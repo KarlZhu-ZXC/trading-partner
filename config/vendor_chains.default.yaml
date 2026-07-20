@@ -1,0 +1,73 @@
+# Phase 1E default Vendor Chains (§9 / §15.2).
+# Names and order only — no secrets. No real network wiring in E1.
+# market_snapshot retains mock for Phase 1A/1D regression; real tools never
+# insert mock into production capability chains.
+version: 1
+markets:
+  A_SHARE:
+    instrument_master:
+      vendors: [local_master, seed_fixture]
+    market_snapshot:
+      vendors: [mock_a_share]
+    market_quote:
+      vendors: [tencent, eastmoney]
+    market_ohlcv:
+      vendors: [tencent, eastmoney]
+    market_structure:
+      vendors: [eastmoney]
+    fundamentals:
+      vendors: [eastmoney]
+    financial_statements:
+      vendors: [sina, eastmoney]
+    announcements:
+      vendors: [cninfo, szse, sse]
+    corporate_actions:
+      vendors: [eastmoney]
+    research_reports:
+      vendors: [eastmoney, ths, iwencai]
+    capital:
+      vendors: [eastmoney, sina, hkex, sse, szse]
+    limit_up:
+      vendors: [eastmoney, ths]
+    options:
+      vendors: [sina]
+    interactive_qa:
+      vendors: [cninfo]
+    news:
+      vendors: [cls, eastmoney]
+    sentiment:
+      vendors: [ths, eastmoney]
+  US:
+    instrument_master:
+      vendors: [local_master, seed_fixture]
+    market_snapshot:
+      vendors: [mock_us]
+    market_quote:
+      vendors: [yfinance, alpha_vantage]
+    market_ohlcv:
+      vendors: [yfinance, alpha_vantage]
+    market_breadth:
+      vendors: [yfinance]
+    # Phase 1G research chains (names/order only; adapters land in later slices).
+    fundamentals:
+      vendors: [yfinance, alpha_vantage, sec_edgar]
+    financial_statements:
+      vendors: [sec_edgar, alpha_vantage, yfinance]
+    filings:
+      vendors: [sec_edgar]
+    corporate_actions:
+      vendors: [yfinance, sec_edgar]
+    insider_activity:
+      vendors: [sec_edgar, alpha_vantage]
+    # Phase 1H optional context chains. Sentiment sources are explicitly
+    # composed per source; this order is only the default single-chain policy.
+    news:
+      vendors: [yfinance, alpha_vantage]
+    macro:
+      vendors: [fred]
+    sentiment:
+      vendors: [stocktwits, reddit]
+    prediction_market:
+      vendors: [polymarket]
+    account:
+      vendors: [schwab, moomoo, manual_csv]

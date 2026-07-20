@@ -1,0 +1,27 @@
+{
+  "rc": 0,
+  "rt": 0,
+  "data": {
+    "advancing_count": 2500,
+    "declining_count": 1800,
+    "unchanged_count": 200,
+    "limit_up_count": 45,
+    "limit_down_count": 12,
+    "broken_limit_count": 8,
+    "total_turnover_cny": "850000000000.00",
+    "median_change_percent": "0.15",
+    "industries": [
+      {
+        "industry_code": "BK0477",
+        "industry_name": "白酒",
+        "change_percent": "1.25",
+        "advancing_count": 20,
+        "declining_count": 5,
+        "unchanged_count": 2,
+        "leading_instrument_id": "equity:A_SHARE:600519.SH",
+        "leading_change_percent": "2.10",
+        "turnover_amount_cny": "5000000000.00"
+      }
+    ]
+  }
+}

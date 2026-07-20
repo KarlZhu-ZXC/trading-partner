@@ -1,0 +1,40 @@
+{
+  "status_code": 0,
+  "data": {
+    "page": {
+      "limit": 2,
+      "total": 2,
+      "count": 1,
+      "page": 1
+    },
+    "info": [
+      {
+        "code": "600519",
+        "name": "贵州茅台",
+        "market_id": 17,
+        "market_type": "HS",
+        "latest": 1680.0,
+        "change_rate": 10.0,
+        "reason_type": "白酒+消费复苏",
+        "high_days": "首板",
+        "change_tag": "LIMIT_UP",
+        "is_new": 0
+      },
+      {
+        "code": "000001",
+        "name": "平安银行",
+        "market_id": 33,
+        "market_type": "HS",
+        "latest": 11.0,
+        "change_rate": 10.0,
+        "reason_type": "银行",
+        "high_days": "2天2板",
+        "change_tag": "LIMIT_UP",
+        "is_new": 0
+      }
+    ],
+    "date": "20240115",
+    "msg": null
+  },
+  "status_msg": "success"
+}

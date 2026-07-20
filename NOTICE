@@ -1,0 +1,12 @@
+Trading Partner
+Copyright 2026 Trading Partner contributors
+
+This product includes reference material derived from the following projects.
+They are reference inputs only and are not runtime dependencies:
+
+- TradingAgents, licensed under Apache License 2.0.
+- a-stock-data, used as a data-flow and provider-priority reference under its
+  upstream terms.
+
+Pinned upstream revisions and preserved license information are documented under
+the references/ directory.

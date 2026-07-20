@@ -1,0 +1,22 @@
+{
+  "version": "test",
+  "result": {
+    "data": [
+      {
+        "SECUCODE": "600519.SH",
+        "SECURITY_CODE": "600519",
+        "REPORT_DATE": "2023-12-31",
+        "NOTICE_DATE": "2023-12-20",
+        "PLAN_NOTICE_DATE": "2023-12-20",
+        "IMPL_PLAN_PROFILE": "10派308.76元",
+        "ASSIGN_PROGRESS": "实施",
+        "EX_DIVIDEND_DATE": "2023-12-15",
+        "CASH_DIVIDEND_RATIO": "30.876",
+        "BONUS_SHARE_RATIO": "0",
+        "TRANSFER_RATIO": "0"
+      }
+    ]
+  },
+  "success": true,
+  "code": 0
+}

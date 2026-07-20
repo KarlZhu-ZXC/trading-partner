@@ -1,0 +1,7 @@
+version: 1
+corrections:
+  - provider_code: US.SPG
+    asset_type: EQUITY
+    display_name: Simon Property Group, Inc.
+    reason: Moomoo OpenD returns ETF with a 1970-01-01 sentinel listing date for this NYSE REIT equity.
+    verified_on: 2026-07-19

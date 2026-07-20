@@ -1,0 +1,1236 @@
+"""Thesis revision propose/confirm lifecycle and research state updates."""
+
+from __future__ import annotations
+
+from application.dto.research import (
+    AssumptionCandidatePayload,
+    CandidateRevisionDTO,
+    CaseUpdateCandidatePayload,
+    ConfirmedStateUpdateDTO,
+    InvalidationCandidatePayload,
+    OpenQuestionCandidatePayload,
+    ThesisHistoryDTO,
+    ThesisRevisionCandidatePayload,
+    WatchlistCandidatePayload,
+    kind_from_payload,
+    parse_candidate_payload,
+)
+from application.dto.tool_envelope import ToolEnvelope
+from application.ports.clock import Clock
+from application.ports.id_generator import IdGenerator
+from application.ports.research_unit_of_work import ResearchUnitOfWork
+from application.ports.secret_redactor import SecretRedactor
+from application.services._research_support import (
+    CODEX_ACTOR,
+    CONFIRM_REVIEWERS,
+    UowFactory,
+    build_research_state,
+    candidate_to_dto,
+    envelope_failure,
+    envelope_success,
+    propose_candidate,
+    require_confirm_reviewer,
+)
+from domain.common.enums import (
+    AssumptionStatus,
+    CandidateKind,
+    CandidateStatus,
+    ConfirmationMode,
+    InvalidationSeverity,
+    InvalidationStatus,
+    InvestmentCaseStatus,
+    ThesisRole,
+    ThesisStatus,
+    WatchlistItemStatus,
+)
+from domain.common.errors import (
+    CandidateAlreadyResolved,
+    DataContractError,
+    InputValidationError,
+    InvalidationConditionNarrowingForbidden,
+    StrictReviewRequired,
+    UnauthorizedReviewer,
+)
+from domain.common.ids import EntityIdPrefix
+from domain.research.models import (
+    RESEARCH_SCHEMA_VERSION,
+    Assumption,
+    InvalidationCondition,
+    InvestmentCase,
+    OpenQuestion,
+    Thesis,
+    ThesisRevision,
+    WatchlistItem,
+)
+
+
+class ThesisRevisionService:
+    def __init__(
+        self,
+        uow_factory: UowFactory,
+        clock: Clock,
+        id_generator: IdGenerator,
+        secret_redactor: SecretRedactor,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+        self._id_generator = id_generator
+        self._redactor = secret_redactor
+
+    # ------------------------------------------------------------------ propose
+
+    def propose_revision(
+        self,
+        *,
+        case_id: str,
+        thesis_id: str | None,
+        payload: ThesisRevisionCandidatePayload,
+        confirmation_mode: ConfirmationMode = ConfirmationMode.STRICT_REVIEW,
+        proposed_by: str,
+        proposed_by_rationale: str,
+        idempotency_key: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            if payload.kind != "thesis_revision":
+                raise InputValidationError("payload.kind must be thesis_revision")
+            with self._uow_factory() as uow:
+                uow.cases.get(case_id)
+                if thesis_id is not None:
+                    thesis = uow.theses.get(thesis_id)
+                    if thesis.case_id != case_id:
+                        raise InputValidationError(
+                            "thesis_id does not belong to case_id",
+                            details={"thesis_id": thesis_id, "case_id": case_id},
+                        )
+                candidate, is_dup, warn = propose_candidate(
+                    uow=uow,
+                    clock=self._clock,
+                    id_generator=self._id_generator,
+                    kind=CandidateKind.THESIS_REVISION,
+                    case_id=case_id,
+                    thesis_id=thesis_id,
+                    target_revision_no=payload.replaces_revision_no,
+                    payload_model=payload,
+                    confirmation_mode=confirmation_mode,
+                    proposed_by=proposed_by,
+                    proposed_by_rationale=proposed_by_rationale,
+                    idempotency_key=idempotency_key,
+                )
+                if not is_dup:
+                    uow.audit.append(
+                        "phase1b.candidate.proposed",
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "kind": candidate.kind.value,
+                            "case_id": case_id,
+                            "proposed_by": proposed_by,
+                        },
+                        request_id=request_id,
+                    )
+                    uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(candidate),
+                    warnings=(warn,) if warn is not None else (),
+                    degraded=warn is not None,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def propose_assumption(
+        self,
+        *,
+        case_id: str,
+        thesis_id: str,
+        revision_no: int,
+        payload: AssumptionCandidatePayload,
+        confirmation_mode: ConfirmationMode = ConfirmationMode.NORMAL,
+        proposed_by: str,
+        proposed_by_rationale: str,
+        idempotency_key: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            body = payload
+            if body.thesis_id != thesis_id or body.revision_no != revision_no:
+                body = AssumptionCandidatePayload(
+                    kind="assumption",
+                    thesis_id=thesis_id,
+                    revision_no=revision_no,
+                    statement=payload.statement,
+                    basis=payload.basis,
+                    falsifiability=payload.falsifiability,
+                )
+            with self._uow_factory() as uow:
+                uow.cases.get(case_id)
+                thesis = uow.theses.get(thesis_id)
+                if thesis.case_id != case_id:
+                    raise InputValidationError("thesis_id does not belong to case_id")
+                candidate, is_dup, warn = propose_candidate(
+                    uow=uow,
+                    clock=self._clock,
+                    id_generator=self._id_generator,
+                    kind=CandidateKind.ASSUMPTION,
+                    case_id=case_id,
+                    thesis_id=thesis_id,
+                    target_revision_no=revision_no,
+                    payload_model=body,
+                    confirmation_mode=confirmation_mode,
+                    proposed_by=proposed_by,
+                    proposed_by_rationale=proposed_by_rationale,
+                    idempotency_key=idempotency_key,
+                )
+                if not is_dup:
+                    uow.audit.append(
+                        "phase1b.candidate.proposed",
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "kind": candidate.kind.value,
+                            "case_id": case_id,
+                        },
+                        request_id=request_id,
+                    )
+                    uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(candidate),
+                    warnings=(warn,) if warn is not None else (),
+                    degraded=warn is not None,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def propose_invalidation(
+        self,
+        *,
+        case_id: str,
+        thesis_id: str,
+        revision_no: int,
+        payload: InvalidationCandidatePayload,
+        confirmation_mode: ConfirmationMode = ConfirmationMode.NORMAL,
+        proposed_by: str,
+        proposed_by_rationale: str,
+        idempotency_key: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            body = payload
+            if body.thesis_id != thesis_id or body.revision_no != revision_no:
+                body = InvalidationCandidatePayload(
+                    kind="invalidation_condition",
+                    thesis_id=thesis_id,
+                    revision_no=revision_no,
+                    description=payload.description,
+                    observable=payload.observable,
+                    severity=payload.severity,
+                    relaxes_invalidation_id=payload.relaxes_invalidation_id,
+                )
+            # Relaxation of HARD requires STRICT_REVIEW.
+            if body.relaxes_invalidation_id is not None:
+                if confirmation_mode != ConfirmationMode.STRICT_REVIEW:
+                    raise StrictReviewRequired(
+                        "relaxing an invalidation condition requires STRICT_REVIEW",
+                        details={"relaxes_invalidation_id": body.relaxes_invalidation_id},
+                    )
+                if body.severity == InvalidationSeverity.SOFT:
+                    # narrowing/relaxation path is allowed only under STRICT_REVIEW
+                    pass
+            with self._uow_factory() as uow:
+                uow.cases.get(case_id)
+                thesis = uow.theses.get(thesis_id)
+                if thesis.case_id != case_id:
+                    raise InputValidationError("thesis_id does not belong to case_id")
+                if body.relaxes_invalidation_id is not None:
+                    existing = uow.invalidations.get(body.relaxes_invalidation_id)
+                    is_hard_to_soft = (
+                        existing.severity == InvalidationSeverity.HARD
+                        and body.severity == InvalidationSeverity.SOFT
+                    )
+                    if (
+                        is_hard_to_soft
+                        and confirmation_mode != ConfirmationMode.STRICT_REVIEW
+                    ):
+                        raise InvalidationConditionNarrowingForbidden(
+                            "HARD→SOFT relaxation requires STRICT_REVIEW candidate",
+                            details={
+                                "invalidation_id": body.relaxes_invalidation_id,
+                            },
+                        )
+                candidate, is_dup, warn = propose_candidate(
+                    uow=uow,
+                    clock=self._clock,
+                    id_generator=self._id_generator,
+                    kind=CandidateKind.INVALIDATION_CONDITION,
+                    case_id=case_id,
+                    thesis_id=thesis_id,
+                    target_revision_no=revision_no,
+                    payload_model=body,
+                    confirmation_mode=confirmation_mode,
+                    proposed_by=proposed_by,
+                    proposed_by_rationale=proposed_by_rationale,
+                    idempotency_key=idempotency_key,
+                )
+                if not is_dup:
+                    uow.audit.append(
+                        "phase1b.candidate.proposed",
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "kind": candidate.kind.value,
+                            "case_id": case_id,
+                        },
+                        request_id=request_id,
+                    )
+                    uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(candidate),
+                    warnings=(warn,) if warn is not None else (),
+                    degraded=warn is not None,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def propose_state_update(
+        self,
+        *,
+        case_id: str | None,
+        thesis_id: str | None = None,
+        payload: (
+            ThesisRevisionCandidatePayload
+            | AssumptionCandidatePayload
+            | InvalidationCandidatePayload
+            | OpenQuestionCandidatePayload
+            | WatchlistCandidatePayload
+            | CaseUpdateCandidatePayload
+        ),
+        confirmation_mode: ConfirmationMode = ConfirmationMode.STRICT_REVIEW,
+        proposed_by: str,
+        proposed_by_rationale: str,
+        idempotency_key: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        """research_state_update semantics: always PROPOSED, never formal write."""
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            kind = kind_from_payload(payload)
+            if kind == CandidateKind.CASE_STATUS_CHANGE:
+                assert isinstance(payload, CaseUpdateCandidatePayload)
+                if payload.action == "create":
+                    raise InputValidationError(
+                        "case create must use investment_case_create, not research_state_update"
+                    )
+                if (
+                    payload.action == "archive"
+                    and confirmation_mode != ConfirmationMode.STRICT_REVIEW
+                ):
+                    raise StrictReviewRequired(
+                        "case archive candidate requires STRICT_REVIEW",
+                    )
+            if kind != CandidateKind.WATCHLIST_ITEM and case_id is None:
+                raise InputValidationError("case_id is required for non-watchlist candidates")
+
+            with self._uow_factory() as uow:
+                if case_id is not None:
+                    uow.cases.get(case_id)
+                target_revision_no: int | None = None
+                resolved_thesis = thesis_id
+                if isinstance(payload, AssumptionCandidatePayload):
+                    resolved_thesis = payload.thesis_id
+                    target_revision_no = payload.revision_no
+                elif isinstance(payload, InvalidationCandidatePayload):
+                    resolved_thesis = payload.thesis_id
+                    target_revision_no = payload.revision_no
+                    if (
+                        payload.relaxes_invalidation_id is not None
+                        and confirmation_mode != ConfirmationMode.STRICT_REVIEW
+                    ):
+                        raise StrictReviewRequired(
+                            "relaxing invalidation requires STRICT_REVIEW",
+                        )
+                elif isinstance(payload, ThesisRevisionCandidatePayload):
+                    target_revision_no = payload.replaces_revision_no
+
+                candidate, is_dup, warn = propose_candidate(
+                    uow=uow,
+                    clock=self._clock,
+                    id_generator=self._id_generator,
+                    kind=kind,
+                    case_id=case_id,
+                    thesis_id=resolved_thesis,
+                    target_revision_no=target_revision_no,
+                    payload_model=payload,
+                    confirmation_mode=confirmation_mode,
+                    proposed_by=proposed_by,
+                    proposed_by_rationale=proposed_by_rationale,
+                    idempotency_key=idempotency_key,
+                    status=CandidateStatus.PROPOSED,
+                )
+                if not is_dup:
+                    uow.audit.append(
+                        "phase1b.candidate.proposed",
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "kind": candidate.kind.value,
+                            "case_id": case_id,
+                            "proposed_by": proposed_by,
+                        },
+                        request_id=request_id,
+                    )
+                    uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(candidate),
+                    warnings=(warn,) if warn is not None else (),
+                    degraded=warn is not None,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    # --------------------------------------------------------------- lifecycle
+
+    def confirm_candidate(
+        self,
+        candidate_id: str,
+        *,
+        reviewed_by: str,
+        review_note: str | None = None,
+    ) -> ToolEnvelope[ConfirmedStateUpdateDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            require_confirm_reviewer(reviewed_by, action="confirm_candidate")
+            with self._uow_factory() as uow:
+                candidate = uow.candidates.get(candidate_id)
+                if candidate.status != CandidateStatus.PROPOSED:
+                    raise CandidateAlreadyResolved(
+                        f"Candidate already resolved with status={candidate.status.value}",
+                        details={
+                            "candidate_id": candidate_id,
+                            "status": candidate.status.value,
+                        },
+                    )
+                now = self._clock.now()
+                if candidate.expires_at < now:
+                    uow.candidates.update_status(
+                        candidate_id,
+                        new_status=CandidateStatus.EXPIRED,
+                        reviewed_at=None,
+                        reviewed_by=None,
+                        review_note=None,
+                        rejection_reason=None,
+                    )
+                    uow.commit()
+                    raise CandidateAlreadyResolved(
+                        "Candidate expired before confirm",
+                        details={"candidate_id": candidate_id},
+                    )
+
+                affected_type, affected_id = self._apply_confirmed_payload(
+                    uow,
+                    candidate,
+                    reviewed_by=reviewed_by.strip(),
+                    now=now,
+                )
+
+                uow.candidates.update_status(
+                    candidate_id,
+                    new_status=CandidateStatus.CONFIRMED,
+                    reviewed_at=now,
+                    reviewed_by=reviewed_by.strip(),
+                    review_note=review_note,
+                    rejection_reason=None,
+                )
+                confirmed = uow.candidates.get(candidate_id)
+                uow.audit.append(
+                    "phase1b.candidate.confirmed",
+                    {
+                        "candidate_id": candidate_id,
+                        "kind": candidate.kind.value,
+                        "reviewed_by": reviewed_by.strip(),
+                        "affected_entity_type": affected_type,
+                        "affected_entity_id": affected_id,
+                    },
+                    request_id=request_id,
+                )
+
+                research_state = None
+                if candidate.case_id is not None:
+                    research_state = build_research_state(uow, candidate.case_id)
+
+                uow.commit()
+                data = ConfirmedStateUpdateDTO(
+                    candidate=candidate_to_dto(confirmed),
+                    research_state=research_state,
+                    affected_entity_type=affected_type,
+                    affected_entity_id=affected_id,
+                )
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=data,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def reject_candidate(
+        self,
+        candidate_id: str,
+        *,
+        reviewed_by: str,
+        rejection_reason: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            require_confirm_reviewer(reviewed_by, action="reject_candidate")
+            reason = rejection_reason.strip()
+            if not reason:
+                raise InputValidationError("rejection_reason must be non-empty")
+            with self._uow_factory() as uow:
+                candidate = uow.candidates.get(candidate_id)
+                if candidate.status != CandidateStatus.PROPOSED:
+                    raise CandidateAlreadyResolved(
+                        f"Candidate already resolved with status={candidate.status.value}",
+                        details={"candidate_id": candidate_id},
+                    )
+                now = self._clock.now()
+                uow.candidates.update_status(
+                    candidate_id,
+                    new_status=CandidateStatus.REJECTED,
+                    reviewed_at=now,
+                    reviewed_by=reviewed_by.strip(),
+                    review_note=None,
+                    rejection_reason=reason,
+                )
+                rejected = uow.candidates.get(candidate_id)
+                uow.audit.append(
+                    "phase1b.candidate.rejected",
+                    {
+                        "candidate_id": candidate_id,
+                        "reviewed_by": reviewed_by.strip(),
+                        "rejection_reason": reason,
+                    },
+                    request_id=request_id,
+                )
+                uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(rejected),
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def withdraw_candidate(
+        self,
+        candidate_id: str,
+        *,
+        reviewed_by: str,
+        review_note: str,
+    ) -> ToolEnvelope[CandidateRevisionDTO]:
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            note = review_note.strip()
+            if not note:
+                raise InputValidationError("review_note must be non-empty for withdraw")
+            actor = reviewed_by.strip()
+            with self._uow_factory() as uow:
+                candidate = uow.candidates.get(candidate_id)
+                if candidate.status != CandidateStatus.PROPOSED:
+                    raise CandidateAlreadyResolved(
+                        f"Candidate already resolved with status={candidate.status.value}",
+                        details={"candidate_id": candidate_id},
+                    )
+                # Withdraw: original proposer, or user/external_agent.
+                # codex may only withdraw its own NORMAL candidates.
+                if actor == CODEX_ACTOR:
+                    if candidate.proposed_by != CODEX_ACTOR:
+                        raise UnauthorizedReviewer(
+                            "codex may only withdraw its own candidates",
+                            details={"proposed_by": candidate.proposed_by},
+                        )
+                    if candidate.confirmation_mode != ConfirmationMode.NORMAL:
+                        raise UnauthorizedReviewer(
+                            "codex may only withdraw NORMAL confirmation_mode candidates",
+                            details={
+                                "confirmation_mode": candidate.confirmation_mode.value,
+                            },
+                        )
+                elif actor not in CONFIRM_REVIEWERS and actor != candidate.proposed_by:
+                    raise UnauthorizedReviewer(
+                        "withdraw requires original proposer or user/external_agent",
+                        details={"reviewed_by": actor, "proposed_by": candidate.proposed_by},
+                    )
+                elif actor in CONFIRM_REVIEWERS:
+                    pass
+                elif actor != candidate.proposed_by:
+                    raise UnauthorizedReviewer(
+                        "only original proposer may withdraw",
+                        details={"reviewed_by": actor, "proposed_by": candidate.proposed_by},
+                    )
+
+                now = self._clock.now()
+                uow.candidates.update_status(
+                    candidate_id,
+                    new_status=CandidateStatus.WITHDRAWN,
+                    reviewed_at=now,
+                    reviewed_by=actor,
+                    review_note=note,
+                    rejection_reason=None,
+                )
+                withdrawn = uow.candidates.get(candidate_id)
+                uow.audit.append(
+                    "phase1b.candidate.withdrawn",
+                    {
+                        "candidate_id": candidate_id,
+                        "reviewed_by": actor,
+                        "review_note": note,
+                    },
+                    request_id=request_id,
+                )
+                uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=candidate_to_dto(withdrawn),
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def expire_due(
+        self, *, now: object | None = None, limit: int = 200
+    ) -> ToolEnvelope[tuple[str, ...]]:
+        """Mark PROPOSED candidates past expires_at as EXPIRED (Phase 3 scheduler hook)."""
+        from datetime import datetime
+
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            when = now if isinstance(now, datetime) else self._clock.now()
+            with self._uow_factory() as uow:
+                expired_ids = uow.candidates.expire_due(now=when, limit=limit)
+                if expired_ids:
+                    uow.audit.append(
+                        "phase1b.candidate.expired_batch",
+                        {"candidate_ids": list(expired_ids), "count": len(expired_ids)},
+                        request_id=request_id,
+                    )
+                    uow.commit()
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=expired_ids,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    def get_revision_history(self, thesis_id: str) -> ToolEnvelope[ThesisHistoryDTO]:
+        from application.dto.research import ThesisDTO, ThesisRevisionDTO
+
+        request_id = self._id_generator.new(EntityIdPrefix.REQ)
+        try:
+            with self._uow_factory() as uow:
+                thesis = uow.theses.get(thesis_id)
+                revisions = uow.revisions.list_by_thesis(thesis_id)
+                edges = tuple((r.revision_no, r.supersedes_revision_no) for r in revisions)
+                data = ThesisHistoryDTO(
+                    thesis=ThesisDTO.from_domain(thesis),
+                    revisions=ThesisRevisionDTO.from_domain_list(revisions),
+                    supersedes_edges=edges,
+                )
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=data,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return envelope_failure(
+                request_id=request_id,
+                clock=self._clock,
+                redactor=self._redactor,
+                exc=exc,
+            )
+
+    # -------------------------------------------------------------- apply kinds
+
+    def _apply_confirmed_payload(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        payload = parse_candidate_payload(candidate.payload_json)
+        kind = candidate.kind
+
+        if kind is CandidateKind.THESIS_REVISION:
+            assert isinstance(payload, ThesisRevisionCandidatePayload)
+            return self._apply_thesis_revision(
+                uow, candidate, payload, reviewed_by=reviewed_by, now=now
+            )
+        if kind is CandidateKind.ASSUMPTION:
+            assert isinstance(payload, AssumptionCandidatePayload)
+            return self._apply_assumption(
+                uow, candidate, payload, reviewed_by=reviewed_by, now=now
+            )
+        if kind is CandidateKind.INVALIDATION_CONDITION:
+            assert isinstance(payload, InvalidationCandidatePayload)
+            return self._apply_invalidation(
+                uow, candidate, payload, reviewed_by=reviewed_by, now=now
+            )
+        if kind is CandidateKind.OPEN_QUESTION:
+            assert isinstance(payload, OpenQuestionCandidatePayload)
+            return self._apply_open_question(
+                uow, candidate, payload, reviewed_by=reviewed_by, now=now
+            )
+        if kind is CandidateKind.WATCHLIST_ITEM:
+            assert isinstance(payload, WatchlistCandidatePayload)
+            return self._apply_watchlist(uow, candidate, payload, now=now)
+        if kind is CandidateKind.CASE_STATUS_CHANGE:
+            assert isinstance(payload, CaseUpdateCandidatePayload)
+            return self._apply_case_update(uow, candidate, payload, now=now)
+        raise DataContractError(f"unsupported candidate kind: {kind}")
+
+    def _touch_case(self, uow: ResearchUnitOfWork, case_id: str, now: object) -> None:
+        from datetime import datetime
+
+        assert isinstance(now, datetime)
+        case = uow.cases.get(case_id)
+        updated = InvestmentCase(
+            case_id=case.case_id,
+            case_type=case.case_type,
+            title=case.title,
+            summary=case.summary,
+            status=case.status,
+            primary_instrument_id=case.primary_instrument_id,
+            topic_tags=case.topic_tags,
+            created_at=case.created_at,
+            updated_at=now,
+            created_by=case.created_by,
+            archived_at=case.archived_at,
+            archived_reason=case.archived_reason,
+            linked_case_ids=case.linked_case_ids,
+            evidence_ids=case.evidence_ids,
+            report_ids=case.report_ids,
+            event_ids=case.event_ids,
+            decision_ids=case.decision_ids,
+            schema_version=case.schema_version,
+        )
+        uow.cases.update(updated)
+
+    def _apply_thesis_revision(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: ThesisRevisionCandidatePayload,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("thesis_revision candidate requires case_id")
+
+        role = (
+            ThesisRole(payload.thesis_role)
+            if payload.thesis_role is not None
+            else ThesisRole.PRIMARY
+        )
+        thesis_status = (
+            ThesisStatus(payload.thesis_status)
+            if payload.thesis_status is not None
+            else ThesisStatus.ACTIVE
+        )
+
+        if candidate.thesis_id is None:
+            # New thesis: revision_no = 1
+            if role == ThesisRole.PRIMARY and thesis_status == ThesisStatus.ACTIVE:
+                existing_primaries = uow.cases.list_active_primary_thesis_ids(case_id)
+                if existing_primaries:
+                    raise DataContractError(
+                        "active primary thesis already exists for case",
+                        details={
+                            "case_id": case_id,
+                            "existing": list(existing_primaries),
+                        },
+                    )
+            thesis_id = self._id_generator.new(EntityIdPrefix.THESIS)
+            revision_id = self._id_generator.new(EntityIdPrefix.REV)
+            revision_no = 1
+            supersedes = None
+            thesis = Thesis(
+                thesis_id=thesis_id,
+                case_id=case_id,
+                title=payload.title,
+                role=role,
+                status=thesis_status,
+                current_revision_no=1,
+                latest_revision_id=revision_id,
+                parent_thesis_id=payload.parent_thesis_id,
+                rival_thesis_ids=payload.rival_thesis_ids,
+                created_at=now,
+                updated_at=now,
+                archived_at=None,
+            )
+            uow.theses.add(thesis)
+        else:
+            thesis_id = candidate.thesis_id
+            thesis = uow.theses.get(thesis_id)
+            revision_no = uow.revisions.next_revision_no(thesis_id)
+            supersedes = thesis.current_revision_no
+            revision_id = self._id_generator.new(EntityIdPrefix.REV)
+
+        from domain.common.enums import ConfidenceBand, InvestmentRating
+
+        revision = ThesisRevision(
+            revision_id=revision_id,
+            thesis_id=thesis_id,
+            case_id=case_id,
+            revision_no=revision_no,
+            supersedes_revision_no=supersedes,
+            statement=payload.statement,
+            rationale=payload.rationale,
+            confidence_band=ConfidenceBand(payload.confidence_band),
+            rating=InvestmentRating(payload.rating),
+            confirmation_mode=candidate.confirmation_mode,
+            proposed_by=candidate.proposed_by,
+            confirmed_by=reviewed_by,
+            proposed_at=candidate.proposed_at,
+            confirmed_at=now,
+            observation_window_start=payload.observation_window_start,
+            observation_window_end=payload.observation_window_end,
+            invalidation_check_note=payload.invalidation_check_note,
+            schema_version=RESEARCH_SCHEMA_VERSION,
+        )
+        uow.revisions.append(revision)
+        if candidate.thesis_id is not None:
+            uow.theses.advance_current_revision(
+                thesis_id,
+                new_revision_no=revision_no,
+                new_latest_revision_id=revision_id,
+            )
+
+        for ap in payload.assumptions:
+            uow.assumptions.add(
+                Assumption(
+                    assumption_id=self._id_generator.new(EntityIdPrefix.REV),
+                    thesis_id=thesis_id,
+                    case_id=case_id,
+                    revision_no=revision_no,
+                    statement=ap.statement,
+                    basis=ap.basis,
+                    falsifiability=ap.falsifiability,
+                    status=AssumptionStatus.ACCEPTED,
+                    proposed_at=candidate.proposed_at,
+                    confirmed_at=now,
+                    proposed_by=candidate.proposed_by,
+                    confirmed_by=reviewed_by,
+                    retired_at=None,
+                    retired_reason=None,
+                )
+            )
+
+        for inv in payload.invalidations:
+            severity = InvalidationSeverity(inv.severity)
+            # HARD create must be ARMED
+            status = InvalidationStatus.ARMED
+            if severity is InvalidationSeverity.HARD and status is not InvalidationStatus.ARMED:
+                raise DataContractError("HARD invalidation must be created as ARMED")
+            uow.invalidations.add(
+                InvalidationCondition(
+                    invalidation_id=self._id_generator.new(EntityIdPrefix.REV),
+                    thesis_id=thesis_id,
+                    case_id=case_id,
+                    revision_no=revision_no,
+                    description=inv.description,
+                    observable=inv.observable,
+                    severity=severity,
+                    status=status,
+                    proposed_at=candidate.proposed_at,
+                    confirmed_at=now,
+                    last_checked_at=None,
+                    triggered_at=None,
+                    triggered_reason=None,
+                    proposed_by=candidate.proposed_by,
+                    confirmed_by=reviewed_by,
+                )
+            )
+
+        self._touch_case(uow, case_id, now)
+        return "thesis_revision", revision_id
+
+    def _apply_assumption(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: AssumptionCandidatePayload,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("assumption candidate requires case_id")
+        assumption_id = self._id_generator.new(EntityIdPrefix.REV)
+        uow.assumptions.add(
+            Assumption(
+                assumption_id=assumption_id,
+                thesis_id=payload.thesis_id,
+                case_id=case_id,
+                revision_no=payload.revision_no,
+                statement=payload.statement,
+                basis=payload.basis,
+                falsifiability=payload.falsifiability,
+                status=AssumptionStatus.ACCEPTED,
+                proposed_at=candidate.proposed_at,
+                confirmed_at=now,
+                proposed_by=candidate.proposed_by,
+                confirmed_by=reviewed_by,
+                retired_at=None,
+                retired_reason=None,
+            )
+        )
+        self._touch_case(uow, case_id, now)
+        return "assumption", assumption_id
+
+    def _apply_invalidation(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: InvalidationCandidatePayload,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("invalidation candidate requires case_id")
+        severity = InvalidationSeverity(payload.severity)
+        # New HARD must be ARMED (INV-9)
+        status = InvalidationStatus.ARMED
+        if severity is InvalidationSeverity.HARD and status is not InvalidationStatus.ARMED:
+            raise DataContractError("HARD invalidation must be created as ARMED")
+
+        if payload.relaxes_invalidation_id is not None:
+            if candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW:
+                raise StrictReviewRequired(
+                    "HARD relaxation requires STRICT_REVIEW",
+                    details={"invalidation_id": payload.relaxes_invalidation_id},
+                )
+            old = uow.invalidations.get(payload.relaxes_invalidation_id)
+            if old.severity is InvalidationSeverity.HARD and severity is InvalidationSeverity.SOFT:
+                uow.invalidations.transition_status(
+                    payload.relaxes_invalidation_id,
+                    new_status=InvalidationStatus.RETIRED,
+                    triggered_at=None,
+                    triggered_reason=None,
+                    last_checked_at=now,
+                )
+
+        inv_id = self._id_generator.new(EntityIdPrefix.REV)
+        uow.invalidations.add(
+            InvalidationCondition(
+                invalidation_id=inv_id,
+                thesis_id=payload.thesis_id,
+                case_id=case_id,
+                revision_no=payload.revision_no,
+                description=payload.description,
+                observable=payload.observable,
+                severity=severity,
+                status=status,
+                proposed_at=candidate.proposed_at,
+                confirmed_at=now,
+                last_checked_at=None,
+                triggered_at=None,
+                triggered_reason=None,
+                proposed_by=candidate.proposed_by,
+                confirmed_by=reviewed_by,
+            )
+        )
+        self._touch_case(uow, case_id, now)
+        return "invalidation_condition", inv_id
+
+    def _apply_open_question(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: OpenQuestionCandidatePayload,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.common.enums import OpenQuestionStatus
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("open_question candidate requires case_id")
+
+        if payload.action == "create":
+            qid = self._id_generator.new(EntityIdPrefix.REV)
+            uow.questions.add(
+                OpenQuestion(
+                    question_id=qid,
+                    case_id=case_id,
+                    text=payload.text or "",
+                    status=OpenQuestionStatus.OPEN,
+                    asked_at=now,
+                    answered_at=None,
+                    answer_summary=None,
+                    closed_without_answer_reason=None,
+                    proposed_by=candidate.proposed_by,
+                )
+            )
+            self._touch_case(uow, case_id, now)
+            return "open_question", qid
+        if payload.action == "answer":
+            assert payload.question_id is not None
+            assert payload.answer_summary is not None
+            uow.questions.answer(
+                payload.question_id,
+                answered_at=now,
+                answer_summary=payload.answer_summary,
+            )
+            self._touch_case(uow, case_id, now)
+            return "open_question", payload.question_id
+        if payload.action == "mark_stale":
+            assert payload.question_id is not None
+            uow.questions.mark_stale(payload.question_id)
+            self._touch_case(uow, case_id, now)
+            return "open_question", payload.question_id
+        if payload.action == "close":
+            assert payload.question_id is not None
+            assert payload.closed_reason is not None
+            uow.questions.close_without_answer(
+                payload.question_id,
+                closed_reason=payload.closed_reason,
+            )
+            self._touch_case(uow, case_id, now)
+            return "open_question", payload.question_id
+        raise DataContractError(f"unknown open_question action: {payload.action}")
+
+    def _apply_watchlist(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: WatchlistCandidatePayload,
+        *,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.common.enums import Market
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+
+        if payload.action == "create":
+            market_value = payload.market
+            if market_value is None:
+                raise DataContractError("create watchlist payload requires market")
+            item_id = self._id_generator.new(EntityIdPrefix.SNAPSHOT)
+            item = WatchlistItem(
+                item_id=item_id,
+                market=Market(str(market_value)),
+                symbol=(payload.symbol or "").strip(),
+                display_name=(payload.display_name or "").strip(),
+                thesis_hint=(payload.thesis_hint or "").strip(),
+                triggers=payload.triggers,
+                case_id=payload.case_id if payload.case_id is not None else candidate.case_id,
+                status=WatchlistItemStatus.WATCHING,
+                created_at=now,
+                updated_at=now,
+                expires_at=payload.expires_at,
+                promoted_to_case_id=None,
+                triggered_at=None,
+                triggered_reason=None,
+            )
+            uow.watchlist.add(item)
+            return "watchlist_item", item_id
+
+        assert payload.item_id is not None
+        assert payload.new_status is not None
+        new_status = WatchlistItemStatus(payload.new_status)
+        triggered_at = now if new_status is WatchlistItemStatus.TRIGGERED else None
+        uow.watchlist.update_status(
+            payload.item_id,
+            new_status=new_status,
+            triggered_at=triggered_at,
+            triggered_reason=payload.triggered_reason,
+            promoted_to_case_id=payload.promoted_to_case_id,
+            expires_at=payload.expires_at,
+        )
+        return "watchlist_item", payload.item_id
+
+    def _apply_case_update(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: CaseUpdateCandidatePayload,
+        *,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("case_status_change candidate requires case_id")
+        case = uow.cases.get(case_id)
+
+        if payload.action == "create":
+            # create is handled by InvestmentCaseService; confirm path is a no-op guard
+            raise DataContractError(
+                "case create candidates are confirmed at creation time, not via confirm_candidate"
+            )
+        if payload.action == "archive":
+            if candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW:
+                raise StrictReviewRequired("archive requires STRICT_REVIEW")
+            reason = payload.archived_reason or "archived"
+            archived = InvestmentCase(
+                case_id=case.case_id,
+                case_type=case.case_type,
+                title=case.title,
+                summary=case.summary,
+                status=InvestmentCaseStatus.ARCHIVED,
+                primary_instrument_id=case.primary_instrument_id,
+                topic_tags=case.topic_tags,
+                created_at=case.created_at,
+                updated_at=now,
+                created_by=case.created_by,
+                archived_at=now,
+                archived_reason=reason,
+                linked_case_ids=case.linked_case_ids,
+                evidence_ids=case.evidence_ids,
+                report_ids=case.report_ids,
+                event_ids=case.event_ids,
+                decision_ids=case.decision_ids,
+                schema_version=case.schema_version,
+            )
+            uow.cases.update(archived)
+            return "investment_case", case_id
+
+        # update
+        new_status = (
+            InvestmentCaseStatus(payload.new_status)
+            if payload.new_status is not None
+            else case.status
+        )
+        if (
+            case.status == InvestmentCaseStatus.ACTIVE
+            and new_status != InvestmentCaseStatus.ACTIVE
+            and candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW
+        ):
+            raise StrictReviewRequired(
+                "leaving ACTIVE case status requires STRICT_REVIEW",
+                details={"from": case.status.value, "to": new_status.value},
+            )
+        is_archived = new_status == InvestmentCaseStatus.ARCHIVED
+        updated = InvestmentCase(
+            case_id=case.case_id,
+            case_type=case.case_type,
+            title=payload.title if payload.title is not None else case.title,
+            summary=payload.summary if payload.summary is not None else case.summary,
+            status=new_status,
+            primary_instrument_id=(
+                payload.primary_instrument_id
+                if payload.primary_instrument_id is not None
+                else case.primary_instrument_id
+            ),
+            topic_tags=payload.topic_tags if payload.topic_tags is not None else case.topic_tags,
+            created_at=case.created_at,
+            updated_at=now,
+            created_by=case.created_by,
+            archived_at=now if is_archived else None,
+            archived_reason=(
+                (payload.archived_reason or case.archived_reason or "archived")
+                if is_archived
+                else None
+            ),
+            linked_case_ids=(
+                payload.linked_case_ids
+                if payload.linked_case_ids is not None
+                else case.linked_case_ids
+            ),
+            evidence_ids=case.evidence_ids,
+            report_ids=case.report_ids,
+            event_ids=case.event_ids,
+            decision_ids=case.decision_ids,
+            schema_version=case.schema_version,
+        )
+        uow.cases.update(updated)
+        return "investment_case", case_id

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"case_id":"eval-nvda","instrument_id":"equity:US:NVDA","revisions":["initial","earnings-update","valuation-review"],"supporting_evidence":["revenue-growth"],"contrary_evidence":["valuation-risk"],"assumptions":["data-center-demand"],"invalidations":["growth-below-threshold"],"formal_reviews":["confidence-review"],"user_resolutions":["defer"],"account_position_link":true},
+    {"case_id":"eval-maotai","instrument_id":"equity:A_SHARE:600519.SH","revisions":["initial","channel-check","demand-review"],"supporting_evidence":["brand-strength"],"contrary_evidence":["wholesale-price-pressure"],"assumptions":["premium-demand"],"invalidations":["channel-inventory-threshold"],"formal_reviews":["invalidation-review"],"user_resolutions":["revise"],"account_position_link":false},
+    {"case_id":"eval-fed-growth","instrument_id":"etf:US:QQQ","revisions":["initial","rate-path-update","macro-review"],"supporting_evidence":["disinflation"],"contrary_evidence":["term-premium"],"assumptions":["earnings-duration"],"invalidations":["real-yield-threshold"],"formal_reviews":["macro-review"],"user_resolutions":["reject"],"account_position_link":false}
+  ]
+}

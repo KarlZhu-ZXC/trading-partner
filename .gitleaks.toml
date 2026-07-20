@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Machine-local ignored secrets and generated Python bytecode"
+paths = [
+  '''^\.env(?:\..*)?$''',
+  '''^data/secrets/''',
+  '''(?:^|/)__pycache__/''',
+]

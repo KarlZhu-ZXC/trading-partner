@@ -1,0 +1,9 @@
+{
+  "result": {
+    "status": {"code": 0},
+    "data": {
+      "cateList": ["50ETF", "50ETF"],
+      "contractMonth": ["2026-07", "2026-08", "2026-09"]
+    }
+  }
+}

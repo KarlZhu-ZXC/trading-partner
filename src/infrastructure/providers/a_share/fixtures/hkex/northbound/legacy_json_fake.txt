@@ -1,0 +1,5 @@
+{"trade_date":"2024-01-15","channels":[
+  {"channel":"sh","buy_cny":"1320548000000","sell_cny":"897549000000","net_buy_cny":"422999000000"},
+  {"channel":"sz","buy_cny":"745227000000","sell_cny":"501777000000","net_buy_cny":"243450000000"},
+  {"channel":"total","buy_cny":"2065775000000","sell_cny":"1399326000000","net_buy_cny":"666449000000"}
+]}

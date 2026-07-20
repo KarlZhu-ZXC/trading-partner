@@ -1,0 +1,774 @@
+"""AST-based architecture boundary tests (no extra architecture library)."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC = PROJECT_ROOT / "src"
+
+FORBIDDEN_DOMAIN_MODULES = {
+    "mcp",
+    "sqlalchemy",
+    "alembic",
+    "pydantic_settings",
+    "pydantic",
+    "dotenv",
+    "uuid6",
+}
+
+LAYER_ROOTS = {
+    "domain": SRC / "domain",
+    "application": SRC / "application",
+    "infrastructure": SRC / "infrastructure",
+    "interfaces": SRC / "interfaces",
+}
+
+
+def _iter_py_files(root: Path) -> list[Path]:
+    return sorted(p for p in root.rglob("*.py") if p.is_file())
+
+
+def _module_name(path: Path) -> str:
+    rel = path.relative_to(SRC)
+    parts = list(rel.with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imports(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.append(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.append(node.module)
+    return found
+
+
+def _top_level(mod: str) -> str:
+    return mod.split(".", 1)[0]
+
+
+def _is_module(imp: str, name: str) -> bool:
+    return imp == name or imp.startswith(f"{name}.")
+
+
+def test_domain_has_no_framework_or_outer_layer_imports() -> None:
+    violations: list[str] = []
+    for path in _iter_py_files(LAYER_ROOTS["domain"]):
+        for imp in _imports(path):
+            top = _top_level(imp)
+            if top in FORBIDDEN_DOMAIN_MODULES:
+                violations.append(f"{path}: imports {imp}")
+            if _is_module(imp, "application"):
+                violations.append(f"{path}: imports application ({imp})")
+            if _is_module(imp, "infrastructure"):
+                violations.append(f"{path}: imports infrastructure ({imp})")
+            if _is_module(imp, "interfaces"):
+                violations.append(f"{path}: imports interfaces ({imp})")
+            if _is_module(imp, "bootstrap"):
+                violations.append(f"{path}: imports bootstrap ({imp})")
+    assert not violations, "Domain boundary violations:\n" + "\n".join(violations)
+
+
+def test_domain_providers_cache_key_is_framework_free() -> None:
+    """domain.providers.cache_key may only depend on domain.common + stdlib."""
+    providers_root = LAYER_ROOTS["domain"] / "providers"
+    assert providers_root.is_dir(), "domain/providers must exist"
+    allowed_tops = {
+        "__future__",
+        "domain",
+        "re",
+        "dataclasses",
+        "datetime",
+        "typing",
+        "collections",
+    }
+    violations: list[str] = []
+    for path in _iter_py_files(providers_root):
+        for imp in _imports(path):
+            top = _top_level(imp)
+            if top in FORBIDDEN_DOMAIN_MODULES:
+                violations.append(f"{path}: imports framework {imp}")
+            if _is_module(imp, "application") or _is_module(imp, "infrastructure"):
+                violations.append(f"{path}: imports outer layer {imp}")
+            # providers may import domain.providers / domain.common only
+            if (
+                _is_module(imp, "domain")
+                and not _is_module(imp, "domain.common")
+                and not _is_module(imp, "domain.providers")
+            ):
+                violations.append(
+                    f"{path}: domain.providers may only import domain.common (or itself), got {imp}"
+                )
+            # Allow domain.* + listed stdlib only; anything else is unexpected.
+            if top not in allowed_tops and top not in FORBIDDEN_DOMAIN_MODULES and top != "domain":
+                violations.append(f"{path}: unexpected import {imp}")
+    assert not violations, "domain.providers boundary violations:\n" + "\n".join(violations)
+
+
+def test_provider_cache_store_does_not_import_application_services() -> None:
+    """SqlAlchemyProviderCacheStore must use domain cache-key helpers, not services."""
+    store = LAYER_ROOTS["infrastructure"] / "persistence" / "provider_cache_store.py"
+    assert store.is_file()
+    imports = _imports(store)
+    service_imports = [i for i in imports if _is_module(i, "application.services")]
+    assert not service_imports, (
+        f"provider_cache_store must not import application.services: {service_imports}"
+    )
+    domain_cache_imports = [i for i in imports if _is_module(i, "domain.providers.cache_key")]
+    assert domain_cache_imports, "provider_cache_store must import domain.providers.cache_key"
+
+
+def test_application_does_not_import_infrastructure_or_interfaces() -> None:
+    violations: list[str] = []
+    for path in _iter_py_files(LAYER_ROOTS["application"]):
+        for imp in _imports(path):
+            if _is_module(imp, "infrastructure"):
+                violations.append(f"{path}: imports infrastructure ({imp})")
+            if _is_module(imp, "interfaces"):
+                violations.append(f"{path}: imports interfaces ({imp})")
+            if _is_module(imp, "bootstrap"):
+                violations.append(f"{path}: imports bootstrap ({imp})")
+            if _top_level(imp) in {"mcp", "sqlalchemy", "alembic", "pydantic_settings"}:
+                violations.append(f"{path}: imports framework {imp}")
+    assert not violations, "Application boundary violations:\n" + "\n".join(violations)
+
+
+def test_interfaces_do_not_import_infrastructure() -> None:
+    violations: list[str] = []
+    for path in _iter_py_files(LAYER_ROOTS["interfaces"]):
+        for imp in _imports(path):
+            if _is_module(imp, "infrastructure"):
+                violations.append(f"{path}: imports infrastructure ({imp})")
+    assert not violations, "Interfaces boundary violations:\n" + "\n".join(violations)
+
+
+def test_only_bootstrap_is_composition_root() -> None:
+    """Only bootstrap may import application services and infrastructure providers."""
+    violations: list[str] = []
+    bootstrap = SRC / "bootstrap.py"
+    assert bootstrap.is_file()
+
+    for path in _iter_py_files(SRC):
+        if path == bootstrap:
+            continue
+        # tests and migrations not under src
+        imports = _imports(path)
+        has_app = any(
+            _is_module(i, "application.services") or _is_module(i, "application") for i in imports
+        )
+        has_infra = any(_is_module(i, "infrastructure") for i in imports)
+        # interfaces may import application + bootstrap container type only
+        if path.is_relative_to(LAYER_ROOTS["interfaces"]):
+            if has_infra:
+                violations.append(f"{path}: interface imports infrastructure")
+            continue
+        if path.is_relative_to(LAYER_ROOTS["domain"]):
+            continue
+        if path.is_relative_to(LAYER_ROOTS["application"]):
+            continue
+        if path.is_relative_to(LAYER_ROOTS["infrastructure"]):
+            # infrastructure may import application ports/dto only — never services.
+            for imp in imports:
+                if _is_module(imp, "application.services"):
+                    violations.append(f"{path}: infrastructure imports application services")
+            continue
+        # other modules under src (should only be bootstrap.py at top level)
+        if has_app and has_infra and path.name != "bootstrap.py":
+            violations.append(f"{path}: non-bootstrap composition of app+infra")
+
+    # bootstrap itself must import both
+    boot_imports = _imports(bootstrap)
+    assert any(_is_module(i, "application") for i in boot_imports)
+    assert any(_is_module(i, "infrastructure") for i in boot_imports)
+    assert not violations, "Composition root violations:\n" + "\n".join(violations)
+
+
+def test_no_forbidden_phase_modules() -> None:
+    forbidden_names = {
+        "strategies",
+        "backtest",
+        "paper",
+        "execution",
+        "orders",
+        "fills",
+    }
+    found: list[str] = []
+    for path in SRC.rglob("*"):
+        if path.name in forbidden_names or path.stem in forbidden_names:
+            found.append(str(path.relative_to(PROJECT_ROOT)))
+    assert not found, f"Forbidden Phase 2+ modules present: {found}"
+
+
+def test_interfaces_mcp_imports_application_not_domain_models_for_response() -> None:
+    """MCP server returns DTOs through application services, not domain dumps."""
+    server = LAYER_ROOTS["interfaces"] / "mcp" / "server.py"
+    text = server.read_text(encoding="utf-8")
+    assert "bootstrap" in text or "ApplicationContainer" in text
+    assert "model_dump" in text
+
+
+def test_d6b1_codec_has_no_unsafe_serialization() -> None:
+    """Codec source must not use pickle/marshal/default=str/reflection serialization."""
+    path = (
+        LAYER_ROOTS["infrastructure"] / "providers" / "common" / "verified_snapshot_cache_codec.py"
+    )
+    text = path.read_text(encoding="utf-8")
+    for forbidden in (
+        "import pickle",
+        "import marshal",
+        "from pickle",
+        "from marshal",
+        "pickle.",
+        "marshal.",
+        "default=str",
+        "importlib.import_module",
+        "__import__",
+        "globals()",
+        "getattr(__builtins__",
+    ):
+        assert forbidden not in text, f"unsafe serialization primitive present: {forbidden}"
+
+
+def test_d6b1_ports_stay_in_application_without_infrastructure() -> None:
+    """Cache codec / engine ports are application Protocols only."""
+    for rel in (
+        ("ports", "provider_cache_codec.py"),
+        ("ports", "provider_router_engine.py"),
+    ):
+        path = LAYER_ROOTS["application"].joinpath(*rel)
+        for imp in _imports(path):
+            assert not _is_module(imp, "infrastructure"), (path, imp)
+            assert not _is_module(imp, "interfaces"), (path, imp)
+            assert not _is_module(imp, "bootstrap"), (path, imp)
+
+
+def test_d6b2_facade_does_not_import_infrastructure() -> None:
+    """ProviderRouter is application-only; must not import infrastructure."""
+    path = LAYER_ROOTS["application"] / "services" / "provider_router.py"
+    for imp in _imports(path):
+        assert not _is_module(imp, "infrastructure"), (path, imp)
+        assert not _is_module(imp, "interfaces"), (path, imp)
+        assert not _is_module(imp, "bootstrap"), (path, imp)
+
+
+def test_d6b2_settings_port_stays_in_application() -> None:
+    """ProviderRouterSettings Protocol must not depend on infrastructure Settings."""
+    path = LAYER_ROOTS["application"] / "ports" / "provider_router_settings.py"
+    for imp in _imports(path):
+        assert not _is_module(imp, "infrastructure"), (path, imp)
+        assert not _is_module(imp, "interfaces"), (path, imp)
+        assert not _is_module(imp, "bootstrap"), (path, imp)
+    text = path.read_text(encoding="utf-8")
+    assert "AppSettings" not in text
+    assert "pydantic" not in text
+
+
+def test_d6b2_engine_does_not_import_application_services() -> None:
+    """Engine may use ports/dto + resilience helpers; never application services."""
+    path = LAYER_ROOTS["infrastructure"] / "providers" / "router_engine.py"
+    imports = _imports(path)
+    service_imports = [i for i in imports if _is_module(i, "application.services")]
+    assert not service_imports, service_imports
+    assert any(_is_module(i, "application.ports") for i in imports)
+    assert any(_is_module(i, "application.dto") for i in imports)
+    text = path.read_text(encoding="utf-8")
+    for forbidden in (
+        "import pickle",
+        "from pickle",
+        "import marshal",
+        "from marshal",
+        "default=str",
+        "AppSettings",
+    ):
+        assert forbidden not in text, f"forbidden in engine: {forbidden}"
+
+
+def test_d6b1_codec_does_not_import_application_services() -> None:
+    """VerifiedMarketSnapshotCacheCodec may use ports/dto + domain, not services."""
+    path = (
+        LAYER_ROOTS["infrastructure"] / "providers" / "common" / "verified_snapshot_cache_codec.py"
+    )
+    imports = _imports(path)
+    service_imports = [i for i in imports if _is_module(i, "application.services")]
+    assert not service_imports, service_imports
+    assert any(_is_module(i, "application.dto") for i in imports)
+    assert any(_is_module(i, "domain") for i in imports)
+    assert "pickle" not in imports
+    assert "marshal" not in imports
+
+
+def test_d7_domain_modules_stay_framework_free() -> None:
+    """D7 pure rules may only import domain + stdlib (no settings/sqlalchemy/mcp)."""
+    paths = [
+        LAYER_ROOTS["domain"] / "market" / "freshness.py",
+        LAYER_ROOTS["domain"] / "market" / "session.py",
+        LAYER_ROOTS["domain"] / "market" / "stale_guard.py",
+        LAYER_ROOTS["domain"] / "common" / "as_of.py",
+    ]
+    allowed_tops = {
+        "__future__",
+        "domain",
+        "dataclasses",
+        "datetime",
+        "typing",
+        "collections",
+        "zoneinfo",
+    }
+    violations: list[str] = []
+    for path in paths:
+        for imp in _imports(path):
+            top = _top_level(imp)
+            if top in FORBIDDEN_DOMAIN_MODULES:
+                violations.append(f"{path}: imports framework {imp}")
+            if _is_module(imp, "application") or _is_module(imp, "infrastructure"):
+                violations.append(f"{path}: imports outer layer {imp}")
+            if _is_module(imp, "interfaces") or _is_module(imp, "bootstrap"):
+                violations.append(f"{path}: imports outer layer {imp}")
+            if top not in allowed_tops and not _is_module(imp, "domain"):
+                violations.append(f"{path}: unexpected import {imp}")
+    assert not violations, "D7 domain purity violations:\n" + "\n".join(violations)
+
+
+def test_vendor_registry_imports_ports_not_application_services() -> None:
+    """VendorRegistry may use CategoryProvider port; never application services."""
+    path = LAYER_ROOTS["infrastructure"] / "providers" / "registry.py"
+    imports = _imports(path)
+    assert any(_is_module(i, "application.ports") for i in imports), (
+        "registry must import application.ports.category_provider"
+    )
+    service_imports = [i for i in imports if _is_module(i, "application.services")]
+    assert not service_imports, f"registry must not import application.services: {service_imports}"
+
+
+def test_domain_market_validation_imports_only_domain_or_stdlib() -> None:
+    """Authoritative validate_verified_market_snapshot lives in domain only."""
+    path = LAYER_ROOTS["domain"] / "market" / "validation.py"
+    assert path.is_file(), "domain/market/validation.py must exist"
+    allowed_tops = {
+        "__future__",
+        "domain",
+        "decimal",
+        "dataclasses",
+        "datetime",
+        "typing",
+        "collections",
+    }
+    imports = _imports(path)
+    violations: list[str] = []
+    for imp in imports:
+        top = _top_level(imp)
+        if top in FORBIDDEN_DOMAIN_MODULES:
+            violations.append(f"framework {imp}")
+        if _is_module(imp, "application") or _is_module(imp, "infrastructure"):
+            violations.append(f"outer layer {imp}")
+        if _is_module(imp, "interfaces") or _is_module(imp, "bootstrap"):
+            violations.append(f"outer layer {imp}")
+        if top not in allowed_tops and top not in FORBIDDEN_DOMAIN_MODULES:
+            violations.append(f"unexpected import {imp}")
+    assert not violations, "domain.market.validation boundary violations:\n" + "\n".join(violations)
+    # Must define the public validator symbol.
+    text = path.read_text(encoding="utf-8")
+    assert "def validate_verified_market_snapshot" in text
+
+
+def test_contract_validation_is_domain_reexport_only() -> None:
+    """Infrastructure contract_validation is a compatibility re-export only."""
+    path = LAYER_ROOTS["infrastructure"] / "providers" / "common" / "contract_validation.py"
+    imports = _imports(path)
+    for imp in imports:
+        assert not _is_module(imp, "application.services"), imp
+        assert not _is_module(imp, "interfaces"), imp
+        assert not _is_module(imp, "bootstrap"), imp
+    assert any(_is_module(i, "domain.market.validation") for i in imports), (
+        "must re-export from domain.market.validation"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    assert "validate_verified_market_snapshot" not in defined, (
+        "infrastructure must not redefine validate_verified_market_snapshot"
+    )
+    assert not any(name.startswith("_require_") for name in defined), (
+        f"infrastructure must not host validation helpers: {defined}"
+    )
+
+
+def test_contract_validation_symbol_is_domain_function_object() -> None:
+    """Compatibility export must be the same function object as domain."""
+    from domain.market.validation import (
+        validate_verified_market_snapshot as domain_fn,
+    )
+    from infrastructure.providers.common import (
+        validate_verified_market_snapshot as package_fn,
+    )
+    from infrastructure.providers.common.contract_validation import (
+        validate_verified_market_snapshot as infra_fn,
+    )
+
+    assert domain_fn is infra_fn
+    assert domain_fn is package_fn
+    # No second implementation body in infrastructure module source.
+    infra_path = LAYER_ROOTS["infrastructure"] / "providers" / "common" / "contract_validation.py"
+    assert "def validate_verified_market_snapshot" not in infra_path.read_text(encoding="utf-8")
+
+
+def test_criticality_policy_stays_in_application() -> None:
+    """CriticalityPolicy is application-only; must not import infrastructure."""
+    path = LAYER_ROOTS["application"] / "services" / "criticality_policy.py"
+    for imp in _imports(path):
+        assert not _is_module(imp, "infrastructure"), imp
+        assert not _is_module(imp, "interfaces"), imp
+
+
+def test_d8a_routed_service_does_not_import_infrastructure() -> None:
+    """RoutedMarketSnapshotService is application-only (codec via Protocol)."""
+    path = LAYER_ROOTS["application"] / "services" / "routed_market_snapshot_service.py"
+    imports = _imports(path)
+    for imp in imports:
+        assert not _is_module(imp, "infrastructure"), (path, imp)
+        assert not _is_module(imp, "interfaces"), (path, imp)
+        assert not _is_module(imp, "bootstrap"), (path, imp)
+    # Full contract validator must come from domain, not infrastructure.
+    assert any(_is_module(i, "domain.market.validation") for i in imports), (
+        "routed service must import domain.market.validation"
+    )
+    text = path.read_text(encoding="utf-8")
+    # No reflection-based get_snapshot dispatch.
+    assert "getattr(" not in text
+    assert "hasattr(" not in text
+    assert "validate_verified_market_snapshot" in text
+
+
+def test_d8a_category_provider_port_stays_in_application() -> None:
+    """MarketSnapshotCategoryProvider Protocol must not depend on infrastructure."""
+    path = LAYER_ROOTS["application"] / "ports" / "market_snapshot_category_provider.py"
+    for imp in _imports(path):
+        assert not _is_module(imp, "infrastructure"), (path, imp)
+        assert not _is_module(imp, "interfaces"), (path, imp)
+        assert not _is_module(imp, "bootstrap"), (path, imp)
+    text = path.read_text(encoding="utf-8")
+    assert "@runtime_checkable" in text
+    assert "MarketSnapshotCategoryProvider" in text
+
+
+def test_d8a_adapter_does_not_import_application_services() -> None:
+    """MarketSnapshotCategoryAdapter may use ports/domain only, not services."""
+    path = (
+        LAYER_ROOTS["infrastructure"]
+        / "providers"
+        / "common"
+        / "market_snapshot_category_adapter.py"
+    )
+    imports = _imports(path)
+    service_imports = [i for i in imports if _is_module(i, "application.services")]
+    assert not service_imports, service_imports
+    assert any(_is_module(i, "application.ports") for i in imports)
+    assert any(_is_module(i, "domain") for i in imports)
+    for imp in imports:
+        assert not _is_module(imp, "bootstrap"), imp
+        assert not _is_module(imp, "interfaces"), imp
+    text = path.read_text(encoding="utf-8")
+    assert "pickle" not in text
+    assert "marshal" not in text
+
+
+def test_d8b_provider_state_backend_does_not_import_application_services() -> None:
+    """Backend selection stays in infrastructure; no application.services."""
+    for rel in (
+        ("persistence", "in_memory_provider_state.py"),
+        ("persistence", "provider_state_backend.py"),
+    ):
+        path = LAYER_ROOTS["infrastructure"].joinpath(*rel)
+        imports = _imports(path)
+        service_imports = [i for i in imports if _is_module(i, "application.services")]
+        assert not service_imports, (path, service_imports)
+        for imp in imports:
+            assert not _is_module(imp, "bootstrap"), (path, imp)
+            assert not _is_module(imp, "interfaces"), (path, imp)
+
+
+def test_d8b_coordinator_uses_single_routed_service() -> None:
+    """Coordinator must accept one routed_service, not dual MarketSnapshotService."""
+    path = LAYER_ROOTS["application"] / "services" / "mock_market_snapshot_coordinator.py"
+    text = path.read_text(encoding="utf-8")
+    assert "routed_service" in text
+    assert "a_share_service" not in text
+    assert "us_service" not in text
+    assert "RoutedMarketSnapshotService" in text
+    for imp in _imports(path):
+        assert not _is_module(imp, "infrastructure"), (path, imp)
+        assert not _is_module(imp, "interfaces"), (path, imp)
+        assert not _is_module(imp, "bootstrap"), (path, imp)
+
+
+def test_d8b_bootstrap_wires_router_fields() -> None:
+    """Composition root exposes provider_router / vendor_registry / routed service."""
+    path = SRC / "bootstrap.py"
+    text = path.read_text(encoding="utf-8")
+    assert "provider_router" in text
+    assert "vendor_registry" in text
+    assert "routed_market_snapshot_service" in text
+    assert "build_provider_state_backend" in text
+    assert "YamlVendorChainConfig" in text
+    assert "MarketSnapshotCategoryAdapter" in text
+    assert "ProviderRouterEngine" in text
+    assert "VerifiedMarketSnapshotCacheCodec" in text
+    # Must not run migrations or seed in build_application (imports / call sites).
+    assert "command.upgrade" not in text
+    imports = _imports(path)
+    assert not any(_is_module(i, "alembic") for i in imports)
+    assert not any(
+        _is_module(i, "infrastructure.persistence.instrument_seed_loader") for i in imports
+    )
+
+
+# --- Phase 1C C2a layout / boundary anti-regression ---
+
+
+_C2A_BUSINESS_ROW_NAMES = (
+    "ResearchEvidenceRow",
+    "CaseEvidenceLinkRow",
+    "EvidenceAssessmentRow",
+    "ResearchReportRow",
+    "ResearchEventRow",
+    "DecisionRecordRow",
+    "JournalEntryRow",
+)
+
+
+def test_public_tool_surface_is_exactly_fifty_two() -> None:
+    """The consolidated public façade stays exact and excludes internal writes."""
+    from interfaces.mcp.server import (
+        FORBIDDEN_PUBLIC_TOOL_NAMES,
+        LEGACY_PUBLIC_TOOL_NAMES,
+        PHASE1A_TOOL_NAMES,
+        PHASE1B_RESEARCH_TOOL_NAMES,
+        PHASE1C_RESEARCH_TOOL_NAMES,
+        PHASE1D_TOOL_NAMES,
+        PHASE1E_A_SHARE_TOOL_NAMES,
+        PHASE1F_US_MARKET_TOOL_NAMES,
+        PHASE1G_US_RESEARCH_TOOL_NAMES,
+        PHASE1H_US_CONTEXT_TOOL_NAMES,
+        PHASE1I_PORTFOLIO_TOOL_NAMES,
+        PHASE1J_CONTEXT_TOOL_NAMES,
+        PHASE1K_CHALLENGE_TOOL_NAMES,
+        PHASE1L_WORKFLOW_TOOL_NAMES,
+        PHASE2_WATCHLIST_TOOL_NAMES,
+        PHASE2B_RISK_TOOL_NAMES,
+        PHASE2C_MONITORING_TOOL_NAMES,
+        PHASE2D_TECHNICAL_TOOL_NAMES,
+        PUBLIC_TOOL_NAMES,
+        RETIRED_PUBLIC_TOOL_NAMES,
+    )
+
+    assert len(LEGACY_PUBLIC_TOOL_NAMES) == 15
+    assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
+    assert len(PHASE1F_US_MARKET_TOOL_NAMES) == 4
+    assert len(PUBLIC_TOOL_NAMES) == 52
+    assert len(PHASE1H_US_CONTEXT_TOOL_NAMES) == 4
+    assert len(PHASE1I_PORTFOLIO_TOOL_NAMES) == 3
+    assert len(PHASE1J_CONTEXT_TOOL_NAMES) == 1
+    assert len(PHASE1K_CHALLENGE_TOOL_NAMES) == 3
+    assert len(PHASE2_WATCHLIST_TOOL_NAMES) == 3
+    assert len(PHASE2B_RISK_TOOL_NAMES) == 3
+    assert len(PHASE2C_MONITORING_TOOL_NAMES) == 6
+    assert len(PHASE2D_TECHNICAL_TOOL_NAMES) == 1
+    assert len(PHASE1L_WORKFLOW_TOOL_NAMES) == 5
+    assert len(PHASE1C_RESEARCH_TOOL_NAMES) == 5
+    prior = PHASE1A_TOOL_NAMES | PHASE1B_RESEARCH_TOOL_NAMES | PHASE1D_TOOL_NAMES
+    assert len(prior) == 10
+    assert prior <= PUBLIC_TOOL_NAMES
+    assert prior | PHASE1C_RESEARCH_TOOL_NAMES == LEGACY_PUBLIC_TOOL_NAMES
+    assert (
+        LEGACY_PUBLIC_TOOL_NAMES
+        | PHASE1E_A_SHARE_TOOL_NAMES
+        | PHASE1F_US_MARKET_TOOL_NAMES
+        | PHASE1G_US_RESEARCH_TOOL_NAMES
+        | PHASE1H_US_CONTEXT_TOOL_NAMES
+        | PHASE1I_PORTFOLIO_TOOL_NAMES
+        | PHASE1J_CONTEXT_TOOL_NAMES
+        | PHASE1K_CHALLENGE_TOOL_NAMES
+        | PHASE2_WATCHLIST_TOOL_NAMES
+        | PHASE2B_RISK_TOOL_NAMES
+            | PHASE2C_MONITORING_TOOL_NAMES
+            | PHASE2D_TECHNICAL_TOOL_NAMES
+            | PHASE1L_WORKFLOW_TOOL_NAMES
+        == PUBLIC_TOOL_NAMES
+    )
+    assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
+    assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
+    server_text = (LAYER_ROOTS["interfaces"] / "mcp" / "server.py").read_text(encoding="utf-8")
+    for name in (
+        PHASE1C_RESEARCH_TOOL_NAMES | PHASE1E_A_SHARE_TOOL_NAMES | PHASE1F_US_MARKET_TOOL_NAMES
+    ):
+        assert f'name="{name}"' in server_text
+    for forbidden in FORBIDDEN_PUBLIC_TOOL_NAMES | RETIRED_PUBLIC_TOOL_NAMES:
+        assert f'name="{forbidden}"' not in server_text
+    bootstrap = (PROJECT_ROOT / "src" / "bootstrap.py").read_text(encoding="utf-8")
+    for field in (
+        "evidence_service",
+        "research_archive_service",
+        "research_search_service",
+        "research_timeline_service",
+        "journal_service",
+        "decision_record_service",
+        "search_backend_probe",
+        "us_tool_coordinator",
+    ):
+        assert field in bootstrap
+
+
+def test_c3_uow_exposes_search_index_with_business_properties() -> None:
+    """Research UoW protocol/concrete expose C2b properties plus search_index."""
+    port = LAYER_ROOTS["application"] / "ports" / "research_unit_of_work.py"
+    concrete = LAYER_ROOTS["infrastructure"] / "persistence" / "research_unit_of_work.py"
+    port_text = port.read_text(encoding="utf-8")
+    concrete_text = concrete.read_text(encoding="utf-8")
+    for name in (
+        "evidence",
+        "case_evidence_links",
+        "evidence_assessments",
+        "reports",
+        "events",
+        "decisions",
+        "journal",
+        "search_index",
+    ):
+        assert f"def {name}(self)" in port_text or f"def {name}(" in port_text, name
+        assert f"def {name}(self)" in concrete_text, name
+    assert "SqlAlchemyResearchSearchIndex" in concrete_text
+    assert "ResearchSearchIndex" in port_text
+
+
+def test_c3_search_index_uses_core_sql_without_orm_rows() -> None:
+    """Search projection must not introduce ORM Row classes or full-table Python scan."""
+    impl = (
+        LAYER_ROOTS["infrastructure"] / "persistence" / "repositories" / "research_search_index.py"
+    )
+    text = impl.read_text(encoding="utf-8")
+    for forbidden in (
+        "class ResearchSearchDocumentRow",
+        "class ResearchSearchDocumentCaseRow",
+        "class ResearchSearchDocumentInstrumentRow",
+        "class ResearchSearchDocumentTagRow",
+        "class ResearchSearchFtsRow",
+        '__tablename__ = "research_search_documents"',
+        "LIKE '%",
+        "instrument_ids_text LIKE",
+    ):
+        assert forbidden not in text, f"forbidden pattern present: {forbidden}"
+    assert "build_fts_match_query" in text
+    assert "bm25" in text
+    assert "SearchBackendUnavailable" in text
+
+
+def test_c2a_business_orm_rows_only_no_search_rows() -> None:
+    """Exactly seven frozen business ORM rows; no Search document/FTS ORM rows."""
+    path = LAYER_ROOTS["infrastructure"] / "persistence" / "models.py"
+    text = path.read_text(encoding="utf-8")
+    for name in _C2A_BUSINESS_ROW_NAMES:
+        assert f"class {name}(" in text, f"missing ORM row {name}"
+    for forbidden in (
+        "class ResearchSearchDocumentRow",
+        "class ResearchSearchDocumentCaseRow",
+        "class ResearchSearchDocumentInstrumentRow",
+        "class ResearchSearchDocumentTagRow",
+        "class ResearchSearchFtsRow",
+        "class SearchDocumentRow",
+    ):
+        assert forbidden not in text, f"forbidden Search ORM row present: {forbidden}"
+    # Table names for search must not be registered as ORM __tablename__
+    for table in (
+        "research_search_documents",
+        "research_search_document_cases",
+        "research_search_document_instruments",
+        "research_search_document_tags",
+        "research_search_fts",
+    ):
+        assert f'__tablename__ = "{table}"' not in text
+
+
+def test_c2a_models_stay_in_infrastructure_without_outer_layers() -> None:
+    """Phase 1C ORM models may use SQLAlchemy + local metadata only."""
+    path = LAYER_ROOTS["infrastructure"] / "persistence" / "models.py"
+    imports = _imports(path)
+    for imp in imports:
+        assert not _is_module(imp, "application.services"), imp
+        assert not _is_module(imp, "interfaces"), imp
+        assert not _is_module(imp, "bootstrap"), imp
+        assert not _is_module(imp, "mcp"), imp
+    # Domain enums must not be imported into ORM rows (wire values are plain TEXT).
+    domain_imports = [i for i in imports if _is_module(i, "domain")]
+    assert not domain_imports, f"models.py must not import domain packages: {domain_imports}"
+
+
+def test_c2a_migration_file_is_sqlite_safe_and_probes_fts5() -> None:
+    """0004 must probe FTS5, create triggers, and avoid Base.metadata.create_all."""
+    path = PROJECT_ROOT / "migrations" / "versions" / "0004_phase1c_research_memory.py"
+    text = path.read_text(encoding="utf-8")
+    assert 'revision: str = "0004_phase1c_research_memory"' in text
+    assert "down_revision" in text
+    assert "0003_phase1d_instrument_provider" in text
+    assert "sqlite_compileoption_used('ENABLE_FTS5')" in text
+    assert "CREATE VIRTUAL TABLE research_search_fts USING fts5" in text
+    assert "research_search_documents_ai" in text
+    assert "research_search_documents_ad" in text
+    assert "research_search_documents_au" in text
+    assert "phase1c_research_memory" in text
+    assert "Base.metadata.create_all" not in text
+    assert "create_all(" not in text
+
+
+# --- Layout / packaging anti-regression (no trading_partner package layer) ---
+
+CACHE_DIR_NAMES = frozenset({"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
+
+ALLOWED_SRC_TOP_LEVEL = frozenset(
+    {
+        "bootstrap.py",
+        "application",
+        "domain",
+        "infrastructure",
+        "interfaces",
+    }
+)
+
+REQUIRED_ROOT_MARKDOWN = frozenset({"README.md", "AGENTS.md", "SECURITY.md"})
+
+
+def test_src_trading_partner_package_does_not_exist() -> None:
+    """Imports are top-level; there is no trading_partner package layer under src."""
+    assert not (SRC / "trading_partner").exists()
+
+
+def test_src_top_level_layout_is_exactly_allowed() -> None:
+    """src may only contain bootstrap.py and the four layer packages (ignore caches)."""
+    assert SRC.is_dir()
+    actual = {
+        entry.name
+        for entry in SRC.iterdir()
+        if entry.name not in CACHE_DIR_NAMES and not entry.name.startswith(".")
+    }
+    assert actual == ALLOWED_SRC_TOP_LEVEL, (
+        f"Unexpected src top-level entries: {sorted(actual - ALLOWED_SRC_TOP_LEVEL)}; "
+        f"missing: {sorted(ALLOWED_SRC_TOP_LEVEL - actual)}"
+    )
+
+
+def test_project_root_markdown_is_exactly_readme_and_agents() -> None:
+    """Root-level markdown is limited to public entry-point documents."""
+    actual = {path.name for path in PROJECT_ROOT.glob("*.md")}
+    assert actual == REQUIRED_ROOT_MARKDOWN, (
+        f"Unexpected root *.md: {sorted(actual - REQUIRED_ROOT_MARKDOWN)}; "
+        f"missing: {sorted(REQUIRED_ROOT_MARKDOWN - actual)}"
+    )

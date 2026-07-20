@@ -1,0 +1,24 @@
+﻿tabData = [
+	{
+		"id": 0,
+		"date": "2024-01-15",
+		"market": "SSE Northbound",
+		"tradingDay": 1,
+		"content": [
+			{
+				"style": 1,
+				"table": {
+					"classname": "tradingTable",
+					"schema": [
+						["Total Turnover", "Buy Turnover", "Sell Turnover"]
+					],
+					"tr": [
+						{"td": [["1"]]},
+						{"td": [["2"]]},
+						{"td": [["3"]]}
+					]
+				}
+			}
+		]
+	}
+]

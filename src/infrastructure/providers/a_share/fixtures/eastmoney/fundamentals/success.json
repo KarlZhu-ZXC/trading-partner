@@ -1,0 +1,25 @@
+{
+  "version": "test",
+  "result": {
+    "pages": 1,
+    "data": [
+      {
+        "SECUCODE": "600519.SH",
+        "SECURITY_CODE": "600519",
+        "REPORT_DATE": "2023-12-31",
+        "NOTICE_DATE": "2023-12-31 00:00:00",
+        "EPSJB": "59.55",
+        "BPS": "180.22",
+        "ROE_WEIGHT": "36.12",
+        "MGJYXJJE": "45.10",
+        "XSMLL": "91.20",
+        "TOTALOPERATEREVE": "150560000000",
+        "PARENTNETPROFIT": "74734000000",
+        "KCFJCXSYJLR": "74700000000"
+      }
+    ]
+  },
+  "success": true,
+  "message": "ok",
+  "code": 0
+}

@@ -1,0 +1,17 @@
+{
+  "result": {
+    "status": {"code": 0},
+    "data": {
+      "expireDay": "2026-07-22",
+      "remainderDays": 5,
+      "stockId": "510050",
+      "cateId": "510050C2607",
+      "other": {
+        "name": "50ETF",
+        "type": 10,
+        "symbol": "s_sh510050",
+        "url": "https://finance.sina.com.cn/"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "test",
+  "result": {
+    "data": [
+      {
+        "SECUCODE": "600519.SH",
+        "SECURITY_CODE": "600519",
+        "FREE_DATE": "2023-11-15",
+        "NOTICE_DATE": "2023-11-01",
+        "FREE_SHARES_TYPE": "首发原股东限售股份",
+        "FREE_SHARES": "1000000",
+        "ACTUAL_FREE_SHARES": "1000000",
+        "LIFT_MARKET_CAP": "1680500000"
+      }
+    ]
+  },
+  "success": true,
+  "code": 0
+}

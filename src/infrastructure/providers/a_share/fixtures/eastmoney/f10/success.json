@@ -1,0 +1,19 @@
+{
+  "version": "test",
+  "result": {
+    "pages": 1,
+    "data": [
+      {
+        "SECUCODE": "600519.SH",
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "ORG_NAME": "贵州茅台酒股份有限公司",
+        "MAIN_BUSINESS": "茅台酒及系列酒的生产与销售",
+        "ORG_PROFILE": "公司主要从事茅台酒系列产品的生产与销售。",
+        "HOLDER_NUM": "180000"
+      }
+    ]
+  },
+  "success": true,
+  "code": 0
+}

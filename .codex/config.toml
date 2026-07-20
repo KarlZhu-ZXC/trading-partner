@@ -1,0 +1,6 @@
+# Codex project configuration for Trading Partner MCP (Phase 1A).
+# Start the stdio MCP server from the repository root via uv.
+
+[mcp_servers.trading-partner]
+command = "uv"
+args = ["run", "trading-partner-mcp"]

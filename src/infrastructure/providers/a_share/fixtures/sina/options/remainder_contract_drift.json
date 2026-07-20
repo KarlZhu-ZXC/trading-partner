@@ -1,0 +1,17 @@
+{
+  "result": {
+    "status": {"code": 0},
+    "data": {
+      "expireDay": "2026-07-22",
+      "remainderDays": 5,
+      "stockId": "510300",
+      "cateId": "510300C2607",
+      "other": {
+        "name": "300ETF",
+        "type": 10,
+        "symbol": "s_sh510300",
+        "url": "https://finance.sina.com.cn/"
+      }
+    }
+  }
+}

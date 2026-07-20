@@ -1,0 +1,13 @@
+{
+  "announcements": [
+    {
+      "announcementId": "1219000001",
+      "announcementTitle": "2023年年度报告",
+      "announcementTime": "2023-12-31 18:00:00",
+      "announcementTypeName": "定期报告",
+      "adjunctUrl": "finalpage/2023-12-31/1219000001.PDF"
+    }
+  ],
+  "totalAnnouncement": 1,
+  "hasMore": false
+}

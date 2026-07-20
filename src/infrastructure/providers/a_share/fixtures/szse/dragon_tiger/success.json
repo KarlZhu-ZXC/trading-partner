@@ -1,0 +1,8 @@
+{"records":[{
+  "SECURITY_CODE":"002140",
+  "reason":"连续三个交易日内，涨幅偏离值累计达到20%的证券",
+  "buy_total_cny":"63010358",
+  "sell_total_cny":"66614295.76",
+  "net_buy_cny":"-3603937.76",
+  "seats":[{"rank":1,"side":"buy","branch_name":"测试营业部","amount_cny":"15694882","is_institution":false}]
+}]}

@@ -1,0 +1,648 @@
+"""Typed application settings loaded from the project-root ``.env`` file."""
+
+from __future__ import annotations
+
+import re
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Literal, Self
+from urllib.parse import urlsplit
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from domain.common.enums import AppEnvironment, DataCategory, LogLevel
+from domain.common.errors import ConfigurationError
+
+# settings.py → config → infrastructure → src → PROJECT_ROOT
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# Default relative path (single tracked source at project root). Exact match is
+# required for the installed-wheel packaged-copy fallback (Phase 1D v1.29).
+_DEFAULT_VENDOR_CHAIN_RELATIVE = Path("config/vendor_chains.default.yaml")
+# Wheel force-include lands a copy beside this module; not a second source file.
+PACKAGED_VENDOR_CHAIN_PATH = Path(__file__).resolve().parent / "vendor_chains.default.yaml"
+# Phase 1E E1: packaged A-share trading calendar (force-include; not bootstrap-wired).
+PACKAGED_A_SHARE_TRADING_CALENDAR_PATH = (
+    Path(__file__).resolve().parent / "a_share_trading_calendar.v1.json"
+)
+# Phase 1E E3: packaged CNINFO orgId map (force-include; not bootstrap-wired).
+PACKAGED_CNINFO_ORG_MAP_PATH = Path(__file__).resolve().parent / "cninfo_org_map.v1.json"
+
+_SECRET_FIELD_NAMES = frozenset(
+    {
+        "alpha_vantage_api_key",
+        "fred_api_key",
+        "broker_api_key",
+        "broker_api_secret",
+        "iwencai_api_key",
+        "schwab_client_id",
+        "schwab_client_secret",
+        "schwab_account_hashes",
+        "schwab_token_path",
+        "polymarket_proxy_url",
+        "apify_api_token",
+    }
+)
+
+# Phase 1E §22 shortest safe TTL per category (seconds).
+_CACHE_TTL_BY_CATEGORY: dict[str, str] = {
+    "MARKET_QUOTE": "cache_ttl_market_quote_seconds",
+    "MARKET_SNAPSHOT": "cache_ttl_market_snapshot_seconds",
+    "MARKET_OHLCV": "cache_ttl_market_ohlcv_seconds",
+    "MARKET_STRUCTURE": "cache_ttl_market_structure_seconds",
+    "MARKET_BREADTH": "cache_ttl_us_market_breadth_seconds",
+    "INSTRUMENT_MASTER": "cache_ttl_instrument_master_seconds",
+    "CAPITAL": "cache_ttl_capital_seconds",
+    "LIMIT_UP": "cache_ttl_limit_up_seconds",
+    "OPTIONS": "cache_ttl_options_seconds",
+    "SENTIMENT": "cache_ttl_sentiment_seconds",
+    "INTERACTIVE_QA": "cache_ttl_interactive_qa_seconds",
+    "RESEARCH_REPORTS": "cache_ttl_research_reports_seconds",
+    "CORPORATE_ACTIONS": "cache_ttl_corporate_actions_seconds",
+    "NEWS": "cache_ttl_news_seconds",
+    "ANNOUNCEMENTS": "cache_ttl_announcements_seconds",
+    "FUNDAMENTALS": "cache_ttl_fundamentals_seconds",
+    "FINANCIAL_STATEMENTS": "cache_ttl_financial_statements_seconds",
+    # Phase 1G research categories.
+    "FILINGS": "cache_ttl_filings_seconds",
+    "INSIDER_ACTIVITY": "cache_ttl_insider_activity_seconds",
+}
+
+_MARKET_TIMEOUT_CATEGORIES = frozenset(
+    {
+        DataCategory.MARKET_QUOTE,
+        DataCategory.MARKET_OHLCV,
+        DataCategory.MARKET_SNAPSHOT,
+        DataCategory.MARKET_STRUCTURE,
+        DataCategory.MARKET_BREADTH,
+    }
+)
+
+_REDACTED = "***REDACTED***"
+_CREDENTIAL_URL_RE = re.compile(r"://[^/@:\s]+:[^/@\s]+@")
+
+
+class AppSettings(BaseSettings):
+    """Root configuration. Extra env keys are ignored for forward compatibility."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        frozen=True,
+    )
+
+    app_name: str = Field(min_length=1)
+    app_env: AppEnvironment
+    log_level: LogLevel
+    database_url: str = Field(min_length=1)
+    mcp_server_name: str = Field(min_length=1)
+    default_timezone: str = Field(min_length=1)
+    # Phase 1A global timeout (kept for wire/compat; timeout_for prefers D5b fields).
+    provider_timeout_seconds: float = Field(gt=0)
+
+    # Non-secret path to Vendor Chain YAML. Relative paths resolve against
+    # PROJECT_ROOT; default relative may fall back to the packaged wheel copy.
+    vendor_chain_path: Path = Field(default=_DEFAULT_VENDOR_CHAIN_RELATIVE)
+
+    # Provider timeouts (Phase 1D D5b). Market categories use market override.
+    provider_timeout_default_seconds: float = Field(default=30.0, gt=0)
+    provider_timeout_market_seconds: float = Field(default=15.0, gt=0)
+    provider_timeout_us_breadth_seconds: float = Field(default=30.0, gt=0)
+
+    # Same-vendor retry (Phase 1D D5b).
+    provider_retry_max_attempts: int = Field(default=2, ge=1)
+    provider_retry_base_delay_seconds: float = Field(default=0.05, ge=0)
+    provider_retry_max_delay_seconds: float = Field(default=1.0, ge=0)
+
+    # Circuit breaker (Phase 1D D5b). Unwired until Router (D6+).
+    circuit_failure_threshold: int = Field(default=5, ge=1)
+    circuit_recovery_timeout_seconds: float = Field(default=60.0, gt=0)
+    circuit_half_open_max_calls: int = Field(default=1, ge=1)
+    enable_circuit_breaker: bool = True
+
+    # Auth failure chain fallback (D6 readiness; unwired in D5b).
+    auth_failure_fallback: bool = False
+
+    # Provider cache TTL overrides (seconds). Phase 1D §12.5 + Phase 1E §22.
+    cache_ttl_market_quote_seconds: int = Field(default=5, gt=0)
+    cache_ttl_market_snapshot_seconds: int = Field(default=30, gt=0)
+    cache_ttl_market_ohlcv_seconds: int = Field(default=300, gt=0)
+    cache_ttl_market_structure_seconds: int = Field(default=5, gt=0)
+    cache_ttl_us_market_breadth_seconds: int = Field(default=900, gt=0)
+    cache_ttl_instrument_master_seconds: int = Field(default=86400, gt=0)
+    cache_ttl_capital_seconds: int = Field(default=30, gt=0)
+    cache_ttl_limit_up_seconds: int = Field(default=30, gt=0)
+    cache_ttl_options_seconds: int = Field(default=15, gt=0)
+    cache_ttl_sentiment_seconds: int = Field(default=30, gt=0)
+    cache_ttl_interactive_qa_seconds: int = Field(default=300, gt=0)
+    cache_ttl_research_reports_seconds: int = Field(default=3600, gt=0)
+    cache_ttl_corporate_actions_seconds: int = Field(default=21600, gt=0)
+    cache_ttl_news_seconds: int = Field(default=300, gt=0)
+    cache_ttl_announcements_seconds: int = Field(default=300, gt=0)
+    cache_ttl_fundamentals_seconds: int = Field(default=21600, gt=0)
+    cache_ttl_financial_statements_seconds: int = Field(default=21600, gt=0)
+    cache_ttl_filings_seconds: int = Field(default=3600, gt=0)
+    cache_ttl_insider_activity_seconds: int = Field(default=3600, gt=0)
+    cache_ttl_default_seconds: int = Field(default=300, gt=0)
+    enable_provider_cache: bool = True
+
+    # Stale guard (Phase 1D D7). Unwired until Router (D6b+).
+    stale_guard_max_age_seconds: int = Field(default=86400, ge=0)
+    stale_guard_respect_session: bool = True
+    stale_guard_allow_closed_last_bar: bool = True
+
+    # Freshness thresholds (Phase 1D D7). Unwired until Router (D6b+).
+    freshness_max_fresh_seconds: int = Field(default=60, ge=0)
+    freshness_max_delayed_seconds: int = Field(default=900, ge=0)
+
+    # Phase 1E A-share vendor enablement / transport (safe defaults; no live wiring in E1).
+    eastmoney_enabled: bool = True
+    eastmoney_min_interval_seconds: float = Field(default=1.0, gt=0)
+    eastmoney_jitter_seconds: float = Field(default=0.25, ge=0)
+    tencent_enabled: bool = True
+    cninfo_enabled: bool = True
+    sina_enabled: bool = True
+    ths_enabled: bool = True
+    cls_enabled: bool = True
+    iwencai_enabled: bool = False
+    iwencai_api_key: str | None = None
+    iwencai_base_url: str = Field(default="https://openapi.iwencai.com", min_length=1)
+    http_max_response_bytes: int = Field(default=20_000_000, gt=0)
+    a_share_current_window_seconds: int = Field(default=300, ge=0)
+    a_share_max_fresh_seconds: int = Field(default=30, ge=0)
+    a_share_max_delayed_seconds: int = Field(default=900, ge=0)
+
+    # Phase 1F US market vendor enablement / freshness (safe defaults; no live wiring in F1).
+    yfinance_enabled: bool = True
+    alpha_vantage_enabled: bool = True
+    us_current_window_seconds: int = Field(default=300, ge=0)
+    us_max_fresh_seconds: int = Field(default=30, ge=0)
+    us_max_delayed_seconds: int = Field(default=900, ge=0)
+
+    # Phase 1G US research / SEC (safe defaults; no live wiring in G1).
+    # sec_user_agent is secret-free identification; blank normalizes to None.
+    sec_edgar_enabled: bool = True
+    sec_user_agent: str | None = None
+    us_research_current_window_seconds: int = Field(default=21600, ge=0)
+
+    # Phase 1H optional context providers.
+    fred_enabled: bool = True
+    stocktwits_enabled: bool = False
+    reddit_enabled: bool = True
+    reddit_subreddits: str = "wallstreetbets,stocks,investing"
+    reddit_apify_enabled: bool = False
+    reddit_apify_actor_id: str = Field(default="harshmaur/reddit-scraper", min_length=1)
+    reddit_apify_subreddits: str = (
+        "stocks,investing,securityanalysis,valueinvesting,wallstreetbets,shortsqueeze"
+    )
+    reddit_apify_lookback_days_by_subreddit: str = (
+        "stocks:7,investing:14,securityanalysis:30,valueinvesting:30,"
+        "wallstreetbets:3,shortsqueeze:2"
+    )
+    reddit_apify_max_charge_usd: Decimal = Field(default=Decimal("0.20"), gt=0)
+    apify_api_token: str | None = None
+    polymarket_enabled: bool = True
+    reddit_user_agent: str = Field(default="TradingPartner/1.0", min_length=1)
+    reddit_min_interval_seconds: float = Field(default=6.0, ge=0)
+    reddit_cache_ttl_seconds: int = Field(default=3600, gt=0)
+    reddit_cooldown_default_seconds: int = Field(default=900, gt=0)
+    reddit_cooldown_max_seconds: int = Field(default=3600, gt=0)
+    polymarket_proxy_url: str | None = None
+
+    # Phase 1I read-only account providers. Sources are additive; no unlock/order
+    # credentials exist. Environment values use a JSON array.
+    holdings_sources: tuple[Literal["SCHWAB", "MOOMOO", "MANUAL_CSV"], ...] = ()
+    moomoo_host: str = "127.0.0.1"
+    moomoo_port: int = Field(default=11111, ge=1, le=65535)
+    moomoo_account_ids: str = ""
+    manual_holdings_csv_path: Path | None = None
+
+    # Phase 2 Watchlist Hub. Exactly one upstream is active at runtime.
+    watchlist_source: Literal["MOOMOO", "MANUAL_CSV"] = "MOOMOO"
+    watchlist_default_group: str = Field(default="Favorites", min_length=1)
+    manual_watchlist_csv_path: Path | None = None
+    post_market_sync_delay_minutes: int = Field(default=10, ge=0, le=120)
+    post_market_sync_lock_path: Path = Path("data/locks/post_market_sync.lock")
+
+    # Schwab read-only accounts. schwab-py owns the rotating token file.
+    schwab_client_id: str | None = None
+    schwab_client_secret: str | None = None
+    schwab_redirect_uri: str = Field(default="https://127.0.0.1:8182", min_length=1)
+    schwab_token_path: Path = Path("data/secrets/schwab_tokens.json")
+    schwab_account_hashes: str = ""
+
+    # Optional provider secrets — not required for Phase 1A mock providers.
+    alpha_vantage_api_key: str | None = None
+    fred_api_key: str | None = None
+    # Reserved legacy placeholders. No runtime provider consumes these fields;
+    # broker integrations must define explicit provider-scoped settings.
+    broker_api_key: str | None = None
+    broker_api_secret: str | None = None
+
+    @field_validator(
+        "app_name",
+        "database_url",
+        "mcp_server_name",
+        "default_timezone",
+        "schwab_redirect_uri",
+        mode="before",
+    )
+    @classmethod
+    def _reject_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("must not be empty or whitespace")
+        return value
+
+    @field_validator("vendor_chain_path", mode="before")
+    @classmethod
+    def _coerce_vendor_chain_path(cls, value: object) -> object:
+        if value is None:
+            return _DEFAULT_VENDOR_CHAIN_RELATIVE
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("must not be empty or whitespace")
+            return Path(stripped)
+        return value
+
+    @field_validator(
+        "alpha_vantage_api_key",
+        "fred_api_key",
+        "broker_api_key",
+        "broker_api_secret",
+        "iwencai_api_key",
+        "sec_user_agent",
+        "schwab_client_id",
+        "schwab_client_secret",
+        "polymarket_proxy_url",
+        "apify_api_token",
+        mode="before",
+    )
+    @classmethod
+    def _empty_secret_to_none(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("polymarket_proxy_url")
+    @classmethod
+    def _validate_polymarket_proxy_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("polymarket_proxy_url must be an HTTP(S) proxy URL")
+        return value
+
+    @field_validator(
+        "manual_holdings_csv_path",
+        "manual_watchlist_csv_path",
+        mode="before",
+    )
+    @classmethod
+    def _empty_manual_path_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("watchlist_source", mode="before")
+    @classmethod
+    def _normalize_watchlist_source(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().upper()
+        return value
+
+    @field_validator("holdings_sources")
+    @classmethod
+    def _holdings_sources_must_be_unique(
+        cls,
+        value: tuple[Literal["SCHWAB", "MOOMOO", "MANUAL_CSV"], ...],
+    ) -> tuple[Literal["SCHWAB", "MOOMOO", "MANUAL_CSV"], ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("holdings_sources entries must be unique")
+        return value
+
+    @field_validator("watchlist_default_group", mode="before")
+    @classmethod
+    def _normalize_watchlist_default_group(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("watchlist_default_group must not be blank")
+        return value
+
+    @field_validator("schwab_token_path", mode="before")
+    @classmethod
+    def _schwab_token_path_is_json(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("schwab_token_path must not be blank")
+            value = Path(value)
+        if isinstance(value, Path) and value.suffix.lower() != ".json":
+            raise ValueError("schwab_token_path must be a JSON file")
+        return value
+
+    @field_validator("post_market_sync_lock_path", mode="before")
+    @classmethod
+    def _normalize_post_market_sync_lock_path(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("post_market_sync_lock_path must not be blank")
+            return Path(value)
+        if value is None:
+            raise ValueError("post_market_sync_lock_path must not be blank")
+        return value
+
+    @field_validator("moomoo_host")
+    @classmethod
+    def _moomoo_must_be_local(cls, value: str) -> str:
+        if value not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("moomoo_host must be local")
+        return value
+
+    @field_validator("reddit_subreddits", "reddit_apify_subreddits", mode="before")
+    @classmethod
+    def _normalize_reddit_subreddits(cls, value: object) -> str:
+        if value is None:
+            return "wallstreetbets,stocks,investing"
+        if not isinstance(value, str):
+            raise ValueError("reddit_subreddits must be a comma-separated string")
+        parts: list[str] = []
+        for raw in value.split(","):
+            item = raw.strip().lower()
+            if not item:
+                raise ValueError("reddit_subreddits entries must be non-empty")
+            if re.fullmatch(r"[a-z0-9_]+", item) is None:
+                raise ValueError("reddit_subreddits entries must be lowercase alnum or underscore")
+            if item in parts:
+                raise ValueError("reddit_subreddits entries must be unique")
+            parts.append(item)
+        if len(parts) > 10:
+            raise ValueError("reddit_subreddits may contain at most 10 entries")
+        if not parts:
+            raise ValueError("reddit_subreddits must not be empty")
+        return ",".join(parts)
+
+    @field_validator("reddit_apify_lookback_days_by_subreddit", mode="before")
+    @classmethod
+    def _normalize_reddit_apify_lookbacks(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("reddit Apify lookbacks must be a comma-separated mapping")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_entry in value.split(","):
+            name, separator, raw_days = raw_entry.strip().partition(":")
+            name = name.strip().lower()
+            raw_days = raw_days.strip()
+            if not separator or not name or not raw_days.isdigit():
+                raise ValueError("reddit Apify lookbacks must use subreddit:days entries")
+            days = int(raw_days)
+            if re.fullmatch(r"[a-z0-9_]+", name) is None or not 1 <= days <= 365:
+                raise ValueError("invalid Reddit Apify subreddit lookback")
+            if name in seen:
+                raise ValueError("Reddit Apify lookback subreddits must be unique")
+            seen.add(name)
+            normalized.append(f"{name}:{days}")
+        if not normalized:
+            raise ValueError("Reddit Apify lookbacks must not be empty")
+        return ",".join(normalized)
+
+    @model_validator(mode="after")
+    def _reddit_apify_lookbacks_cover_subreddits(self) -> Self:
+        configured = set(self.reddit_apify_subreddits.split(","))
+        mapped = {
+            entry.partition(":")[0]
+            for entry in self.reddit_apify_lookback_days_by_subreddit.split(",")
+        }
+        if mapped != configured:
+            raise ValueError("Reddit Apify lookbacks must exactly cover configured subreddits")
+        return self
+
+    @property
+    def reddit_apify_lookback_map(self) -> dict[str, int]:
+        return {
+            name: int(days)
+            for entry in self.reddit_apify_lookback_days_by_subreddit.split(",")
+            for name, _, days in (entry.partition(":"),)
+        }
+
+    @model_validator(mode="after")
+    def _validate_reddit_cooldown_bounds(self) -> Self:
+        if self.reddit_cooldown_max_seconds < self.reddit_cooldown_default_seconds:
+            raise ValueError(
+                "reddit_cooldown_max_seconds must be >= reddit_cooldown_default_seconds"
+            )
+        return self
+
+    @field_validator("iwencai_base_url", mode="before")
+    @classmethod
+    def _normalize_iwencai_base_url(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("must not be empty or whitespace")
+            return stripped.rstrip("/")
+        return value
+
+    @field_validator(
+        "a_share_current_window_seconds",
+        "a_share_max_fresh_seconds",
+        "a_share_max_delayed_seconds",
+        "us_current_window_seconds",
+        "us_max_fresh_seconds",
+        "us_max_delayed_seconds",
+        "us_research_current_window_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _require_a_share_nonnegative_int(cls, value: object) -> object:
+        """Reject Python coercions while retaining decimal-string env parsing."""
+        if isinstance(value, (bool, float)):
+            raise ValueError("must be a nonnegative exact int")
+        if isinstance(value, int):
+            if value < 0:
+                raise ValueError("must be a nonnegative exact int")
+            return value
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value) is not None:
+            return value
+        raise ValueError("must be a nonnegative exact int or pure decimal string")
+
+    @model_validator(mode="after")
+    def _normalize_sqlite_url_and_paths(self) -> Self:
+        url = self.database_url
+        if url.startswith("sqlite:///"):
+            path_part = url.removeprefix("sqlite:///")
+            # Absolute path: sqlite:////abs/path → path_part starts with /
+            if not path_part.startswith("/"):
+                absolute = (PROJECT_ROOT / path_part).resolve()
+                object.__setattr__(self, "database_url", f"sqlite:///{absolute}")
+
+        chain_path = self.vendor_chain_path
+        if not chain_path.is_absolute():
+            project_candidate = (PROJECT_ROOT / chain_path).resolve()
+            if project_candidate.is_file():
+                resolved = project_candidate
+            elif (
+                chain_path == _DEFAULT_VENDOR_CHAIN_RELATIVE
+                and PACKAGED_VENDOR_CHAIN_PATH.is_file()
+            ):
+                # Installed wheel: project-root config is absent; use packaged copy.
+                resolved = PACKAGED_VENDOR_CHAIN_PATH.resolve()
+            else:
+                # Custom relative (or missing default with no package data): keep
+                # project-root candidate so the loader raises a clear config error.
+                resolved = project_candidate
+            object.__setattr__(self, "vendor_chain_path", resolved)
+
+        token_path = self.schwab_token_path
+        if not token_path.is_absolute():
+            token_path = (PROJECT_ROOT / token_path).resolve()
+        secret_root = (PROJECT_ROOT / "data" / "secrets").resolve()
+        if not token_path.is_relative_to(secret_root):
+            raise ValueError("schwab_token_path must be under project data/secrets")
+        object.__setattr__(self, "schwab_token_path", token_path)
+
+        manual_watchlist_path = self.manual_watchlist_csv_path
+        if manual_watchlist_path is not None and not manual_watchlist_path.is_absolute():
+            manual_watchlist_path = (PROJECT_ROOT / manual_watchlist_path).resolve()
+        object.__setattr__(self, "manual_watchlist_csv_path", manual_watchlist_path)
+
+        lock_path = self.post_market_sync_lock_path
+        if not lock_path.is_absolute():
+            lock_path = (PROJECT_ROOT / lock_path).resolve()
+        data_root = (PROJECT_ROOT / "data").resolve()
+        if not lock_path.is_relative_to(data_root):
+            raise ValueError("post_market_sync_lock_path must be under project data")
+        object.__setattr__(self, "post_market_sync_lock_path", lock_path)
+        return self
+
+    @model_validator(mode="after")
+    def _retry_max_delay_ge_base(self) -> Self:
+        if self.provider_retry_max_delay_seconds < self.provider_retry_base_delay_seconds:
+            raise ValueError(
+                "provider_retry_max_delay_seconds must be >= provider_retry_base_delay_seconds"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _freshness_delayed_ge_fresh(self) -> Self:
+        if self.freshness_max_delayed_seconds < self.freshness_max_fresh_seconds:
+            raise ValueError("freshness_max_delayed_seconds must be >= freshness_max_fresh_seconds")
+        return self
+
+    @model_validator(mode="after")
+    def _a_share_delayed_ge_fresh(self) -> Self:
+        if self.a_share_max_delayed_seconds < self.a_share_max_fresh_seconds:
+            raise ValueError("a_share_max_delayed_seconds must be >= a_share_max_fresh_seconds")
+        return self
+
+    @model_validator(mode="after")
+    def _us_delayed_ge_fresh(self) -> Self:
+        if self.us_max_delayed_seconds < self.us_max_fresh_seconds:
+            raise ValueError("us_max_delayed_seconds must be >= us_max_fresh_seconds")
+        return self
+
+    @classmethod
+    def load(cls, env_file: Path | None = None) -> AppSettings:
+        """Load settings for source or installed layouts.
+
+        * **Source layout** — ``PROJECT_ROOT/pyproject.toml`` exists: default to
+          the project-root ``.env`` when present; otherwise process environment
+          only (``_env_file=None``).
+        * **Installed layout** — source marker absent but
+          ``PACKAGED_VENDOR_CHAIN_PATH`` is a file: process environment only;
+          never implicit cwd / home / parent ``.env``.
+        * **Invalid layout** — neither: raise the safe ``PROJECT_ROOT`` guard
+          ``ConfigurationError``.
+
+        Explicit ``env_file`` is allowed in both valid layouts and must exist.
+        """
+        source_layout = (PROJECT_ROOT / "pyproject.toml").is_file()
+        installed_layout = not source_layout and PACKAGED_VENDOR_CHAIN_PATH.is_file()
+        if not source_layout and not installed_layout:
+            raise ConfigurationError(
+                "PROJECT_ROOT guard failed: pyproject.toml not found at expected root",
+                details={"project_root": str(PROJECT_ROOT)},
+            )
+
+        try:
+            if env_file is not None:
+                path = Path(env_file)
+                if not path.is_file():
+                    raise ConfigurationError(
+                        f"env_file does not exist: {path}",
+                        details={"env_file": str(path)},
+                    )
+                return cls(_env_file=path)  # type: ignore[call-arg]
+            if source_layout:
+                default_env = PROJECT_ROOT / ".env"
+                if default_env.is_file():
+                    return cls(_env_file=default_env)  # type: ignore[call-arg]
+                # Fall back to process environment only (tests / CI).
+                return cls(_env_file=None)  # type: ignore[call-arg]
+            # Installed layout: process environment only — no implicit .env scan.
+            return cls(_env_file=None)  # type: ignore[call-arg]
+        except ConfigurationError:
+            raise
+        except Exception as exc:  # pydantic ValidationError etc.
+            raise ConfigurationError(
+                f"Failed to load AppSettings: {exc}",
+                details={"error_type": type(exc).__name__},
+            ) from exc
+
+    def cache_ttl_for(self, category: DataCategory) -> int:
+        """Return positive cache TTL seconds for ``category`` (1D §12.5 + 1E §22)."""
+        attr = _CACHE_TTL_BY_CATEGORY.get(category.name)
+        if attr is not None:
+            return int(getattr(self, attr))
+        return self.cache_ttl_default_seconds
+
+    def timeout_for(self, category: DataCategory) -> float:
+        """Return provider timeout seconds for ``category`` (design §12.1 / 1E).
+
+        Breadth uses its own bounded-batch override; other market categories use
+        the market override. Remaining categories use the D5b default. The 1A
+        ``provider_timeout_seconds`` remains available as a compatibility field.
+        """
+        if category is DataCategory.MARKET_BREADTH:
+            return self.provider_timeout_us_breadth_seconds
+        if category in _MARKET_TIMEOUT_CATEGORIES:
+            return self.provider_timeout_market_seconds
+        return self.provider_timeout_default_seconds
+
+    def redacted_dict(self) -> dict[str, object]:
+        """Return a plain dict safe for logging and debugging."""
+        raw = self.model_dump()
+        result: dict[str, object] = {}
+        for key, value in raw.items():
+            if key in _SECRET_FIELD_NAMES and value is not None:
+                result[key] = _REDACTED
+            elif key == "database_url" and isinstance(value, str):
+                result[key] = _REDACTED if _CREDENTIAL_URL_RE.search(value) else value
+            elif isinstance(value, Path):
+                # Non-secret paths (e.g. vendor_chain_path) appear unredacted.
+                result[key] = str(value)
+            else:
+                # Enums → value for stable wire-like representation
+                if hasattr(value, "value") and not isinstance(value, str | int | float | bool):
+                    result[key] = value.value
+                else:
+                    result[key] = value
+        return result
+
+    def __repr__(self) -> str:
+        return f"AppSettings({self.redacted_dict()!r})"
+
+    def __str__(self) -> str:
+        return repr(self)
+
+    def model_dump_redacted(self) -> dict[str, Any]:
+        return self.redacted_dict()

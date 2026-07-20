@@ -1,0 +1,13 @@
+{
+  "rc": 0,
+  "rt": 0,
+  "data": {
+    "empty": true,
+    "advancing_count": 0,
+    "declining_count": 0,
+    "unchanged_count": 0,
+    "limit_up_count": 0,
+    "limit_down_count": 0,
+    "broken_limit_count": 0
+  }
+}

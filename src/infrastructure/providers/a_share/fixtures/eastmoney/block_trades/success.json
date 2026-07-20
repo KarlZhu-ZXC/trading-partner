@@ -1,0 +1,3 @@
+{"version":"test","result":{"pages":1,"data":[
+  {"TRADE_DATE":"2024-01-10 00:00:00","DEAL_PRICE":"1680.00","DEAL_VOLUME":"5000","DEAL_AMT":"8400000","PREMIUM_RATIO":"-0.01","BUYER_NAME":"测试买方营业部","SELLER_NAME":"机构专用"}
+]},"success":true,"code":0}

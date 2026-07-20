@@ -1,0 +1,81 @@
+# Public quality gate — secrets, static checks, tests, migrations, and wheel smoke.
+# Safe non-secret env only; never inject real provider credentials.
+name: quality
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      APP_NAME: trading-partner-ci
+      APP_ENV: test
+      LOG_LEVEL: INFO
+      DATABASE_URL: sqlite:////tmp/trading-partner-ci.db
+      MCP_SERVER_NAME: trading-partner-ci
+      DEFAULT_TIMEZONE: UTC
+      PROVIDER_TIMEOUT_SECONDS: "5"
+      # Explicit empty secrets — never set real keys in CI.
+      ALPHA_VANTAGE_API_KEY: ""
+      FRED_API_KEY: ""
+      BROKER_API_KEY: ""
+      BROKER_API_SECRET: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.24.3
+          git --redact --no-banner --log-opts=HEAD /repo
+
+      - name: Install uv (Python 3.13)
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Full pytest
+        run: uv run pytest
+
+      - name: Isolated wheel smoke
+        run: uv run python scripts/smoke_isolated_wheel.py
+
+      - name: Alembic upgrade → downgrade -1 → upgrade (isolated SQLite)
+        env:
+          DATABASE_URL: sqlite:////tmp/trading-partner-alembic-rt.db
+        run: |
+          set -euo pipefail
+          rm -f /tmp/trading-partner-alembic-rt.db
+          uv run alembic upgrade head
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
+
+      - name: Phase 1B data-preservation migration test
+        run: >
+          uv run pytest
+          tests/integration/test_database_migrations.py::test_phase1d_migration_round_trip_preserves_1b_data
+          -q

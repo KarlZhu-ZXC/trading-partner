@@ -1,0 +1,9 @@
+{
+  "rc": 0,
+  "rt": 0,
+  "data": {
+    "details": [
+      {"not": "a string"}
+    ]
+  }
+}

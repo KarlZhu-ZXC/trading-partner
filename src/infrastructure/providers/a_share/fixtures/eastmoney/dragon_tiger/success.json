@@ -1,0 +1,5 @@
+{"version":"test","result":{"pages":1,"data":[{
+  "TRADE_DATE":"2024-01-15 00:00:00","SECUCODE":"600519.SH","SECURITY_CODE":"600519",
+  "EXPLANATION":"日涨幅偏离值达到7%的前5只证券",
+  "BILLBOARD_BUY_AMT":"10000000","BILLBOARD_SELL_AMT":"8000000","BILLBOARD_NET_AMT":"2000000"
+}]},"success":true,"code":0}

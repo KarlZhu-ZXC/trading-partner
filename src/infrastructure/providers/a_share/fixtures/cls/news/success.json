@@ -1,0 +1,14 @@
+{
+  "errno": 0,
+  "data": {
+    "roll_data": [
+      {
+        "id": 123456789,
+        "title": "市场早报：指数高开",
+        "brief": "A股三大指数高开。",
+        "ctime": "1705384800",
+        "shareurl": "https://www.cls.cn/detail/123456789"
+      }
+    ]
+  }
+}

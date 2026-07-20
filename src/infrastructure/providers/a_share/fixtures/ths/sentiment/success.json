@@ -1,0 +1,32 @@
+{
+  "status_code": 0,
+  "data": {
+    "stock_list": [
+      {
+        "market": 17,
+        "code": "600519",
+        "rate": "4106078.0",
+        "name": "贵州茅台",
+        "hot_rank_chg": 0,
+        "order": 1,
+        "tag": {
+          "concept_tag": [
+            "白酒",
+            "消费"
+          ]
+        }
+      },
+      {
+        "market": 33,
+        "code": "000001",
+        "rate": "1000",
+        "name": "平安银行",
+        "hot_rank_chg": 2,
+        "order": 2,
+        "tag": {
+          "concept_tag": []
+        }
+      }
+    ]
+  }
+}

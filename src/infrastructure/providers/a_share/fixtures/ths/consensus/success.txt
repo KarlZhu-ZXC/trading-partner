@@ -1,0 +1,5 @@
+<!DOCTYPE html><html><body>
+<div data-year="2024" class="eps">65.80</div>
+<div data-year="2025" class="eps">72.10</div>
+<script>alert('should never execute')</script>
+</body></html>

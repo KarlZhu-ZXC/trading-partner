@@ -1,0 +1,5 @@
+{"version":"test","result":{"pages":1,"data":[{
+  "TRADE_DATE":"2024-01-15 00:00:00","SECUCODE":"002140.SZ","SECURITY_CODE":"002140",
+  "EXPLANATION":"连续三个交易日内，涨幅偏离值累计达到20%的证券",
+  "BILLBOARD_BUY_AMT":"63010358","BILLBOARD_SELL_AMT":"66614295.76","BILLBOARD_NET_AMT":"-3603937.76"
+}]},"success":true,"code":0}

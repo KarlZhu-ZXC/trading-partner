@@ -1,0 +1,2 @@
+schema_version,account_ref,account_as_of,base_currency,instrument_id,side,currency,quantity,sellable_quantity,average_cost,diluted_cost,market_price,market_price_at,market_value,unrealized_pnl,realized_pnl,cash,buying_power,net_assets,margin_used
+1,example_manual,2026-07-17T08:00:00Z,USD,equity:US:NVDA,long,USD,2,2,100,,125,2026-07-17T07:59:00Z,250,50,,100,100,350,0

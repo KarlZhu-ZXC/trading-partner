@@ -1,0 +1,21 @@
+{
+  "globalId": null,
+  "message": "OK",
+  "status": 0,
+  "code": 0,
+  "data": [
+    {
+      "sc": "SH600519",
+      "rk": 1,
+      "rc": 0,
+      "hisRc": 2
+    },
+    {
+      "sc": "SZ000001",
+      "rk": 2,
+      "rc": -1,
+      "hisRc": 0
+    }
+  ],
+  "stack": null
+}

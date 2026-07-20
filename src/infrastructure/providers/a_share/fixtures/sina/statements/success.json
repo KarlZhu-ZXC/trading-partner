@@ -1,0 +1,26 @@
+{
+  "result": {
+    "data": {
+      "report": [
+        {
+          "report_date": "2023-12-31",
+          "publish_date": "2023-12-31",
+          "data": [
+            {
+              "item_code": "TOTAL_OPERATE_INCOME",
+              "item_name": "营业总收入",
+              "item_value": "150560000000",
+              "unit": "CNY"
+            },
+            {
+              "item_code": "NETPROFIT",
+              "item_name": "净利润",
+              "item_value": "74734000000",
+              "unit": "CNY"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

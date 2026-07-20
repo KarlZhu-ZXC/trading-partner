@@ -1,0 +1,112 @@
+﻿tabData = [
+	{
+		"id": 0,
+		"date": "2024-01-15",
+		"market": "SSE Northbound",
+		"tradingDay": 1,
+		"content": [
+			{
+				"style": 1,
+				"table": {
+					"classname": "tradingTable",
+					"schema": [
+						["Total Turnover", "Total Trade Count", "DQB", "ETF Turnover"]
+					],
+					"tr": [
+						{"td": [["132,054.80"]]},
+						{"td": [["7,412,470"]]},
+						{"td": [["999,999,999"]]},
+						{"td": [["3,435.11"]]}
+					]
+				}
+			},
+			{
+				"style": 2,
+				"table": {
+					"classname": "top10Table",
+					"schema": [
+						["Rank", "Stock Code", "Stock Name", "Total Turnover"]
+					],
+					"tr": [
+						{"td": [["1", "600519", "贵州茅台", "1,467,659,295"]]}
+					]
+				}
+			}
+		]
+	},
+	{
+		"id": 1,
+		"date": "2024-01-15",
+		"market": "SSE Southbound",
+		"tradingDay": 1,
+		"content": [
+			{
+				"style": 1,
+				"table": {
+					"classname": "tradingTable",
+					"schema": [
+						["Total Turnover", "Buy Turnover", "Sell Turnover", "Total Trade Count", "Buy Trade Count", "Sell Trade Count", "ETF Turnover"]
+					],
+					"tr": [
+						{"td": [["84,439.52"]]},
+						{"td": [["43,220.65"]]},
+						{"td": [["41,218.87"]]},
+						{"td": [["1,532,680"]]},
+						{"td": [["758,736"]]},
+						{"td": [["773,944"]]},
+						{"td": [["964.54"]]}
+					]
+				}
+			}
+		]
+	},
+	{
+		"id": 2,
+		"date": "2024-01-15",
+		"market": "SZSE Northbound",
+		"tradingDay": 1,
+		"content": [
+			{
+				"style": 1,
+				"table": {
+					"classname": "tradingTable",
+					"schema": [
+						["Total Turnover", "Total Trade Count", "DQB", "ETF Turnover"]
+					],
+					"tr": [
+						{"td": [["193,136.68"]]},
+						{"td": [["8,928,703"]]},
+						{"td": [["999,999,999"]]},
+						{"td": [["2,654.25"]]}
+					]
+				}
+			}
+		]
+	},
+	{
+		"id": 3,
+		"date": "2024-01-15",
+		"market": "SZSE Southbound",
+		"tradingDay": 1,
+		"content": [
+			{
+				"style": 1,
+				"table": {
+					"classname": "tradingTable",
+					"schema": [
+						["Total Turnover", "Buy Turnover", "Sell Turnover", "Total Trade Count", "Buy Trade Count", "Sell Trade Count", "ETF Turnover"]
+					],
+					"tr": [
+						{"td": [["55,167.46"]]},
+						{"td": [["29,102.58"]]},
+						{"td": [["26,064.88"]]},
+						{"td": [["952,097"]]},
+						{"td": [["504,148"]]},
+						{"td": [["447,949"]]},
+						{"td": [["464.83"]]}
+					]
+				}
+			}
+		]
+	}
+]

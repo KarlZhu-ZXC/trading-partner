@@ -1,0 +1,55 @@
+# Secrets and local environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.venv/
+venv/
+ENV/
+
+# uv / packaging
+uv.lock.bak
+
+# Runtime data
+data/*.db
+data/*.db-*
+data/secrets/
+data/locks/
+data/artifacts/
+!data/.gitkeep
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+tmp/
+temp/
+.cache/
+
+docs/archive
+docs/progress
+docs/design

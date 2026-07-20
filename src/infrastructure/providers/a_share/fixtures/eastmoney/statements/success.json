@@ -1,0 +1,25 @@
+{
+  "version": "test",
+  "result": {
+    "pages": 1,
+    "data": [
+      {
+        "SECUCODE": "600519.SH",
+        "SECURITY_CODE": "600519",
+        "REPORT_DATE": "2023-12-31",
+        "NOTICE_DATE": "2023-12-31",
+        "TOTAL_ASSETS": "300000000000",
+        "TOTAL_LIABILITIES": "50000000000",
+        "TOTAL_EQUITY": "250000000000",
+        "TOTAL_OPERATE_INCOME": "150560000000",
+        "OPERATE_PROFIT": "98000000000",
+        "NETPROFIT": "74734000000",
+        "NETCASH_OPERATE": "60000000000",
+        "NETCASH_INVEST": "-10000000000",
+        "NETCASH_FINANCE": "-20000000000"
+      }
+    ]
+  },
+  "success": true,
+  "code": 0
+}

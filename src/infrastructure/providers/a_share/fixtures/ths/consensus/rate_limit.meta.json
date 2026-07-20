@@ -1,0 +1,7 @@
+{
+  "status_code": 429,
+  "body": "rate limited",
+  "headers": {
+    "content-type": "application/json"
+  }
+}

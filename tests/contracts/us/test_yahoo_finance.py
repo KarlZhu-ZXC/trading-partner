@@ -1,0 +1,433 @@
+"""Phase 1F F2a: Yahoo Finance chart adapter focused contracts."""
+
+from __future__ import annotations
+
+import json
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from application.ports.http_transport import HttpRequest, HttpResponse
+from conftest import FixedClock
+from domain.common.enums import (
+    AdjustmentMethod,
+    AssetType,
+    DataCategory,
+    Market,
+    VendorId,
+)
+from domain.common.errors import (
+    DataContractError,
+    ProviderRateLimitError,
+    ProviderUnavailableError,
+    StaleMarketData,
+)
+from domain.instruments.models import Instrument
+from domain.us_market.enums import USBarInterval
+from infrastructure.providers.us.yahoo_finance import YahooFinanceAdapter
+
+NY = ZoneInfo("America/New_York")
+# Friday regular session (not weekend closed).
+AS_OF = datetime(2026, 7, 17, 16, 5, tzinfo=NY)
+CLOCK = FixedClock(AS_OF)
+
+
+def _instrument() -> Instrument:
+    return Instrument(
+        instrument_id="equity:US:NVDA",
+        symbol="NVDA",
+        name="NVIDIA",
+        market=Market.US,
+        exchange="NASDAQ",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.EQUITY,
+    )
+
+
+def _unix(dt: datetime) -> int:
+    return int(dt.timestamp())
+
+
+def _chart_payload(
+    *,
+    days: list[date],
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[int],
+    adjcloses: list[float] | None = None,
+    regular_market_time: datetime | None = None,
+    regular_market_price: float | None = None,
+    include_adjclose: bool = True,
+    trading_period_at: datetime | None = None,
+) -> dict[str, Any]:
+    timestamps = [_unix(datetime(d.year, d.month, d.day, 0, 0, tzinfo=NY)) for d in days]
+    rmt = regular_market_time or datetime(
+        days[-1].year, days[-1].month, days[-1].day, 16, 0, tzinfo=NY
+    )
+    price = regular_market_price if regular_market_price is not None else closes[-1]
+    # Trading windows for rmt's calendar day.
+    day = rmt.astimezone(NY).date()
+    pre_s = _unix(datetime(day.year, day.month, day.day, 4, 0, tzinfo=NY))
+    reg_s = _unix(datetime(day.year, day.month, day.day, 9, 30, tzinfo=NY))
+    reg_e = _unix(datetime(day.year, day.month, day.day, 16, 0, tzinfo=NY))
+    post_e = _unix(datetime(day.year, day.month, day.day, 20, 0, tzinfo=NY))
+    tp = trading_period_at or rmt
+    del tp  # windows are day-based; rmt selects session
+    indicators: dict[str, Any] = {
+        "quote": [
+            {
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes,
+            }
+        ]
+    }
+    if include_adjclose:
+        indicators["adjclose"] = [{"adjclose": adjcloses if adjcloses is not None else closes}]
+    return {
+        "chart": {
+            "result": [
+                {
+                    "meta": {
+                        "currency": "USD",
+                        "symbol": "NVDA",
+                        "exchangeTimezoneName": "America/New_York",
+                        "regularMarketTime": _unix(rmt),
+                        "regularMarketPrice": price,
+                        "regularMarketVolume": volumes[-1],
+                        "chartPreviousClose": 119.0,
+                        "previousClose": 119.0,
+                        "regularMarketOpen": opens[-1],
+                        "regularMarketDayHigh": highs[-1],
+                        "regularMarketDayLow": lows[-1],
+                        "fiftyTwoWeekLow": 90.0,
+                        "fiftyTwoWeekHigh": 140.0,
+                        "currentTradingPeriod": {
+                            "pre": {
+                                "timezone": "EDT",
+                                "start": pre_s,
+                                "end": reg_s,
+                                "gmtoffset": -14400,
+                            },
+                            "regular": {
+                                "timezone": "EDT",
+                                "start": reg_s,
+                                "end": reg_e,
+                                "gmtoffset": -14400,
+                            },
+                            "post": {
+                                "timezone": "EDT",
+                                "start": reg_e,
+                                "end": post_e,
+                                "gmtoffset": -14400,
+                            },
+                        },
+                    },
+                    "timestamp": timestamps,
+                    "indicators": indicators,
+                }
+            ],
+            "error": None,
+        }
+    }
+
+
+class RecordingTransport:
+    def __init__(
+        self,
+        *,
+        body: bytes,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.body = body
+        self.status_code = status_code
+        self.headers = headers or {"content-type": "application/json; charset=utf-8"}
+        self.requests: list[HttpRequest] = []
+
+    async def send(self, request: HttpRequest) -> HttpResponse:
+        self.requests.append(request)
+        return HttpResponse(
+            status_code=self.status_code,
+            headers=self.headers,
+            body=self.body,
+        )
+
+
+def _success_days() -> list[date]:
+    # Mon–Fri week ending 2026-07-17
+    return [
+        date(2026, 7, 13),
+        date(2026, 7, 14),
+        date(2026, 7, 15),
+        date(2026, 7, 16),
+        date(2026, 7, 17),
+    ]
+
+
+def _success_body(**kwargs: Any) -> bytes:
+    days = _success_days()
+    payload = _chart_payload(
+        days=days,
+        opens=[118.0, 119.0, 120.0, 121.0, 122.0],
+        highs=[119.0, 120.0, 121.0, 122.0, 123.0],
+        lows=[117.0, 118.0, 119.0, 120.0, 121.0],
+        closes=[118.5, 119.5, 120.5, 121.5, 122.5],
+        volumes=[1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
+        regular_market_time=datetime(2026, 7, 17, 16, 0, tzinfo=NY),
+        regular_market_price=122.5,
+        **kwargs,
+    )
+    return json.dumps(payload).encode("utf-8")
+
+
+def _adapter(transport: RecordingTransport) -> YahooFinanceAdapter:
+    return YahooFinanceAdapter(
+        transport,
+        clock=CLOCK,
+        max_fresh_seconds=60,
+        max_delayed_seconds=3600,
+    )
+
+
+@pytest.mark.asyncio
+async def test_yahoo_quote_and_bars_success() -> None:
+    transport = RecordingTransport(body=_success_body())
+    adapter = _adapter(transport)
+
+    quote = await adapter.get_quote(_instrument(), AS_OF)
+    assert quote.meta.vendor is VendorId.YFINANCE
+    assert quote.meta.category is DataCategory.MARKET_QUOTE
+    assert quote.value.instrument_id == "equity:US:NVDA"
+    assert quote.value.last == Decimal("122.5")
+    assert type(quote.value.last) is Decimal
+    assert quote.value.quote_at <= AS_OF
+    assert quote.value.session.value in {
+        "pre_market",
+        "regular",
+        "post_market",
+        "closed",
+    }
+    assert quote.value.previous_close == Decimal("119.0")
+
+    bars = await adapter.get_bars(
+        _instrument(),
+        start=date(2026, 7, 13),
+        end=date(2026, 7, 17),
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=AS_OF,
+    )
+    assert bars.meta.vendor is VendorId.YFINANCE
+    assert bars.meta.category is DataCategory.MARKET_OHLCV
+    assert bars.meta.adjustment is AdjustmentMethod.NONE
+    assert bars.value.end == date(2026, 7, 17)
+    assert len(bars.value.bars) == 5
+    # Inclusive end: last bar is 2026-07-17 session close NY.
+    assert bars.value.bars[-1].timestamp == datetime(2026, 7, 17, 16, 0, tzinfo=NY)
+    assert bars.value.bars[-1].close == Decimal("122.5")
+    assert all(b.timestamp <= AS_OF for b in bars.value.bars)
+
+    # Fixed host/path + GET only; symbol URL-encoded in path.
+    assert transport.requests
+    for req in transport.requests:
+        assert req.method == "GET"
+        parts = urlsplit(req.url)
+        assert parts.scheme == "https"
+        assert parts.hostname == "query1.finance.yahoo.com"
+        assert parts.path == "/v8/finance/chart/NVDA"
+
+
+@pytest.mark.asyncio
+async def test_end_inclusive_and_as_of_cutoff() -> None:
+    # Extra future day after as_of must be filtered even if present in payload.
+    days = _success_days() + [date(2026, 7, 20)]
+    payload = _chart_payload(
+        days=days,
+        opens=[118.0, 119.0, 120.0, 121.0, 122.0, 999.0],
+        highs=[119.0, 120.0, 121.0, 122.0, 123.0, 999.0],
+        lows=[117.0, 118.0, 119.0, 120.0, 121.0, 998.0],
+        closes=[118.5, 119.5, 120.5, 121.5, 122.5, 999.0],
+        volumes=[1, 1, 1, 1, 1, 1],
+        regular_market_time=datetime(2026, 7, 20, 16, 0, tzinfo=NY),
+        regular_market_price=999.0,
+    )
+    transport = RecordingTransport(body=json.dumps(payload).encode("utf-8"))
+    adapter = _adapter(transport)
+
+    result = await adapter.get_bars(
+        _instrument(),
+        start=date(2026, 7, 13),
+        end=date(2026, 7, 17),
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=AS_OF,
+    )
+    assert result.value.bars[-1].timestamp.astimezone(NY).date() == date(2026, 7, 17)
+    assert all(b.close != Decimal("999.0") for b in result.value.bars)
+
+    # period2 should request exclusive day after inclusive end.
+    bars_req = transport.requests[-1]
+    period2 = int(bars_req.params["period2"])
+    exclusive = int(datetime(2026, 7, 18, 0, 0, tzinfo=NY).timestamp())
+    assert period2 == exclusive
+
+    # Quote must not use regularMarketTime after as_of.
+    quote = await adapter.get_quote(_instrument(), AS_OF)
+    assert quote.value.quote_at <= AS_OF
+    assert quote.value.last != Decimal("999.0")
+    assert quote.value.previous_close is None
+    assert quote.value.week_52_high is None
+
+
+@pytest.mark.asyncio
+async def test_stale_daily_bar_fail_closed() -> None:
+    # Latest bar 10 natural days before expected end/as_of.
+    stale_day = date(2026, 7, 7)
+    payload = _chart_payload(
+        days=[stale_day],
+        opens=[100.0],
+        highs=[101.0],
+        lows=[99.0],
+        closes=[100.5],
+        volumes=[1_000],
+        regular_market_time=datetime(2026, 7, 7, 16, 0, tzinfo=NY),
+    )
+    transport = RecordingTransport(body=json.dumps(payload).encode("utf-8"))
+    adapter = _adapter(transport)
+    with pytest.raises(StaleMarketData) as exc:
+        await adapter.get_bars(
+            _instrument(),
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 17),
+            interval=USBarInterval.ONE_DAY,
+            adjustment=AdjustmentMethod.NONE,
+            as_of=AS_OF,
+        )
+    assert exc.value.details.get("rule") == "stale_daily_bar"
+    blob = f"{exc.value.message}{exc.value.details}"
+    assert "100.5" not in blob  # no price body leak
+
+
+@pytest.mark.asyncio
+async def test_adjustment_fail_closed() -> None:
+    transport = RecordingTransport(body=_success_body(include_adjclose=False))
+    adapter = _adapter(transport)
+
+    with pytest.raises(DataContractError) as split_only:
+        await adapter.get_bars(
+            _instrument(),
+            start=date(2026, 7, 13),
+            end=date(2026, 7, 17),
+            interval=USBarInterval.ONE_DAY,
+            adjustment=AdjustmentMethod.SPLIT_ADJUSTED,
+            as_of=AS_OF,
+        )
+    assert split_only.value.details.get("rule") == "unsupported_adjustment"
+
+    with pytest.raises(DataContractError) as missing_adj:
+        await adapter.get_bars(
+            _instrument(),
+            start=date(2026, 7, 13),
+            end=date(2026, 7, 17),
+            interval=USBarInterval.ONE_DAY,
+            adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+            as_of=AS_OF,
+        )
+    assert missing_adj.value.details.get("rule") == "adjustment_unavailable"
+
+    # With adjclose present, closes become adjusted (close*factor when factor=adj/close).
+    body = _success_body(
+        adjcloses=[59.25, 59.75, 60.25, 60.75, 61.25],  # half of raw closes
+    )
+    transport2 = RecordingTransport(body=body)
+    adapter2 = _adapter(transport2)
+    adjusted = await adapter2.get_bars(
+        _instrument(),
+        start=date(2026, 7, 13),
+        end=date(2026, 7, 17),
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+        as_of=AS_OF,
+    )
+    assert adjusted.value.adjustment is AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+    assert adjusted.value.bars[-1].close == Decimal("61.25")
+    assert adjusted.value.bars[-1].open == Decimal("61.0")  # 122 * 0.5
+
+
+@pytest.mark.asyncio
+async def test_http_status_and_body_never_leaked() -> None:
+    secret = b'{"chart":{"result":null,"error":{"description":"SECRET_TOKEN_XYZ"}}}'
+    transport = RecordingTransport(body=secret, status_code=500)
+    adapter = _adapter(transport)
+    with pytest.raises(ProviderUnavailableError) as exc:
+        await adapter.get_quote(_instrument(), AS_OF)
+    blob = f"{exc.value.message}{exc.value.details}"
+    assert "SECRET_TOKEN_XYZ" not in blob
+    assert exc.value.details.get("status_class") == "5xx"
+
+    transport429 = RecordingTransport(body=secret, status_code=429)
+    adapter429 = _adapter(transport429)
+    with pytest.raises(ProviderRateLimitError):
+        await adapter429.get_quote(_instrument(), AS_OF)
+
+    # Schema drift body must not appear in contract error.
+    drift = RecordingTransport(
+        body=b'{"not_chart":"SECRET_BODY_ABC"}',
+        status_code=200,
+    )
+    adapter_drift = _adapter(drift)
+    with pytest.raises(DataContractError) as drift_exc:
+        await adapter_drift.get_quote(_instrument(), AS_OF)
+    drift_blob = f"{drift_exc.value.message}{drift_exc.value.details}"
+    assert "SECRET_BODY_ABC" not in drift_blob
+    assert "not_chart" not in drift_blob
+
+
+def test_supports_us_quote_and_ohlcv_only() -> None:
+    transport = RecordingTransport(body=_success_body())
+    adapter = YahooFinanceAdapter(transport)
+    assert adapter.supports(Market.US, DataCategory.MARKET_QUOTE)
+    assert adapter.supports(Market.US, DataCategory.MARKET_OHLCV)
+    assert not adapter.supports(Market.A_SHARE, DataCategory.MARKET_QUOTE)
+    assert not adapter.supports(Market.US, DataCategory.NEWS)
+    assert adapter.vendor_id is VendorId.YFINANCE
+    assert adapter.provider_name == VendorId.YFINANCE.value
+    assert adapter.is_configured() is True
+    disabled = YahooFinanceAdapter(transport, enabled=False)
+    assert disabled.is_configured() is False
+
+
+@pytest.mark.asyncio
+async def test_daily_stale_boundary_four_natural_days_ok() -> None:
+    # Exactly 4 natural days lag is accepted; 5 would fail.
+    latest = AS_OF.astimezone(NY).date() - timedelta(days=4)
+    payload = _chart_payload(
+        days=[latest],
+        opens=[100.0],
+        highs=[101.0],
+        lows=[99.0],
+        closes=[100.5],
+        volumes=[500],
+        regular_market_time=datetime(latest.year, latest.month, latest.day, 16, 0, tzinfo=NY),
+    )
+    transport = RecordingTransport(body=json.dumps(payload).encode("utf-8"))
+    adapter = _adapter(transport)
+    result = await adapter.get_bars(
+        _instrument(),
+        start=latest,
+        end=AS_OF.astimezone(NY).date(),
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=AS_OF,
+    )
+    assert len(result.value.bars) == 1

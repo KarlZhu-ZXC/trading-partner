@@ -1,0 +1,8 @@
+{"records":[{
+  "SECURITY_CODE":"600519",
+  "reason":"日涨幅偏离值达到7%的前5只证券",
+  "buy_total_cny":"10000000",
+  "sell_total_cny":"8000000",
+  "net_buy_cny":"2000000",
+  "seats":[{"rank":1,"side":"buy","branch_name":"测试营业部","amount_cny":"5000000","is_institution":false}]
+}]}

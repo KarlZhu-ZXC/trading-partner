@@ -1,0 +1,4 @@
+{"version":"test","result":{"pages":1,"data":[
+  {"RANK":1,"TRADE_DIRECTION":"0","OPERATEDEPT_NAME":"测试证券营业部A","BUY_AMT_REAL":"15694882","SELL_AMT_REAL":"0","NET":"15694882"},
+  {"RANK":1,"TRADE_DIRECTION":"1","OPERATEDEPT_NAME":"测试证券营业部B","BUY_AMT_REAL":"0","SELL_AMT_REAL":"16517976","NET":"-16517976"}
+]},"success":true,"code":0}
