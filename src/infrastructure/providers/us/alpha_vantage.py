@@ -43,6 +43,10 @@ from domain.market.models import MarketBar
 from domain.market.session import infer_session_basic
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USQuote
+from infrastructure.providers.us.alpha_vantage_key_pool import (
+    AlphaVantageKeyPool,
+    classify_alpha_vantage_notice,
+)
 from infrastructure.system.clock import SystemClock
 
 _NY = ZoneInfo("America/New_York")
@@ -60,7 +64,6 @@ _GQ_LATEST_DAY, _GQ_PREV_CLOSE = "07. latest trading day", "08. previous close"
 _TS_KEY = "Time Series (Daily)"
 _BAR_OPEN, _BAR_HIGH, _BAR_LOW = "1. open", "2. high", "3. low"
 _BAR_CLOSE, _BAR_ADJ_CLOSE, _BAR_VOLUME = "4. close", "5. adjusted close", "6. volume"
-_RATE_LIMIT_MARKERS = ("rate limit", "requests per day", "call frequency", "premium")
 
 
 def _contract(message: str, *, operation: str, rule: str, **extra: object) -> DataContractError:
@@ -207,7 +210,7 @@ class AlphaVantageAdapter:
         self,
         transport: HttpTransport,
         *,
-        api_key: str | None = None,
+        api_keys: Sequence[str] = (),
         clock: Clock | None = None,
         enabled: bool = True,
         timeout_seconds: float = 15.0,
@@ -225,9 +228,8 @@ class AlphaVantageAdapter:
         self._transport = transport
         self._clock = clock if clock is not None else SystemClock()
         self._enabled = bool(enabled)
-        # Key for request params only — never copy into details/messages.
-        key = api_key.strip() if isinstance(api_key, str) else None
-        self._api_key = key or None
+        # Keys are request params only — never copy into details/messages.
+        self._key_pool = AlphaVantageKeyPool(api_keys)
 
     @property
     def vendor_id(self) -> VendorId:
@@ -241,7 +243,7 @@ class AlphaVantageAdapter:
         return market is Market.US and category in _SUPPORTED_CATEGORIES
 
     def is_configured(self) -> bool:
-        return self._enabled and self._api_key is not None
+        return self._enabled and self._key_pool.is_configured()
 
     def _require_configured(self) -> None:
         if not self.is_configured():
@@ -321,9 +323,7 @@ class AlphaVantageAdapter:
                 },
             )
 
-    def _raise_for_payload_notices(
-        self, payload: Mapping[str, object], *, operation: str
-    ) -> None:
+    def _raise_for_payload_notices(self, payload: Mapping[str, object], *, operation: str) -> None:
         """Map Note / Information / Error Message without echoing payload or key."""
         err = payload.get("Error Message")
         if isinstance(err, str) and err.strip():
@@ -343,8 +343,8 @@ class AlphaVantageAdapter:
                 break
         if notice is None:
             return
-        low = notice.casefold()
-        if any(m in low for m in _RATE_LIMIT_MARKERS):
+        notice_kind = classify_alpha_vantage_notice(notice)
+        if notice_kind == "rate_limit":
             raise ProviderRateLimitError(
                 "Alpha Vantage rate limit or entitlement notice",
                 details={
@@ -353,7 +353,7 @@ class AlphaVantageAdapter:
                     "error_type": "rate_limit",
                 },
             )
-        if "api key" in low or "apikey" in low:
+        if notice_kind == "api_key":
             raise ProviderNotConfigured(
                 "Alpha Vantage API key invalid or missing",
                 details={
@@ -374,53 +374,70 @@ class AlphaVantageAdapter:
     async def _fetch(
         self, *, params: Mapping[str, str], operation: str
     ) -> tuple[dict[str, object], datetime]:
-        wire = dict(params)
-        assert self._api_key is not None
-        wire["apikey"] = self._api_key  # request param only
-        response = await self._transport.send(
-            HttpRequest(
-                method="GET",
-                url=_QUERY_URL,
-                params=wire,
-                headers={"Accept": "application/json,text/plain,*/*"},
-                body=None,
-                timeout_seconds=self._timeout_seconds,
-            )
-        )
-        fetched_at = self._clock.now()
-        require_aware_datetime(fetched_at, field_name="fetched_at")
-        self._raise_for_http_status(response.status_code, operation=operation)
-        if not _content_type_ok(response.headers):
-            rule = "content_type"
-            if not response.headers.get("content-type") and not response.headers.get(
-                "Content-Type"
-            ):
-                raise _contract(
-                    "Alpha Vantage response missing Content-Type",
-                    operation=operation,
-                    rule=rule,
+        last_rate_limit: ProviderRateLimitError | None = None
+        for key_index, api_key in self._key_pool.ordered_candidates():
+            wire = dict(params)
+            wire["apikey"] = api_key  # request param only
+            response = await self._transport.send(
+                HttpRequest(
+                    method="GET",
+                    url=_QUERY_URL,
+                    params=wire,
+                    headers={"Accept": "application/json,text/plain,*/*"},
+                    body=None,
+                    timeout_seconds=self._timeout_seconds,
                 )
-            raise _contract(
-                "Alpha Vantage response Content-Type is not acceptable",
-                operation=operation,
-                rule=rule,
             )
-        try:
-            payload = _loads_json_decimal(response.body)
-        except DataContractError as exc:
-            raise _contract(
-                "Alpha Vantage payload failed contract validation",
-                operation=operation,
-                rule=str(exc.details.get("rule", "json")),
-            ) from None
-        if not isinstance(payload, dict):
-            raise _contract(
-                "Alpha Vantage payload failed contract validation",
-                operation=operation,
-                rule="contract_drift",
-            )
-        self._raise_for_payload_notices(payload, operation=operation)
-        return payload, fetched_at
+            fetched_at = self._clock.now()
+            require_aware_datetime(fetched_at, field_name="fetched_at")
+            try:
+                self._raise_for_http_status(response.status_code, operation=operation)
+                if not _content_type_ok(response.headers):
+                    rule = "content_type"
+                    if not response.headers.get("content-type") and not response.headers.get(
+                        "Content-Type"
+                    ):
+                        raise _contract(
+                            "Alpha Vantage response missing Content-Type",
+                            operation=operation,
+                            rule=rule,
+                        )
+                    raise _contract(
+                        "Alpha Vantage response Content-Type is not acceptable",
+                        operation=operation,
+                        rule=rule,
+                    )
+                try:
+                    payload = _loads_json_decimal(response.body)
+                except DataContractError as exc:
+                    raise _contract(
+                        "Alpha Vantage payload failed contract validation",
+                        operation=operation,
+                        rule=str(exc.details.get("rule", "json")),
+                    ) from None
+                if not isinstance(payload, dict):
+                    raise _contract(
+                        "Alpha Vantage payload failed contract validation",
+                        operation=operation,
+                        rule="contract_drift",
+                    )
+                self._raise_for_payload_notices(payload, operation=operation)
+            except ProviderRateLimitError as exc:
+                last_rate_limit = exc
+                continue
+            self._key_pool.mark_success(key_index)
+            return payload, fetched_at
+
+        assert last_rate_limit is not None
+        raise ProviderRateLimitError(
+            "Alpha Vantage key pool exhausted by rate limits",
+            details={
+                "vendor": self.vendor_id.value,
+                "operation": operation,
+                "error_type": "key_pool_exhausted",
+                "attempted_key_count": self._key_pool.size,
+            },
+        ) from None
 
     def _meta(
         self,
@@ -556,16 +573,12 @@ class AlphaVantageAdapter:
                 )
 
             out.append(
-                MarketBar(
-                    timestamp=ts, open=open_, high=high, low=low, close=close, volume=volume
-                )
+                MarketBar(timestamp=ts, open=open_, high=high, low=low, close=close, volume=volume)
             )
         out.sort(key=lambda b: b.timestamp)
         return out
 
-    async def get_quote(
-        self, instrument: Instrument, as_of: datetime
-    ) -> ProviderSuccess[USQuote]:
+    async def get_quote(self, instrument: Instrument, as_of: datetime) -> ProviderSuccess[USQuote]:
         self._require_configured()
         self._require_as_of(as_of)
         symbol = self._require_us_instrument(instrument)
@@ -726,9 +739,7 @@ class AlphaVantageAdapter:
             end=end,
             bars=tuple(bars),
         )
-        session = infer_session_basic(
-            Market.US, bars[-1].timestamp, timezone="America/New_York"
-        )
+        session = infer_session_basic(Market.US, bars[-1].timestamp, timezone="America/New_York")
         return ProviderSuccess(
             value=series,
             meta=self._meta(

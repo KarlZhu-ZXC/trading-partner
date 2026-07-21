@@ -9,7 +9,7 @@ Router ``result_validator`` rejects malicious adapter/cache payloads before DTO
 conversion. Primary must be Eastmoney factual rows; THS enrichment is
 LIMIT_UP-only editorial tags and never mutates factual summary counts.
 
-E5 will wire public MCP tools; this module is not bootstrapped yet.
+The service is bootstrapped behind ``a_share_get_facts(operation="limit_up")``.
 """
 
 from __future__ import annotations

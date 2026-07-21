@@ -1,8 +1,8 @@
 """A-share composite snapshot product service (Phase 1E E3).
 
 ``AShareSnapshotService.get_snapshot`` accepts a resolved ``Instrument`` plus
-aware ``as_of`` and ``AShareSnapshotDetail``. E5 will wire InstrumentMaster /
-MCP / bootstrap; this module is Router-backed only.
+aware ``as_of`` and ``AShareSnapshotDetail``. It is Router-backed and is
+bootstrapped behind ``a_share_get_facts(operation="snapshot")``.
 
 Parallel component fetches use ``asyncio.TaskGroup`` (structured concurrency).
 All started tasks complete or cancel before ``get_snapshot`` returns.

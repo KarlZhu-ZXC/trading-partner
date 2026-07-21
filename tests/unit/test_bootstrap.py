@@ -65,6 +65,7 @@ _REAL_US_VENDORS = (
     VendorId.FRED,
     VendorId.STOCKTWITS,
     VendorId.REDDIT,
+    VendorId.MOOMOO_FEED,
     VendorId.POLYMARKET,
     VendorId.SCHWAB,
     VendorId.MOOMOO,

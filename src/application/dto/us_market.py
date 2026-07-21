@@ -20,6 +20,7 @@ from domain.common.values import parse_instrument_id
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import (
     USBarSeries,
+    USCommunityHeatItem,
     USCompositeSnapshot,
     USMarketContext,
     USMarketProxy,
@@ -31,7 +32,9 @@ from domain.us_market.models import (
 _DATE_WIRE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Equity / ETF / index instruments for quote, bars, technical, composite.
-_QUOTE_ASSET_TYPES = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_QUOTE_ASSET_TYPES = frozenset(
+    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
 
 # US wire adjustment values (design §5; excludes A-share forward/backward).
 _US_ADJUSTMENT = frozenset(
@@ -109,7 +112,9 @@ class MarketGetBarsInput(_FrozenForbid):
     start: date
     end: date
     interval: USBarInterval = USBarInterval.ONE_DAY
-    adjustment: AdjustmentMethod = AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+    # None selects the asset-aware default in the coordinator: unadjusted for
+    # futures, split-and-dividend-adjusted for equities/ETFs/indexes.
+    adjustment: AdjustmentMethod | None = None
     as_of: datetime | None = None
 
     @field_validator("instrument_id")
@@ -129,7 +134,11 @@ class MarketGetBarsInput(_FrozenForbid):
 
     @field_validator("adjustment")
     @classmethod
-    def _us_adjustment(cls, value: AdjustmentMethod) -> AdjustmentMethod:
+    def _us_adjustment(
+        cls, value: AdjustmentMethod | None
+    ) -> AdjustmentMethod | None:
+        if value is None:
+            return None
         if value not in _US_ADJUSTMENT:
             allowed = ", ".join(sorted(a.value for a in _US_ADJUSTMENT))
             raise ValueError(f"adjustment must be one of [{allowed}] for US bars")
@@ -262,6 +271,27 @@ class USSectorRotationDTO(_FrozenForbid):
         )
 
 
+class USCommunityHeatItemDTO(_FrozenForbid):
+    provider_code: str
+    name: str
+    rank: int
+    trade_heat: DecimalWire | None
+    trade_heat_change: DecimalWire | None
+    search_heat: DecimalWire | None
+    search_heat_change: DecimalWire | None
+    news_heat: DecimalWire | None
+    news_heat_change: DecimalWire | None
+    average_heat: DecimalWire | None
+    average_heat_change: DecimalWire | None
+    related_content_type: str | None
+    related_title: str | None
+    related_url: str | None
+
+    @classmethod
+    def from_domain(cls, row: USCommunityHeatItem) -> USCommunityHeatItemDTO:
+        return cls.model_validate(row, from_attributes=True)
+
+
 class USMarketContextDTO(_FrozenForbid):
     as_of: datetime
     spy: USMarketProxyDTO
@@ -274,6 +304,9 @@ class USMarketContextDTO(_FrozenForbid):
     breadth_basis: str | None = None
     breadth_universe: str | None = None
     sector_rotation: tuple[USSectorRotationDTO, ...] = ()
+    community_heat_as_of: datetime | None = None
+    community_heat_basis: str | None = None
+    community_heat: tuple[USCommunityHeatItemDTO, ...] = ()
     warning_codes: tuple[str, ...]
 
     @classmethod
@@ -291,6 +324,11 @@ class USMarketContextDTO(_FrozenForbid):
             breadth_universe=context.breadth_universe,
             sector_rotation=tuple(
                 USSectorRotationDTO.from_domain(row) for row in context.sector_rotation
+            ),
+            community_heat_as_of=context.community_heat_as_of,
+            community_heat_basis=context.community_heat_basis,
+            community_heat=tuple(
+                USCommunityHeatItemDTO.from_domain(row) for row in context.community_heat
             ),
             warning_codes=context.warning_codes,
         )

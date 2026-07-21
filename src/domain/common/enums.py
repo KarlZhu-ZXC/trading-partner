@@ -17,6 +17,9 @@ class AssetType(StrEnum):
     ETF = "etf"
     INDEX = "index"
     OPTION = "option"
+    # Phase 3 append-only: exchange-traded futures and continuous futures
+    # proxies. A future must never be relabelled as an OTC spot instrument.
+    FUTURE = "future"
 
 
 class Freshness(StrEnum):
@@ -206,6 +209,9 @@ class DataCategory(StrEnum):
     # Current aggregate US breadth/rotation facts. Kept separate from order-book
     # market structure because it has a much longer safe cache lifetime.
     MARKET_BREADTH = "market_breadth"
+    # Current broker-community attention rankings. Heat is descriptive attention,
+    # never an inferred bullish/bearish stance.
+    COMMUNITY_HEAT = "community_heat"
     RESEARCH_REPORTS = "research_reports"
     INTERACTIVE_QA = "interactive_qa"
     CORPORATE_ACTIONS = "corporate_actions"
@@ -251,6 +257,9 @@ class VendorId(StrEnum):
     FRED = "fred"
     STOCKTWITS = "stocktwits"
     REDDIT = "reddit"
+    # Public Moomoo community/search feed. This is distinct from the local
+    # OpenD gateway so both adapters can coexist in the provider registry.
+    MOOMOO_FEED = "moomoo_feed"
     POLYMARKET = "polymarket"
     SCHWAB = "schwab"
     MOOMOO = "moomoo"

@@ -191,6 +191,7 @@ async def test_prefix_directory_stem_uses_same_match_for_method_allowlist() -> N
     (
         "https://query1.finance.yahoo.com/v8/finance/chart/NVDA",
         "https://www.alphavantage.co/query",
+        "https://ai-news-search.moomoo.com/stock_feed",
         "https://www.sec.gov/files/company_tickers.json",
         "https://data.sec.gov/submissions/CIK0001045810.json",
         "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json",

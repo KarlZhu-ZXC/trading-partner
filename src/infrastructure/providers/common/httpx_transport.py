@@ -178,6 +178,12 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
         frozenset({"GET"}),
     ),
     _AllowEntry(
+        "ai-news-search.moomoo.com",
+        "/stock_feed",
+        _MatchMode.EXACT,
+        frozenset({"GET"}),
+    ),
+    _AllowEntry(
         "www.reddit.com",
         "/r/",
         _MatchMode.PREFIX,

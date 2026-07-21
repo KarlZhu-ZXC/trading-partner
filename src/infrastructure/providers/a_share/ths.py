@@ -8,8 +8,8 @@ E4b (live-verified 2026-07-17):
   - Hot list (ths_hot): ``dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock``
 
 Does not claim exchange authority for limit pools; reason tags are editorial
-enrichment only. Concept heat has no live-verified dedicated endpoint and fails
-closed pre-network when requested.
+enrichment only. THS does not implement ``concept_heat``; the product routes
+instrument-scoped concept-hit requests to the Eastmoney provider instead.
 """
 
 from __future__ import annotations
@@ -712,7 +712,8 @@ class ThsAShareAdapter:
         self._require_configured()
         trade_date = require_exact_date(trade_date, field="trade_date")
         # Hot list is current-only; sample clock once and reject before network.
-        # concept_heat fails closed pre-network (no dedicated ranking endpoint).
+        # THS has no verified concept-hit endpoint; product routing assigns that
+        # source to Eastmoney rather than deriving it from THS concept tags.
         self._require_current_only_as_of_and_trade_date(
             as_of, trade_date, operation="sentiment"
         )

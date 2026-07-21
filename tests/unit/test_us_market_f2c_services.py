@@ -41,6 +41,8 @@ from domain.us_market.enums import USBarInterval
 from domain.us_market.models import (
     USBarSeries,
     USBreadthSnapshot,
+    USCommunityHeatItem,
+    USCommunityHeatSnapshot,
     USQuote,
     USSectorRotation,
 )
@@ -298,6 +300,25 @@ class _FakeBreadthService:
         )
 
 
+class _FakeCommunityHeatService:
+    def __init__(self, snapshot: USCommunityHeatSnapshot) -> None:
+        self.snapshot = snapshot
+
+    async def get_current(
+        self, *, limit: int, as_of: datetime
+    ) -> RouterExecutionResult[USCommunityHeatSnapshot]:
+        assert limit == 20
+        return RouterExecutionResult(
+            value=self.snapshot,
+            ok=True,
+            criticality=DataCriticality.OPTIONAL,
+            meta=_meta(DataCategory.COMMUNITY_HEAT, as_of=as_of),
+            attempts=(),
+            warnings=(),
+            error=None,
+        )
+
+
 def _data_service(
     router: object,
     clock: FixedClock | None = None,
@@ -512,6 +533,52 @@ async def test_context_includes_provider_breadth_and_sector_rotation() -> None:
     assert result.context.sector_rotation == (sector,)
     assert "US_BREADTH_UNAVAILABLE" not in result.context.warning_codes
     assert any(meta.category is DataCategory.MARKET_BREADTH for meta in result.metas)
+
+
+@pytest.mark.asyncio
+async def test_context_includes_moomoo_community_attention_without_calling_it_sentiment() -> None:
+    instruments = {f"etf:US:{symbol}": _us_etf(symbol) for symbol in ("SPY", "QQQ", "IWM")}
+    results = {
+        instrument_id: _ok_result(
+            _quote(instrument_id, last=D("100"), previous_close=D("99")), _meta()
+        )
+        for instrument_id in instruments
+    }
+    heat = USCommunityHeatSnapshot(
+        observed_at=AS_OF,
+        basis="moomoo_opend_hot_list_composite_heat",
+        items=(
+            USCommunityHeatItem(
+                provider_code="US.NVDA",
+                name="NVIDIA",
+                rank=1,
+                trade_heat=None,
+                trade_heat_change=None,
+                search_heat=None,
+                search_heat_change=None,
+                news_heat=None,
+                news_heat_change=None,
+                average_heat=D("99.1"),
+                average_heat_change=None,
+                related_content_type=None,
+                related_title=None,
+                related_url=None,
+            ),
+        ),
+    )
+    service = USMarketContextService(
+        _FakeDataService(results),  # type: ignore[arg-type]
+        _FakeMaster(instruments),  # type: ignore[arg-type]
+        FixedClock(NOW),
+        community_heat_service=_FakeCommunityHeatService(heat),  # type: ignore[arg-type]
+    )
+
+    result = await service.get_context_result(AS_OF)
+
+    assert result.context.community_heat_basis == "moomoo_opend_hot_list_composite_heat"
+    assert result.context.community_heat[0].provider_code == "US.NVDA"
+    assert "MOOMOO_COMMUNITY_HEAT_UNAVAILABLE" not in result.context.warning_codes
+    assert any(meta.category is DataCategory.COMMUNITY_HEAT for meta in result.metas)
 
 
 @pytest.mark.asyncio

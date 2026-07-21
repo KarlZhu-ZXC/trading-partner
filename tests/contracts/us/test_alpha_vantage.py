@@ -35,6 +35,7 @@ NY = ZoneInfo("America/New_York")
 AS_OF = datetime(2026, 7, 17, 16, 5, tzinfo=NY)
 CLOCK = FixedClock(AS_OF)
 API_KEY = "TEST_AV_SECRET_KEY_NEVER_LEAK"
+SECOND_API_KEY = "SECOND_TEST_AV_SECRET_KEY_NEVER_LEAK"
 
 
 def _instrument() -> Instrument:
@@ -184,11 +185,14 @@ class ScriptedTransport:
 
 
 def _adapter(
-    transport: ScriptedTransport, *, api_key: str | None = API_KEY, enabled: bool = True
+    transport: ScriptedTransport,
+    *,
+    api_keys: tuple[str, ...] = (API_KEY,),
+    enabled: bool = True,
 ) -> AlphaVantageAdapter:
     return AlphaVantageAdapter(
         transport,
-        api_key=api_key,
+        api_keys=api_keys,
         clock=CLOCK,
         enabled=enabled,
         max_fresh_seconds=60,
@@ -200,6 +204,7 @@ def _assert_no_secret(exc: BaseException) -> None:
     blob = f"{exc}{getattr(exc, 'message', '')}{getattr(exc, 'details', '')}"
     assert API_KEY not in blob
     assert "TEST_AV_SECRET" not in blob
+    assert SECOND_API_KEY not in blob
 
 
 @pytest.mark.asyncio
@@ -325,14 +330,30 @@ async def test_rate_limit_error_message_secret_redaction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rate_limited_key_fails_over_and_successful_key_stays_active() -> None:
+    rate_body = json.dumps({"Note": "API call frequency rate limit reached"}).encode()
+    success_body = json.dumps(_global_quote()).encode()
+    transport = ScriptedTransport([rate_body, success_body, success_body])
+    adapter = _adapter(transport, api_keys=(API_KEY, SECOND_API_KEY))
+
+    await adapter.get_quote(_instrument(), AS_OF)
+    await adapter.get_quote(_instrument(), AS_OF)
+
+    used_keys = [request.params["apikey"] for request in transport.requests]
+    assert used_keys == [API_KEY, SECOND_API_KEY, SECOND_API_KEY]
+    assert API_KEY not in repr(adapter._key_pool)  # noqa: SLF001
+    assert SECOND_API_KEY not in repr(adapter._key_pool)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_missing_key_and_unsupported_interval() -> None:
     transport = ScriptedTransport([b"{}"])
-    missing = _adapter(transport, api_key=None)
+    missing = _adapter(transport, api_keys=())
     assert missing.is_configured() is False
     with pytest.raises(ProviderNotConfigured):
         await missing.get_quote(_instrument(), AS_OF)
 
-    blank = _adapter(transport, api_key="   ")
+    blank = _adapter(transport, api_keys=("   ",))
     assert blank.is_configured() is False
 
     disabled = _adapter(transport, enabled=False)

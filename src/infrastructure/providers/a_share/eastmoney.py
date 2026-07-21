@@ -12,9 +12,9 @@ protocol-compatible but fails closed until an allowlisted upstream contract
 is verified (no fabricated report names).
 
 E4b: push2ex four limit pools (limit-up / broken / limit-down / previous
-limit-up via live-verified getYesterdayZTPool) and stockrank hot list
-(eastmoney_hot). Concept heat under stockrank/* was not live-observed and
-fails closed pre-network.
+limit-up via live-verified getYesterdayZTPool), stockrank hot list
+(``eastmoney_hot``), and instrument-scoped stockrank concept-hit counts
+(``concept_heat``). Concept hits are not a global concept leaderboard.
 
 Volume fields (quote f47, kline f56, book ladder, tick volume) are lots (手);
 domain stores volume_shares = lots * 100 for EQUITY/ETF. INDEX does not invent
@@ -4618,13 +4618,13 @@ class EastmoneyAShareAdapter:
         sources: tuple[SentimentSourceType, ...],
         as_of: datetime,
     ) -> ProviderSuccess[tuple[SentimentSignal, ...]]:
-        """Eastmoney stockrank hot list (eastmoney_hot only).
+        """Eastmoney current stockrank facts.
 
         Live-verified 2026-07-17: POST emappdata.../stockrank/getAllCurrentList.
         Current-only: ranks are a live cross-section and must not be labeled as
-        an arbitrary historical trade_date. Concept heat under stockrank/* was
-        not observed — fail closed pre-network when concept_heat is requested
-        without inventing endpoints.
+        an arbitrary historical trade_date. ``concept_heat`` is separately
+        fetched for one required instrument from getHotStockRankList and returns
+        concept hit counts, not a global concept ranking.
         """
         self._require_configured()
         trade_date = require_exact_date(trade_date, field="trade_date")

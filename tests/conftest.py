@@ -105,7 +105,7 @@ def test_settings(tmp_sqlite_url: str) -> AppSettings:
         mcp_server_name="trading-partner-test",
         default_timezone="UTC",
         provider_timeout_seconds=5.0,
-        alpha_vantage_api_key=None,
+        alpha_vantage_api_keys=(),
         fred_api_key=None,
         broker_api_key=None,
         broker_api_secret=None,

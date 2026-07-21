@@ -27,7 +27,9 @@ from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USTechnicalSnapshot
 
 _NEW_YORK = ZoneInfo("America/New_York")
-_QUOTE_ASSET_TYPES = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_QUOTE_ASSET_TYPES = frozenset(
+    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
 _ALGORITHM_VERSION = "tp_technical_v1"
 _SUPPORT_RESISTANCE_METHOD = "rolling_extrema_20_v1"
 _LOOKBACK_MIN = 20
@@ -270,7 +272,7 @@ class USTechnicalService:
             )
         if instrument.asset_type not in _QUOTE_ASSET_TYPES:
             raise DataContractError(
-                "instrument asset_type must be equity, etf, or index",
+                "instrument asset_type must be equity, etf, index, or future",
                 details={
                     "field": "instrument",
                     "rule": "asset_type",
@@ -350,12 +352,18 @@ class USTechnicalService:
                 "technical snapshot requires daily bars",
                 details={"field": "series.interval", "rule": "daily_only"},
             )
-        if series.adjustment is not AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED:
+        expected_adjustment = (
+            AdjustmentMethod.NONE
+            if instrument.asset_type is AssetType.FUTURE
+            else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+        )
+        if series.adjustment is not expected_adjustment:
             raise DataContractError(
-                "technical snapshot requires split-and-dividend-adjusted bars",
+                "technical snapshot bars use the wrong adjustment basis",
                 details={
                     "field": "series.adjustment",
-                    "rule": "split_and_dividend_adjusted_only",
+                    "rule": "asset_aware_adjustment",
+                    "expected": expected_adjustment.value,
                 },
             )
         lookback = self._require_lookback(lookback_sessions)
@@ -398,12 +406,17 @@ class USTechnicalService:
         start = as_of_ny_date - timedelta(days=lookback * 2)
         end = as_of_ny_date
 
+        adjustment = (
+            AdjustmentMethod.NONE
+            if instrument.asset_type is AssetType.FUTURE
+            else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+        )
         result = await self._data_service.get_bars(
             instrument,
             start=start,
             end=end,
             interval=USBarInterval.ONE_DAY,
-            adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+            adjustment=adjustment,
             as_of=as_of,
         )
         if not result.ok:

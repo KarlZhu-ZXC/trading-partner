@@ -22,5 +22,6 @@ class USSentimentLabelOrigin(StrEnum):
 class USSentimentSource(StrEnum):
     STOCKTWITS = "stocktwits"
     REDDIT = "reddit"
+    MOOMOO = "moomoo"
     YAHOO = "yahoo"
     ALPHA_VANTAGE = "alpha_vantage"
