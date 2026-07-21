@@ -58,7 +58,7 @@ RUNTIME_SEED_ALIAS_COUNT = 8
 PHASE1D_MINIMUM_SEED_INSTRUMENT_COUNT = 8
 PHASE1D_MINIMUM_SEED_ALIAS_COUNT = 6
 PHASE1F_SEED_TS = "2026-07-18T00:00:00+00:00"
-_HEADS = frozenset({"0013_phase2c_monitoring"})
+_HEADS = frozenset({"0014_phase3_commodity_futures"})
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -373,7 +373,7 @@ def test_downgrade_to_0002_and_reupgrade_reseeds(
 
     Uses absolute revision ``0002_phase1b_research_state`` (not relative ``-1``)
     so intermediate steps stay stable; current migration head is
-    0013_phase2c_monitoring.
+    0014_phase3_commodity_futures.
     """
     db_path = tmp_path / "reseed.db"
     database_url = f"sqlite:///{db_path}"
@@ -396,13 +396,15 @@ def test_downgrade_to_0002_and_reupgrade_reseeds(
     command.upgrade(cfg, "heads")
     engine = create_engine(database_url)
     with engine.connect() as conn:
-        assert (
-            conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar()
-            == RUNTIME_SEED_INSTRUMENT_COUNT
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == (
+            RUNTIME_SEED_INSTRUMENT_COUNT + 6
         )
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM instruments WHERE asset_type = 'future'")
+        ).scalar() == 6
         assert (
             conn.execute(text("SELECT COUNT(*) FROM instrument_aliases")).scalar()
-            == RUNTIME_SEED_ALIAS_COUNT
+            == RUNTIME_SEED_ALIAS_COUNT + 6
         )
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).one()
         assert rev[0] in _HEADS

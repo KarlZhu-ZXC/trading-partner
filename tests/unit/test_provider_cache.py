@@ -368,6 +368,15 @@ def test_build_cache_key_matrix_and_roundtrip() -> None:
     )
     assert key == GOOD_KEY
 
+    futures_key = build_cache_key(
+        Market.US,
+        DataCategory.MARKET_OHLCV,
+        "future:US:GC=F",
+        AS_OF,
+        "get_bars|0123456789abcdef",
+    )
+    assert parse_cache_key(futures_key).instrument_id == "future:US:GC=F"
+
     null_key = build_cache_key(
         Market.A_SHARE,
         DataCategory.INSTRUMENT_MASTER,

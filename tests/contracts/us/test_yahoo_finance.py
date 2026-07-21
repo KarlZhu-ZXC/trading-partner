@@ -49,6 +49,19 @@ def _instrument() -> Instrument:
     )
 
 
+def _future_instrument() -> Instrument:
+    return Instrument(
+        instrument_id="future:US:GC=F",
+        symbol="GC=F",
+        name="COMEX Gold Futures Continuous",
+        market=Market.US,
+        exchange="COMEX",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.FUTURE,
+    )
+
+
 def _unix(dt: datetime) -> int:
     return int(dt.timestamp())
 
@@ -405,6 +418,26 @@ def test_supports_us_quote_and_ohlcv_only() -> None:
     assert adapter.is_configured() is True
     disabled = YahooFinanceAdapter(transport, enabled=False)
     assert disabled.is_configured() is False
+
+
+@pytest.mark.asyncio
+async def test_future_bars_are_unadjusted_and_disclose_proxy_roll_risk() -> None:
+    transport = RecordingTransport(body=_success_body())
+    result = await _adapter(transport).get_bars(
+        _future_instrument(),
+        start=date(2026, 7, 13),
+        end=date(2026, 7, 17),
+        interval=USBarInterval.SIXTY_MINUTES,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=AS_OF,
+    )
+    assert result.value.instrument_id == "future:US:GC=F"
+    assert result.value.adjustment is AdjustmentMethod.NONE
+    assert result.meta.warnings == (
+        "FUTURES_CONTRACT_NOT_SPOT",
+        "CONTINUOUS_FUTURES_ROLL_RISK",
+    )
+    assert transport.requests[0].url.endswith("GC%3DF")
 
 
 @pytest.mark.asyncio

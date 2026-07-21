@@ -4,7 +4,7 @@
 ``ProviderRouter`` with ``OPTIONS_POLICY``, explicit option snapshot codec,
 canonical secret-free fingerprint, and a strict ``result_validator``.
 
-E5 will wire the public MCP tool; this module is not bootstrapped yet.
+The service is bootstrapped behind ``a_share_get_facts(operation="etf_option")``.
 """
 
 from __future__ import annotations

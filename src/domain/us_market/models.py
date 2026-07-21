@@ -21,7 +21,9 @@ from domain.market.models import MarketBar, TechnicalIndicators
 from domain.us_market.enums import USBarInterval
 
 # Equity / ETF / index instruments for US quote, bars, technical, composite.
-_QUOTE_ASSET_TYPES = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_QUOTE_ASSET_TYPES = frozenset(
+    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
 # Market context proxies are the three US ETF seeds.
 _PROXY_ASSET_TYPES = frozenset({AssetType.ETF})
 _PROXY_INSTRUMENT_IDS = frozenset(
@@ -440,6 +442,81 @@ class USBreadthSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class USCommunityHeatItem:
+    """One Moomoo OpenD community-attention ranking row."""
+
+    provider_code: str
+    name: str
+    rank: int
+    trade_heat: Decimal | None
+    trade_heat_change: Decimal | None
+    search_heat: Decimal | None
+    search_heat_change: Decimal | None
+    news_heat: Decimal | None
+    news_heat_change: Decimal | None
+    average_heat: Decimal | None
+    average_heat_change: Decimal | None
+    related_content_type: str | None
+    related_title: str | None
+    related_url: str | None
+
+    def __post_init__(self) -> None:
+        _require_str(self.provider_code, field="provider_code", max_len=64)
+        _require_str(self.name, field="name", max_len=256)
+        if type(self.rank) is not int or self.rank <= 0:
+            raise DataContractError(
+                "rank must be a positive integer",
+                details={"field": "rank", "rule": "positive_integer"},
+            )
+        for field_name in (
+            "trade_heat",
+            "trade_heat_change",
+            "search_heat",
+            "search_heat_change",
+            "news_heat",
+            "news_heat_change",
+            "average_heat",
+            "average_heat_change",
+        ):
+            _require_optional_decimal(getattr(self, field_name), field=field_name)
+        if self.related_content_type is not None:
+            _require_str(
+                self.related_content_type,
+                field="related_content_type",
+                max_len=32,
+            )
+        if self.related_title is not None:
+            _require_str(self.related_title, field="related_title", max_len=500)
+        if self.related_url is not None:
+            _require_str(self.related_url, field="related_url", max_len=2_000)
+
+
+@dataclass(frozen=True, slots=True)
+class USCommunityHeatSnapshot:
+    observed_at: datetime
+    basis: str
+    items: tuple[USCommunityHeatItem, ...]
+
+    def __post_init__(self) -> None:
+        require_aware_datetime(self.observed_at, field_name="observed_at")
+        _require_str(self.basis, field="basis", max_len=128)
+        rows = _require_tuple(self.items, field="items")
+        codes: set[str] = set()
+        for idx, row in enumerate(rows):
+            if not isinstance(row, USCommunityHeatItem):
+                raise DataContractError(
+                    "items must contain USCommunityHeatItem",
+                    details={"field": f"items[{idx}]", "rule": "type"},
+                )
+            if row.provider_code in codes:
+                raise DataContractError(
+                    "community heat provider codes must be unique",
+                    details={"field": "items", "rule": "unique"},
+                )
+            codes.add(row.provider_code)
+
+
+@dataclass(frozen=True, slots=True)
 class USMarketContext:
     as_of: datetime
     spy: USMarketProxy
@@ -453,6 +530,9 @@ class USMarketContext:
     breadth_basis: str | None = None
     breadth_universe: str | None = None
     sector_rotation: tuple[USSectorRotation, ...] = ()
+    community_heat_as_of: datetime | None = None
+    community_heat_basis: str | None = None
+    community_heat: tuple[USCommunityHeatItem, ...] = ()
 
     def __post_init__(self) -> None:
         require_aware_datetime(self.as_of, field_name="as_of")
@@ -500,6 +580,23 @@ class USMarketContext:
                 raise DataContractError(
                     "sector_rotation items must be USSectorRotation",
                     details={"field": f"sector_rotation[{idx}]", "rule": "type"},
+                )
+        if self.community_heat_as_of is not None:
+            require_aware_datetime(
+                self.community_heat_as_of,
+                field_name="community_heat_as_of",
+            )
+        if self.community_heat_basis is not None:
+            _require_str(
+                self.community_heat_basis,
+                field="community_heat_basis",
+                max_len=128,
+            )
+        for idx, row in enumerate(_require_tuple(self.community_heat, field="community_heat")):
+            if not isinstance(row, USCommunityHeatItem):
+                raise DataContractError(
+                    "community_heat items must be USCommunityHeatItem",
+                    details={"field": f"community_heat[{idx}]", "rule": "type"},
                 )
         codes = _require_tuple(self.warning_codes, field="warning_codes")
         for idx, code in enumerate(codes):

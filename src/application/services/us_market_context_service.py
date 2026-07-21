@@ -16,12 +16,19 @@ from decimal import Decimal
 from application.dto.provider_routing import ProviderResultMeta
 from application.ports.clock import Clock
 from application.services.instrument_master_service import InstrumentMasterService
+from application.services.us_community_heat_service import USCommunityHeatService
 from application.services.us_market_breadth_service import USMarketBreadthService
 from application.services.us_market_data_service import USMarketDataService
-from domain.common.errors import DataContractError, InvalidInstrument
+from domain.common.errors import DataContractError, InvalidInstrument, TradingPartnerError
 from domain.common.time import require_aware_datetime
 from domain.instruments.models import Instrument
-from domain.us_market.models import USBreadthSnapshot, USMarketContext, USMarketProxy, USQuote
+from domain.us_market.models import (
+    USBreadthSnapshot,
+    USCommunityHeatSnapshot,
+    USMarketContext,
+    USMarketProxy,
+    USQuote,
+)
 
 _PROXY_SLOTS: tuple[tuple[str, str], ...] = (
     ("spy", "etf:US:SPY"),
@@ -30,6 +37,7 @@ _PROXY_SLOTS: tuple[tuple[str, str], ...] = (
 )
 _BREADTH_WARNING = "US_BREADTH_UNAVAILABLE"
 _ROTATION_WARNING = "US_SECTOR_ROTATION_UNAVAILABLE"
+_COMMUNITY_HEAT_WARNING = "MOOMOO_COMMUNITY_HEAT_UNAVAILABLE"
 _HUNDRED = Decimal("100")
 
 
@@ -50,6 +58,8 @@ class USMarketContextService:
         instrument_master: InstrumentMasterService,
         clock: Clock,
         breadth_service: USMarketBreadthService | None = None,
+        community_heat_service: USCommunityHeatService | None = None,
+        community_heat_limit: int = 20,
     ) -> None:
         if data_service is None or instrument_master is None or clock is None:
             raise DataContractError(
@@ -60,6 +70,13 @@ class USMarketContextService:
         self._instrument_master = instrument_master
         self._clock = clock
         self._breadth_service = breadth_service
+        self._community_heat_service = community_heat_service
+        if not 1 <= community_heat_limit <= 200:
+            raise DataContractError(
+                "community_heat_limit must be in [1,200]",
+                details={"field": "community_heat_limit", "rule": "range"},
+            )
+        self._community_heat_limit = community_heat_limit
 
     def _require_as_of_not_future(self, as_of: datetime) -> None:
         require_aware_datetime(as_of, field_name="as_of")
@@ -186,6 +203,38 @@ class USMarketContextService:
         elif not breadth.sector_rotation and _ROTATION_WARNING not in seen:
             warning_list.append(_ROTATION_WARNING)
 
+        community_heat: USCommunityHeatSnapshot | None = None
+        community_error_code: str | None = None
+        if self._community_heat_service is not None:
+            try:
+                community_result = await self._community_heat_service.get_current(
+                    limit=self._community_heat_limit,
+                    as_of=as_of,
+                )
+            except TradingPartnerError as exc:
+                community_result = None
+                community_error_code = exc.code
+            except Exception:
+                community_result = None
+            if (
+                community_result is not None
+                and community_result.ok
+                and isinstance(community_result.value, USCommunityHeatSnapshot)
+            ):
+                community_heat = community_result.value
+                if isinstance(community_result.meta, ProviderResultMeta):
+                    metas.append(community_result.meta)
+            else:
+                if (
+                    community_error_code is None
+                    and community_result is not None
+                    and community_result.error is not None
+                ):
+                    community_error_code = community_result.error.code
+                warning = community_error_code or _COMMUNITY_HEAT_WARNING
+                if warning not in seen:
+                    warning_list.append(warning)
+
         context = USMarketContext(
             as_of=as_of,
             spy=proxies["spy"],
@@ -198,6 +247,9 @@ class USMarketContextService:
             breadth_basis=(breadth.basis if breadth else None),
             breadth_universe=(breadth.universe if breadth else None),
             sector_rotation=(breadth.sector_rotation if breadth else ()),
+            community_heat_as_of=(community_heat.observed_at if community_heat else None),
+            community_heat_basis=(community_heat.basis if community_heat else None),
+            community_heat=(community_heat.items if community_heat else ()),
             warning_codes=tuple(warning_list),
         )
         return USMarketContextResult(context=context, metas=tuple(metas))

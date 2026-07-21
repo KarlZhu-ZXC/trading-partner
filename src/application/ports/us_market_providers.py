@@ -17,7 +17,12 @@ from application.ports.category_provider import CategoryProvider
 from domain.common.enums import AdjustmentMethod
 from domain.instruments.models import Instrument
 from domain.us_market.enums import USBarInterval
-from domain.us_market.models import USBarSeries, USBreadthSnapshot, USQuote
+from domain.us_market.models import (
+    USBarSeries,
+    USBreadthSnapshot,
+    USCommunityHeatSnapshot,
+    USQuote,
+)
 
 
 @runtime_checkable
@@ -48,9 +53,17 @@ class USMarketBreadthProvider(CategoryProvider, Protocol):
     ) -> ProviderSuccess[USBreadthSnapshot]: ...
 
 
+@runtime_checkable
+class USCommunityHeatProvider(CategoryProvider, Protocol):
+    async def get_community_heat(
+        self, *, limit: int, as_of: datetime
+    ) -> ProviderSuccess[USCommunityHeatSnapshot]: ...
+
+
 # Explicit inventory for architecture / completeness tests (order frozen).
 US_MARKET_RUNTIME_PROTOCOLS: tuple[type, ...] = (
     USQuoteProvider,
     USBarsProvider,
     USMarketBreadthProvider,
+    USCommunityHeatProvider,
 )

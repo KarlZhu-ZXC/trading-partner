@@ -28,7 +28,7 @@ _FINGERPRINT_RE = re.compile(
 
 # Cache key segment safety: public identities use asset/market/symbol chars only.
 # Rejects pipe/query/whitespace pollution of the v1|{...}|{instrument_id}|... key.
-_CACHE_INSTRUMENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_CACHE_INSTRUMENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:=\-]+$")
 
 # v1 key is exactly 7 pipe-separated segments once fingerprint's single pipe
 # is included: v1|market|category|instrument|as_of|operation|hash16

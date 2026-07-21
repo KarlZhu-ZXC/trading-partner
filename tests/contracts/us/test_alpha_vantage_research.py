@@ -56,7 +56,7 @@ def _instrument() -> Instrument:
 
 
 def _adapter(transport: FunctionTransport) -> AlphaVantageResearchAdapter:
-    return AlphaVantageResearchAdapter(transport, api_key=API_KEY, clock=FixedClock(NOW))
+    return AlphaVantageResearchAdapter(transport, api_keys=(API_KEY,), clock=FixedClock(NOW))
 
 
 @pytest.mark.asyncio

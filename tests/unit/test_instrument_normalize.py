@@ -94,6 +94,24 @@ class TestAShareNormalize:
 
 
 class TestUsNormalize:
+    def test_yahoo_continuous_future_requires_explicit_future_hint(self) -> None:
+        result = normalize_symbol_input(
+            Market.US,
+            " gc=f ",
+            asset_type_hint=AssetType.FUTURE,
+        )
+        assert result.canonical_candidate == "GC=F"
+        assert result.local_code == "GC"
+        assert result.asset_type_hint is AssetType.FUTURE
+        assert "continuous_future_roll_risk" in result.warnings
+
+        with pytest.raises(InvalidInstrument, match="continuous future"):
+            normalize_symbol_input(
+                Market.US,
+                "XAUUSD",
+                asset_type_hint=AssetType.FUTURE,
+            )
+
     def test_case_and_dollar(self) -> None:
         for raw in ("nvda", "NVDA", "$NVDA", "$nvda"):
             result = normalize_symbol_input(Market.US, raw)
