@@ -53,6 +53,7 @@ _US_EXCHANGE_SUFFIXES = frozenset(
 _OCC_RE = re.compile(r"^([A-Z0-9.]{1,6})(\d{6})([CP])(\d{8})$")
 
 _US_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
+_YAHOO_CONTINUOUS_FUTURE_RE = re.compile(r"^[A-Z0-9]{1,8}=F$")
 
 # A-share option-style contract codes (exchange native), e.g. 10007601.SH
 _A_SHARE_OPTION_CODE_RE = re.compile(r"^(\d{6,10})(\.(?:SH|SZ|BJ))?$", re.IGNORECASE)
@@ -230,6 +231,27 @@ def _normalize_us(
         )
 
     warnings: list[str] = []
+
+    if asset_type_hint is AssetType.FUTURE:
+        compact = upper.replace(" ", "")
+        if not _YAHOO_CONTINUOUS_FUTURE_RE.fullmatch(compact):
+            raise InvalidInstrument(
+                "US continuous future symbol must use Yahoo ROOT=F form",
+                details={
+                    "raw": raw,
+                    "market": Market.US.value,
+                    "reason": "future_format",
+                },
+            )
+        return NormalizedSymbol(
+            market=Market.US,
+            asset_type_hint=AssetType.FUTURE,
+            canonical_candidate=compact,
+            local_code=compact.removesuffix("=F"),
+            exchange_hint="COMEX",
+            display_symbol=compact,
+            warnings=("continuous_future_roll_risk",),
+        )
 
     # Index caret form: keep underlying ticker as candidate; Master owns canonical (e.g. SPX).
     if upper.startswith("^"):

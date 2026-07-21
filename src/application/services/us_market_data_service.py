@@ -27,7 +27,9 @@ from domain.us_market.models import USBarSeries, USQuote
 OP_QUOTE = "us.quote.v1"
 OP_BARS = "us.bars.v1"
 
-_QUOTE_ASSET_TYPES = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_QUOTE_ASSET_TYPES = frozenset(
+    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
 
 
 def _as_of_utc_z(as_of: datetime) -> str:
@@ -110,7 +112,7 @@ class USMarketDataService:
             )
         if instrument.asset_type not in _QUOTE_ASSET_TYPES:
             raise DataContractError(
-                "instrument asset_type must be equity, etf, or index",
+                "instrument asset_type must be equity, etf, index, or future",
                 details={
                     "field": "instrument",
                     "rule": "asset_type",
@@ -316,6 +318,15 @@ class USMarketDataService:
             raise DataContractError(
                 "adjustment must be AdjustmentMethod",
                 details={"field": "adjustment", "rule": "type"},
+            )
+        if instrument.asset_type is AssetType.FUTURE and adjustment is not AdjustmentMethod.NONE:
+            raise DataContractError(
+                "futures bars require adjustment=none",
+                details={
+                    "field": "adjustment",
+                    "rule": "futures_unadjusted_only",
+                    "instrument_id": instrument.instrument_id,
+                },
             )
         params = {
             "adjustment": adjustment.value,

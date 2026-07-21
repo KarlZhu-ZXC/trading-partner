@@ -46,6 +46,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Create durable price and portfolio-risk monitors with transition-only events.
 - Produce shared A-share/US daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
+- Retrieve free Yahoo COMEX/NYMEX continuous commodity-futures quotes and 1m–monthly
+  bars with explicit non-spot and contract-roll warnings.
 - Run repeatable deep-dive, catalyst, market-review, and portfolio-review workflows
   while keeping the AI host as the synthesizer.
 

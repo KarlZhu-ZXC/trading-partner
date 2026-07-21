@@ -55,8 +55,16 @@ an allowlist. Directory failures remain typed provider errors.
 
 - `us_get_market` (`quote` or `composite`)
 - `market_get_bars`
-- `market_get_context` (SPY/QQQ/IWM plus best-effort Yahoo breadth and sector rotation)
+- `market_get_context` (SPY/QQQ/IWM, best-effort Yahoo breadth/sector rotation,
+  and optional Moomoo OpenD US community-attention Hot List)
 - `technical_get_snapshot`
+
+**Phase 3A commodity futures facts**
+
+- The existing `instrument_resolve`, `us_get_market`, `market_get_bars`,
+  `technical_get_snapshot`, and `technical_render_chart` tools support Yahoo
+  continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`, and `PA=F` through
+  `future:US:*` IDs. Futures are unadjusted and always disclose non-spot and roll risk.
 
 **Phase 1G US research facts**
 
@@ -70,6 +78,14 @@ an allowlist. Directory failures remain typed provider errors.
 - `us_get_macro_context`
 - `us_get_sentiment_snapshot`
 - `us_get_prediction_market_context`
+
+`us_get_sentiment_snapshot` keeps StockTwits user labels, Reddit inference, and
+Moomoo public-feed inference source-separated. The Moomoo path is deterministic:
+it performs exact-symbol relevance filtering, HTML cleanup, deduplication,
+low-quality filtering, and versioned bilingual rule classification. It never
+invokes a Skill or an LLM; Codex or another external host interprets the returned
+samples and summaries. The feed is current-only and missing engagement remains
+null rather than inferred.
 
 **Phase 1I read-only accounts and portfolio**
 
@@ -145,6 +161,12 @@ through a project-owned `schwab-py` OAuth token, Moomoo OpenD, or a strict manua
 CSV; persist account snapshots; and compute deterministic gross portfolio exposure
 without implicit FX conversion. The Schwab adapter exposes only balances,
 positions, and transactions — no order method or plugin CLI runtime dependency.
+Moomoo Hot List is an optional `market_get_context` component, not directional
+sentiment. It uses the shared cross-process OpenD limiter, is cached in 15-minute
+buckets, and requires OpenD 10.9 or newer. Older versions remain a typed
+`MOOMOO_OPEND_VERSION_UNSUPPORTED` degradation. Moomoo discussion-post retrieval
+is a separate public-feed Provider under `us_get_sentiment_snapshot`; it never
+uses OpenD, a Skill, or an LLM at runtime.
 Ordinary holdings, portfolio, and risk questions read the latest durable account
 snapshots. Broker refresh is explicit: only `account_get(operation="refresh")`, or a workflow
 called with `refresh_accounts=true` after an explicit user request, may fetch and
@@ -187,8 +209,9 @@ remain `NOT_EVALUATED`. Event acknowledgement/resolution never mutates a Thesis,
 position, Risk Policy, or order, and every run carries `execution_effect=false`.
 
 Phase 2D derives standard indicators through the open-source TA-Lib backend and
-project-owned structure analysis over provider-backed adjusted daily bars. It
-supports A-share and US equity/ETF/index instruments, emits daily and weekly
+project-owned structure analysis over provider-backed adjusted daily bars. Phase 3A
+adds explicitly unadjusted Yahoo continuous-futures bars. It supports A-share and US
+equity/ETF/index instruments plus the seeded commodity-futures proxies, emitting daily and weekly
 timeframes, regime states, disclosed metrics, clustered support/resistance, and
 recent candlestick patterns. `technical_render_chart` returns an auditable
 envelope, a permission-restricted local artifact reference, and an in-memory PNG

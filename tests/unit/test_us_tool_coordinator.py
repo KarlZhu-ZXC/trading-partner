@@ -308,6 +308,9 @@ async def test_five_handlers_delegate_and_return_us_envelope(
         data.get_quote.assert_awaited_once()
     if method == "get_market_bars":
         data.get_bars.assert_awaited_once()
+        assert data.get_bars.await_args.kwargs["adjustment"] is (
+            AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+        )
     if method == "get_market_context":
         context.get_context_result.assert_awaited_once()
         assert envelope.degraded is True  # breadth always unavailable
@@ -320,6 +323,70 @@ async def test_five_handlers_delegate_and_return_us_envelope(
         data.get_bars.assert_awaited_once()
         context.get_context_result.assert_awaited_once()
         technical.build_snapshot.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_future_bars_default_to_unadjusted() -> None:
+    future = Instrument(
+        instrument_id="future:US:GC=F",
+        symbol="GC=F",
+        name="COMEX Gold Futures Continuous",
+        market=Market.US,
+        exchange="COMEX",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.FUTURE,
+    )
+    master = MagicMock()
+    master.get.return_value = future
+    data = MagicMock()
+    future_series = USBarSeries(
+        instrument_id=future.instrument_id,
+        interval=USBarInterval.SIXTY_MINUTES,
+        adjustment=AdjustmentMethod.NONE,
+        start=date(2026, 7, 17),
+        end=date(2026, 7, 17),
+        bars=(
+            MarketBar(
+                timestamp=BAR_TS,
+                open=D("4000"),
+                high=D("4010"),
+                low=D("3990"),
+                close=D("4005"),
+                volume=D("100"),
+            ),
+        ),
+    )
+    data.get_bars = AsyncMock(
+        return_value=_ok(
+            future_series,
+            _meta(
+                category=DataCategory.MARKET_OHLCV,
+                adjustment=AdjustmentMethod.NONE,
+                warnings=(
+                    "FUTURES_CONTRACT_NOT_SPOT",
+                    "CONTINUOUS_FUTURES_ROLL_RISK",
+                ),
+            ),
+        )
+    )
+    coord, _, _, _, _ = _coordinator(master=master, data=data)
+    envelope = await coord.get_market_bars(
+        MarketGetBarsInput(
+            instrument_id=future.instrument_id,
+            start=date(2026, 7, 17),
+            end=date(2026, 7, 17),
+            interval=USBarInterval.SIXTY_MINUTES,
+            as_of=AS_OF,
+        )
+    )
+    assert envelope.ok is True
+    assert envelope.data is not None
+    assert envelope.data.adjustment is AdjustmentMethod.NONE
+    assert {warning.code for warning in envelope.warnings}.issuperset(
+        {"FUTURES_CONTRACT_NOT_SPOT", "CONTINUOUS_FUTURES_ROLL_RISK"}
+    )
+    assert data.get_bars.await_args.kwargs["adjustment"] is AdjustmentMethod.NONE
 
 
 @pytest.mark.asyncio

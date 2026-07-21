@@ -20,6 +20,7 @@ from domain.us_context.enums import (
     USSentimentLabelOrigin,
 )
 from infrastructure.persistence.reddit_state_store import InMemoryRedditStateStore
+from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
 from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
 from infrastructure.providers.us.reddit import RedditSentimentAdapter
 from infrastructure.providers.us.reddit_apify import ApifyRedditClient, ApifyRedditPost
@@ -167,6 +168,78 @@ async def test_reddit_rss_inference_keeps_engagement_unknown_and_versioned() -> 
     assert sample.classifier_version == "reddit_lexicon_v1"
     assert sample.likes is None and sample.comments is None
     assert len(transport.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_moomoo_feed_is_exact_filtered_deterministic_and_cached() -> None:
+    recent = int((NOW - timedelta(minutes=15)).timestamp())
+    newer = int((NOW - timedelta(minutes=10)).timestamp())
+    payload = {
+        "code": 0,
+        "data": [
+            {
+                "id": "bull-old",
+                "title": '<nnstock stockcode="NVDA" stocksymbol="NVDA.US">NVDA</nnstock>',
+                "desc": "Strong demand supports a breakout with more upside ahead.",
+                "publish_time": str(recent),
+                "url": "https://example.test/bull-old",
+            },
+            {
+                "id": "bull-new",
+                "title": '<nnstock stockcode="NVDA" stocksymbol="NVDA.US">NVDA</nnstock>',
+                "desc": "Strong demand supports a breakout with more upside ahead.",
+                "publish_time": str(newer),
+                "url": "https://example.test/bull-new",
+            },
+            {
+                "id": "bear",
+                "title": '<nnstock stockcode="NVDA" stocksymbol="NVDA.US">NVDA</nnstock>',
+                "desc": "估值高估且需求疲软，我选择减仓并防范下跌风险。",
+                "publish_time": str(recent),
+            },
+            {
+                "id": "ticker-only",
+                "title": '<nnstock stockcode="NVDA" stocksymbol="NVDA.US">$NVDA</nnstock>',
+                "desc": "",
+                "publish_time": str(recent),
+            },
+            {
+                "id": "irrelevant",
+                "title": '<nnstock stockcode="INTC" stocksymbol="INTC.US">INTC</nnstock>',
+                "desc": "Bullish earnings beat and strong demand support a breakout.",
+                "publish_time": str(recent),
+            },
+        ],
+    }
+    transport = PayloadTransport(json.dumps(payload).encode(), "application/json")
+    adapter = MoomooSentimentAdapter(transport, clock=FixedClock(NOW))
+
+    first = await adapter.get_sentiment_samples(
+        _instrument(), start=None, end=None, limit=20, as_of=NOW
+    )
+    second = await adapter.get_sentiment_samples(
+        _instrument(), start=None, end=None, limit=20, as_of=NOW
+    )
+
+    assert first.value == second.value
+    assert len(first.value) == 2
+    assert [sample.direction for sample in first.value] == [
+        USSentimentDirection.BULLISH,
+        USSentimentDirection.BEARISH,
+    ]
+    assert all(
+        sample.label_origin is USSentimentLabelOrigin.DETERMINISTIC_INFERENCE
+        and sample.classifier_version == "moomoo_rules_v1"
+        and sample.likes is None
+        and sample.comments is None
+        for sample in first.value
+    )
+    assert first.value[0].url == "https://example.test/bull-new"
+    assert second.meta.freshness is Freshness.FRESH
+    assert "MOOMOO_SENTIMENT_DETERMINISTIC_RULES" in first.meta.warnings
+    assert len(transport.requests) == 1
+    assert transport.requests[0].url.endswith("/stock_feed")
+    assert transport.requests[0].params == {"keyword": "NVDA", "size": "30"}
 
 
 @pytest.mark.asyncio

@@ -48,6 +48,8 @@ markets:
       vendors: [yfinance, alpha_vantage]
     market_breadth:
       vendors: [yfinance]
+    community_heat:
+      vendors: [moomoo]
     # Phase 1G research chains (names/order only; adapters land in later slices).
     fundamentals:
       vendors: [yfinance, alpha_vantage, sec_edgar]
@@ -66,7 +68,7 @@ markets:
     macro:
       vendors: [fred]
     sentiment:
-      vendors: [stocktwits, reddit]
+      vendors: [moomoo_feed, stocktwits, reddit]
     prediction_market:
       vendors: [polymarket]
     account:

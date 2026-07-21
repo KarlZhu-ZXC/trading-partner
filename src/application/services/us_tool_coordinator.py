@@ -45,6 +45,7 @@ from application.services.us_market_data_service import USMarketDataService
 from application.services.us_technical_service import USTechnicalService
 from domain.common.enums import (
     AdjustmentMethod,
+    AssetType,
     Freshness,
     Market,
     SourceRole,
@@ -127,6 +128,22 @@ _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE = WarningInfo(
     ),
     details={},
 )
+_FUTURES_CONTRACT_NOT_SPOT = WarningInfo(
+    code="FUTURES_CONTRACT_NOT_SPOT",
+    message=(
+        "This price belongs to an exchange-traded futures proxy, not OTC spot. "
+        "Do not reuse its exact levels as XAUUSD/XAGUSD spot levels."
+    ),
+    details={},
+)
+_CONTINUOUS_FUTURES_ROLL_RISK = WarningInfo(
+    code="CONTINUOUS_FUTURES_ROLL_RISK",
+    message=(
+        "The Yahoo ROOT=F series follows a front-month continuous future; contract "
+        "rolls can create basis changes or artificial discontinuities."
+    ),
+    details={},
+)
 _GENERIC_CODE_MESSAGE = "US market data warning."
 
 
@@ -172,12 +189,19 @@ class USToolCoordinator:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
             instrument = self._resolve(request.instrument_id)
+            adjustment = request.adjustment
+            if adjustment is None:
+                adjustment = (
+                    AdjustmentMethod.NONE
+                    if instrument.asset_type is AssetType.FUTURE
+                    else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+                )
             result = await self._data_service.get_bars(
                 instrument,
                 start=request.start,
                 end=request.end,
                 interval=request.interval,
-                adjustment=request.adjustment,
+                adjustment=adjustment,
                 as_of=effective_as_of,
             )
             return self._envelope_from_router(
@@ -364,12 +388,17 @@ class USToolCoordinator:
         as_of_ny_date = as_of.astimezone(_NEW_YORK).date()
         start = as_of_ny_date - timedelta(days=lookback_sessions * 2)
         end = as_of_ny_date
+        adjustment = (
+            AdjustmentMethod.NONE
+            if instrument.asset_type is AssetType.FUTURE
+            else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+        )
         return await self._data_service.get_bars(
             instrument,
             start=start,
             end=end,
             interval=USBarInterval.ONE_DAY,
-            adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+            adjustment=adjustment,
             as_of=as_of,
         )
 
@@ -604,6 +633,8 @@ def _warnings_from_codes(codes: tuple[str, ...]) -> tuple[WarningInfo, ...]:
         _BREADTH_UNAVAILABLE.code: _BREADTH_UNAVAILABLE,
         _SECTOR_ROTATION_UNAVAILABLE.code: _SECTOR_ROTATION_UNAVAILABLE,
         _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE.code: _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE,
+        _FUTURES_CONTRACT_NOT_SPOT.code: _FUTURES_CONTRACT_NOT_SPOT,
+        _CONTINUOUS_FUTURES_ROLL_RISK.code: _CONTINUOUS_FUTURES_ROLL_RISK,
     }
     for code in codes:
         if code in seen:

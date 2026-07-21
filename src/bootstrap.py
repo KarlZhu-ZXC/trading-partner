@@ -74,6 +74,7 @@ from application.services.routed_market_snapshot_service import (
 )
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
+from application.services.us_community_heat_service import USCommunityHeatService
 from application.services.us_company_update_service import USCompanyUpdateService
 from application.services.us_context_services import (
     USMacroService,
@@ -205,6 +206,7 @@ from infrastructure.providers.router_engine import ProviderRouterEngine
 from infrastructure.providers.us.alpha_vantage_research import AlphaVantageResearchAdapter
 from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
 from infrastructure.providers.us.context_codecs import (
+    us_community_heat_codec,
     us_macro_context_codec,
     us_market_breadth_codec,
     us_news_feed_codec,
@@ -213,6 +215,8 @@ from infrastructure.providers.us.context_codecs import (
 )
 from infrastructure.providers.us.fred import FredMacroAdapter
 from infrastructure.providers.us.mock_market import MockUSMarketSnapshotProvider
+from infrastructure.providers.us.moomoo_community import MoomooCommunityHeatAdapter
+from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
 from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
 from infrastructure.providers.us.reddit import RedditSentimentAdapter
 from infrastructure.providers.us.research_codecs import (
@@ -597,7 +601,7 @@ def build_application(
         VendorId.ALPHA_VANTAGE,
         AlphaVantageResearchAdapter(
             a_share_transport,
-            api_key=settings.alpha_vantage_api_key,
+            api_keys=settings.alpha_vantage_api_keys,
             clock=clock,
             enabled=settings.alpha_vantage_enabled,
             timeout_seconds=market_timeout,
@@ -635,6 +639,15 @@ def build_application(
         ),
     )
     vendor_registry.register(
+        VendorId.MOOMOO_FEED,
+        MoomooSentimentAdapter(
+            a_share_transport,
+            clock=clock,
+            enabled=settings.moomoo_sentiment_enabled,
+            timeout_seconds=settings.provider_timeout_default_seconds,
+        ),
+    )
+    vendor_registry.register(
         VendorId.REDDIT,
         RedditSentimentAdapter(
             a_share_transport,
@@ -668,6 +681,14 @@ def build_application(
     moomoo_opend_rate_limiter = MoomooOpenDRateLimiter(
         settings.post_market_sync_lock_path.parent / "moomoo_opend_rate_limit.log"
     )
+    moomoo_community_heat_provider = MoomooCommunityHeatAdapter(
+        enabled=settings.moomoo_community_heat_enabled,
+        host=settings.moomoo_host,
+        port=settings.moomoo_port,
+        clock=clock,
+        opend_rate_limiter=moomoo_opend_rate_limiter,
+    )
+    vendor_registry.register(VendorId.MOOMOO, moomoo_community_heat_provider)
     moomoo_account_provider = MoomooAccountAdapter(
         id_generator,
         enabled="MOOMOO" in settings.holdings_sources,
@@ -697,7 +718,6 @@ def build_application(
         clock=clock,
     )
     vendor_registry.register(VendorId.SCHWAB, schwab_account_provider)
-    vendor_registry.register(VendorId.MOOMOO, moomoo_account_provider)
     vendor_registry.register(VendorId.MANUAL_CSV, manual_account_provider)
 
     watchlist_source_provider = overrides.watchlist_provider
@@ -834,7 +854,7 @@ def build_application(
                 ),
                 AlphaVantageInstrumentDirectoryAdapter(
                     a_share_transport,
-                    api_key=settings.alpha_vantage_api_key,
+                    api_keys=settings.alpha_vantage_api_keys,
                     clock=clock,
                     enabled=settings.alpha_vantage_enabled,
                     timeout_seconds=market_timeout,
@@ -1002,11 +1022,18 @@ def build_application(
         clock=clock,
         codec=us_market_breadth_codec(),
     )
+    us_community_heat_service = USCommunityHeatService(
+        router=provider_router,
+        clock=clock,
+        codec=us_community_heat_codec(),
+    )
     us_market_context_service = USMarketContextService(
         data_service=us_market_data_service,
         instrument_master=instrument_master_service,
         clock=clock,
         breadth_service=us_market_breadth_service,
+        community_heat_service=us_community_heat_service,
+        community_heat_limit=settings.moomoo_community_heat_limit,
     )
     us_technical_service = USTechnicalService(
         data_service=us_market_data_service,

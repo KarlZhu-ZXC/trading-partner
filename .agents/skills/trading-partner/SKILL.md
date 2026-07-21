@@ -75,8 +75,8 @@ Preserve their warnings and source timestamps when answering the user.
 | Tool | Purpose |
 |---|---|
 | `us_get_market` | Provider-backed US `quote` or `composite` snapshot |
-| `market_get_bars` | Inclusive-end US OHLCV with explicit adjustment |
-| `market_get_context` | SPY/QQQ/IWM plus best-effort Yahoo screener breadth and 11-sector rotation; unavailable components stay explicit |
+| `market_get_bars` | Inclusive-end US equity/index and commodity-futures OHLCV with asset-aware adjustment |
+| `market_get_context` | SPY/QQQ/IWM, best-effort Yahoo breadth/11-sector rotation, and optional Moomoo OpenD US community-attention Hot List; unavailable components stay explicit |
 | `technical_get_snapshot` | Cross-market daily/weekly indicators, regimes, structure levels, and recent patterns |
 | `technical_render_chart` | Auditable envelope plus an in-memory PNG candlestick/volume/RSI chart |
 
@@ -86,6 +86,14 @@ support A-share and US equity/ETF/index instruments. Preserve
 Yahoo breadth uses a disclosed listed-security universe that may include ETFs and
 ADRs; never describe it as official exchange common-stock breadth. New-high/low
 and moving-average participation remain unavailable rather than fabricated.
+Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
+its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
+warning when the local OpenD predates 10.9.
+
+Phase 3A also supports Yahoo continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`,
+`PL=F`, and `PA=F` under `future:US:*` IDs. Futures default to unadjusted bars and
+must preserve `FUTURES_CONTRACT_NOT_SPOT` and `CONTINUOUS_FUTURES_ROLL_RISK`.
+Never call GC/SI spot XAUUSD/XAGUSD, or call HG London/LME copper.
 
 ### US research and context facts (Phase 1G–1H)
 
@@ -95,11 +103,14 @@ and moving-average participation remain unavailable rather than fabricated.
 | `us_get_company_research` | Filings, insider activity, company updates, or typed events |
 | `market_get_live_news` | Dated company/global news with publication cutoff |
 | `us_get_macro_context` | FRED observations with requested ALFRED vintage cutoff |
-| `us_get_sentiment_snapshot` | Source-separated StockTwits labels and Reddit inference |
+| `us_get_sentiment_snapshot` | Source-separated StockTwits labels, Reddit inference, and deterministic Moomoo feed mining |
 | `us_get_prediction_market_context` | Current-only open Polymarket probabilities |
 
-Do not relabel current Polymarket odds as historical. Keep StockTwits user labels
-separate from versioned Reddit inference, and preserve nullable Reddit engagement.
+Do not relabel current Polymarket odds as historical. Keep StockTwits user labels,
+versioned Reddit inference, and versioned Moomoo deterministic inference separate.
+Moomoo samples are current-only, exact-symbol filtered, and may have nullable
+engagement. The MCP runtime only cleans, filters, deduplicates, and classifies with
+fixed rules; interpretation and narrative synthesis remain the host's responsibility.
 
 ### Read-only accounts and portfolio (Phase 1I)
 
@@ -223,7 +234,8 @@ is not a scheduler itself.
 ### Technical Engine v2 (Phase 2D)
 
 - `technical_get_snapshot` returns shared A-share/US `1d` and `1w` facts using
-  provider-backed adjusted daily bars, TA-Lib standard indicators, project-owned
+  provider-backed adjusted equity bars or unadjusted futures bars, TA-Lib standard
+  indicators, project-owned
   structure clustering, and recent candlestick recognition.
 - `technical_render_chart` returns a JSON Tool Envelope, a local
   `chart_artifact` reference, and a PNG image block when analysis succeeds.
@@ -277,6 +289,6 @@ args = ["run", "trading-partner-mcp"]
 
 ## Later phases (not yet available)
 
-Additional brokers, automated evidence ingestion, runtime LLM synthesis,
-backtest, paper trading, and order execution remain out
+Spot-metals providers, additional brokers, automated evidence ingestion, runtime
+LLM synthesis, backtest, paper trading, and order execution remain out
 of scope. Do not call tools that are not registered.

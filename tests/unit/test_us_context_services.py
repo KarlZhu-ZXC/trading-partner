@@ -92,11 +92,25 @@ async def test_sentiment_service_keeps_sources_separate_and_shows_disagreement()
         None,
         "reddit_lexicon_v1",
     )
+    moomoo = USSentimentSample(
+        IID,
+        USSentimentSource.MOOMOO,
+        AS_OF,
+        "Neutral deterministic mining",
+        USSentimentDirection.NEUTRAL,
+        USSentimentLabelOrigin.DETERMINISTIC_INFERENCE,
+        Decimal(0),
+        None,
+        None,
+        None,
+        "moomoo_rules_v1",
+    )
     router = MagicMock()
     router.execute = AsyncMock(
         side_effect=[
             _result(VendorId.STOCKTWITS, (stock,)),
             _result(VendorId.REDDIT, (reddit,)),
+            _result(VendorId.MOOMOO_FEED, (moomoo,)),
         ]
     )
     service = USSentimentService(router, FixedClock(AS_OF), MagicMock())
@@ -108,6 +122,7 @@ async def test_sentiment_service_keeps_sources_separate_and_shows_disagreement()
     assert [item.source for item in result.snapshot.summaries] == [
         USSentimentSource.STOCKTWITS,
         USSentimentSource.REDDIT,
+        USSentimentSource.MOOMOO,
     ]
     assert result.snapshot.disagreement == Decimal(2)
     assert not result.snapshot.degraded

@@ -48,7 +48,13 @@ from infrastructure.system.clock import SystemClock
 _NY = ZoneInfo("America/New_York")
 _CHART_HOST = "https://query1.finance.yahoo.com"
 _CHART_PATH_PREFIX = "/v8/finance/chart/"
-_ALLOWED_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_ALLOWED_ASSETS = frozenset(
+    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
+_FUTURES_WARNING_CODES = (
+    "FUTURES_CONTRACT_NOT_SPOT",
+    "CONTINUOUS_FUTURES_ROLL_RISK",
+)
 _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 # Latest daily bar more than this many natural days behind expected end/as_of → stale.
 _MAX_DAILY_STALE_NATURAL_DAYS = 4
@@ -306,7 +312,7 @@ class YahooFinanceAdapter:
             )
         if instrument.asset_type not in _ALLOWED_ASSETS:
             raise DataContractError(
-                "Yahoo Finance supports equity/ETF/index only",
+                "Yahoo Finance supports equity/ETF/index/future instruments",
                 details={
                     "field": "instrument",
                     "rule": "asset_type",
@@ -477,6 +483,7 @@ class YahooFinanceAdapter:
     def _meta(
         self,
         *,
+        instrument_asset_type: AssetType,
         category: DataCategory,
         as_of: datetime,
         fetched_at: datetime,
@@ -501,6 +508,7 @@ class YahooFinanceAdapter:
         else:
             data_delay = None
             freshness = Freshness.UNKNOWN
+        warnings = _FUTURES_WARNING_CODES if instrument_asset_type is AssetType.FUTURE else ()
         return ProviderResultMeta(
             vendor=self.vendor_id,
             category=category,
@@ -513,7 +521,7 @@ class YahooFinanceAdapter:
             cache_disposition=CacheDisposition.MISS,
             adjustment=adjustment,
             data_delay_seconds=data_delay,
-            warnings=(),
+            warnings=warnings,
         )
 
     def _parse_ohlcv_arrays(
@@ -842,6 +850,7 @@ class YahooFinanceAdapter:
         return ProviderSuccess(
             value=quote,
             meta=self._meta(
+                instrument_asset_type=instrument.asset_type,
                 category=DataCategory.MARKET_QUOTE,
                 as_of=as_of,
                 fetched_at=fetched_at,
@@ -967,6 +976,7 @@ class YahooFinanceAdapter:
         return ProviderSuccess(
             value=series,
             meta=self._meta(
+                instrument_asset_type=instrument.asset_type,
                 category=DataCategory.MARKET_OHLCV,
                 as_of=as_of,
                 fetched_at=fetched_at,

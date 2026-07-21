@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -120,7 +120,7 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
         self,
         transport: HttpTransport,
         *,
-        api_key: str | None = None,
+        api_keys: Sequence[str] = (),
         clock: Clock | None = None,
         enabled: bool = True,
         timeout_seconds: float = 15.0,
@@ -129,7 +129,7 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
     ) -> None:
         super().__init__(
             transport,
-            api_key=api_key,
+            api_keys=api_keys,
             clock=clock,
             enabled=enabled,
             timeout_seconds=timeout_seconds,

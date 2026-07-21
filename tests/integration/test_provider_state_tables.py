@@ -182,8 +182,15 @@ def test_instrument_table_checks_and_unique_symbol(
             )
 
     with engine.connect() as conn:
-        # Head seeds: 0003 minimum 8 + 0005 QQQ/IWM (including 600519.SH).
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 10
+        # Head seeds: 10 Phase 1 instruments plus 6 Phase 3 commodity futures.
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 16
+        assert conn.execute(
+            text(
+                "SELECT COUNT(*) FROM instruments "
+                "WHERE asset_type = 'future' AND symbol IN "
+                "('GC=F','MGC=F','SI=F','HG=F','PL=F','PA=F')"
+            )
+        ).scalar() == 6
 
     # Non-seed row for constraint checks.
     _insert_instrument()

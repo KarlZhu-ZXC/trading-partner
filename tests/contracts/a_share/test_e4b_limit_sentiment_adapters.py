@@ -365,7 +365,7 @@ async def test_em_concept_heat_requires_instrument_before_network() -> None:
             as_of=AS_OF,
         )
     assert (exc.value.details or {}).get("rule") == "asset_support"
-    # Zero network on concept_heat fail-closed.
+    # Missing instrument is rejected before the concept-hit network request.
     assert adapter  # transport not exercised for pre-network path
     # Use a transport that would fail if called:
     failing = FixtureHttpTransport(vendor="eastmoney", operation="sentiment", case="success")

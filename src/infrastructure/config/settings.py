@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from domain.common.enums import AppEnvironment, DataCategory, LogLevel
 from domain.common.errors import ConfigurationError
@@ -31,7 +31,7 @@ PACKAGED_CNINFO_ORG_MAP_PATH = Path(__file__).resolve().parent / "cninfo_org_map
 
 _SECRET_FIELD_NAMES = frozenset(
     {
-        "alpha_vantage_api_key",
+        "alpha_vantage_api_keys",
         "fred_api_key",
         "broker_api_key",
         "broker_api_secret",
@@ -192,6 +192,9 @@ class AppSettings(BaseSettings):
     # Phase 1H optional context providers.
     fred_enabled: bool = True
     stocktwits_enabled: bool = False
+    moomoo_sentiment_enabled: bool = True
+    moomoo_community_heat_enabled: bool = False
+    moomoo_community_heat_limit: int = Field(default=20, ge=1, le=200)
     reddit_enabled: bool = True
     reddit_subreddits: str = "wallstreetbets,stocks,investing"
     reddit_apify_enabled: bool = False
@@ -236,7 +239,8 @@ class AppSettings(BaseSettings):
     schwab_account_hashes: str = ""
 
     # Optional provider secrets — not required for Phase 1A mock providers.
-    alpha_vantage_api_key: str | None = None
+    # Environment value is a comma-separated string. Order defines failover priority.
+    alpha_vantage_api_keys: Annotated[tuple[str, ...], NoDecode] = Field(default=(), max_length=8)
     fred_api_key: str | None = None
     # Reserved legacy placeholders. No runtime provider consumes these fields;
     # broker integrations must define explicit provider-scoped settings.
@@ -270,7 +274,6 @@ class AppSettings(BaseSettings):
         return value
 
     @field_validator(
-        "alpha_vantage_api_key",
         "fred_api_key",
         "broker_api_key",
         "broker_api_secret",
@@ -289,6 +292,26 @@ class AppSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("alpha_vantage_api_keys", mode="before")
+    @classmethod
+    def _normalize_alpha_vantage_api_keys(cls, value: object) -> object:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            if not value.strip():
+                return ()
+            value = value.split(",")
+        if not isinstance(value, (list, tuple)):
+            return value
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("alpha_vantage_api_keys entries must be non-empty strings")
+            key = item.strip()
+            if key not in normalized:
+                normalized.append(key)
+        return tuple(normalized)
 
     @field_validator("polymarket_proxy_url")
     @classmethod
@@ -623,7 +646,7 @@ class AppSettings(BaseSettings):
         raw = self.model_dump()
         result: dict[str, object] = {}
         for key, value in raw.items():
-            if key in _SECRET_FIELD_NAMES and value is not None:
+            if key in _SECRET_FIELD_NAMES and value not in (None, "", (), []):
                 result[key] = _REDACTED
             elif key == "database_url" and isinstance(value, str):
                 result[key] = _REDACTED if _CREDENTIAL_URL_RE.search(value) else value

@@ -22,7 +22,12 @@ from domain.us_context.models import (
     USPredictionMarketContext,
     USSentimentSample,
 )
-from domain.us_market.models import USBreadthSnapshot, USSectorRotation
+from domain.us_market.models import (
+    USBreadthSnapshot,
+    USCommunityHeatItem,
+    USCommunityHeatSnapshot,
+    USSectorRotation,
+)
 from infrastructure.providers.us.codecs import USProviderCacheCodec
 
 CODEC_US_NEWS_FEED: Final[str] = "us.news_feed.v1"
@@ -30,6 +35,7 @@ CODEC_US_MACRO_CONTEXT: Final[str] = "us.macro_context.v1"
 CODEC_US_SENTIMENT_SAMPLES: Final[str] = "us.sentiment_samples.v1"
 CODEC_US_PREDICTION_MARKET_CONTEXT: Final[str] = "us.prediction_market_context.v1"
 CODEC_US_MARKET_BREADTH: Final[str] = "us.market_breadth.v1"
+CODEC_US_COMMUNITY_HEAT: Final[str] = "us.community_heat.v1"
 
 
 def _contract(message: str, *, rule: str) -> DataContractError:
@@ -218,6 +224,75 @@ def _decode_breadth(value: object) -> USBreadthSnapshot:
         ) from None
 
 
+def _encode_community_heat(value: USCommunityHeatSnapshot) -> dict[str, object]:
+    if not isinstance(value, USCommunityHeatSnapshot):
+        raise _contract(
+            "community heat cache value must be USCommunityHeatSnapshot",
+            rule="type",
+        )
+    return {
+        "observed_at": value.observed_at.isoformat(),
+        "basis": value.basis,
+        "items": [
+            {
+                "provider_code": row.provider_code,
+                "name": row.name,
+                "rank": row.rank,
+                "trade_heat": _decimal_wire(row.trade_heat),
+                "trade_heat_change": _decimal_wire(row.trade_heat_change),
+                "search_heat": _decimal_wire(row.search_heat),
+                "search_heat_change": _decimal_wire(row.search_heat_change),
+                "news_heat": _decimal_wire(row.news_heat),
+                "news_heat_change": _decimal_wire(row.news_heat_change),
+                "average_heat": _decimal_wire(row.average_heat),
+                "average_heat_change": _decimal_wire(row.average_heat_change),
+                "related_content_type": row.related_content_type,
+                "related_title": row.related_title,
+                "related_url": row.related_url,
+            }
+            for row in value.items
+        ],
+    }
+
+
+def _decode_community_heat(value: object) -> USCommunityHeatSnapshot:
+    try:
+        obj = _object(value)
+        rows: list[USCommunityHeatItem] = []
+        for raw in _list(obj["items"]):
+            row = _object(raw)
+            rows.append(
+                USCommunityHeatItem(
+                    provider_code=row["provider_code"],  # type: ignore[arg-type]
+                    name=row["name"],  # type: ignore[arg-type]
+                    rank=row["rank"],  # type: ignore[arg-type]
+                    trade_heat=_decode_optional_decimal(row["trade_heat"]),
+                    trade_heat_change=_decode_optional_decimal(row["trade_heat_change"]),
+                    search_heat=_decode_optional_decimal(row["search_heat"]),
+                    search_heat_change=_decode_optional_decimal(row["search_heat_change"]),
+                    news_heat=_decode_optional_decimal(row["news_heat"]),
+                    news_heat_change=_decode_optional_decimal(row["news_heat_change"]),
+                    average_heat=_decode_optional_decimal(row["average_heat"]),
+                    average_heat_change=_decode_optional_decimal(row["average_heat_change"]),
+                    related_content_type=row["related_content_type"],  # type: ignore[arg-type]
+                    related_title=row["related_title"],  # type: ignore[arg-type]
+                    related_url=row["related_url"],  # type: ignore[arg-type]
+                )
+            )
+        return USCommunityHeatSnapshot(
+            observed_at=datetime.fromisoformat(obj["observed_at"]),  # type: ignore[arg-type]
+            basis=obj["basis"],  # type: ignore[arg-type]
+            items=tuple(rows),
+        )
+    except DataContractError:
+        raise
+    except (KeyError, TypeError, ValueError):
+        raise _contract(
+            "community heat cache value failed schema validation",
+            rule="value_schema",
+        ) from None
+
+
 def us_news_feed_codec() -> USProviderCacheCodec[USNewsFeed]:
     return USProviderCacheCodec(
         CODEC_US_NEWS_FEED,
@@ -260,4 +335,13 @@ def us_market_breadth_codec() -> USProviderCacheCodec[USBreadthSnapshot]:
         _encode_breadth,
         _decode_breadth,
         expected_category=DataCategory.MARKET_BREADTH,
+    )
+
+
+def us_community_heat_codec() -> USProviderCacheCodec[USCommunityHeatSnapshot]:
+    return USProviderCacheCodec(
+        CODEC_US_COMMUNITY_HEAT,
+        _encode_community_heat,
+        _decode_community_heat,
+        expected_category=DataCategory.COMMUNITY_HEAT,
     )

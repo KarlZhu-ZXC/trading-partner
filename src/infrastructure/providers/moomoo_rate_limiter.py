@@ -22,6 +22,7 @@ class MoomooOpenDOperation(StrEnum):
     ACCOUNT_POSITIONS = "account_positions"
     ACCOUNT_ORDERS = "account_orders"
     ACCOUNT_HISTORY_DEALS = "account_history_deals"
+    COMMUNITY_HOT_LIST = "community_hot_list"
 
 
 class OpenDRequestLimiter(Protocol):
@@ -56,6 +57,9 @@ DEFAULT_MOOMOO_POLICIES: Mapping[MoomooOpenDOperation, SlidingWindowPolicy] = {
     MoomooOpenDOperation.ACCOUNT_HISTORY_DEALS: SlidingWindowPolicy(
         10, 30.0, scoped=True
     ),
+    # Official OpenD limit: 60 requests per 30 seconds. Keep one request of
+    # headroom and share the bucket across CLI and MCP processes.
+    MoomooOpenDOperation.COMMUNITY_HOT_LIST: SlidingWindowPolicy(59, 30.0),
 }
 
 

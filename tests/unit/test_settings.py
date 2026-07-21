@@ -157,15 +157,16 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
         mcp_server_name="tp",
         default_timezone="UTC",
         provider_timeout_seconds=1.0,
-        alpha_vantage_api_key="REAL_SECRET_KEY",
+        alpha_vantage_api_keys=("REAL_SECRET_KEY", "SECOND_REAL_SECRET_KEY"),
         broker_api_secret="REAL_BROKER_SECRET",
         polymarket_proxy_url="http://proxy-user:proxy-secret@127.0.0.1:7890",
     )
     redacted = settings.redacted_dict()
-    assert redacted["alpha_vantage_api_key"] == "***REDACTED***"
+    assert redacted["alpha_vantage_api_keys"] == "***REDACTED***"
     assert redacted["broker_api_secret"] == "***REDACTED***"
     assert redacted["database_url"] == "***REDACTED***"
     assert "REAL_SECRET_KEY" not in repr(settings)
+    assert "SECOND_REAL_SECRET_KEY" not in repr(settings)
     assert "REAL_BROKER_SECRET" not in str(settings)
     assert redacted["polymarket_proxy_url"] == "***REDACTED***"
     assert "proxy-secret" not in repr(settings)
@@ -190,6 +191,28 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert "vendor_chain_path" in redacted
     assert redacted["vendor_chain_path"] == str(settings.vendor_chain_path)
     assert redacted["vendor_chain_path"] != "***REDACTED***"
+
+
+def test_alpha_vantage_key_pool_loads_comma_separated_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "ALPHA_VANTAGE_API_KEYS",
+        " first-test-key , second-test-key,first-test-key ",
+    )
+    settings = AppSettings(
+        _env_file=None,  # type: ignore[call-arg]
+        app_name="tp",
+        app_env=AppEnvironment.TEST,
+        log_level=LogLevel.INFO,
+        database_url=f"sqlite:///{tmp_path / 'x.db'}",
+        mcp_server_name="tp",
+        default_timezone="UTC",
+        provider_timeout_seconds=1.0,
+    )
+
+    assert settings.alpha_vantage_api_keys == ("first-test-key", "second-test-key")
+    assert settings.redacted_dict()["alpha_vantage_api_keys"] == "***REDACTED***"
 
 
 def test_plain_fred_api_key_alias_is_loaded_and_redacted(
@@ -464,6 +487,7 @@ def test_d5b_resilience_defaults() -> None:
     assert s.reddit_apify_max_charge_usd == Decimal("0.20")
     assert s.apify_api_token is None
     assert s.stocktwits_enabled is False
+    assert s.moomoo_sentiment_enabled is True
 
 
 def test_reddit_subreddits_normalizes_input() -> None:

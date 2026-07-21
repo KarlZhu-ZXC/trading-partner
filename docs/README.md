@@ -16,7 +16,8 @@ docs/
 │   └── mcp-capability-boundary.md
 ├── phases/
 │   ├── phase1.md
-│   └── phase2.md
+│   ├── phase2.md
+│   └── phase3.md
 ├── operations/
 │   └── known-issues.md
 ├── roadmap/
@@ -41,12 +42,14 @@ docs/
 |---|---|
 | [phases/phase1.md](phases/phase1.md) | Consolidated Phase 1 product, architecture, capability, acceptance, and operational boundary |
 | [phases/phase2.md](phases/phase2.md) | Phase 2 Watchlist Hub, Risk, Monitoring, and cross-market Technical Engine v2 |
+| [phases/phase3.md](phases/phase3.md) | Phase 3 commodity-futures foundation and remaining validation/cross-asset boundary |
 
 ## Operations
 
 | Document | Purpose |
 |---|---|
 | [operations/known-issues.md](operations/known-issues.md) | Ordered cross-phase defect queue for Moomoo, Reddit, and future verified operational gaps |
+| [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Secure macOS command-line OpenD layout, launchd lifecycle, readiness, and upgrade procedure |
 
 ## Source layout
 

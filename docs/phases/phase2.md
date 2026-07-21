@@ -3,7 +3,8 @@
 > Status: Watchlist completed 2026-07-18; Risk, Monitoring, and Technical Engine v2 completed 2026-07-20  
 > Design version: Phase 2 v4  
 > Public MCP target: 52 tools  
-> Current migration head: `0013_phase2c_monitoring`
+> Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
+> `0014_phase3_commodity_futures`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
 
 ## 1. Product outcome

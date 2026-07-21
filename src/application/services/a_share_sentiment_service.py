@@ -11,10 +11,10 @@ warnings (never silently accepted). Meta warnings are preserved.
 News reuses the existing ``AShareNewsProvider`` router path — never vendor HTTP
 from this service. SentimentSignal never claims authority or bullish scores.
 
-``concept_heat`` remains pre-network unavailable (E4 completion blocker): do not
-synthesize concept ranking from stock tags without a provenance model.
+``concept_heat`` is an instrument-scoped Eastmoney concept-hit result. It is not
+a global concept leaderboard and is never synthesized from THS stock tags.
 
-E5 will wire public MCP tools; this module is not bootstrapped yet.
+The service is bootstrapped behind ``a_share_get_facts(operation="sentiment")``.
 """
 
 from __future__ import annotations
@@ -677,7 +677,8 @@ class AShareSentimentService:
         as_of: datetime | None = None,
     ) -> None:
         self._require_success(success, expected_category=DataCategory.SENTIMENT)
-        # Response-meta provenance even for empty tuples (concept_heat has no vendor map).
+        # Response-meta provenance is required even for empty tuples. Concept
+        # heat is explicitly Eastmoney-owned although it has no generic source map.
         expected_vendor = _SOURCE_VENDOR.get(source)
         if source is SentimentSourceType.CONCEPT_HEAT:
             expected_vendor = VendorId.EASTMONEY

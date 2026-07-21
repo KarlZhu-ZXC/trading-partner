@@ -4,6 +4,8 @@ from domain.us_market.enums import USBarInterval
 from domain.us_market.models import (
     USBarSeries,
     USBreadthSnapshot,
+    USCommunityHeatItem,
+    USCommunityHeatSnapshot,
     USCompositeSnapshot,
     USMarketContext,
     USMarketProxy,
@@ -16,6 +18,8 @@ __all__ = [
     "USBarInterval",
     "USBarSeries",
     "USBreadthSnapshot",
+    "USCommunityHeatItem",
+    "USCommunityHeatSnapshot",
     "USCompositeSnapshot",
     "USMarketContext",
     "USMarketProxy",

@@ -6,7 +6,7 @@ protocols, corporate-actions filtering for unlock/dividend, fixed chain
 overrides, ``asyncio.TaskGroup`` structured concurrency, and deterministic
 merge in caller/default metric order.
 
-E5 will wire public MCP tools; this module is not bootstrapped yet.
+The service is bootstrapped behind ``a_share_get_facts(operation="capital")``.
 """
 
 from __future__ import annotations

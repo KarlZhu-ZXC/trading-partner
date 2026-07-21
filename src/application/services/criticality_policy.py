@@ -23,6 +23,7 @@ _DEFAULT_CRITICALITY: Mapping[DataCategory, DataCriticality] = MappingProxyType(
         DataCategory.MARKET_SNAPSHOT: DataCriticality.CORE,
         DataCategory.MARKET_STRUCTURE: DataCriticality.CORE,
         DataCategory.MARKET_BREADTH: DataCriticality.OPTIONAL,
+        DataCategory.COMMUNITY_HEAT: DataCriticality.OPTIONAL,
         DataCategory.FUNDAMENTALS: DataCriticality.CORE,
         DataCategory.FINANCIAL_STATEMENTS: DataCriticality.CORE,
         DataCategory.FILINGS: DataCriticality.CORE,

@@ -210,6 +210,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "quote_market",
                 AssetType.INDEX: "quote_market",
                 AssetType.OPTION: "reject",
+                AssetType.FUTURE: "reject",
             }
         ),
         "structure": MappingProxyType(
@@ -218,6 +219,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "yes",
                 AssetType.INDEX: "yes",
                 AssetType.OPTION: "reject",
+                AssetType.FUTURE: "reject",
             }
         ),
         "capital": MappingProxyType(
@@ -226,6 +228,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "provider_supported_only",
                 AssetType.INDEX: "market_scope_only",
                 AssetType.OPTION: "reject",
+                AssetType.FUTURE: "reject",
             }
         ),
         "limit_sentiment": MappingProxyType(
@@ -234,6 +237,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "market_context",
                 AssetType.INDEX: "market_context",
                 AssetType.OPTION: "reject",
+                AssetType.FUTURE: "reject",
             }
         ),
         "etf_options": MappingProxyType(
@@ -242,6 +246,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "required",
                 AssetType.INDEX: "reject",
                 AssetType.OPTION: "contracts_only_in_output",
+                AssetType.FUTURE: "reject",
             }
         ),
         "reports": MappingProxyType(
@@ -250,6 +255,7 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.ETF: "optional_industry_theme",
                 AssetType.INDEX: "optional_industry_theme",
                 AssetType.OPTION: "reject",
+                AssetType.FUTURE: "reject",
             }
         ),
     }

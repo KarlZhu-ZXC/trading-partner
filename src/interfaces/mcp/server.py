@@ -1142,10 +1142,10 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         start: date,
         end: date,
         interval: str = "1d",
-        adjustment: str = "split_and_dividend_adjusted",
+        adjustment: str | None = None,
         as_of: datetime | None = None,
     ) -> dict[str, Any]:
-        """Return a US OHLCV bar series Tool Envelope."""
+        """Return US equity/index/futures OHLCV; futures default to unadjusted."""
         try:
             inp = MarketGetBarsInput.model_validate(
                 {

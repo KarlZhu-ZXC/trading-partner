@@ -36,7 +36,7 @@ monitoring. Those capabilities belong to later phases.
 | 1E | A-share quote, structure, capital, limit-up, sentiment, reports, ETF options |
 | 1F | US quote, bars, context, deterministic technical indicators |
 | 1G | US fundamentals, statements, SEC filings, insiders, corporate events |
-| 1H | News, FRED/ALFRED macro, Reddit/StockTwits sentiment, Polymarket context |
+| 1H | News, FRED/ALFRED macro, Reddit/StockTwits/Moomoo sentiment, Polymarket context |
 | 1I | Read-only Moomoo/manual-CSV accounts and deterministic portfolio exposure |
 | 1J | Durable cross-task research Context Builder |
 | 1K | Persistent ten-dimension Challenge Review and explicit user resolution |
@@ -100,6 +100,11 @@ us_get_prediction_market_context
 缓存。Yahoo 失败不影响指数代理，缺失字段分别附带 `US_BREADTH_UNAVAILABLE` 或
 `US_SECTOR_ROTATION_UNAVAILABLE`。
 
+同一工具还可选择性读取 Moomoo OpenD 美股 Hot List，保留交易、搜索、新闻和综合热度，
+但明确将其定义为 community attention，而非方向性 sentiment。请求复用全项目 OpenD
+限流器并按 15 分钟桶缓存；OpenD 低于 10.9 时返回
+`MOOMOO_OPEND_VERSION_UNSUPPORTED`，其余市场上下文仍可用。
+
 ### Accounts, portfolio, durable context, and challenge
 
 ```text
@@ -156,7 +161,9 @@ confirmed Thesis. `create_case=false` preserves ad-hoc research.
 ### US
 
 - Yahoo/yfinance is the primary current market/fundamental source where applicable.
-- Alpha Vantage is a configured fallback, not a broker quote substitute.
+- Alpha Vantage is a configured fallback, not a broker quote substitute. Its optional
+  comma-separated key pool is ordered and sticky, and advances only on explicit
+  provider rate-limit responses; it is not a round-robin throughput mechanism.
 - SEC is the authority for filings and separately based reported facts.
 - FRED/ALFRED observations preserve requested vintage cutoffs.
 - Social sources remain separated; current Polymarket odds are never presented as
@@ -260,6 +267,10 @@ without rebuilding the full Phase 1 test matrix.
 - Reddit anonymous RSS is rate-limited and not a reliable production identity;
   approved OAuth remains the proper future solution.
 - StockTwits may be disabled when no supported API access exists.
+- Moomoo sentiment uses the current public feed with exact-symbol filtering,
+  HTML cleanup, deduplication, low-quality filtering, and versioned deterministic
+  bilingual rules. It does not call a Skill or an LLM; engagement may be unknown,
+  and the feed must not be presented as a historical archive.
 - Polymarket can require a separately configured proxy.
 - Broker position market-price timestamps may be unavailable.
 - Phase 1 has no scheduler, automatic evidence ingestion, runtime LLM synthesis,

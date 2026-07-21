@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
@@ -32,6 +32,10 @@ from domain.common.time import require_aware_datetime
 from domain.common.values import build_instrument_id
 from domain.instruments.models import Instrument
 from domain.instruments.normalize import normalize_symbol_input
+from infrastructure.providers.us.alpha_vantage_key_pool import (
+    AlphaVantageKeyPool,
+    classify_alpha_vantage_notice,
+)
 
 _YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 _ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
@@ -99,6 +103,7 @@ def _us_asset_type(raw: str | None) -> AssetType | None:
         "EXCHANGE_TRADED_FUND": AssetType.ETF,
         "INDEX": AssetType.INDEX,
         "OPTION": AssetType.OPTION,
+        "FUTURE": AssetType.FUTURE,
     }.get(normalized)
 
 
@@ -219,13 +224,13 @@ class AlphaVantageInstrumentDirectoryAdapter:
         self,
         transport: HttpTransport,
         *,
-        api_key: str | None,
+        api_keys: Sequence[str],
         clock: Clock,
         enabled: bool = True,
         timeout_seconds: float = 15.0,
     ) -> None:
         self._transport = transport
-        self._api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
+        self._key_pool = AlphaVantageKeyPool(api_keys)
         self._clock = clock
         self._enabled = enabled
         self._timeout = timeout_seconds
@@ -242,7 +247,7 @@ class AlphaVantageInstrumentDirectoryAdapter:
         return market is Market.US and category is DataCategory.INSTRUMENT_MASTER
 
     def is_configured(self) -> bool:
-        return self._enabled and self._api_key is not None
+        return self._enabled and self._key_pool.is_configured()
 
     async def lookup(
         self,
@@ -255,25 +260,67 @@ class AlphaVantageInstrumentDirectoryAdapter:
         if not self.is_configured():
             raise ProviderNotConfigured("Alpha Vantage instrument directory is not configured")
         require_aware_datetime(as_of, field_name="as_of")
-        assert self._api_key is not None
-        response = await self._transport.send(
-            HttpRequest(
-                method="GET",
-                url=_ALPHA_VANTAGE_URL,
-                params={"function": "SYMBOL_SEARCH", "keywords": query, "apikey": self._api_key},
-                headers={"Accept": "application/json", "User-Agent": "TradingPartner/1.0"},
-                body=None,
-                timeout_seconds=self._timeout,
+        payload: Mapping[str, object] | None = None
+        last_rate_limit: ProviderRateLimitError | None = None
+        for key_index, api_key in self._key_pool.ordered_candidates():
+            response = await self._transport.send(
+                HttpRequest(
+                    method="GET",
+                    url=_ALPHA_VANTAGE_URL,
+                    params={"function": "SYMBOL_SEARCH", "keywords": query, "apikey": api_key},
+                    headers={"Accept": "application/json", "User-Agent": "TradingPartner/1.0"},
+                    body=None,
+                    timeout_seconds=self._timeout,
+                )
             )
-        )
-        _raise_http(response.status_code, vendor=self.vendor_id)
-        payload = _loads(response.body, vendor=self.vendor_id)
-        note = _text(payload.get("Note")) or _text(payload.get("Information"))
-        if note is not None:
+            try:
+                _raise_http(response.status_code, vendor=self.vendor_id)
+                candidate_payload = _loads(response.body, vendor=self.vendor_id)
+                notice = _text(candidate_payload.get("Note")) or _text(
+                    candidate_payload.get("Information")
+                )
+                if notice is not None:
+                    notice_kind = classify_alpha_vantage_notice(notice)
+                    if notice_kind == "rate_limit":
+                        raise ProviderRateLimitError(
+                            "Alpha Vantage instrument directory rate limited",
+                            details={
+                                "vendor": self.vendor_id.value,
+                                "operation": "instrument_lookup",
+                            },
+                        )
+                    if notice_kind == "api_key":
+                        raise ProviderNotConfigured(
+                            "Alpha Vantage API key invalid or missing",
+                            details={
+                                "vendor": self.vendor_id.value,
+                                "operation": "instrument_lookup",
+                            },
+                        )
+                    raise ProviderUnavailableError(
+                        "Alpha Vantage instrument directory returned a notice",
+                        details={
+                            "vendor": self.vendor_id.value,
+                            "operation": "instrument_lookup",
+                        },
+                    )
+            except ProviderRateLimitError as exc:
+                last_rate_limit = exc
+                continue
+            self._key_pool.mark_success(key_index)
+            payload = candidate_payload
+            break
+        if payload is None:
+            assert last_rate_limit is not None
             raise ProviderRateLimitError(
-                "Alpha Vantage instrument directory is temporarily unavailable",
-                details={"vendor": self.vendor_id.value, "operation": "instrument_lookup"},
-            )
+                "Alpha Vantage instrument key pool exhausted by rate limits",
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": "instrument_lookup",
+                    "error_type": "key_pool_exhausted",
+                    "attempted_key_count": self._key_pool.size,
+                },
+            ) from None
         raw_matches = payload.get("bestMatches")
         if not isinstance(raw_matches, list):
             raise DataContractError(

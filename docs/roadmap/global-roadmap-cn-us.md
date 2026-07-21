@@ -2,13 +2,59 @@
 > 文档位置：`docs/roadmap/`
 ## A 股参考 a-stock-data，美股参考 TradingAgents
 
-> 文档版本：Global v7
+> 文档版本：Global v8
 > 最终交互：Codex 长期会话  
 > 研究接口：Trading Partner MCP  
 > 执行接口：独立 Execution MCP  
 > A 股参考：`simonlin1212/a-stock-data`  
 > 美股参考：`TauricResearch/TradingAgents` v0.3.1  
 > Phase 1 不包含回测与交易写入
+
+---
+
+# 0. 当前执行目标（2026-07-21）
+
+以下事项是当前优先队列，尚未标记为完成：
+
+- [ ] **现货金属追踪：黄金、白银、铜**
+  先扩展正确的 OTC 现货金属 Instrument 语义，禁止用美股指数、ETF 或
+  `GC=F` / `SI=F` 等期货冒充现货。目标数据源必须至少覆盖 `XAUUSD`、
+  `XAGUSD` 与铜现货，提供稳定 quote、日线 OHLC、明确单位/报价币种、
+  provider timestamp、交易时段和 `spot aggregate` / `mid` / `bid` / `ask`
+  basis，并评估分钟线、历史深度、授权、费用和限流。Alpha Vantage 免费额度与
+  close-only 历史不足以担任主数据源，只保留为低频 supplemental/fallback；不得把
+  `date + price` 伪造成 OHLC。多个用户提供的 Alpha Vantage 凭证只能在服务条款
+  允许时用于显式故障切换，不做轮询扩容或绕过免费额度，所有真实 key 仅保存在本地
+  `.env`，永不进入文档、日志或提交。
+  - [x] Phase 3A 免费期货代理已接入：Yahoo `GC=F`、`MGC=F`、`SI=F`、
+    `HG=F`、`PL=F`、`PA=F` 支持 quote、1m–1mo bars 与日/周技术分析；所有
+    输出明确标记非现货及连续合约换月风险。
+  - [ ] OTC 现货与 LME Cash/3M 仍需独立 Provider；不得由上述期货代理冒充。
+- [ ] **StockTwits 正式接入**
+  现有代码已经包含 symbol-stream adapter、Bullish/Bearish 用户标签解析、
+  Provider Router 路由和 `us_get_sentiment_snapshot` 聚合；当前因缺少受支持的
+  官方访问方式而默认关闭。本目标是确认可用的官方鉴权/访问契约，补齐 secret-safe
+  配置、缓存、限流和 typed error，完成代表标的 live smoke，并继续保持 StockTwits
+  用户标签与 Reddit 模型推断严格分源。普通网页登录或未经批准的匿名抓取不算完成。
+- [x] **Moomoo OpenD 美股 Hot List**
+  已内化到现有 `market_get_context`，不新增 MCP 工具或独立 Skill；输出交易、搜索、新闻和
+  综合热度，固定披露“注意力不等于多空情绪”，复用统一 OpenD 限流并按 15 分钟缓存。
+  本机已迁移至由 macOS launchd 守护的 command-line OpenD 10.9.6908，并与 Python SDK
+  同版本；Hot List、Watchlist 和只读账户目录均通过 live smoke。旧版仍以
+  `MOOMOO_OPEND_VERSION_UNSUPPORTED` 局部降级。
+- [x] **Moomoo 评论流固定 Provider**
+  已内化进现有 `us_get_sentiment_snapshot`，不新增 MCP 工具或独立 Skill。固定 Provider
+  调用当前 `stock_feed`，对语义检索结果执行精确 ticker 相关性过滤、HTML 清洗、去重、
+  低质量过滤和 `moomoo_rules_v1` 中英确定性分类，并按标的缓存 15 分钟。当前响应缺少可靠
+  互动量时保留 `null`，且明确披露仅为近期快照。MCP 运行时不调用 Skill 或 LLM，Codex 等
+  外部交互层继续负责观点综合。NVDA live smoke 已验证相关性过滤、样本归一化和 warning。
+
+作为 A 股情绪源参考，`a-stock-data` 当前优先巨潮互动易、同花顺热榜、东方财富人气榜及
+东方财富个股概念命中；它未推荐匿名抓取雪球/股吧帖子作为稳定主源，且明确标注雪球深度数据
+需要 token。Trading Partner 继续优先这些可审计的热榜/互动数据，而不是把社区帖子热度
+伪装成方向性情绪。
+
+阶段归属在实现设计冻结时确定；本节只记录当前执行优先级，不代表扩大交易或订单权限。
 
 ---
 
@@ -520,6 +566,14 @@ envelope 与 PNG K线/量能/RSI 图。所有结果固定 `historically_validate
 把会话中的 Thesis 转为可复现的历史实验，再从一次性研究升级为持续跟踪和模拟执行。
 Phase 2 已能保留但不能研究的 Crypto、Forex/贵金属与期货 Watchlist 标的，统一在本阶段
 扩展数据、Instrument 与研究能力；这属于产品覆盖扩展，不作为 Phase 2 Watchlist 缺陷。
+
+### 10.1.1 已完成：商品期货行情基础
+
+在不增加 MCP 工具数量的前提下，`instrument_resolve`、`us_get_market`、
+`market_get_bars`、`technical_get_snapshot` 和 `technical_render_chart` 已支持
+Yahoo 连续商品期货。期货使用 `future:US:<ROOT=F>` 身份与不复权价格口径，明确
+`FUTURES_CONTRACT_NOT_SPOT` 和 `CONTINUOUS_FUTURES_ROLL_RISK`；现货金银、LME 铜、
+合约级期限结构、持久化基差与研究级连续合约仍为后续 Action Item。
 
 ## 10.2 策略、历史数据与回测
 

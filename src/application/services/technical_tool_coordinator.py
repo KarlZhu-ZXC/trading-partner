@@ -25,7 +25,7 @@ from application.services.instrument_master_service import InstrumentMasterServi
 from application.services.us_market_data_service import USMarketDataService
 from domain.a_share.enums import BarInterval
 from domain.a_share.models import AShareBar
-from domain.common.enums import AdjustmentMethod, Freshness, Market, SourceRole
+from domain.common.enums import AdjustmentMethod, AssetType, Freshness, Market, SourceRole
 from domain.common.errors import DataContractError, TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 from domain.instruments.models import Instrument
@@ -87,8 +87,20 @@ def _warnings(result: RouterExecutionResult[object]) -> tuple[WarningInfo, ...]:
         for code in result.meta.warnings:
             if code not in seen:
                 seen.add(code)
+                messages = {
+                    "FUTURES_CONTRACT_NOT_SPOT": (
+                        "Technical levels use an exchange-traded futures proxy, not "
+                        "the exact OTC spot instrument."
+                    ),
+                    "CONTINUOUS_FUTURES_ROLL_RISK": (
+                        "The continuous front-month future can shift at contract roll."
+                    ),
+                }
                 merged.append(
-                    WarningInfo(code=code, message="Provider supplied this warning code.")
+                    WarningInfo(
+                        code=code,
+                        message=messages.get(code, "Provider supplied this warning code."),
+                    )
                 )
         if result.meta.role is SourceRole.FALLBACK and "FALLBACK_SOURCE" not in seen:
             merged.append(
@@ -225,20 +237,31 @@ class TechnicalToolCoordinator:
     ) -> tuple[RouterExecutionResult[object], tuple[MarketBar, ...], str]:
         if instrument.market is Market.US:
             day = as_of.astimezone(_NEW_YORK).date()
+            is_future = instrument.asset_type is AssetType.FUTURE
+            adjustment = (
+                AdjustmentMethod.NONE
+                if is_future
+                else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+            )
+            basis = (
+                "unadjusted_front_month_continuous_futures_close"
+                if is_future
+                else "split_and_dividend_adjusted_daily_close"
+            )
             us_result = await self._us_data_service.get_bars(
                 instrument,
                 start=day - timedelta(days=lookback * 2),
                 end=day,
                 interval=USBarInterval.ONE_DAY,
-                adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+                adjustment=adjustment,
                 as_of=as_of,
             )
             if not us_result.ok or not isinstance(us_result.value, USBarSeries):
-                return us_result, (), "split_and_dividend_adjusted_daily_close"
+                return us_result, (), basis
             return (
                 us_result,
                 tuple(us_result.value.bars[-lookback:]),
-                "split_and_dividend_adjusted_daily_close",
+                basis,
             )
         if instrument.market is Market.A_SHARE:
             day = as_of.astimezone(_SHANGHAI).date()

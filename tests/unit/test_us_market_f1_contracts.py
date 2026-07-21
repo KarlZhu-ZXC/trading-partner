@@ -124,8 +124,20 @@ def test_output_dto_decimal_json_and_valid_inputs() -> None:
     )
     assert snap.instrument_id == INSTRUMENT
     assert bars.end >= bars.start
+    assert bars.adjustment is None
     assert tech.lookback_sessions == 260
     assert composite.lookback_sessions == 260
+
+    futures = MarketGetBarsInput.model_validate(
+        {
+            "instrument_id": "future:US:GC=F",
+            "start": "2026-07-20",
+            "end": "2026-07-21",
+            "interval": "60m",
+        }
+    )
+    assert futures.adjustment is None
+    assert futures.interval is USBarInterval.SIXTY_MINUTES
 
 
 def test_invalid_negative_last_and_ohlc_and_bar_range() -> None:

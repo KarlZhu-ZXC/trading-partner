@@ -41,6 +41,7 @@ OP_NEWS = "us.news_feed.v1"
 OP_MACRO = "us.macro_context.v1"
 OP_SENTIMENT_STOCKTWITS = "us.sentiment.stocktwits.v1"
 OP_SENTIMENT_REDDIT = "us.sentiment.reddit.v1"
+OP_SENTIMENT_MOOMOO = "us.sentiment.moomoo.v1"
 OP_PREDICTION = "us.prediction_market_context.v1"
 
 _STOCKTWITS_POLICY = ToolDataPolicy(
@@ -54,6 +55,12 @@ _REDDIT_POLICY = ToolDataPolicy(
     required_categories=(),
     optional_categories=(DataCategory.SENTIMENT,),
     category_chain_overrides={DataCategory.SENTIMENT: (VendorId.REDDIT,)},
+)
+_MOOMOO_POLICY = ToolDataPolicy(
+    tool_name="us_get_sentiment_snapshot",
+    required_categories=(),
+    optional_categories=(DataCategory.SENTIMENT,),
+    category_chain_overrides={DataCategory.SENTIMENT: (VendorId.MOOMOO_FEED,)},
 )
 
 
@@ -221,6 +228,16 @@ class USSentimentService:
                 limit=limit,
                 as_of=as_of,
             ),
+            self._source(
+                instrument,
+                source=USSentimentSource.MOOMOO,
+                policy=_MOOMOO_POLICY,
+                operation=OP_SENTIMENT_MOOMOO,
+                start=start,
+                end=end,
+                limit=limit,
+                as_of=as_of,
+            ),
         )
         samples = tuple(
             sample
@@ -231,7 +248,12 @@ class USSentimentService:
         summaries = tuple(
             self._summary(source, tuple(item for item in samples if item.source is source))
             for source in USSentimentSource
-            if source in {USSentimentSource.STOCKTWITS, USSentimentSource.REDDIT}
+            if source
+            in {
+                USSentimentSource.STOCKTWITS,
+                USSentimentSource.REDDIT,
+                USSentimentSource.MOOMOO,
+            }
             and any(item.source is source for item in samples)
         )
         scores = [item.weighted_score for item in summaries if item.weighted_score is not None]

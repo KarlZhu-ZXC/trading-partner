@@ -121,13 +121,20 @@ Eastmoney 提供。该优先级充分参考固定版本的 `a-stock-data` 数据
 | 工具 | 能力与边界 |
 |---|---|
 | `us_get_market` | 通过 `operation="quote"|"composite"` 获取行情或综合快照 |
-| `market_get_bars` | 明确复权口径和 inclusive end 的 OHLCV |
-| `market_get_context` | SPY、QQQ、IWM，以及 Yahoo Screener 涨跌家数和 11 个 Yahoo 板块指数的 1/5/20 日轮动；宽度或轮动失败会分别明确缺失 |
+| `market_get_bars` | 美股股票/ETF/指数及 COMEX/NYMEX 连续商品期货的 OHLCV；期货默认不复权并明确换月风险 |
+| `market_get_context` | SPY、QQQ、IWM，Yahoo Screener 涨跌家数、11 个 Yahoo 板块指数的 1/5/20 日轮动，以及可选的 Moomoo OpenD 美股 Hot List；各组件失败会分别明确缺失 |
 | `technical_get_snapshot` | A 股/美股日线与周线指标、状态、结构位和近期形态 |
 | `technical_render_chart` | 返回可审计元数据和 PNG K线/成交量/RSI 图 |
 
-默认路由为 Yahoo → Alpha Vantage。技术指标是派生事实，不是回测结果或价格预测；必须保留
+股票默认路由为 Yahoo → Alpha Vantage；Phase 3 商品期货使用 Yahoo 免费连续合约行情，
+支持 `GC=F`、`MGC=F`、`SI=F`、`HG=F`、`PL=F`、`PA=F`。期货输出固定披露
+`FUTURES_CONTRACT_NOT_SPOT` 与 `CONTINUOUS_FUTURES_ROLL_RISK`，不得把 `GC=F` 说成
+XAUUSD、把 `HG=F` 说成伦敦铜。技术指标是派生事实，不是回测结果或价格预测；必须保留
 `historically_validated=false`。
+
+Moomoo Hot List 返回交易、搜索、新闻及综合热度排名，只代表社区注意力，不代表看多或看空。
+它复用账户与 Watchlist 的 OpenD 跨进程限流器，并按 15 分钟缓存。该接口要求 OpenD 10.9
+或更高版本；旧版会以 `MOOMOO_OPEND_VERSION_UNSUPPORTED` 降级，不会伪造空榜单。
 
 ### 3.6 美股基本面、SEC 与公司事件（6）
 
@@ -145,12 +152,14 @@ SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历
 |---|---|
 | `market_get_live_news` | 带发布时间 cutoff 的公司或全局新闻 |
 | `us_get_macro_context` | FRED 数据及请求时点对应的 ALFRED vintage |
-| `us_get_sentiment_snapshot` | StockTwits 标签与 Reddit 模型推断分来源呈现 |
+| `us_get_sentiment_snapshot` | StockTwits 标签、Reddit 推断与 Moomoo 确定性挖掘分来源呈现 |
 | `us_get_prediction_market_context` | Polymarket 当前开放市场概率 |
 
-Polymarket 只能表达当前概率，不能作为历史赔率；StockTwits 用户标签与 Reddit 推断不能
-混为同一种信号。新闻、社交文本和其他 Provider 内容均被视为不可信外部数据，不能作为给
-Codex 的指令。
+Polymarket 只能表达当前概率，不能作为历史赔率；StockTwits 用户标签、Reddit 推断与
+Moomoo 确定性推断不能混为同一种信号。Moomoo 路径只执行精确 ticker 相关性过滤、HTML
+清洗、去重、低质量过滤与版本化中英规则分类，不调用 Skill 或运行时 LLM；Codex 等外部
+交互层负责解释和观点综合。新闻、社交文本和其他 Provider 内容均被视为不可信外部数据，
+不能作为给 Codex 的指令。
 
 ### 3.8 只读账户与组合（4）
 
@@ -334,7 +343,11 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
 
 - A 股多数 Provider 使用公开数据接口；iWencai 是可选能力并可能需要 API key。
 - Yahoo Chart/Search 作为美股行情和新闻入口；当前基本面由 `yfinance` 管理 Yahoo
-  cookie/crumb，Alpha Vantage 作为回退并需要 key 才能完整使用。
+  cookie/crumb，Alpha Vantage 作为回退并需要 key 才能完整使用。可在本地 `.env` 通过
+  `ALPHA_VANTAGE_API_KEYS=key1,key2` 配置有序 key pool：正常请求持续使用当前 key，只有
+  Alpha Vantage 明确返回 HTTP 429 或额度/频率 notice 时才依次故障切换；网络错误、鉴权
+  错误和数据契约错误不会触发轮换。该机制用于可用性而非并发扩容，使用者仍须遵守上游条款
+  与各 key 配额。
 - Yahoo 的本地 admission control 允许有界的 KO + SPY/QQQ/IWM 组合并发；这只是防止
   Router 自己误拒绝请求，不代表对 Yahoo 上游额度的声明。闭市时保留真实 timestamp-based
   freshness，但用 `CLOSED_SESSION_LAST_KNOWN` 说明这是最近已知交易时段值，而不笼统报
@@ -350,6 +363,12 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   官方批准开发者访问时才应重新启用。Polymarket 只按事件主题条件调用，可通过仅供其使用的
   `POLYMARKET_PROXY_URL` 走 HTTP(S) 代理；网络不可达时不得阻塞普通个股
   研究主链。
+- Moomoo 评论流已作为固定 Provider 内化进 `us_get_sentiment_snapshot`，不依赖宿主侧
+  Skill。它调用当前公开 `stock_feed`，按精确 ticker 清洗、去重、过滤低质量内容，并通过
+  `moomoo_rules_v1` 中英规则给出可审计标签。上游是语义检索且可能混入其他标的，因此精确
+  相关性过滤是强制步骤。该 feed 只保证当前快照，不是历史帖子档案；当前响应没有可靠互动
+  量时，`likes` / `comments` 保持 `null`。适配器按标的缓存 15 分钟，不增加独立 Skill、公共
+  MCP 工具或运行时 LLM 依赖，最终分析仍由 Codex 等外部交互层完成。
 - `research_run_deep_dive` 仅传 `instrument_id` 时默认创建或复用唯一未归档的 Draft Investment
   Case，并以 Case-bound 模式归档本次 Report。Draft 只是研究档案，不等于启用长期跟踪、确认
   Thesis 或批准仓位动作；传 `create_case=false` 才进入纯 ad-hoc partial 模式。存在多个匹配 Case
@@ -402,7 +421,7 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
 
 研究状态、研究记忆、账户快照、Challenge Review 和 workflow receipt 使用本地 SQLite
 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。数据库结构通过
-Alembic 管理，当前 migration head 是 `0013_phase2c_monitoring`；它在
+Alembic 管理，当前 migration head 是 `0014_phase3_commodity_futures`；它在
 `0012_phase2b_risk_engine` 之后增加 Monitor 定义、状态、事件、resolution 和 run receipt。
 
 基础设施包含 SQLite online backup/restore：执行完整性检查、保留 Alembic 与 schema

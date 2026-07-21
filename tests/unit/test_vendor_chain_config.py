@@ -51,6 +51,8 @@ US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     DataCategory.MARKET_SNAPSHOT: (VendorId.MOCK_US,),
     DataCategory.MARKET_QUOTE: (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
     DataCategory.MARKET_OHLCV: (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
+    DataCategory.MARKET_BREADTH: (VendorId.YFINANCE,),
+    DataCategory.COMMUNITY_HEAT: (VendorId.MOOMOO,),
     # Phase 1G research chains.
     DataCategory.FUNDAMENTALS: (
         VendorId.YFINANCE,
@@ -64,11 +66,14 @@ US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     ),
     DataCategory.FILINGS: (VendorId.SEC_EDGAR,),
     DataCategory.CORPORATE_ACTIONS: (VendorId.YFINANCE, VendorId.SEC_EDGAR),
-    DataCategory.MARKET_BREADTH: (VendorId.YFINANCE,),
     DataCategory.INSIDER_ACTIVITY: (VendorId.SEC_EDGAR, VendorId.ALPHA_VANTAGE),
     DataCategory.NEWS: (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
     DataCategory.MACRO: (VendorId.FRED,),
-    DataCategory.SENTIMENT: (VendorId.STOCKTWITS, VendorId.REDDIT),
+    DataCategory.SENTIMENT: (
+        VendorId.MOOMOO_FEED,
+        VendorId.STOCKTWITS,
+        VendorId.REDDIT,
+    ),
     DataCategory.PREDICTION_MARKET: (VendorId.POLYMARKET,),
     DataCategory.ACCOUNT: (
         VendorId.SCHWAB,
@@ -130,6 +135,7 @@ def test_default_vendor_sets_respect_phase_boundaries() -> None:
         VendorId.ALPHA_VANTAGE,
         VendorId.SEC_EDGAR,
         VendorId.FRED,
+        VendorId.MOOMOO_FEED,
         VendorId.STOCKTWITS,
         VendorId.REDDIT,
         VendorId.POLYMARKET,
