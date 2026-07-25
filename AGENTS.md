@@ -48,7 +48,8 @@ an allowlist. Directory failures remain typed provider errors.
 **Phase 1E A-share facts**
 
 - `a_share_get_facts` (`snapshot`, `market_structure`, `capital`, `limit_up`,
-  `sentiment`, or `etf_option`)
+  `sentiment`, `etf_option`, `financials`, `industry_cycle`, or
+  `company_operating_metrics`)
 - `research_search_reports`
 
 **Phase 1F US market facts**
@@ -65,10 +66,38 @@ an allowlist. Directory failures remain typed provider errors.
   `technical_get_snapshot`, and `technical_render_chart` tools support Yahoo
   continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`, and `PA=F` through
   `future:US:*` IDs. Futures are unadjusted and always disclose non-spot and roll risk.
+- Futures routing is asset-aware: Yahoo is primary; timestamped Sina quotes are a
+  best-effort fallback for GC/SI/HG; Eastmoney daily bars are a best-effort fallback
+  for all six metals and may be aggregated to weekly/monthly. There is no intraday
+  OHLCV fallback, and a price-only minute line must never be promoted to candles.
+
+**Phase 3B company financial/operating facts and optional industry datasets**
+
+- `a_share_get_facts(operation="financials")` returns normalized A-share income,
+  balance-sheet, and cash-flow facts for up to 20 reported periods. It labels
+  interim statements as cumulative/YTD, preserves publication cutoffs and
+  provenance, and derives only ratios whose inputs are present. Sina is primary;
+  Eastmoney is a narrower fallback. Equity Deep Dive includes this fact package.
+- `a_share_get_facts(operation="industry_cycle", cycle="hog")` returns official
+  national monthly hog/pork/feed prices and pig-grain ratios plus the latest visible
+  periodic capacity observation. Default `view=compact` returns the latest visible
+  observation per selected metric with per-metric coverage; `view=series` pages a
+  filtered history (`offset`, `limit<=200`, `has_more`). Optional `metric_codes`
+  are lower_snake_case filters. It applies the publication-time `as_of` cutoff,
+  makes no cycle-phase verdict, and discloses missing company operating data and
+  live-hog futures curves. Explicit historical synchronization persists publication
+  vintages and reports gaps; a 240-month request never implies continuous coverage.
+- `a_share_get_facts(operation="company_operating_metrics", instrument_id=...)`
+  downloads publication-cutoff-safe official CNINFO finalpage PDFs and returns a
+  bounded, generic company operating series plus per-document parse receipts. It
+  extracts explicit sales volume/price/revenue, slaughter/output, breeding-sow,
+  and full-cost disclosures; financial statements remain owned by the existing
+  fundamentals/statements path. Raw PDFs and extracted text never leave the Provider.
 
 **Phase 1G US research facts**
 
-- `us_get_fundamentals` (`snapshot` or `statements`)
+- `us_get_fundamentals` (`snapshot` or `statements`; statement `view` is `latest`
+  or SEC `vintages`)
 - `us_get_company_research` (`filings`, `insider_activity`, `company_updates`,
   or `events`)
 
@@ -86,6 +115,15 @@ low-quality filtering, and versioned bilingual rule classification. It never
 invokes a Skill or an LLM; Codex or another external host interprets the returned
 samples and summaries. The feed is current-only and missing engagement remains
 null rather than inferred.
+US normalized statements route SEC → yfinance → Alpha Vantage. SEC is the
+point-in-time primary and exposes filing/accession metadata; `latest` deduplicates
+period ends while `vintages` keeps visible filing versions. yfinance and Alpha
+Vantage are current-only fallbacks and must not be described as historical filing
+vintages. Derived financial-quality metrics are emitted only for the deduplicated
+latest view.
+StockTwits formal access is no longer an active roadmap deliverable. Its dormant,
+default-disabled adapter may remain for compatibility, but agents must not retry,
+scrape, or request credentials when it is unavailable.
 
 **Phase 1I read-only accounts and portfolio**
 
@@ -152,7 +190,11 @@ provider-backed with Yahoo→Alpha Vantage routing. US breadth uses cached Yahoo
 Screener totals over a disclosed listed-security universe that may include ETFs
 and ADRs; sector rotation uses versioned Yahoo sector-index symbols. Neither is
 presented as official exchange common-stock breadth, and unavailable high/low or
-moving-average participation is never fabricated. Phase 1G combines current
+moving-average participation is never fabricated. For near-current non-closed
+requests, a stale Yahoo regular quote may be replaced only by a newer timestamped
+one-minute `includePrePost` bar with an explicit recovery/extended-hours warning;
+historical `as_of` remains cutoff-safe and Yahoo is not presented as complete
+overnight equity coverage. Phase 1G combines current
 Yahoo/Alpha facts with separately based SEC reported facts and preserves filing
 visibility cutoffs. Phase 1H adds dated news,
 vintage-safe FRED observations, source-separated social sentiment, and
@@ -171,17 +213,22 @@ Ordinary holdings, portfolio, and risk questions read the latest durable account
 snapshots. Broker refresh is explicit: only `account_get(operation="refresh")`, or a workflow
 called with `refresh_accounts=true` after an explicit user request, may fetch and
 persist new account facts. Snapshot staleness is disclosed, not an implicit trigger.
-Phase 1J restores one current durable Investment Case context with contrary-first
+Phase 1J restores one current durable research file (`InvestmentCase`)
+context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.
 Phase 1K bypasses ordinary discussion but persists material strict reviews with a
 versioned ten-dimension checklist and explicit non-executing user resolution.
 Phase 1L returns actual fact packages for five workflows while Codex remains the
 synthesizer. Workflow receipts/reports and normalized historical transactions are
-durable; workflow outputs never execute or directly mutate a Thesis. An
+durable; workflow outputs never execute or directly mutate a current investment
+judgment (`Thesis`). An
 instrument-only `research_run_deep_dive` creates or reuses one non-archived Draft
-Investment Case by default; `create_case=false` preserves ad-hoc mode. Draft case
-creation is a research-folder write, not long-term tracking, Thesis confirmation,
+instrument research file by default; `create_case=false` preserves ad-hoc mode.
+Draft case creation is a research-folder write, not long-term tracking, Thesis confirmation,
 or trading authority. Catalyst Review does not auto-create a Case.
+For A-share Deep Dive, `industry_cycle="hog"` explicitly adds the compact national
+hog-cycle package and, for equities, the company operating-metrics package. The
+workflow never infers an industry cycle from an instrument or company name.
 
 Phase 2 selects exactly one active watchlist upstream (`MOOMOO` or `MANUAL_CSV`).
 The database persists complete group/membership lifecycle history and mutation
@@ -205,12 +252,16 @@ V1 supports A-share/US `PRICE_ABOVE`/`PRICE_BELOW` rules and a portfolio
 `RISK_OVERALL_AT_LEAST` rule. Rule states are `QUIET`, `TRIGGERED`, or
 `NOT_EVALUATED`; durable events are emitted only on state transitions, so repeated
 unchanged facts do not create duplicate alerts. Provider failures and stale facts
-remain `NOT_EVALUATED`. Event acknowledgement/resolution never mutates a Thesis,
+remain `NOT_EVALUATED`. A versioned optional `valid_until` is an inclusive alarm
+lifetime; expired Monitors are skipped before provider access, state mutation, or
+event creation and report `MONITOR_EXPIRED`. It is separate from rule fact age.
+Event acknowledgement/resolution never mutates a Thesis,
 position, Risk Policy, or order, and every run carries `execution_effect=false`.
 
 Phase 2D derives standard indicators through the open-source TA-Lib backend and
 project-owned structure analysis over provider-backed adjusted daily bars. Phase 3A
-adds explicitly unadjusted Yahoo continuous-futures bars. It supports A-share and US
+adds explicitly unadjusted continuous-futures bars with Yahoo primary and a scoped
+Eastmoney daily fallback. It supports A-share and US
 equity/ETF/index instruments plus the seeded commodity-futures proxies, emitting daily and weekly
 timeframes, regime states, disclosed metrics, clustered support/resistance, and
 recent candlestick patterns. `technical_render_chart` returns an auditable

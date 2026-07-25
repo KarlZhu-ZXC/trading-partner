@@ -43,6 +43,8 @@ _DEFAULT_CRITICALITY: Mapping[DataCategory, DataCriticality] = MappingProxyType(
         DataCategory.CORPORATE_ACTIONS: DataCriticality.OPTIONAL,
         # Phase 1G: insider activity optional by default; tools may elevate.
         DataCategory.INSIDER_ACTIVITY: DataCriticality.OPTIONAL,
+        DataCategory.INDUSTRY_CYCLE: DataCriticality.OPTIONAL,
+        DataCategory.COMPANY_OPERATING_METRICS: DataCriticality.OPTIONAL,
     }
 )
 

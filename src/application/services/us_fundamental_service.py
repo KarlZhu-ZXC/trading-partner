@@ -21,7 +21,7 @@ from domain.common.enums import AssetType, DataCategory, Market
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
 from domain.instruments.models import Instrument
-from domain.us_research.enums import USStatementFrequency
+from domain.us_research.enums import USStatementFrequency, USStatementView
 from domain.us_research.models import (
     USCorporateAction,
     USFinancialStatements,
@@ -153,10 +153,13 @@ class USFundamentalService:
         frequency: USStatementFrequency,
         limit: int,
         as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
     ) -> RouterExecutionResult[USFinancialStatements]:
         self._request(instrument, as_of)
         if not isinstance(frequency, USStatementFrequency):
             raise DataContractError("frequency must be USStatementFrequency")
+        if not isinstance(view, USStatementView):
+            raise DataContractError("view must be USStatementView")
         cap = 8 if frequency is USStatementFrequency.QUARTERLY else 5
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= cap:
             raise DataContractError(f"limit must be between 1 and {cap}")
@@ -165,7 +168,11 @@ class USFundamentalService:
             if not isinstance(adapter, USFinancialStatementsProvider):
                 raise DataContractError("adapter does not implement USFinancialStatementsProvider")
             return await adapter.get_financial_statements(
-                instrument, frequency=frequency, limit=limit, as_of=as_of
+                instrument,
+                frequency=frequency,
+                view=view,
+                limit=limit,
+                as_of=as_of,
             )
 
         def validate(success: ProviderSuccess[USFinancialStatements]) -> None:
@@ -178,8 +185,10 @@ class USFundamentalService:
             )
             if success.value.frequency is not frequency:
                 raise DataContractError("statement frequency does not match request")
+            if success.value.view is not view:
+                raise DataContractError("statement view does not match request")
 
-        params = {"frequency": frequency.value, "limit": str(limit)}
+        params = {"frequency": frequency.value, "view": view.value, "limit": str(limit)}
         return await self._router.execute(
             market=Market.US,
             category=DataCategory.FINANCIAL_STATEMENTS,

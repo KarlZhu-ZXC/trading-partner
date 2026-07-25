@@ -19,6 +19,7 @@ from domain.us_research.enums import (
     USFundamentalBasis,
     USStatementFrequency,
     USStatementType,
+    USStatementView,
 )
 from infrastructure.providers.us.sec_companyfacts import SECCompanyFactsAdapter
 
@@ -511,6 +512,32 @@ async def test_cutoff_amendment_and_fundamental_snapshot() -> None:
     assert snap.value.degraded is True
     assert m.filed_at is not None and m.filed_at <= AS_OF
     assert m.period_end == date(2025, 1, 26)
+
+
+@pytest.mark.asyncio
+async def test_statement_latest_view_deduplicates_periods_and_vintages_retains_filings() -> None:
+    adapter = _adapter(FixtureTransport())
+    latest = await adapter.get_financial_statements(
+        _instrument(),
+        frequency=USStatementFrequency.ANNUAL,
+        limit=5,
+        as_of=AS_OF,
+        view=USStatementView.LATEST,
+    )
+    vintages = await adapter.get_financial_statements(
+        _instrument(),
+        frequency=USStatementFrequency.ANNUAL,
+        limit=5,
+        as_of=AS_OF,
+        view=USStatementView.VINTAGES,
+    )
+
+    assert len({period.period_end for period in latest.value.income}) == len(
+        latest.value.income
+    )
+    assert latest.value.view is USStatementView.LATEST
+    assert vintages.value.view is USStatementView.VINTAGES
+    assert all(period.accession for period in vintages.value.income)
 
 
 @pytest.mark.asyncio

@@ -1461,6 +1461,7 @@ class MonitorVersionRow(Base):
     cadence: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     rules_json: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_until: Mapped[str | None] = mapped_column(Text)
     confirmed_by: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1679,6 +1680,48 @@ class AccountTransactionRow(Base):
     fees: Mapped[str] = mapped_column(Text, nullable=False)
     currency: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# --- Phase 3B durable industry-cycle observations ---
+
+
+class IndustryMetricObservationRow(Base):
+    __tablename__ = "industry_metric_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "cycle",
+            "dataset_code",
+            "metric_code",
+            "period_end",
+            "published_at",
+            name="uq_industry_metric_vintage",
+        ),
+        Index(
+            "ix_industry_metric_series",
+            "cycle",
+            "metric_code",
+            "period_end",
+        ),
+        Index("ix_industry_metric_publication", "published_at"),
+    )
+
+    observation_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    cycle: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_code: Mapped[str] = mapped_column(Text, nullable=False)
+    metric_code: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    unit: Mapped[str] = mapped_column(Text, nullable=False)
+    geography: Mapped[str] = mapped_column(Text, nullable=False)
+    period_start: Mapped[str] = mapped_column(Text, nullable=False)
+    period_end: Mapped[str] = mapped_column(Text, nullable=False)
+    frequency: Mapped[str] = mapped_column(Text, nullable=False)
+    measurement_basis: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    is_estimated: Mapped[int] = mapped_column(Integer, nullable=False)
+    methodology_version: Mapped[str] = mapped_column(Text, nullable=False)
+    methodology_break: Mapped[str | None] = mapped_column(Text)
+    ingested_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 # --- Scheduled operational synchronization receipts ---

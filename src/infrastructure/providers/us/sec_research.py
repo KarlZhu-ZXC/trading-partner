@@ -9,7 +9,7 @@ from application.ports.clock import Clock
 from application.ports.http_transport import HttpTransport
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.instruments.models import Instrument
-from domain.us_research.enums import USFilingForm, USStatementFrequency
+from domain.us_research.enums import USFilingForm, USStatementFrequency, USStatementView
 from domain.us_research.models import (
     USFiling,
     USFinancialStatements,
@@ -73,9 +73,10 @@ class SECResearchAdapter:
         frequency: USStatementFrequency,
         limit: int,
         as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
     ) -> ProviderSuccess[USFinancialStatements]:
         return await self._facts.get_financial_statements(
-            instrument, frequency=frequency, limit=limit, as_of=as_of
+            instrument, frequency=frequency, view=view, limit=limit, as_of=as_of
         )
 
     async def get_filings(

@@ -85,8 +85,10 @@ _PHASE2_TABLES = {
     "monitor_runs",
 }
 
+_PHASE3_TABLES = {"industry_metric_observations"}
+
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0014_phase3_commodity_futures"})
+_HEAD_REVISIONS = frozenset({"0016_monitor_valid_until"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -104,6 +106,8 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0012_phase2b_risk_engine",
     "0013_phase2c_monitoring",
     "0014_phase3_commodity_futures",
+    "0015_phase3b_industry_metrics",
+    "0016_monitor_valid_until",
 }
 
 
@@ -130,6 +134,7 @@ def test_migration_round_trip(
     assert _PHASE1D_TABLES.issubset(tables_after_first)
     assert _PHASE1C_TABLES.issubset(tables_after_first)
     assert _PHASE2_TABLES.issubset(tables_after_first)
+    assert _PHASE3_TABLES.issubset(tables_after_first)
 
     with engine.connect() as conn:
         versions = {
@@ -148,6 +153,7 @@ def test_migration_round_trip(
     assert not _PHASE1D_TABLES.intersection(tables_after_down)
     assert not _PHASE1C_TABLES.intersection(tables_after_down)
     assert not _PHASE2_TABLES.intersection(tables_after_down)
+    assert not _PHASE3_TABLES.intersection(tables_after_down)
 
     # upgrade head again
     command.upgrade(cfg, _HEAD_TARGET)

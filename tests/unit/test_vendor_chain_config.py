@@ -44,6 +44,8 @@ A_SHARE_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     DataCategory.INTERACTIVE_QA: (VendorId.CNINFO,),
     DataCategory.NEWS: (VendorId.CLS, VendorId.EASTMONEY),
     DataCategory.SENTIMENT: (VendorId.THS, VendorId.EASTMONEY),
+    DataCategory.INDUSTRY_CYCLE: (VendorId.NAHS,),
+    DataCategory.COMPANY_OPERATING_METRICS: (VendorId.CNINFO,),
 }
 
 US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
@@ -61,8 +63,8 @@ US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     ),
     DataCategory.FINANCIAL_STATEMENTS: (
         VendorId.SEC_EDGAR,
-        VendorId.ALPHA_VANTAGE,
         VendorId.YFINANCE,
+        VendorId.ALPHA_VANTAGE,
     ),
     DataCategory.FILINGS: (VendorId.SEC_EDGAR,),
     DataCategory.CORPORATE_ACTIONS: (VendorId.YFINANCE, VendorId.SEC_EDGAR),

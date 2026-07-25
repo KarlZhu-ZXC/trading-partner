@@ -83,6 +83,19 @@ def _us_etf(symbol: str) -> Instrument:
     )
 
 
+def _us_future(symbol: str = "GC=F") -> Instrument:
+    return Instrument(
+        instrument_id=f"future:US:{symbol}",
+        symbol=symbol,
+        name="COMEX continuous future",
+        market=Market.US,
+        exchange="COMEX",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.FUTURE,
+    )
+
+
 def _meta(
     category: DataCategory = DataCategory.MARKET_QUOTE,
     *,
@@ -411,6 +424,53 @@ async def test_quote_and_bars_router_delegation_and_validator() -> None:
             adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
             as_of=AS_OF,
         )
+
+
+@pytest.mark.asyncio
+async def test_futures_route_to_asset_compatible_fallback_chains() -> None:
+    instrument = _us_future()
+    quote_router = _RecordingRouter(
+        success_value=_quote(instrument.instrument_id),
+        meta=_meta(DataCategory.MARKET_QUOTE),
+    )
+    quote_service = _data_service(quote_router)
+
+    await quote_service.get_quote(instrument, AS_OF)
+
+    quote_policy = quote_router.calls[0]["tool_policy"]
+    assert quote_policy is not None
+    assert quote_policy.category_chain_overrides[DataCategory.MARKET_QUOTE] == (
+        VendorId.YFINANCE,
+        VendorId.SINA_FUTURES,
+    )
+
+    start = end = date(2026, 7, 17)
+    bars_router = _RecordingRouter(
+        success_value=_series(
+            instrument.instrument_id,
+            start=start,
+            end=end,
+            adjustment=AdjustmentMethod.NONE,
+        ),
+        meta=_meta(DataCategory.MARKET_OHLCV, adjustment=AdjustmentMethod.NONE),
+    )
+    bars_service = _data_service(bars_router)
+
+    await bars_service.get_bars(
+        instrument,
+        start=start,
+        end=end,
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=AS_OF,
+    )
+
+    bars_policy = bars_router.calls[0]["tool_policy"]
+    assert bars_policy is not None
+    assert bars_policy.category_chain_overrides[DataCategory.MARKET_OHLCV] == (
+        VendorId.YFINANCE,
+        VendorId.EASTMONEY_FUTURES,
+    )
 
 
 @pytest.mark.asyncio

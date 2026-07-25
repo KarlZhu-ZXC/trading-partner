@@ -74,7 +74,7 @@ class MonitorEvaluationService:
         as_of = request.as_of or started_at
         if as_of > started_at:
             raise DataContractError("monitor as_of must not be in the future")
-        monitors, selection_warnings = self._select(request)
+        monitors, selection_warnings = self._select(request, as_of=as_of)
         price_cache: dict[str, _Fact] = {}
         risk_fact: _Fact | None = None
         states: list[MonitorRuleState] = []
@@ -146,7 +146,7 @@ class MonitorEvaluationService:
         return self._repository.record_evaluation(run, tuple(states), tuple(events))
 
     def _select(
-        self, request: MonitorEvaluateInput
+        self, request: MonitorEvaluateInput, *, as_of: datetime
     ) -> tuple[tuple[MonitorDefinition, ...], tuple[str, ...]]:
         warnings: list[str] = []
         if request.monitor_ids:
@@ -157,13 +157,23 @@ class MonitorEvaluationService:
                     warnings.append("MONITOR_NOT_FOUND")
                 elif value.status is not MonitorStatus.ACTIVE:
                     warnings.append("MONITOR_NOT_ACTIVE")
+                elif value.valid_until is not None and as_of > value.valid_until:
+                    warnings.append("MONITOR_EXPIRED")
                 else:
                     selected.append(value)
             return tuple(selected), tuple(dict.fromkeys(warnings))
         values = self._repository.list_current(MonitorStatus.ACTIVE)
         if request.cadence is not None:
             values = tuple(item for item in values if item.cadence is request.cadence)
-        return values, ()
+        expired = tuple(
+            item for item in values if item.valid_until is not None and as_of > item.valid_until
+        )
+        if expired:
+            warnings.append("MONITOR_EXPIRED")
+        values = tuple(
+            item for item in values if item.valid_until is None or as_of <= item.valid_until
+        )
+        return values, tuple(dict.fromkeys(warnings))
 
     async def _price_fact(self, instrument_id: str, as_of: datetime) -> _Fact:
         _asset, market, _symbol = parse_instrument_id(instrument_id)

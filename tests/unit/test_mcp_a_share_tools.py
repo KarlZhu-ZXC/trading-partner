@@ -135,3 +135,28 @@ async def test_phase1e_validation_error_reraises() -> None:
     with pytest.raises(ValidationError):
         await reports_fn()  # needs text | instrument_id | industry_code
     container.a_share_tool_coordinator.search_reports.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_share_financials_operation_delegates_without_new_public_tool() -> None:
+    container = _container_with_coordinator()
+    container.a_share_tool_coordinator.get_financial_statements = AsyncMock(
+        return_value=_stub_envelope()
+    )
+    server = create_mcp_server(container)
+
+    result = await server._tool_manager.call_tool(
+        "a_share_get_facts",
+        {
+            "operation": "financials",
+            "instrument_id": _INSTRUMENT_ID,
+            "periods": 8,
+            "statement_types": ["income_statement", "cash_flow"],
+        },
+    )
+
+    assert result["ok"] is False
+    container.a_share_tool_coordinator.get_financial_statements.assert_awaited_once()
+    (request,) = container.a_share_tool_coordinator.get_financial_statements.await_args.args
+    assert request.__class__.__name__ == "AShareGetFinancialStatementsInput"
+    assert request.periods == 8

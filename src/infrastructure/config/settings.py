@@ -165,6 +165,7 @@ class AppSettings(BaseSettings):
     eastmoney_jitter_seconds: float = Field(default=0.25, ge=0)
     tencent_enabled: bool = True
     cninfo_enabled: bool = True
+    nahs_enabled: bool = True
     sina_enabled: bool = True
     ths_enabled: bool = True
     cls_enabled: bool = True

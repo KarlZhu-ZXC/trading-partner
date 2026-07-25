@@ -24,6 +24,7 @@ from domain.us_research.enums import (
     USInsiderAcquiredDisposed,
     USStatementFrequency,
     USStatementType,
+    USStatementView,
 )
 
 _EQUITY_ONLY = frozenset({AssetType.EQUITY})
@@ -476,6 +477,10 @@ class USStatementPeriod:
     filed_at: datetime | None
     currency: str | None
     line_items: tuple[tuple[str, Decimal | None], ...]
+    period_start: date | None = None
+    accession: str | None = None
+    filing_form: str | None = None
+    is_amendment: bool = False
 
     def __post_init__(self) -> None:
         _require_enum(self.statement_type, USStatementType, field="statement_type")
@@ -488,9 +493,23 @@ class USStatementPeriod:
             )
         _require_optional_str(self.fiscal_period, field="fiscal_period", max_len=_FISCAL_PERIOD_MAX)
         _require_date(self.period_end, field="period_end")
+        if self.period_start is not None:
+            _require_date(self.period_start, field="period_start")
+            if self.period_start > self.period_end:
+                raise DataContractError(
+                    "period_start must be <= period_end",
+                    details={"field": "period_start", "rule": "range"},
+                )
         if self.filed_at is not None:
             require_aware_datetime(self.filed_at, field_name="filed_at")
         _require_optional_str(self.currency, field="currency", max_len=_CURRENCY_MAX)
+        _require_optional_str(self.accession, field="accession", max_len=_ACCESSION_MAX)
+        _require_optional_str(self.filing_form, field="filing_form", max_len=16)
+        if type(self.is_amendment) is not bool:
+            raise DataContractError(
+                "is_amendment must be an exact bool",
+                details={"field": "is_amendment", "rule": "type"},
+            )
         _require_line_items(self.line_items, field="line_items")
 
 
@@ -502,11 +521,13 @@ class USFinancialStatements:
     income: tuple[USStatementPeriod, ...]
     balance_sheet: tuple[USStatementPeriod, ...]
     cash_flow: tuple[USStatementPeriod, ...]
+    view: USStatementView = USStatementView.LATEST
 
     def __post_init__(self) -> None:
         _require_us_equity_instrument_id(self.instrument_id, field="instrument_id")
         require_aware_datetime(self.as_of, field_name="as_of")
         frequency = _require_enum(self.frequency, USStatementFrequency, field="frequency")
+        _require_enum(self.view, USStatementView, field="view")
         cap = _period_cap(frequency)
         for field_name, statement_type, periods in (
             ("income", USStatementType.INCOME, self.income),

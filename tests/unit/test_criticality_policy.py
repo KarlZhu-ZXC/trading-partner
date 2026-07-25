@@ -34,6 +34,8 @@ EXPECTED_DEFAULTS: dict[DataCategory, DataCriticality] = {
     DataCategory.INTERACTIVE_QA: DataCriticality.OPTIONAL,
     DataCategory.CORPORATE_ACTIONS: DataCriticality.OPTIONAL,
     DataCategory.INSIDER_ACTIVITY: DataCriticality.OPTIONAL,
+    DataCategory.INDUSTRY_CYCLE: DataCriticality.OPTIONAL,
+    DataCategory.COMPANY_OPERATING_METRICS: DataCriticality.OPTIONAL,
 }
 
 

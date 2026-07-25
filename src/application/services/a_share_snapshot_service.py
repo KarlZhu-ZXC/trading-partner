@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 from application.dto.a_share import (
     AnnouncementItemDTO,
     AShareCompositeSnapshotDTO,
+    AShareFinancialStatementsDTO,
     AShareQuoteDTO,
     DividendRecordDTO,
     F10SectionDTO,
@@ -80,7 +81,7 @@ from domain.a_share.models import (
     NewsItem,
     UnlockRecord,
 )
-from domain.common.enums import AssetType, DataCategory, Market
+from domain.common.enums import AssetType, DataCategory, Market, ReliabilityLevel
 from domain.common.errors import DataContractError, TradingPartnerError
 from domain.common.time import require_aware_datetime
 from domain.instruments.models import Instrument
@@ -232,6 +233,37 @@ class AShareSnapshotResult:
                 )
 
 
+@dataclass(frozen=True, slots=True)
+class AShareFinancialStatementsResult:
+    ok: bool
+    data: AShareFinancialStatementsDTO | None
+    warnings: tuple[WarningInfo, ...]
+    error: TradingPartnerError | None
+    provenance: tuple[AShareComponentProvenance, ...]
+
+    def __post_init__(self) -> None:
+        validate_provenance_tuple(
+            self.provenance,
+            order=(AShareComponentType.STATEMENTS,),
+        )
+        if type(self.ok) is not bool:
+            raise DataContractError("ok must be exact bool")
+        if not isinstance(self.warnings, tuple) or any(
+            not isinstance(item, WarningInfo) for item in self.warnings
+        ):
+            raise DataContractError("warnings must be a tuple of WarningInfo")
+        if self.ok:
+            if self.data is None or self.error is not None:
+                raise DataContractError("successful financial statements require data only")
+            validate_data_provenance(self.data, self.provenance)
+            if {item.component for item in self.provenance} != {
+                AShareComponentType.STATEMENTS
+            }:
+                raise DataContractError("financial statements provenance is required")
+        elif self.data is not None or not isinstance(self.error, TradingPartnerError):
+            raise DataContractError("failed financial statements require a typed error only")
+
+
 class AShareSnapshotService:
     """E3 product service: summary/full snapshot via ProviderRouter components."""
 
@@ -314,6 +346,85 @@ class AShareSnapshotService:
 
     def _is_equity_full_matrix(self, instrument: Instrument) -> bool:
         return instrument.asset_type is AssetType.EQUITY
+
+    async def get_financial_statements(
+        self,
+        instrument: Instrument,
+        as_of: datetime,
+        *,
+        statement_types: tuple[FinancialStatementType, ...],
+        periods: int,
+        metric_codes: tuple[str, ...],
+    ) -> AShareFinancialStatementsResult:
+        """Return only bounded company statements; do not fetch snapshot extras."""
+
+        require_aware_datetime(as_of, field_name="as_of")
+        now = self._clock.now()
+        require_aware_datetime(now, field_name="clock.now")
+        self._require_a_share(instrument)
+        if instrument.asset_type is not AssetType.EQUITY:
+            raise DataContractError(
+                "financial statements support A-share equities only",
+                details={"field": "instrument", "rule": "asset_type"},
+            )
+        if as_of > now:
+            raise DataContractError(
+                "as_of must not be in the future relative to clock",
+                details={"field": "as_of", "rule": "not_future"},
+            )
+        routed = await self._fetch_statements(
+            instrument,
+            as_of,
+            now=now,
+            require_non_empty=True,
+            statement_types=statement_types,
+            periods=periods,
+        )
+        if not routed.ok or routed.value is None or routed.meta is None:
+            return AShareFinancialStatementsResult(
+                ok=False,
+                data=None,
+                warnings=routed.warnings,
+                error=routed.error
+                or DataContractError(
+                    "required financial statements component failed",
+                    details={"component": "statements", "rule": "required"},
+                ),
+                provenance=(),
+            )
+        provenance = (
+            component_provenance(
+                AShareComponentType.STATEMENTS,
+                routed.meta,
+                routed.value,
+                empty_reliability=ReliabilityLevel.MEDIUM,
+                empty_authoritative=False,
+            ),
+        )
+        data = AShareFinancialStatementsDTO.from_lines(
+            instrument_id=instrument.instrument_id,
+            as_of=as_of,
+            requested_periods=periods,
+            metric_codes=metric_codes,
+            lines=routed.value,
+            provenance=provenance_dtos(provenance),
+        )
+        warnings = list(routed.warnings)
+        if not any(period.metrics for period in data.periods):
+            warnings.append(
+                WarningInfo(
+                    code="FINANCIAL_METRICS_UNAVAILABLE",
+                    message="Requested normalized financial metrics were unavailable.",
+                    details={},
+                )
+            )
+        return AShareFinancialStatementsResult(
+            ok=True,
+            data=data,
+            warnings=tuple(warnings),
+            error=None,
+            provenance=provenance,
+        )
 
     async def get_snapshot(
         self,
@@ -1161,15 +1272,17 @@ class AShareSnapshotService:
         *,
         now: datetime,
         require_non_empty: bool,
+        statement_types: tuple[FinancialStatementType, ...] = _DEFAULT_STATEMENT_TYPES,
+        periods: int = _DEFAULT_STATEMENT_PERIODS,
     ) -> RouterExecutionResult[tuple[FinancialStatementLine, ...]]:
         params = {
-            "periods": str(_DEFAULT_STATEMENT_PERIODS),
-            "types": ",".join(sorted(t.value for t in _DEFAULT_STATEMENT_TYPES)),
+            "periods": str(periods),
+            "types": ",".join(sorted(t.value for t in statement_types)),
         }
         fingerprint = build_a_share_fingerprint(
             OP_STATEMENTS, instrument.instrument_id, params, as_of
         )
-        requested_types = _DEFAULT_STATEMENT_TYPES
+        requested_types = statement_types
 
         async def _call(
             adapter: CategoryProvider,
@@ -1185,7 +1298,7 @@ class AShareSnapshotService:
             return await adapter.get_financial_statements(
                 instrument,
                 statement_types=requested_types,
-                periods=_DEFAULT_STATEMENT_PERIODS,
+                periods=periods,
                 as_of=as_of,
             )
 

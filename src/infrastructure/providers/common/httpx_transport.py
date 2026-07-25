@@ -55,9 +55,8 @@ class _AllowEntry:
 _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
     # Tencent
     _AllowEntry("qt.gtimg.cn", "/q", _MatchMode.EXACT),
-    _AllowEntry(
-        "web.ifzq.gtimg.cn", "/appstock/app/fqkline/get", _MatchMode.EXACT
-    ),
+    _AllowEntry("smartbox.gtimg.cn", "/s3/", _MatchMode.EXACT),
+    _AllowEntry("web.ifzq.gtimg.cn", "/appstock/app/fqkline/get", _MatchMode.EXACT),
     # Eastmoney push2
     _AllowEntry("push2.eastmoney.com", "/api/qt/stock/get", _MatchMode.EXACT),
     _AllowEntry("push2.eastmoney.com", "/api/qt/stock/details/get", _MatchMode.EXACT),
@@ -126,6 +125,17 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
     # Cninfo
     _AllowEntry("www.cninfo.com.cn", "/new/hisannouncement/query", _MatchMode.EXACT),
     _AllowEntry("irm.cninfo.com.cn", "/newircs/", _MatchMode.PREFIX),
+    # Official CNINFO static finalpage PDF bodies (company operating metrics).
+    _AllowEntry(
+        "static.cninfo.com.cn",
+        "/finalpage/",
+        _MatchMode.PREFIX,
+        frozenset({"GET"}),
+    ),
+    # National Animal Husbandry Service official price/capacity publications.
+    _AllowEntry("www.nahs.org.cn", "/jcyj/scxs/", _MatchMode.PREFIX, frozenset({"GET"})),
+    _AllowEntry("www.nahs.org.cn", "/jcyj/jghq/", _MatchMode.PREFIX, frozenset({"GET"})),
+    _AllowEntry("www.nahs.org.cn", "/jcyj/jcgz/", _MatchMode.PREFIX, frozenset({"GET"})),
     # THS
     _AllowEntry("basic.10jqka.com.cn", "/new/", _MatchMode.PREFIX),
     _AllowEntry(

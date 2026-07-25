@@ -99,9 +99,48 @@ _HQ_LIST_URL = "https://hq.sinajs.cn/list"
 _SINA_REFERER = "https://finance.sina.com.cn/"
 
 _SOURCE_BY_TYPE: Mapping[FinancialStatementType, str] = {
-    FinancialStatementType.BALANCE_SHEET: "gjzb_bs",
-    FinancialStatementType.INCOME_STATEMENT: "gjzb_is",
-    FinancialStatementType.CASH_FLOW: "gjzb_cf",
+    FinancialStatementType.BALANCE_SHEET: "fzb",
+    FinancialStatementType.INCOME_STATEMENT: "lrb",
+    FinancialStatementType.CASH_FLOW: "llb",
+}
+
+_FINANCIAL_ITEM_CODES: Mapping[FinancialStatementType, Mapping[str, str]] = {
+    FinancialStatementType.BALANCE_SHEET: {
+        "CURFDS": "cash_and_equivalents",
+        "TRADFINASSET": "short_term_investments",
+        "ACCORECE": "accounts_receivable",
+        "INVE": "inventory",
+        "TOTCURRASSET": "current_assets",
+        "TOTASSET": "total_assets",
+        "SHORTTERMBORR": "short_term_debt",
+        "DUENONCLIAB": "current_portion_long_term_debt",
+        "TOTALCURRLIAB": "current_liabilities",
+        "LONGBORR": "long_term_debt",
+        "BDSPAYA": "bonds_payable",
+        "TOTLIAB": "total_liabilities",
+        "RIGHAGGR": "stockholders_equity",
+    },
+    FinancialStatementType.INCOME_STATEMENT: {
+        "BIZTOTINCO": "total_revenue",
+        "BIZINCO": "revenue",
+        "BIZCOST": "cost_of_revenue",
+        "DEVEEXPE": "research_and_development",
+        "SALESEXPE": "selling_expense",
+        "MANAEXPE": "general_and_administrative_expense",
+        "FINEXPE": "finance_expense",
+        "PERPROFIT": "operating_income",
+        "NETPROFIT": "net_income",
+        "PARENETP": "net_income_attributable_parent",
+        "BASICEPS": "eps_basic",
+        "DILUTEDEPS": "eps_diluted",
+    },
+    FinancialStatementType.CASH_FLOW: {
+        "MANANETR": "operating_cash_flow",
+        "ACQUASSETCASH": "capital_expenditure",
+        "INVNETCASHFLOW": "investing_cash_flow",
+        "FINNETCFLOW": "financing_cash_flow",
+        "CASHNETR": "cash_change",
+    },
 }
 
 _PAPER_PREFIX: Mapping[str, str] = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
@@ -631,25 +670,20 @@ class SinaAShareAdapter:
                     "rule": "contract_drift",
                 },
             )
-        # Frozen envelope: result.data.report is a list of period objects.
+        # Current upstream contract: report_list is keyed by YYYYMMDD.
         result = payload.get("result")
-        if result is None and payload.get("data") is None:
-            # Explicit empty success path handled by caller as NoMarketData.
+        if result is None:
             return [], False
         if not isinstance(result, dict):
-            # Some Sina builds nest under data only.
-            data_root = payload.get("data")
-            if not isinstance(data_root, dict):
-                raise DataContractError(
-                    "Sina statements payload missing result object",
-                    details={
-                        "vendor": self.vendor_id.value,
-                        "operation": "statements",
-                        "rule": "contract_drift",
-                    },
-                )
-            result = data_root
-        data = result.get("data") if "data" in result else result
+            raise DataContractError(
+                "Sina statements payload missing result object",
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": "statements",
+                    "rule": "contract_drift",
+                },
+            )
+        data = result.get("data")
         if data is None:
             return [], False
         if not isinstance(data, dict):
@@ -661,26 +695,36 @@ class SinaAShareAdapter:
                     "rule": "contract_drift",
                 },
             )
-        reports = data.get("report")
-        if reports is None:
-            reports = data.get("report_list")
+        reports = data.get("report_list")
         if reports is None:
             return [], False
-        if not isinstance(reports, list):
+        if not isinstance(reports, dict):
             raise DataContractError(
-                "Sina statements report list failed contract validation",
+                "Sina statements report_list must be an object",
                 details={
                     "vendor": self.vendor_id.value,
                     "operation": "statements",
                     "rule": "contract_drift",
                 },
             )
-        if len(reports) == 0:
+        if not reports:
             return [], False
 
         lines: list[FinancialStatementLine] = []
         unknown_excluded = False
-        for idx, report in enumerate(reports[:periods]):
+        period_keys = sorted(reports, reverse=True)[:periods]
+        for idx, period_key in enumerate(period_keys):
+            if not isinstance(period_key, str) or re.fullmatch(r"\d{8}", period_key) is None:
+                raise DataContractError(
+                    "Sina statement period key must be YYYYMMDD",
+                    details={
+                        "vendor": self.vendor_id.value,
+                        "operation": "statements",
+                        "rule": "contract_drift",
+                        "index": idx,
+                    },
+                )
+            report = reports.get(period_key)
             if not isinstance(report, dict):
                 raise DataContractError(
                     "Sina statement period failed contract validation",
@@ -691,36 +735,12 @@ class SinaAShareAdapter:
                         "index": idx,
                     },
                 )
-            period_raw = report.get("report_date") or report.get("rDate") or report.get(
-                "enddate"
+            period_end = parse_shanghai_date(
+                f"{period_key[:4]}-{period_key[4:6]}-{period_key[6:8]}"
             )
-            if period_raw is None:
-                raise DataContractError(
-                    "Sina statement missing report_date",
-                    details={
-                        "vendor": self.vendor_id.value,
-                        "operation": "statements",
-                        "rule": "contract_drift",
-                        "index": idx,
-                    },
-                )
-            if isinstance(period_raw, str):
-                period_end = parse_shanghai_date(period_raw)
-            else:
-                raise DataContractError(
-                    "Sina statement report_date type invalid",
-                    details={
-                        "vendor": self.vendor_id.value,
-                        "operation": "statements",
-                        "rule": "contract_drift",
-                        "index": idx,
-                    },
-                )
-            pub_raw = (
-                report.get("publish_date")
-                or report.get("notice_date")
-                or report.get("announcement_date")
-            )
+            pub_raw = report.get("publish_date")
+            if isinstance(pub_raw, str) and re.fullmatch(r"\d{8}", pub_raw):
+                pub_raw = f"{pub_raw[:4]}-{pub_raw[4:6]}-{pub_raw[6:8]}"
             published_at = parse_shanghai_datetime(pub_raw, field="published_at")
             keep, excluded = publication_cutoff_keep(
                 published_at,
@@ -732,25 +752,7 @@ class SinaAShareAdapter:
                 unknown_excluded = True
             if not keep:
                 continue
-            items = report.get("data") or report.get("items") or report.get("list")
-            if items is None:
-                # Period-level field map form: every non-meta key is a line item.
-                meta_keys = {
-                    "report_date",
-                    "rDate",
-                    "enddate",
-                    "publish_date",
-                    "notice_date",
-                    "announcement_date",
-                    "data",
-                    "items",
-                    "list",
-                }
-                items = [
-                    {"item_code": k, "item_name": k, "item_value": v}
-                    for k, v in report.items()
-                    if k not in meta_keys
-                ]
+            items = report.get("data")
             if not isinstance(items, list):
                 raise DataContractError(
                     "Sina statement items failed contract validation",
@@ -772,26 +774,29 @@ class SinaAShareAdapter:
                             "index": jdx,
                         },
                     )
-                code = item.get("item_code") or item.get("code") or item.get("field")
-                name = item.get("item_name") or item.get("name") or item.get("title")
-                if not isinstance(code, str) or not code.strip():
+                raw_code = item.get("item_field")
+                name = item.get("item_title")
+                if not isinstance(raw_code, str):
                     raise DataContractError(
-                        "Sina statement line missing item_code",
+                        "Sina statement line item_field must be a string",
                         details={
                             "vendor": self.vendor_id.value,
                             "operation": "statements",
                             "rule": "contract_drift",
                         },
                     )
+                code = _FINANCIAL_ITEM_CODES[statement_type].get(raw_code.strip().upper())
+                if code is None:
+                    continue
                 if not isinstance(name, str) or not name.strip():
                     name = code
                 value = decimal_from_text(
-                    item.get("item_value")
-                    if "item_value" in item
-                    else item.get("value"),
+                    item.get("item_value"),
                     field="value",
                 )
-                unit = item.get("unit")
+                if code == "capital_expenditure" and value is not None:
+                    value = abs(value)
+                unit = report.get("rCurrency")
                 if unit is None or (isinstance(unit, str) and not unit.strip()):
                     unit = "CNY"
                 if not isinstance(unit, str):
@@ -808,7 +813,7 @@ class SinaAShareAdapter:
                         statement_type=statement_type,
                         period_end=period_end,
                         published_at=published_at,
-                        item_code=code.strip()[:64],
+                        item_code=code,
                         item_name=name.strip()[:200],
                         value=value,
                         unit=unit.strip()[:50],

@@ -15,7 +15,8 @@
 Trading Partner is a durable research and portfolio context service exposed through
 the [Model Context Protocol](https://modelcontextprotocol.io/). Connect it to Codex
 or another MCP host and the conversation can retrieve your positions, Watchlist,
-past research, Investment Cases, thesis revisions, challenge reviews, monitoring
+past research, research files (instrument-centered Investment Cases by default), investment-judgment
+revisions (Thesis revisions), challenge reviews, monitoring
 events, and current market facts without rebuilding context from scratch.
 
 The MCP supplies structured facts and durable state. Your AI host remains responsible
@@ -34,7 +35,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> What it can do
 
-- Maintain Investment Cases, research state, thesis history, journals, decisions, and
+- Maintain a durable research file for an instrument or higher-level topic, including
+  its current investment judgments, revision history, journals, decisions, and
   contrary-first Challenge Reviews.
 - Resolve A-share and US instruments and retrieve provider-backed market,
   fundamental, filing, macro, news, sentiment, and prediction-market context.
@@ -46,8 +48,11 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Create durable price and portfolio-risk monitors with transition-only events.
 - Produce shared A-share/US daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
-- Retrieve free Yahoo COMEX/NYMEX continuous commodity-futures quotes and 1m–monthly
+- Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
+  scoped Sina quote and Eastmoney daily-derived fallbacks, and 1m–monthly
   bars with explicit non-spot and contract-roll warnings.
+- Retrieve official national hog-cycle price, feed, pig-grain-ratio, and capacity
+  observations with publication-time cutoffs and no fabricated phase verdict.
 - Run repeatable deep-dive, catalyst, market-review, and portfolio-review workflows
   while keeping the AI host as the synthesizer.
 

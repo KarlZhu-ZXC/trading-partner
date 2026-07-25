@@ -40,7 +40,7 @@ from infrastructure.providers.us.codecs import USProviderCacheCodec
 CODEC_US_FILINGS: Final[str] = "us.filings.v1"
 CODEC_US_INSIDER_ACTIVITY: Final[str] = "us.insider_activity.v1"
 CODEC_US_FUNDAMENTAL_SNAPSHOT: Final[str] = "us.fundamental_snapshot.v1"
-CODEC_US_FINANCIAL_STATEMENTS: Final[str] = "us.financial_statements.v1"
+CODEC_US_FINANCIAL_STATEMENTS: Final[str] = "us.financial_statements.v2"
 CODEC_US_CORPORATE_ACTIONS: Final[str] = "us.corporate_actions.v1"
 
 
@@ -316,6 +316,10 @@ def _period_from_dto(dto: USStatementPeriodDTO) -> USStatementPeriod:
         filed_at=dto.filed_at,
         currency=dto.currency,
         line_items=tuple(items),
+        period_start=dto.period_start,
+        accession=dto.accession,
+        filing_form=dto.filing_form,
+        is_amendment=dto.is_amendment,
     )
 
 
@@ -327,6 +331,7 @@ def _statements_from_dto(dto: USFinancialStatementsDTO) -> USFinancialStatements
         income=tuple(_period_from_dto(p) for p in dto.income),
         balance_sheet=tuple(_period_from_dto(p) for p in dto.balance_sheet),
         cash_flow=tuple(_period_from_dto(p) for p in dto.cash_flow),
+        view=dto.view,
     )
 
 

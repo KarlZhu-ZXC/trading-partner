@@ -106,7 +106,7 @@ def test_e3_codec_ids_inventory() -> None:
             {
                 "a_share_fundamentals.v1",
                 "a_share_f10.v1",
-                "a_share_statements.v1",
+                "a_share_statements.v2",
                 "a_share_reports.v1",
                 "a_share_consensus.v1",
                 "a_share_announcements.v1",

@@ -57,9 +57,12 @@ _REAL_A_SHARE_VENDORS = (
     VendorId.SZSE,
     VendorId.HKEX,
     VendorId.IWENCAI,
+    VendorId.NAHS,
 )
 _REAL_US_VENDORS = (
     VendorId.YFINANCE,
+    VendorId.SINA_FUTURES,
+    VendorId.EASTMONEY_FUTURES,
     VendorId.ALPHA_VANTAGE,
     VendorId.SEC_EDGAR,
     VendorId.FRED,
@@ -342,6 +345,10 @@ def test_e5b_registry_disabled_vendor_remains_registered_unconfigured(
         assert isinstance(eastmoney, EastmoneyAShareAdapter)
         assert tencent.is_configured() is False
         assert eastmoney.is_configured() is False
+        assert (
+            container.vendor_registry.get(VendorId.EASTMONEY_FUTURES).is_configured()
+            is False
+        )
         assert iwencai.is_configured() is False
         # SSE/SZSE/HKEX remain configured (no enable flags in Phase 1E).
         assert container.vendor_registry.get(VendorId.SSE).is_configured() is True
@@ -633,10 +640,14 @@ def test_package_scripts_register_post_market_and_watchlist_cli() -> None:
     }
     assert scripts["trading-partner-mcp"] == "interfaces.mcp.server:main"
     assert scripts["trading-partner-post-market-sync"] == "interfaces.cli.post_market_sync:main"
+    assert scripts["trading-partner-account-transactions"] == (
+        "interfaces.cli.account_transactions:main"
+    )
     assert scripts["trading-partner-watchlist-sync"] == "interfaces.cli.watchlist_sync:main"
     # Resolve load targets without invoking side-effecting main() bodies.
     for name in (
         "trading-partner-post-market-sync",
+        "trading-partner-account-transactions",
         "trading-partner-watchlist-sync",
     ):
         ep = next(e for e in entry_points(group="console_scripts") if e.name == name)

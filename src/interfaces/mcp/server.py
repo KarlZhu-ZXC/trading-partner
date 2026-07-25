@@ -15,7 +15,10 @@ from pydantic import ValidationError
 
 from application.dto.a_share import (
     AShareGetCapitalSnapshotInput,
+    AShareGetCompanyOperatingMetricsInput,
     AShareGetEtfOptionSnapshotInput,
+    AShareGetFinancialStatementsInput,
+    AShareGetIndustryCycleInput,
     AShareGetLimitUpContextInput,
     AShareGetMarketStructureInput,
     AShareGetSentimentSnapshotInput,
@@ -30,13 +33,16 @@ from application.dto.challenge import (
 )
 from application.dto.error_mapper import to_error_info_from_exception
 from application.dto.monitoring import (
+    MonitorCadenceInput,
     MonitorCreateInput,
     MonitorEvaluateInput,
+    MonitorEventActionInput,
     MonitorEventListInput,
     MonitorEventResolveInput,
     MonitorGetInput,
     MonitorListInput,
     MonitorRuleInput,
+    MonitorStatusInput,
     MonitorUpdateInput,
 )
 from application.dto.portfolio import (
@@ -85,8 +91,10 @@ from application.dto.workflow import (
     USRunMarketReviewInput,
 )
 from bootstrap import ApplicationContainer, build_default_application
+from domain.a_share.enums import FinancialStatementType
 from domain.common.enums import AssetType, Freshness, Market
 from domain.common.ids import EntityIdPrefix
+from domain.monitoring.enums import MonitorCadence
 from interfaces.mcp.chart_artifacts import persist_chart_png
 from interfaces.mcp.schemas import (
     DecisionRecordAppendInput,
@@ -324,7 +332,11 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         topic_tags: list[str] | None = None,
         linked_case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create an Investment Case (user-confirmed write)."""
+        """Create a user-confirmed research file (Investment Case).
+
+        COMPANY and CATALYST files are anchored to an objective Instrument. The Case
+        is the durable research file around it; creating one does not confirm a Thesis.
+        """
         try:
             inp = InvestmentCaseCreateInput.model_validate(
                 {
@@ -365,13 +377,11 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Get one Investment Case by id, or list current Cases with filters."""
+        """Get one research file, or list research files with filters."""
         try:
             if case_id is not None:
                 get_input = InvestmentCaseGetInput.model_validate({"case_id": case_id})
-                return container.investment_case_service.get_case(
-                    get_input.case_id
-                ).model_dump(
+                return container.investment_case_service.get_case(get_input.case_id).model_dump(
                     mode="json"
                 )
             list_input = InvestmentCaseListInput.model_validate(
@@ -407,7 +417,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         reviewed_by: str,
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """Archive an Investment Case (user-confirmed write)."""
+        """Archive a research file without deleting its linked Instrument."""
         try:
             inp = InvestmentCaseArchiveInput.model_validate(
                 {
@@ -435,7 +445,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         include_archived_theses: bool = False,
         include_watchlist: bool = True,
     ) -> dict[str, Any]:
-        """Return a full research-state snapshot for a case."""
+        """Return a research file's current judgments, assumptions, and open questions."""
         try:
             inp = ResearchStateGetInput.model_validate(
                 {
@@ -500,7 +510,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         thesis_id: str | None = None,
         confirmation_mode: str = "strict_review",
     ) -> dict[str, Any]:
-        """Propose a ThesisRevision candidate (PROPOSED only)."""
+        """Propose a revision to an investment judgment in a research file."""
         try:
             inp = ThesisRevisionProposeInput.model_validate(
                 {
@@ -573,7 +583,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
 
     @server.tool(name="thesis_history_get")
     def thesis_history_get(thesis_id: str) -> dict[str, Any]:
-        """Return append-only revision history for a thesis."""
+        """Return append-only history for one investment judgment (Thesis)."""
         try:
             inp = ThesisHistoryGetInput.model_validate({"thesis_id": thesis_id})
             envelope = container.thesis_revision_service.get_revision_history(inp.thesis_id)
@@ -851,7 +861,15 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
     @server.tool(name="a_share_get_facts")
     async def a_share_get_facts(
         operation: Literal[
-            "snapshot", "market_structure", "capital", "limit_up", "sentiment", "etf_option"
+            "snapshot",
+            "market_structure",
+            "capital",
+            "limit_up",
+            "sentiment",
+            "etf_option",
+            "financials",
+            "industry_cycle",
+            "company_operating_metrics",
         ] = "snapshot",
         instrument_id: str | None = None,
         as_of: datetime | None = None,
@@ -875,6 +893,15 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         expiry: date | None = None,
         strike_center: str | None = None,
         strike_count_each_side: int = 5,
+        cycle: Literal["hog"] = "hog",
+        lookback_months: int = 12,
+        document_limit: int = 10,
+        view: Literal["compact", "series"] = "compact",
+        metric_codes: list[str] | None = None,
+        statement_types: list[str] | None = None,
+        periods: int = 8,
+        offset: int = 0,
+        limit: int = 50,
     ) -> dict[str, Any]:
         """Read one A-share fact family selected by a closed operation name."""
         if operation == "snapshot":
@@ -913,9 +940,78 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
             return await a_share_get_etf_option_snapshot(
                 instrument_id or "", expiry, strike_center, strike_count_each_side, as_of
             )
+        if operation == "financials":
+            if instrument_id is None:
+                raise ValueError("instrument_id is required for operation=financials")
+            try:
+                financial_input = AShareGetFinancialStatementsInput.model_validate(
+                    {
+                        "instrument_id": instrument_id,
+                        "statement_types": tuple(statement_types or FinancialStatementType),
+                        "periods": periods,
+                        "metric_codes": tuple(metric_codes or ()),
+                        "as_of": as_of,
+                    }
+                )
+                return (
+                    await container.a_share_tool_coordinator.get_financial_statements(
+                        financial_input
+                    )
+                ).model_dump(mode="json")
+            except ValidationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return _unexpected_failure(container, exc)
+        if operation == "industry_cycle":
+            try:
+                industry_cycle_input = AShareGetIndustryCycleInput.model_validate(
+                    {
+                        "cycle": cycle,
+                        "lookback_months": lookback_months,
+                        "view": view,
+                        "metric_codes": tuple(metric_codes or ()),
+                        "offset": offset,
+                        "limit": limit,
+                        "as_of": as_of,
+                    }
+                )
+                return (
+                    await container.a_share_tool_coordinator.get_industry_cycle(
+                        industry_cycle_input
+                    )
+                ).model_dump(mode="json")
+            except ValidationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return _unexpected_failure(container, exc)
+        if operation == "company_operating_metrics":
+            if instrument_id is None:
+                raise ValueError(
+                    "instrument_id is required for operation=company_operating_metrics"
+                )
+            try:
+                company_metrics_input = AShareGetCompanyOperatingMetricsInput.model_validate(
+                    {
+                        "instrument_id": instrument_id,
+                        "lookback_months": lookback_months,
+                        "document_limit": document_limit,
+                        "metric_codes": tuple(metric_codes or ()),
+                        "as_of": as_of,
+                    }
+                )
+                return (
+                    await container.a_share_tool_coordinator.get_company_operating_metrics(
+                        company_metrics_input
+                    )
+                ).model_dump(mode="json")
+            except ValidationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return _unexpected_failure(container, exc)
         raise ValueError(
             "operation must be snapshot, market_structure, capital, limit_up, "
-            "sentiment, or etf_option"
+            "sentiment, etf_option, financials, industry_cycle, or "
+            "company_operating_metrics"
         )
 
     async def a_share_get_snapshot(
@@ -1287,10 +1383,13 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         operation: Literal["snapshot", "statements"] = "snapshot",
         frequency: str = "quarterly",
         limit: int = 8,
+        view: Literal["latest", "vintages"] = "latest",
     ) -> dict[str, Any]:
         """Return a US fundamental snapshot or normalized statements."""
         if operation == "statements":
-            return await fundamental_get_statements(instrument_id, frequency, as_of, limit)
+            return await fundamental_get_statements(
+                instrument_id, frequency, as_of, limit, view
+            )
         if operation != "snapshot":
             raise ValueError("operation must be snapshot or statements")
         try:
@@ -1309,6 +1408,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         frequency: str = "quarterly",
         as_of: datetime | None = None,
         limit: int = 8,
+        view: str = "latest",
     ) -> dict[str, Any]:
         """Return normalized US income, balance-sheet, and cash-flow periods."""
         try:
@@ -1318,6 +1418,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
                     "frequency": frequency,
                     "as_of": as_of,
                     "limit": limit,
+                    "view": view,
                 }
             )
             envelope = await container.us_research_tool_coordinator.get_fundamental_statements(inp)
@@ -1329,9 +1430,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
 
     @server.tool(name="us_get_company_research")
     async def us_get_company_research(
-        operation: Literal[
-            "filings", "insider_activity", "company_updates", "events"
-        ] = "filings",
+        operation: Literal["filings", "insider_activity", "company_updates", "events"] = "filings",
         instrument_id: str | None = None,
         forms: tuple[str, ...] = (),
         start: date | None = None,
@@ -1722,7 +1821,8 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         idempotency_key: str,
         case_id: str | None = None,
         primary_instrument_id: str | None = None,
-        cadence: str = "ON_DEMAND",
+        cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND,
+        valid_until: datetime | None = None,
     ) -> dict[str, Any]:
         """Create one confirmed, versioned, non-executing monitor."""
         try:
@@ -1733,6 +1833,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
                     "primary_instrument_id": primary_instrument_id,
                     "cadence": cadence,
                     "rules": rules,
+                    "valid_until": valid_until,
                     "confirmed_by": confirmed_by,
                     "idempotency_key": idempotency_key,
                 }
@@ -1744,8 +1845,11 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
             return _unexpected_failure(container, exc)
 
     @server.tool(name="monitor_query")
-    def monitor_query(monitor_id: str | None = None, status: str | None = None) -> dict[str, Any]:
-        """Restore one monitor by id, or list current versions by status."""
+    def monitor_query(
+        monitor_id: str | None = None,
+        status: MonitorStatusInput | None = None,
+    ) -> dict[str, Any]:
+        """Restore one monitor, or filter by ACTIVE/PAUSED/ARCHIVED (case-insensitive)."""
         if monitor_id is None:
             return monitor_list(status)
         try:
@@ -1756,7 +1860,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
-    def monitor_list(status: str | None = None) -> dict[str, Any]:
+    def monitor_list(status: MonitorStatusInput | None = None) -> dict[str, Any]:
         """List current monitor versions, optionally filtered by status."""
         try:
             request = MonitorListInput.model_validate({"status": status})
@@ -1771,13 +1875,14 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         monitor_id: str,
         expected_version: int,
         name: str,
-        cadence: str,
-        status: str,
+        cadence: MonitorCadenceInput,
+        status: MonitorStatusInput,
         rules: tuple[MonitorRuleInput, ...],
         confirmed_by: str,
         idempotency_key: str,
         case_id: str | None = None,
         primary_instrument_id: str | None = None,
+        valid_until: datetime | None = None,
     ) -> dict[str, Any]:
         """Append a confirmed monitor version, including pause/archive changes."""
         try:
@@ -1791,6 +1896,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
                     "cadence": cadence,
                     "status": status,
                     "rules": rules,
+                    "valid_until": valid_until,
                     "confirmed_by": confirmed_by,
                     "idempotency_key": idempotency_key,
                 }
@@ -1804,7 +1910,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
     @server.tool(name="monitor_evaluate")
     async def monitor_evaluate(
         monitor_ids: tuple[str, ...] = (),
-        cadence: str | None = None,
+        cadence: MonitorCadenceInput | None = None,
         as_of: datetime | None = None,
     ) -> dict[str, Any]:
         """Evaluate active monitors and persist only rule-state transitions."""
@@ -1837,7 +1943,7 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
     @server.tool(name="monitor_event_resolve")
     def monitor_event_resolve(
         event_id: str,
-        action: str,
+        action: MonitorEventActionInput,
         note: str,
         confirmed_by: str,
         idempotency_key: str,
@@ -1981,8 +2087,12 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
         case_topic_tags: list[str] | None = None,
         case_creation_confirmed_by: str = "user",
         case_creation_idempotency_key: str | None = None,
+        industry_cycle: Literal["hog"] | None = None,
+        industry_cycle_lookback_months: int = 120,
+        company_operating_lookback_months: int = 36,
+        company_operating_document_limit: int = 20,
     ) -> dict[str, Any]:
-        """Run Deep Research; by default create/reuse a Draft Investment Case."""
+        """Run Deep Research; by default create/reuse a Draft instrument research file."""
         try:
             inp = ResearchRunDeepDiveInput.model_validate(
                 {
@@ -1996,6 +2106,10 @@ def create_mcp_server(container: ApplicationContainer) -> FastMCP:
                     "case_topic_tags": tuple(case_topic_tags or ()),
                     "case_creation_confirmed_by": case_creation_confirmed_by,
                     "case_creation_idempotency_key": case_creation_idempotency_key,
+                    "industry_cycle": industry_cycle,
+                    "industry_cycle_lookback_months": industry_cycle_lookback_months,
+                    "company_operating_lookback_months": company_operating_lookback_months,
+                    "company_operating_document_limit": company_operating_document_limit,
                 }
             )
             return (await container.research_workflow_orchestrator.run_deep_dive(inp)).model_dump(

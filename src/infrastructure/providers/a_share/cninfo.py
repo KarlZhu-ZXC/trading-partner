@@ -6,6 +6,11 @@ Primary owner of announcements via
 E4b interactive QA via live-verified 2026-07-17
 ``irm.cninfo.com.cn/newircs/index/search`` (POST JSON).
 
+Phase 3B company operating metrics: list publication-cutoff-safe announcements,
+download only official ``static.cninfo.com.cn/finalpage/*.PDF`` bodies through
+the shared transport, extract text with pypdf, and parse with a versioned
+generic Chinese text parser. Raw PDF bytes/text never leave this adapter.
+
 Corporate actions are **not** claimed (Eastmoney-owned). The protocol method
 exists only so ``isinstance(..., AShareDisclosureProvider)`` can narrow; it
 raises a typed unsupported contract error.
@@ -16,22 +21,30 @@ Runtime never synthesizes orgId from code.
 
 from __future__ import annotations
 
+import io
 import json
+import re
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpRequest, HttpTransport
+from domain.a_share.enums import CompanyDocumentParseStatus, CompanyDocumentType
 from domain.a_share.models import (
     AnnouncementItem,
+    CompanyOperatingMetricObservation,
+    CompanyOperatingMetricsSnapshot,
     DividendRecord,
+    DocumentParseReceipt,
     InteractiveQAItem,
     UnlockRecord,
 )
 from domain.common.enums import (
+    AssetType,
     CacheDisposition,
     DataCategory,
     Freshness,
@@ -42,11 +55,13 @@ from domain.common.enums import (
 )
 from domain.common.errors import (
     DataContractError,
+    NoMarketData,
     ProviderNotConfigured,
     ProviderRateLimitError,
     ProviderUnavailableError,
 )
 from domain.common.time import require_aware_datetime
+from domain.common.values import parse_instrument_id
 from domain.instruments.models import Instrument
 from domain.market.session import infer_session_basic
 from infrastructure.providers.a_share._parsing import (
@@ -62,12 +77,39 @@ from infrastructure.providers.a_share.cninfo_org_map import (
     load_cninfo_org_map,
     require_org_id,
 )
+from infrastructure.providers.a_share.company_operating_parser import (
+    PARSER_VERSION,
+    classify_document_type,
+    is_relevant_operating_title,
+    parse_company_operating_text,
+)
 from infrastructure.system.clock import SystemClock
 
 _ANNOUNCEMENTS_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 # Live-verified 2026-07-17 IRM interactive Q&A search (POST JSON).
 _IRM_SEARCH_URL = "https://irm.cninfo.com.cn/newircs/index/search"
 _JSON_CONTENT = ("application/json", "text/json", "text/plain")
+_PDF_CONTENT = ("application/pdf", "application/octet-stream", "binary/octet-stream")
+_PDF_MAGIC = b"%PDF"
+_MIN_PDF_BYTES = 100
+_MAX_PDF_BYTES = 20_000_000
+_OFFICIAL_PDF_HOST = "static.cninfo.com.cn"
+_OFFICIAL_PDF_PATH = re.compile(
+    r"^/finalpage/\d{4}-\d{2}-\d{2}/\d+\.pdf$",
+    re.IGNORECASE,
+)
+_MAX_OBSERVATIONS = 200
+_OPERATING_SEARCH_TERMS = (
+    "销售简报",
+    "经营简报",
+    "产销快报",
+    "月度经营",
+    "业绩预告",
+    "季度报告",
+    "半年度报告",
+    "年度报告",
+)
+_SEARCH_HIGHLIGHT_TAG = re.compile(r"</?em>", re.IGNORECASE)
 
 _COLUMN_BY_SUFFIX: Mapping[str, str] = {
     "SH": "sse",
@@ -79,6 +121,7 @@ _SUPPORTED_CATEGORIES = frozenset(
     {
         DataCategory.ANNOUNCEMENTS,
         DataCategory.INTERACTIVE_QA,
+        DataCategory.COMPANY_OPERATING_METRICS,
     }
 )
 
@@ -216,9 +259,7 @@ class CninfoAShareAdapter:
         )
 
     def _resolve_org(self, code6: str, suffix: str) -> tuple[str, str]:
-        org_id = require_org_id(
-            self._org_id_map, code6, vendor=self.vendor_id.value
-        )
+        org_id = require_org_id(self._org_id_map, code6, vendor=self.vendor_id.value)
         column = _COLUMN_BY_SUFFIX.get(suffix)
         if column is None:
             raise DataContractError(
@@ -323,6 +364,9 @@ class CninfoAShareAdapter:
                 announcements = data.get("announcements")
             elif isinstance(data, list):
                 announcements = data
+        if announcements is None and payload.get("totalAnnouncement") == 0:
+            # Live CNINFO search uses null, not [], for a legitimate zero-hit page.
+            announcements = []
         if announcements is None:
             raise DataContractError(
                 "Cninfo announcements payload missing announcements field",
@@ -487,9 +531,7 @@ class CninfoAShareAdapter:
             "pageSize": limit,
             "searchkey": code6,
         }
-        body = json.dumps(body_obj, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
+        body = json.dumps(body_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         response = await self._transport.send(
             HttpRequest(
                 method="POST",
@@ -600,9 +642,7 @@ class CninfoAShareAdapter:
             if answered_at > as_of:
                 continue
             # asked_at optional; unknown allowed.
-            asked_at = self._irm_ms_to_datetime(
-                row.get("pubDate"), field=f"results[{idx}].pubDate"
-            )
+            asked_at = self._irm_ms_to_datetime(row.get("pubDate"), field=f"results[{idx}].pubDate")
             question_raw = row.get("mainContent")
             if not isinstance(question_raw, str) or not question_raw.strip():
                 raise DataContractError(
@@ -684,6 +724,458 @@ class CninfoAShareAdapter:
             )
         # Live-observed epoch milliseconds (integer arithmetic only).
         seconds, millis = divmod(ms, 1000)
-        return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
-            seconds=seconds, milliseconds=millis
+        return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds, milliseconds=millis)
+
+    async def get_company_operating_metrics(
+        self,
+        instrument: Instrument,
+        *,
+        lookback_months: int,
+        document_limit: int,
+        metric_codes: tuple[str, ...],
+        as_of: datetime,
+    ) -> ProviderSuccess[CompanyOperatingMetricsSnapshot]:
+        """Download and parse official disclosure PDFs into operating metrics.
+
+        Lists publication-cutoff-safe announcements, filters relevant titles,
+        downloads only official static.cninfo.com.cn finalpage PDFs, extracts
+        text with pypdf, and returns a bounded snapshot. One bad document is a
+        typed partial warning when another document yields data.
+        """
+        self._require_configured()
+        self._require_as_of(as_of)
+        if (
+            not isinstance(lookback_months, int)
+            or isinstance(lookback_months, bool)
+            or lookback_months < 3
+            or lookback_months > 120
+        ):
+            raise DataContractError(
+                "lookback_months must be an int in 3..120",
+                details={"field": "lookback_months", "rule": "range"},
+            )
+        if (
+            not isinstance(document_limit, int)
+            or isinstance(document_limit, bool)
+            or document_limit < 1
+            or document_limit > 30
+        ):
+            raise DataContractError(
+                "document_limit must be an int in 1..30",
+                details={"field": "document_limit", "rule": "range"},
+            )
+        if not isinstance(metric_codes, tuple) or any(
+            not isinstance(code, str) for code in metric_codes
+        ):
+            raise DataContractError(
+                "metric_codes must be a tuple of strings",
+                details={"field": "metric_codes", "rule": "type"},
+            )
+        asset_type, market, _symbol = parse_instrument_id(instrument.instrument_id)
+        if market is not Market.A_SHARE or asset_type is not AssetType.EQUITY:
+            raise DataContractError(
+                "company operating metrics require equity A-share instrument",
+                details={"field": "instrument_id", "rule": "equity_a_share"},
+            )
+
+        period_floor = self._lookback_floor(as_of=as_of, lookback_months=lookback_months)
+        candidates, search_warnings = await self._search_operating_announcements(
+            instrument,
+            period_floor=period_floor,
+            document_limit=document_limit,
+            as_of=as_of,
         )
+
+        documents: list[DocumentParseReceipt] = []
+        observations: list[CompanyOperatingMetricObservation] = []
+        partial = False
+        had_sales_brief = False
+        for announcement in candidates:
+            receipt, metrics = await self._parse_operating_document(
+                announcement,
+                instrument_id=instrument.instrument_id,
+            )
+            documents.append(receipt)
+            if receipt.status is CompanyDocumentParseStatus.PARSED:
+                observations.extend(metrics)
+                if receipt.document_type is CompanyDocumentType.MONTHLY_OPERATING_BRIEF:
+                    had_sales_brief = True
+            elif receipt.status is not CompanyDocumentParseStatus.NO_METRICS:
+                partial = True
+
+        if metric_codes:
+            allowed = frozenset(metric_codes)
+            filtered = [
+                item
+                for item in observations
+                if item.period_end >= period_floor and item.metric_code in allowed
+            ]
+        else:
+            filtered = [item for item in observations if item.period_end >= period_floor]
+
+        # Deduplicate across documents: prefer newest published_at, then key.
+        deduped = self._dedupe_observations(filtered)
+        truncated = False
+        if len(deduped) > _MAX_OBSERVATIONS:
+            deduped = deduped[:_MAX_OBSERVATIONS]
+            truncated = True
+        ordered = tuple(
+            sorted(
+                deduped,
+                key=lambda item: (
+                    -item.period_end.toordinal(),
+                    item.metric_code,
+                    item.measurement_basis.value,
+                ),
+            )
+        )
+        present = {item.metric_code for item in ordered}
+        missing = tuple(code for code in metric_codes if code not in present)
+        if not ordered:
+            raise NoMarketData(
+                "no company operating metrics parsed from official disclosures",
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": "company_operating_metrics",
+                    "documents_considered": len(candidates),
+                },
+            )
+
+        warnings: list[str] = []
+        warnings.extend(search_warnings)
+        if partial:
+            warnings.append("COMPANY_OPERATING_DOCUMENT_PARTIAL")
+        if truncated:
+            warnings.append("COMPANY_OPERATING_OBSERVATIONS_TRUNCATED")
+        if had_sales_brief:
+            warnings.append("COMPANY_OPERATING_UNAUDITED_SALES_BRIEF")
+        # Preserve order while unique.
+        unique_warnings = tuple(dict.fromkeys(warnings))
+
+        fetched_at = self._clock.now()
+        require_aware_datetime(fetched_at, field_name="fetched_at")
+        snapshot = CompanyOperatingMetricsSnapshot(
+            instrument_id=instrument.instrument_id,
+            as_of=as_of,
+            lookback_months=lookback_months,
+            observations=ordered,
+            documents=tuple(documents),
+            missing_metric_codes=missing,
+        )
+        return ProviderSuccess(
+            value=snapshot,
+            meta=self._meta(
+                as_of=as_of,
+                fetched_at=fetched_at,
+                warnings=unique_warnings,
+                category=DataCategory.COMPANY_OPERATING_METRICS,
+            ),
+        )
+
+    async def _search_operating_announcements(
+        self,
+        instrument: Instrument,
+        *,
+        period_floor: date,
+        document_limit: int,
+        as_of: datetime,
+    ) -> tuple[tuple[AnnouncementItem, ...], tuple[str, ...]]:
+        """Search bounded title families instead of scanning the latest generic page."""
+        code6, suffix = require_a_share_instrument(instrument)
+        org_id, column = self._resolve_org(code6, suffix)
+        now = self._require_as_of(as_of)
+        by_key: dict[str, AnnouncementItem] = {}
+        failures = 0
+        unknown_excluded = False
+        date_window = f"{period_floor.isoformat()}~{as_of.date().isoformat()}"
+        for term in _OPERATING_SEARCH_TERMS:
+            form = {
+                "stock": f"{code6},{org_id}",
+                "tabName": "fulltext",
+                "pageSize": "30",
+                "pageNum": "1",
+                "column": column,
+                "category": "",
+                "plate": "",
+                "seDate": date_window,
+                "searchkey": term,
+                "secid": "",
+                "sortName": "",
+                "sortType": "",
+                "isHLtitle": "true",
+            }
+            try:
+                response = await self._transport.send(
+                    HttpRequest(
+                        method="POST",
+                        url=_ANNOUNCEMENTS_URL,
+                        params={},
+                        headers={
+                            "Accept": "application/json,text/plain,*/*",
+                            "Content-Type": ("application/x-www-form-urlencoded; charset=UTF-8"),
+                            "User-Agent": self._user_agent,
+                            "Referer": "http://www.cninfo.com.cn/",
+                        },
+                        body=urlencode(form).encode("utf-8"),
+                        timeout_seconds=self._timeout_seconds,
+                    )
+                )
+                self._raise_for_http_status(
+                    response.status_code,
+                    operation="company_operating_announcements",
+                )
+                if not content_type_matches(response.headers, allowed_substrings=_JSON_CONTENT):
+                    raise DataContractError(
+                        "Cninfo operating-announcement Content-Type is not acceptable"
+                    )
+                payload = loads_json_decimal(response.body)
+                items, excluded = self._parse_announcements(
+                    payload,
+                    limit=30,
+                    as_of=as_of,
+                    now=now,
+                )
+                unknown_excluded = unknown_excluded or excluded
+            except (
+                ProviderRateLimitError,
+                ProviderUnavailableError,
+                DataContractError,
+            ):
+                failures += 1
+                continue
+            for item in items:
+                clean_title = _SEARCH_HIGHLIGHT_TAG.sub("", item.title)
+                clean = replace(item, title=clean_title)
+                if (
+                    clean.published_at.date() >= period_floor
+                    and clean.pdf_url is not None
+                    and is_relevant_operating_title(clean.title)
+                ):
+                    by_key[clean.announcement_key] = clean
+
+        if not by_key:
+            if failures == len(_OPERATING_SEARCH_TERMS):
+                raise ProviderUnavailableError(
+                    "all Cninfo operating-announcement searches failed",
+                    details={
+                        "vendor": self.vendor_id.value,
+                        "operation": "company_operating_announcements",
+                    },
+                )
+            return (), ()
+        ordered = tuple(
+            sorted(
+                by_key.values(),
+                key=lambda item: (item.published_at, item.announcement_key),
+                reverse=True,
+            )[:document_limit]
+        )
+        warnings: list[str] = []
+        if failures:
+            warnings.append("COMPANY_OPERATING_ANNOUNCEMENT_SEARCH_PARTIAL")
+        if unknown_excluded:
+            warnings.append("PUBLICATION_TIME_UNKNOWN_EXCLUDED")
+        return ordered, tuple(warnings)
+
+    async def _parse_operating_document(
+        self,
+        announcement: AnnouncementItem,
+        *,
+        instrument_id: str,
+    ) -> tuple[DocumentParseReceipt, tuple[CompanyOperatingMetricObservation, ...]]:
+        doc_type = classify_document_type(announcement.title)
+        pdf_url = announcement.pdf_url
+
+        def receipt(
+            status: CompanyDocumentParseStatus,
+            warning_code: str | None,
+            *,
+            page_count: int | None = None,
+            extracted_metric_count: int = 0,
+        ) -> DocumentParseReceipt:
+            return DocumentParseReceipt(
+                announcement_key=announcement.announcement_key,
+                title=announcement.title,
+                document_type=doc_type,
+                published_at=announcement.published_at,
+                source_url=announcement.source_url,
+                pdf_url=pdf_url,
+                parser_version=PARSER_VERSION,
+                page_count=page_count,
+                status=status,
+                extracted_metric_count=extracted_metric_count,
+                warning_code=warning_code,
+            )
+
+        if pdf_url is None or not self._is_official_finalpage_pdf(pdf_url):
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.UNSUPPORTED_URL,
+                    "COMPANY_OPERATING_UNSUPPORTED_PDF_URL",
+                ),
+                (),
+            )
+        try:
+            body, content_type = await self._download_pdf(pdf_url)
+        except (
+            ProviderRateLimitError,
+            ProviderUnavailableError,
+            DataContractError,
+            ProviderNotConfigured,
+        ):
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.DOWNLOAD_FAILED,
+                    "COMPANY_OPERATING_PDF_DOWNLOAD_FAILED",
+                ),
+                (),
+            )
+        if not self._validate_pdf_body(body, content_type=content_type):
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.INVALID_PDF,
+                    "COMPANY_OPERATING_INVALID_PDF",
+                ),
+                (),
+            )
+        try:
+            text, page_count = self._extract_pdf_text(body)
+        except Exception:
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.PARSE_FAILED,
+                    "COMPANY_OPERATING_PDF_TEXT_FAILED",
+                ),
+                (),
+            )
+        try:
+            metrics = parse_company_operating_text(
+                text,
+                instrument_id=instrument_id,
+                title=announcement.title,
+                published_at=announcement.published_at,
+                source_url=announcement.source_url,
+                pdf_url=pdf_url,
+                announcement_key=announcement.announcement_key,
+            )
+        except DataContractError:
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.PARSE_FAILED,
+                    "COMPANY_OPERATING_PARSE_FAILED",
+                    page_count=page_count,
+                ),
+                (),
+            )
+        if not metrics:
+            return (
+                receipt(
+                    CompanyDocumentParseStatus.NO_METRICS,
+                    "COMPANY_OPERATING_NO_METRICS",
+                    page_count=page_count,
+                ),
+                (),
+            )
+        return (
+            receipt(
+                CompanyDocumentParseStatus.PARSED,
+                None,
+                page_count=page_count,
+                extracted_metric_count=len(metrics),
+            ),
+            metrics,
+        )
+
+    async def _download_pdf(self, pdf_url: str) -> tuple[bytes, str | None]:
+        # Prefer https official static host; accept already-validated absolute URL.
+        url = pdf_url
+        parts = urlsplit(url)
+        if parts.scheme == "http":
+            url = f"https://{parts.netloc}{parts.path}"
+        response = await self._transport.send(
+            HttpRequest(
+                method="GET",
+                url=url,
+                params={},
+                headers={
+                    "Accept": "application/pdf,*/*",
+                    "User-Agent": self._user_agent,
+                    "Referer": "http://www.cninfo.com.cn/",
+                },
+                body=None,
+                timeout_seconds=self._timeout_seconds,
+            )
+        )
+        self._raise_for_http_status(response.status_code, operation="company_operating_pdf")
+        content_type = None
+        if isinstance(response.headers, Mapping):
+            raw_ct = response.headers.get("content-type") or response.headers.get("Content-Type")
+            if isinstance(raw_ct, str):
+                content_type = raw_ct
+        return response.body, content_type
+
+    @staticmethod
+    def _is_official_finalpage_pdf(url: str) -> bool:
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return False
+        host = (parts.hostname or "").lower()
+        if host != _OFFICIAL_PDF_HOST:
+            return False
+        if parts.scheme not in {"http", "https"}:
+            return False
+        return _OFFICIAL_PDF_PATH.fullmatch(parts.path or "") is not None
+
+    @staticmethod
+    def _validate_pdf_body(body: bytes, *, content_type: str | None) -> bool:
+        if not isinstance(body, (bytes, bytearray)):
+            return False
+        if len(body) < _MIN_PDF_BYTES or len(body) > _MAX_PDF_BYTES:
+            return False
+        if not bytes(body[:4]).startswith(_PDF_MAGIC):
+            return False
+        if content_type is not None and content_type.strip():
+            lower = content_type.casefold()
+            if not any(token in lower for token in _PDF_CONTENT) and any(
+                token in lower for token in ("html", "json", "text/plain")
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _extract_pdf_text(body: bytes) -> tuple[str, int]:
+        # Import locally so unit tests that only exercise announcement listing
+        # do not require pypdf at import time of unrelated paths.
+        from pypdf import PdfReader  # noqa: PLC0415
+
+        reader = PdfReader(io.BytesIO(body), strict=False)
+        pages = list(reader.pages)
+        chunks: list[str] = []
+        for page in pages:
+            extracted = page.extract_text() or ""
+            if extracted:
+                chunks.append(extracted)
+        return "\n".join(chunks), len(pages)
+
+    @staticmethod
+    def _lookback_floor(*, as_of: datetime, lookback_months: int) -> date:
+        # Inclusive month window ending at as_of's calendar month.
+        year = as_of.year
+        month = as_of.month - (lookback_months - 1)
+        while month <= 0:
+            month += 12
+            year -= 1
+        return date(year, month, 1)
+
+    @staticmethod
+    def _dedupe_observations(
+        items: list[CompanyOperatingMetricObservation],
+    ) -> list[CompanyOperatingMetricObservation]:
+        best: dict[tuple[str, date, str], CompanyOperatingMetricObservation] = {}
+        for item in items:
+            key = (item.metric_code, item.period_end, item.measurement_basis.value)
+            existing = best.get(key)
+            if existing is None or item.published_at > existing.published_at:
+                best[key] = item
+        return list(best.values())

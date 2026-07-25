@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from application.dto.market import DecimalWire
 from domain.common.time import require_aware_datetime
@@ -35,13 +42,32 @@ class _DTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
 
 
+def _normalize_enum_wire_value(value: object) -> object:
+    """Accept conversational enum casing while preserving canonical wire values."""
+    if isinstance(value, str):
+        return value.strip().upper()
+    return value
+
+
+MonitorStatusInput = Annotated[MonitorStatus, BeforeValidator(_normalize_enum_wire_value)]
+MonitorCadenceInput = Annotated[MonitorCadence, BeforeValidator(_normalize_enum_wire_value)]
+MonitorRuleTypeInput = Annotated[MonitorRuleType, BeforeValidator(_normalize_enum_wire_value)]
+MonitorSeverityInput = Annotated[MonitorSeverity, BeforeValidator(_normalize_enum_wire_value)]
+MonitorEventActionInput = Annotated[
+    MonitorEventAction, BeforeValidator(_normalize_enum_wire_value)
+]
+RiskOverallStatusInput = Annotated[
+    RiskOverallStatus, BeforeValidator(_normalize_enum_wire_value)
+]
+
+
 class MonitorRuleInput(_DTO):
     rule_code: str = Field(min_length=1, max_length=64)
-    rule_type: MonitorRuleType
-    severity: MonitorSeverity = MonitorSeverity.MEDIUM
+    rule_type: MonitorRuleTypeInput
+    severity: MonitorSeverityInput = MonitorSeverity.MEDIUM
     instrument_id: str | None = None
     price_threshold: Decimal | None = Field(default=None, gt=0)
-    risk_status_threshold: RiskOverallStatus | None = None
+    risk_status_threshold: RiskOverallStatusInput | None = None
     max_fact_age_seconds: int = Field(default=3600, gt=0)
 
     @model_validator(mode="after")
@@ -65,10 +91,18 @@ class MonitorCreateInput(_DTO):
     name: str = Field(min_length=1, max_length=200)
     case_id: str | None = None
     primary_instrument_id: str | None = None
-    cadence: MonitorCadence = MonitorCadence.ON_DEMAND
+    cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND
     rules: tuple[MonitorRuleInput, ...] = Field(min_length=1, max_length=50)
+    valid_until: datetime | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
+
+    @field_validator("valid_until")
+    @classmethod
+    def validate_valid_until(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value, field_name="valid_until")
+        return value
 
 
 class MonitorUpdateInput(_DTO):
@@ -77,11 +111,19 @@ class MonitorUpdateInput(_DTO):
     name: str = Field(min_length=1, max_length=200)
     case_id: str | None = None
     primary_instrument_id: str | None = None
-    cadence: MonitorCadence
-    status: MonitorStatus
+    cadence: MonitorCadenceInput
+    status: MonitorStatusInput
     rules: tuple[MonitorRuleInput, ...] = Field(min_length=1, max_length=50)
+    valid_until: datetime | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
+
+    @field_validator("valid_until")
+    @classmethod
+    def validate_valid_until(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value, field_name="valid_until")
+        return value
 
 
 class MonitorGetInput(_DTO):
@@ -89,12 +131,12 @@ class MonitorGetInput(_DTO):
 
 
 class MonitorListInput(_DTO):
-    status: MonitorStatus | None = None
+    status: MonitorStatusInput | None = None
 
 
 class MonitorEvaluateInput(_DTO):
     monitor_ids: tuple[str, ...] = ()
-    cadence: MonitorCadence | None = None
+    cadence: MonitorCadenceInput | None = None
     as_of: datetime | None = None
 
     @model_validator(mode="after")
@@ -115,7 +157,7 @@ class MonitorEventListInput(_DTO):
 
 class MonitorEventResolveInput(_DTO):
     event_id: str
-    action: MonitorEventAction
+    action: MonitorEventActionInput
     note: str = Field(min_length=1, max_length=2000)
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -140,6 +182,7 @@ class MonitorDefinitionDTO(_DTO):
     cadence: MonitorCadence
     status: MonitorStatus
     rules: tuple[MonitorRuleDTO, ...]
+    valid_until: datetime | None
     confirmed_by: str
     idempotency_key: str
     created_at: datetime

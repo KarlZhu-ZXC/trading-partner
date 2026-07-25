@@ -59,6 +59,10 @@ _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 # Latest daily bar more than this many natural days behind expected end/as_of → stale.
 _MAX_DAILY_STALE_NATURAL_DAYS = 4
 _SESSION_CLOSE = time(16, 0)
+_CURRENT_QUOTE_CUTOFF_SECONDS = 300
+_EXTENDED_HOURS_PRICE_WARNING = "EXTENDED_HOURS_PRICE"
+_INTRADAY_QUOTE_RECOVERY_WARNING = "INTRADAY_QUOTE_RECOVERY"
+_INTRADAY_QUOTE_UNAVAILABLE_WARNING = "INTRADAY_QUOTE_UNAVAILABLE"
 
 _INTERVAL_WIRE: Mapping[USBarInterval, str] = {
     USBarInterval.ONE_MINUTE: "1m",
@@ -490,6 +494,7 @@ class YahooFinanceAdapter:
         session: TradingSession,
         data_timestamp: datetime | None,
         adjustment: AdjustmentMethod | None,
+        additional_warnings: tuple[str, ...] = (),
     ) -> ProviderResultMeta:
         if data_timestamp is not None:
             data_delay = max(0, int((fetched_at - data_timestamp).total_seconds()))
@@ -508,7 +513,18 @@ class YahooFinanceAdapter:
         else:
             data_delay = None
             freshness = Freshness.UNKNOWN
-        warnings = _FUTURES_WARNING_CODES if instrument_asset_type is AssetType.FUTURE else ()
+        warnings = tuple(
+            dict.fromkeys(
+                (
+                    *(
+                        _FUTURES_WARNING_CODES
+                        if instrument_asset_type is AssetType.FUTURE
+                        else ()
+                    ),
+                    *additional_warnings,
+                )
+            )
+        )
         return ProviderResultMeta(
             vendor=self.vendor_id,
             category=category,
@@ -713,11 +729,82 @@ class YahooFinanceAdapter:
                 },
             )
 
+    @staticmethod
+    def _previous_session_close(
+        bars: Sequence[MarketBar],
+        *,
+        quote_at: datetime,
+        quote_session: TradingSession,
+        asset_type: AssetType,
+    ) -> Decimal | None:
+        """Return the regular-session baseline for the selected quote.
+
+        Yahoo ``chartPreviousClose`` is the baseline immediately before the
+        requested chart window, not necessarily the previous trading session.
+        Its meaning therefore changes with ``period1`` and must never populate
+        the quote-level ``previous_close`` field. A post-market equity quote uses
+        that day's completed regular close; other sessions use an earlier date.
+        """
+        quote_day = quote_at.astimezone(_NY).date()
+        same_day_close_allowed = (
+            asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
+            and quote_session is TradingSession.POST_MARKET
+        )
+        for bar in reversed(bars):
+            bar_day = bar.timestamp.astimezone(_NY).date()
+            if bar_day < quote_day or (
+                same_day_close_allowed
+                and bar_day == quote_day
+                and bar.timestamp <= quote_at
+            ):
+                return bar.close
+        return None
+
+    async def _latest_intraday_quote_bar(
+        self,
+        symbol: str,
+        *,
+        as_of: datetime,
+    ) -> tuple[MarketBar, datetime, Mapping[str, object]]:
+        """Return the latest minute bar at/before cutoff, including extended hours."""
+        payload, fetched_at = await self._fetch_chart(
+            symbol,
+            params={
+                "period1": str(int((as_of - timedelta(days=2)).timestamp())),
+                "period2": str(int(as_of.timestamp()) + 1),
+                "interval": "1m",
+                "includePrePost": "true",
+                "events": "div|split",
+            },
+            operation="quote_intraday",
+        )
+        result = self._chart_result(payload, operation="quote_intraday")
+        meta = result.get("meta")
+        if not isinstance(meta, dict):
+            raise _contract(
+                "Yahoo Finance intraday chart metadata failed contract validation",
+                operation="quote_intraday",
+                rule="contract_drift",
+            )
+        bars = self._parse_ohlcv_arrays(
+            result,
+            operation="quote_intraday",
+            interval=USBarInterval.ONE_MINUTE,
+            adjustment=AdjustmentMethod.NONE,
+            as_of=as_of,
+        )
+        if not bars:
+            raise NoMarketData(
+                "Yahoo Finance returned no intraday quote bars",
+                details={"vendor": self.vendor_id.value, "operation": "quote_intraday"},
+            )
+        return bars[-1], fetched_at, meta
+
     async def get_quote(
         self, instrument: Instrument, as_of: datetime
     ) -> ProviderSuccess[USQuote]:
         self._require_configured()
-        self._require_as_of(as_of)
+        now = self._require_as_of(as_of)
         symbol = self._require_us_instrument(instrument)
 
         # Window ends exclusive of the calendar day after as_of (NY), inclusive wire.
@@ -765,20 +852,13 @@ class YahooFinanceAdapter:
         low: Decimal | None = None
         # Chart meta is a current snapshot even for a historical period query.
         # It is only legal when its own timestamp is at/before the requested
-        # cutoff; otherwise using previous-close/52-week fields leaks future
-        # information into a historical response.
-        previous_close: Decimal | None = None
+        # cutoff; otherwise using volume/52-week fields leaks future information
+        # into a historical response.
         volume: Decimal | None = None
         week_low: Decimal | None = None
         week_high: Decimal | None = None
 
         if quote_at is not None:
-            previous_close = _optional_decimal(
-                meta_raw.get("chartPreviousClose")
-                if meta_raw.get("chartPreviousClose") is not None
-                else meta_raw.get("previousClose"),
-                field="previous_close",
-            )
             volume = _optional_decimal(
                 meta_raw.get("regularMarketVolume"), field="volume"
             )
@@ -808,6 +888,8 @@ class YahooFinanceAdapter:
                 field="low",
             )
 
+        quote_session = TradingSession.REGULAR
+
         if last is None and bars:
             bar = bars[-1]
             quote_at = bar.timestamp
@@ -829,12 +911,50 @@ class YahooFinanceAdapter:
                 rule="as_of_cutoff",
             )
 
-        session = self._session_from_meta(meta_raw, quote_at)
-        meta_session = self._session_from_meta(meta_raw, fetched_at)
+        meta_session = self._session_from_meta(meta_raw, as_of)
+        additional_warnings: list[str] = []
+        current_cutoff = 0 <= (now - as_of).total_seconds() <= _CURRENT_QUOTE_CUTOFF_SECONDS
+        regular_age = (as_of - quote_at).total_seconds()
+        if (
+            current_cutoff
+            and meta_session is not TradingSession.CLOSED
+            and regular_age > self._max_delayed_seconds
+        ):
+            try:
+                intraday_bar, intraday_fetched_at, intraday_meta = (
+                    await self._latest_intraday_quote_bar(symbol, as_of=as_of)
+                )
+            except (
+                DataContractError,
+                NoMarketData,
+                ProviderRateLimitError,
+                ProviderUnavailableError,
+            ):
+                additional_warnings.append(_INTRADAY_QUOTE_UNAVAILABLE_WARNING)
+            else:
+                if intraday_bar.timestamp > quote_at:
+                    quote_at = intraday_bar.timestamp
+                    last = intraday_bar.close
+                    fetched_at = intraday_fetched_at
+                    quote_session = self._session_from_meta(intraday_meta, quote_at)
+                    meta_session = quote_session
+                    additional_warnings.append(
+                        _EXTENDED_HOURS_PRICE_WARNING
+                        if quote_session
+                        in {TradingSession.PRE_MARKET, TradingSession.POST_MARKET}
+                        else _INTRADAY_QUOTE_RECOVERY_WARNING
+                    )
+
+        previous_close = self._previous_session_close(
+            bars,
+            quote_at=quote_at,
+            quote_session=quote_session,
+            asset_type=instrument.asset_type,
+        )
         quote = USQuote(
             instrument_id=instrument.instrument_id,
             quote_at=quote_at,
-            session=session,
+            session=quote_session,
             last=last,
             open=open_,
             high=high,
@@ -857,6 +977,7 @@ class YahooFinanceAdapter:
                 session=meta_session,
                 data_timestamp=quote_at,
                 adjustment=None,
+                additional_warnings=tuple(additional_warnings),
             ),
         )
 

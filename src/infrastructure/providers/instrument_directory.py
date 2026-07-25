@@ -22,6 +22,7 @@ from domain.common.enums import (
 )
 from domain.common.errors import (
     DataContractError,
+    InvalidInstrument,
     NoMarketData,
     ProviderAuthenticationError,
     ProviderNotConfigured,
@@ -40,7 +41,9 @@ from infrastructure.providers.us.alpha_vantage_key_pool import (
 _YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 _ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 _TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q"
+_TENCENT_HINT_URL = "https://smartbox.gtimg.cn/s3/"
 _TENCENT_LINE_RE = re.compile(r'^v_(?P<symbol>[a-z]{2}\d{6})="(?P<body>.*)";?\s*$', re.M)
+_TENCENT_HINT_RE = re.compile(r'^v_hint="(?P<body>(?:\\.|[^"])*)";?\s*$', re.S)
 
 
 def _loads(body: bytes, *, vendor: VendorId) -> Mapping[str, object]:
@@ -401,7 +404,26 @@ class TencentInstrumentDirectoryAdapter:
         if not self.is_configured():
             raise ProviderNotConfigured("Tencent instrument directory is disabled")
         require_aware_datetime(as_of, field_name="as_of")
-        normalized = normalize_symbol_input(Market.A_SHARE, query, asset_type_hint=asset_type_hint)
+        try:
+            normalized = normalize_symbol_input(
+                Market.A_SHARE, query, asset_type_hint=asset_type_hint
+            )
+        except InvalidInstrument:
+            if not _is_name_like_a_share_query(query):
+                raise
+            candidates = await self._lookup_name_candidates(
+                query=query,
+                asset_type_hint=asset_type_hint,
+            )
+            if not candidates:
+                raise NoMarketData(
+                    "Tencent instrument search returned no exact A-share name"
+                ) from None
+            fetched_at = self._clock.now()
+            return ProviderSuccess(
+                value=candidates,
+                meta=_meta(self.vendor_id, as_of=as_of, fetched_at=fetched_at),
+            )
         if normalized.local_code is None:
             raise NoMarketData("A-share query does not identify one exchange")
         exchange = normalized.exchange_hint
@@ -409,38 +431,113 @@ class TencentInstrumentDirectoryAdapter:
             exchange = {"5": "SSE", "1": "SZSE"}.get(normalized.local_code[0])
         if exchange is None:
             raise NoMarketData("A-share query does not identify one exchange")
-        prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[exchange]
+        instrument = await self._fetch_validated_instrument(
+            code=normalized.local_code,
+            exchange=exchange,
+            asset_type_hint=asset_type_hint,
+        )
+        fetched_at = self._clock.now()
+        return ProviderSuccess(
+            value=(instrument,),
+            meta=_meta(self.vendor_id, as_of=as_of, fetched_at=fetched_at),
+        )
+
+    async def _lookup_name_candidates(
+        self,
+        *,
+        query: str,
+        asset_type_hint: AssetType | None,
+    ) -> tuple[Instrument, ...]:
         response = await self._transport.send(
             HttpRequest(
                 method="GET",
-                url=_TENCENT_QUOTE_URL,
-                params={"q": f"{prefix}{normalized.local_code}"},
+                url=_TENCENT_HINT_URL,
+                params={"q": query.strip(), "t": "all"},
                 headers={"Accept": "text/plain,*/*", "User-Agent": "TradingPartner/1.0"},
                 body=None,
                 timeout_seconds=self._timeout,
             )
         )
         _raise_http(response.status_code, vendor=self.vendor_id)
+        text = _decode_tencent_text(response.body)
+        match = _TENCENT_HINT_RE.fullmatch(text.strip())
+        if match is None:
+            raise NoMarketData("Tencent instrument search returned no A-share hints")
         try:
-            text = response.body.decode("gbk")
-        except UnicodeDecodeError:
-            text = response.body.decode("utf-8", errors="strict")
+            decoded = json.loads(f'"{match.group("body")}"')
+        except (TypeError, ValueError):
+            raise DataContractError(
+                "Tencent instrument search returned an invalid escaped payload",
+                details={"vendor": self.vendor_id.value, "operation": "instrument_lookup"},
+            ) from None
+        if not isinstance(decoded, str):
+            raise DataContractError(
+                "Tencent instrument search returned an invalid hint payload",
+                details={"vendor": self.vendor_id.value, "operation": "instrument_lookup"},
+            )
+        expected_name = query.strip().casefold()
+        hinted: dict[tuple[str, str], None] = {}
+        for item in decoded.split("^"):
+            fields = item.split("~")
+            if len(fields) < 3:
+                continue
+            prefix, code, name = fields[0].lower(), fields[1], fields[2].strip()
+            exchange = {"sh": "SSE", "sz": "SZSE", "bj": "BSE"}.get(prefix)
+            if (
+                exchange is None
+                or re.fullmatch(r"\d{6}", code) is None
+                or name.casefold() != expected_name
+            ):
+                continue
+            hinted[(exchange, code)] = None
+        validated: list[Instrument] = []
+        for exchange, code in hinted:
+            instrument = await self._fetch_validated_instrument(
+                code=code,
+                exchange=exchange,
+                asset_type_hint=asset_type_hint,
+            )
+            if instrument.name.casefold() == expected_name:
+                validated.append(instrument)
+        return tuple(sorted(validated, key=lambda item: item.instrument_id))
+
+    async def _fetch_validated_instrument(
+        self,
+        *,
+        code: str,
+        exchange: str,
+        asset_type_hint: AssetType | None,
+    ) -> Instrument:
+        prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[exchange]
+        response = await self._transport.send(
+            HttpRequest(
+                method="GET",
+                url=_TENCENT_QUOTE_URL,
+                params={"q": f"{prefix}{code}"},
+                headers={"Accept": "text/plain,*/*", "User-Agent": "TradingPartner/1.0"},
+                body=None,
+                timeout_seconds=self._timeout,
+            )
+        )
+        _raise_http(response.status_code, vendor=self.vendor_id)
+        text = _decode_tencent_text(response.body)
         match = _TENCENT_LINE_RE.search(text)
         if match is None:
             raise NoMarketData("Tencent returned no A-share instrument")
         fields = match.group("body").split("~")
-        if len(fields) < 3 or fields[2] != normalized.local_code or not fields[1].strip():
+        if len(fields) < 3 or fields[2] != code or not fields[1].strip():
             raise NoMarketData("Tencent did not validate the requested A-share instrument")
-        code = normalized.local_code
         inferred = (
             AssetType.ETF
             if code[:2] in {"15", "16", "18", "51", "56", "58"}
             else AssetType.EQUITY
         )
+        if asset_type_hint is not None and asset_type_hint is not inferred:
+            raise NoMarketData("Tencent instrument type does not match asset_type_hint")
         asset_type = asset_type_hint or inferred
         suffix = {"SSE": ".SH", "SZSE": ".SZ", "BSE": ".BJ"}[exchange]
         symbol = f"{code}{suffix}"
-        instrument = Instrument(
+        return Instrument(
             instrument_id=build_instrument_id(asset_type, Market.A_SHARE, symbol),
             symbol=symbol,
             name=fields[1].strip(),
@@ -451,8 +548,14 @@ class TencentInstrumentDirectoryAdapter:
             asset_type=asset_type,
             country="CN",
         )
-        fetched_at = self._clock.now()
-        return ProviderSuccess(
-            value=(instrument,),
-            meta=_meta(self.vendor_id, as_of=as_of, fetched_at=fetched_at),
-        )
+
+
+def _decode_tencent_text(body: bytes) -> str:
+    try:
+        return body.decode("gbk")
+    except UnicodeDecodeError:
+        return body.decode("utf-8", errors="strict")
+
+
+def _is_name_like_a_share_query(query: object) -> bool:
+    return isinstance(query, str) and bool(query.strip()) and ":" not in query

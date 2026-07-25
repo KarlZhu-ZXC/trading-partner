@@ -29,6 +29,7 @@ from domain.a_share.models import (
     AShareQuote,
     BlockTradeRecord,
     ChipDistributionSnapshot,
+    CompanyOperatingMetricsSnapshot,
     ConsensusEstimate,
     DividendRecord,
     DragonTigerRecord,
@@ -37,6 +38,7 @@ from domain.a_share.models import (
     FinancialStatementLine,
     FundamentalMetric,
     FundFlowPoint,
+    IndustryCycleSnapshot,
     IndustryPerformanceRow,
     InteractiveQAItem,
     LimitUpContext,
@@ -59,6 +61,26 @@ class AShareQuoteProvider(CategoryProvider, Protocol):
     async def get_quote(
         self, instrument: Instrument, as_of: datetime
     ) -> ProviderSuccess[AShareQuote]: ...
+
+
+@runtime_checkable
+class AShareIndustryCycleProvider(CategoryProvider, Protocol):
+    async def get_hog_cycle(
+        self, *, lookback_months: int, as_of: datetime
+    ) -> ProviderSuccess[IndustryCycleSnapshot]: ...
+
+
+@runtime_checkable
+class AShareCompanyOperatingMetricsProvider(CategoryProvider, Protocol):
+    async def get_company_operating_metrics(
+        self,
+        instrument: Instrument,
+        *,
+        lookback_months: int,
+        document_limit: int,
+        metric_codes: tuple[str, ...],
+        as_of: datetime,
+    ) -> ProviderSuccess[CompanyOperatingMetricsSnapshot]: ...
 
 
 @runtime_checkable

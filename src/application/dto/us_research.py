@@ -14,6 +14,10 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from application.dto.financial_quality import (
+    FinancialQualityMetricDTO,
+    derive_financial_quality_metrics,
+)
 from application.dto.market import DecimalWire
 from application.dto.us_context import USNewsArticleDTO
 from domain.common.enums import AssetType, Market
@@ -27,6 +31,7 @@ from domain.us_research.enums import (
     USInsiderAcquiredDisposed,
     USStatementFrequency,
     USStatementType,
+    USStatementView,
 )
 from domain.us_research.models import (
     USCompanyProfile,
@@ -111,6 +116,7 @@ class FundamentalGetStatementsInput(_FrozenForbid):
     frequency: USStatementFrequency = USStatementFrequency.QUARTERLY
     as_of: datetime | None = None
     limit: int = Field(default=8, ge=1, le=8)
+    view: USStatementView = USStatementView.LATEST
 
     @field_validator("instrument_id")
     @classmethod
@@ -368,6 +374,10 @@ class USStatementPeriodDTO(_FrozenForbid):
     filed_at: datetime | None
     currency: str | None
     line_items: tuple[tuple[str, DecimalWire | None], ...]
+    period_start: date | None
+    accession: str | None
+    filing_form: str | None
+    is_amendment: bool
 
     @classmethod
     def from_domain(cls, period: USStatementPeriod) -> USStatementPeriodDTO:
@@ -382,6 +392,10 @@ class USStatementPeriodDTO(_FrozenForbid):
             filed_at=period.filed_at,
             currency=period.currency,
             line_items=tuple(items),
+            period_start=period.period_start,
+            accession=period.accession,
+            filing_form=period.filing_form,
+            is_amendment=period.is_amendment,
         )
 
 
@@ -392,9 +406,34 @@ class USFinancialStatementsDTO(_FrozenForbid):
     income: tuple[USStatementPeriodDTO, ...]
     balance_sheet: tuple[USStatementPeriodDTO, ...]
     cash_flow: tuple[USStatementPeriodDTO, ...]
+    view: USStatementView
+    quality_metrics: tuple[FinancialQualityMetricDTO, ...]
 
     @classmethod
     def from_domain(cls, statements: USFinancialStatements) -> USFinancialStatementsDTO:
+        quality: list[FinancialQualityMetricDTO] = []
+        by_period: dict[date, dict[str, Decimal | None]] = {}
+        currencies: dict[date, str | None] = {}
+        # A vintage view may contain multiple filings for one period end.  A
+        # period-only quality metric would silently mix those filing versions,
+        # so derived quality is intentionally emitted only for the deduplicated
+        # latest view.  The vintage statement lines remain available verbatim.
+        if statements.view is USStatementView.LATEST:
+            for period in (*statements.income, *statements.balance_sheet, *statements.cash_flow):
+                bucket = by_period.setdefault(period.period_end, {})
+                for key, value in period.line_items:
+                    if value is not None:
+                        bucket[key] = value
+                if period.currency is not None:
+                    currencies[period.period_end] = period.currency
+            for period_end in sorted(by_period, reverse=True):
+                quality.extend(
+                    derive_financial_quality_metrics(
+                        period_end=period_end,
+                        line_items=by_period[period_end],
+                        currency=currencies.get(period_end),
+                    )
+                )
         return cls(
             instrument_id=statements.instrument_id,
             as_of=statements.as_of,
@@ -404,6 +443,8 @@ class USFinancialStatementsDTO(_FrozenForbid):
                 USStatementPeriodDTO.from_domain(p) for p in statements.balance_sheet
             ),
             cash_flow=tuple(USStatementPeriodDTO.from_domain(p) for p in statements.cash_flow),
+            view=statements.view,
+            quality_metrics=tuple(quality),
         )
 
 

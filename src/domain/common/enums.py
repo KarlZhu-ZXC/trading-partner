@@ -217,6 +217,10 @@ class DataCategory(StrEnum):
     CORPORATE_ACTIONS = "corporate_actions"
     # Phase 1G append-only category (wire value frozen).
     INSIDER_ACTIVITY = "insider_activity"
+    # Phase 3B deterministic industry-cycle facts (for example the hog cycle).
+    INDUSTRY_CYCLE = "industry_cycle"
+    # Phase 3B company-level operating metrics parsed from official disclosures.
+    COMPANY_OPERATING_METRICS = "company_operating_metrics"
 
 
 class DataCriticality(StrEnum):
@@ -248,10 +252,17 @@ class VendorId(StrEnum):
     SZSE = "szse"
     HKEX = "hkex"
     IWENCAI = "iwencai"
+    # National Animal Husbandry Service (全国畜牧总站), official industry data.
+    NAHS = "nahs"
 
     # US / general (1F+)
     BROKER = "broker"
     YFINANCE = "yfinance"
+    # Phase 3A metal-futures fallbacks. Keep these distinct from the A-share
+    # adapters registered under SINA / EASTMONEY: the wire contracts, symbols,
+    # timestamps, and supported categories are different.
+    SINA_FUTURES = "sina_futures"
+    EASTMONEY_FUTURES = "eastmoney_futures"
     ALPHA_VANTAGE = "alpha_vantage"
     SEC_EDGAR = "sec_edgar"
     FRED = "fred"

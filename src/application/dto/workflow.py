@@ -56,9 +56,11 @@ class ResearchRunDeepDiveInput(_CaseWorkflowInput):
     case_summary: str | None = Field(default=None, min_length=1, max_length=4_000)
     case_topic_tags: tuple[str, ...] = ()
     case_creation_confirmed_by: Literal["user", "external_agent"] = "user"
-    case_creation_idempotency_key: str | None = Field(
-        default=None, min_length=1, max_length=128
-    )
+    case_creation_idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    industry_cycle: Literal["hog"] | None = None
+    industry_cycle_lookback_months: int = Field(default=120, ge=3, le=240)
+    company_operating_lookback_months: int = Field(default=36, ge=3, le=120)
+    company_operating_document_limit: int = Field(default=20, ge=1, le=30)
 
     @field_validator("case_topic_tags")
     @classmethod
@@ -177,9 +179,7 @@ class WorkflowRunDTO(_DTO):
             completed_at=run.completed_at,
             status=run.status,
             facts=tuple(
-                WorkflowFactDTO(
-                    receipt=WorkflowStepReceiptDTO.from_domain(receipt), data=data
-                )
+                WorkflowFactDTO(receipt=WorkflowStepReceiptDTO.from_domain(receipt), data=data)
                 for receipt, data in zip(run.steps, fact_data, strict=True)
             ),
             synthesis_contract=synthesis_contract,

@@ -11,13 +11,23 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from application.dto.provider_routing import ProviderSuccess, RouterExecutionResult
+from application.dto.provider_routing import (
+    ProviderSuccess,
+    RouterExecutionResult,
+    ToolDataPolicy,
+)
 from application.ports.category_provider import CategoryProvider
 from application.ports.clock import Clock
 from application.ports.provider_cache_codec import ProviderCacheCodec
 from application.ports.us_market_providers import USBarsProvider, USQuoteProvider
 from application.services.provider_router import ProviderRouter
-from domain.common.enums import AdjustmentMethod, AssetType, DataCategory, Market
+from domain.common.enums import (
+    AdjustmentMethod,
+    AssetType,
+    DataCategory,
+    Market,
+    VendorId,
+)
 from domain.common.errors import DataContractError
 from domain.common.time import ensure_utc, require_aware_datetime
 from domain.instruments.models import Instrument
@@ -29,6 +39,32 @@ OP_BARS = "us.bars.v1"
 
 _QUOTE_ASSET_TYPES = frozenset(
     {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
+)
+
+# Alpha Vantage's equity/ETF/index endpoints cannot serve continuous futures.
+# Metal futures use dedicated, asset-aware fallbacks: Sina supplies timestamped
+# GC/SI/HG quotes; Eastmoney supplies daily-derived bars for the seeded metals.
+_FUTURES_QUOTE_POLICY = ToolDataPolicy(
+    tool_name="us_get_market",
+    required_categories=(DataCategory.MARKET_QUOTE,),
+    optional_categories=(),
+    category_chain_overrides={
+        DataCategory.MARKET_QUOTE: (
+            VendorId.YFINANCE,
+            VendorId.SINA_FUTURES,
+        )
+    },
+)
+_FUTURES_BARS_POLICY = ToolDataPolicy(
+    tool_name="market_get_bars",
+    required_categories=(DataCategory.MARKET_OHLCV,),
+    optional_categories=(),
+    category_chain_overrides={
+        DataCategory.MARKET_OHLCV: (
+            VendorId.YFINANCE,
+            VendorId.EASTMONEY_FUTURES,
+        )
+    },
 )
 
 
@@ -284,7 +320,11 @@ class USMarketDataService:
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=None,
+            tool_policy=(
+                _FUTURES_QUOTE_POLICY
+                if instrument.asset_type is AssetType.FUTURE
+                else None
+            ),
             bypass_cache=False,
             cache_codec=self._quote_codec,
             result_validator=_validator,
@@ -375,7 +415,11 @@ class USMarketDataService:
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=None,
+            tool_policy=(
+                _FUTURES_BARS_POLICY
+                if instrument.asset_type is AssetType.FUTURE
+                else None
+            ),
             bypass_cache=False,
             cache_codec=self._bars_codec,
             result_validator=_validator,

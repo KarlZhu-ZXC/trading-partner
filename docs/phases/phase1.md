@@ -15,7 +15,8 @@ packages.
 
 The product can:
 
-- restore an Investment Case and its evolving Thesis across Codex tasks;
+- restore a research file (normally an instrument-centered Investment Case) and its evolving investment
+  judgments (Theses) across Codex tasks;
 - research A-share and US instruments with source/time/freshness metadata;
 - read Moomoo, Schwab, or strict manual-CSV accounts without order permissions;
 - analyze gross portfolio exposure and descriptive correlation/beta;
@@ -36,7 +37,7 @@ monitoring. Those capabilities belong to later phases.
 | 1E | A-share quote, structure, capital, limit-up, sentiment, reports, ETF options |
 | 1F | US quote, bars, context, deterministic technical indicators |
 | 1G | US fundamentals, statements, SEC filings, insiders, corporate events |
-| 1H | News, FRED/ALFRED macro, Reddit/StockTwits/Moomoo sentiment, Polymarket context |
+| 1H | News, FRED/ALFRED macro, Reddit/Moomoo sentiment, dormant StockTwits compatibility, Polymarket context |
 | 1I | Read-only Moomoo/manual-CSV accounts and deterministic portfolio exposure |
 | 1J | Durable cross-task research Context Builder |
 | 1K | Persistent ten-dimension Challenge Review and explicit user resolution |
@@ -133,10 +134,29 @@ constraints live in [AGENTS.md](../../AGENTS.md).
 
 ## 4. Research model
 
-`InvestmentCase` is the durable research folder. It owns or links the current
-Thesis, append-only revisions, assumptions, invalidation conditions, open
-questions, reports, events, decisions, journals, challenge reviews, and optional
-WatchlistItem metadata.
+The user-facing concept is a **research file**. For the primary company/catalyst
+flow, `Instrument` is the objective security identity and `InvestmentCase` is the
+durable, subjective research file opened around that Instrument; `Thesis` is one
+current, falsifiable investment judgment inside the file. Theme, macro, and
+portfolio-concern Cases may instead span instruments or have no primary Instrument.
+A research file owns or links its current judgments,
+append-only revisions, assumptions, invalidation conditions, open questions,
+reports, events, decisions, journals, challenge reviews, and optional WatchlistItem
+metadata.
+
+```text
+Instrument
+└── Investment Case (instrument research file)
+    ├── Thesis (current investment judgment)
+    ├── Thesis revisions
+    └── evidence, reports, events, decisions, journals, and reviews
+```
+
+For an instrument-centered Case, the three entities are deliberately not collapsed:
+an Instrument can exist without a research file, a research file can exist before any judgment is confirmed, and
+the judgment can change while the Instrument identity and research history remain
+stable. One open file is reused by default for an instrument; an archived file does
+not delete or archive the Instrument.
 
 Research changes use Candidate Propose → Confirm/Reject/Withdraw. Codex may
 propose changes but cannot impersonate the user to confirm or reject them.
@@ -144,9 +164,10 @@ Journal and decision appends require an explicit `user` or authorized
 `external_agent` confirmer. Decisions express research or position intent only;
 they never create orders, fills, or holdings.
 
-An instrument-only Deep Dive creates or reuses a Draft Case by default. Draft
-means a durable research folder, not automatic long-term monitoring and not a
-confirmed Thesis. `create_case=false` preserves ad-hoc research.
+An instrument-only Deep Dive creates or reuses a Draft instrument research file by
+default. Draft means the research has a durable home, not automatic long-term
+monitoring and not a confirmed investment judgment. `create_case=false` preserves
+ad-hoc research.
 
 ## 5. Provider model
 
@@ -161,6 +182,18 @@ confirmed Thesis. `create_case=false` preserves ad-hoc research.
 ### US
 
 - Yahoo/yfinance is the primary current market/fundamental source where applicable.
+- For a near-current request during a Yahoo regular, pre-market, or post-market
+  session, a stale regular quote is compared with the latest available one-minute
+  `includePrePost` bar. The newer timestamp wins and carries
+  `EXTENDED_HOURS_PRICE` or `INTRADAY_QUOTE_RECOVERY`; a failed recovery remains
+  explicit as `INTRADAY_QUOTE_UNAVAILABLE`. Historical `as_of` requests never use
+  this current-only recovery path, and Yahoo does not provide a complete overnight
+  equity market.
+- Yahoo quote `previous_close` is derived from the latest completed daily bar before
+  `quote_at`; for a post-market equity quote, that day's regular close is the
+  previous close. The range-dependent `chartPreviousClose` metadata field is never
+  used as a previous-session close; this prevents chart-window baselines from
+  corrupting intraday percentage comparisons.
 - Alpha Vantage is a configured fallback, not a broker quote substitute. Its optional
   comma-separated key pool is ordered and sticky, and advances only on explicit
   provider rate-limit responses; it is not a round-robin throughput mechanism.
@@ -266,7 +299,8 @@ without rebuilding the full Phase 1 test matrix.
 - Closed-session US quotes may be stale but represent the last known session.
 - Reddit anonymous RSS is rate-limited and not a reliable production identity;
   approved OAuth remains the proper future solution.
-- StockTwits may be disabled when no supported API access exists.
+- StockTwits formal access has left the active roadmap; its compatibility adapter
+  remains default-disabled and must not trigger scraping, retries, or credential requests.
 - Moomoo sentiment uses the current public feed with exact-symbol filtering,
   HTML cleanup, deduplication, low-quality filtering, and versioned deterministic
   bilingual rules. It does not call a Skill or an LLM; engagement may be unknown,
