@@ -37,6 +37,10 @@ markets:
       vendors: [cls, eastmoney]
     sentiment:
       vendors: [ths, eastmoney]
+    industry_cycle:
+      vendors: [nahs]
+    company_operating_metrics:
+      vendors: [cninfo]
   US:
     instrument_master:
       vendors: [local_master, seed_fixture]
@@ -46,6 +50,9 @@ markets:
       vendors: [yfinance, alpha_vantage]
     market_ohlcv:
       vendors: [yfinance, alpha_vantage]
+    # Phase 3A uses application-owned asset-aware overrides instead:
+    # futures quote = yfinance -> sina_futures; daily/weekly/monthly futures
+    # bars = yfinance -> eastmoney_futures. Alpha Vantage is never sent futures.
     market_breadth:
       vendors: [yfinance]
     community_heat:
@@ -54,7 +61,7 @@ markets:
     fundamentals:
       vendors: [yfinance, alpha_vantage, sec_edgar]
     financial_statements:
-      vendors: [sec_edgar, alpha_vantage, yfinance]
+      vendors: [sec_edgar, yfinance, alpha_vantage]
     filings:
       vendors: [sec_edgar]
     corporate_actions:

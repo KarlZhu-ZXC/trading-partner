@@ -37,12 +37,20 @@ from domain.market.session import infer_session_basic
 from domain.us_context.enums import USNewsScope
 from domain.us_context.models import USNewsArticle, USNewsFeed
 from domain.us_market.models import USBreadthSnapshot
-from domain.us_research.enums import USCorporateActionType, USFundamentalBasis
+from domain.us_research.enums import (
+    USCorporateActionType,
+    USFundamentalBasis,
+    USStatementFrequency,
+    USStatementType,
+    USStatementView,
+)
 from domain.us_research.models import (
     USCompanyProfile,
     USCorporateAction,
+    USFinancialStatements,
     USFundamentalMetrics,
     USFundamentalSnapshot,
+    USStatementPeriod,
 )
 from infrastructure.providers.us.yahoo_finance import YahooFinanceAdapter
 from infrastructure.providers.us.yfinance_breadth_client import (
@@ -52,6 +60,10 @@ from infrastructure.providers.us.yfinance_breadth_client import (
 from infrastructure.providers.us.yfinance_fundamentals_client import (
     YahooFundamentalsClient,
     YFinanceFundamentalsClient,
+)
+from infrastructure.providers.us.yfinance_statements_client import (
+    YahooStatementsClient,
+    YFinanceStatementsClient,
 )
 from infrastructure.system.clock import SystemClock
 
@@ -64,8 +76,51 @@ _SUPPORTED: Final = frozenset(
         DataCategory.CORPORATE_ACTIONS,
         DataCategory.NEWS,
         DataCategory.MARKET_BREADTH,
+        DataCategory.FINANCIAL_STATEMENTS,
     }
 )
+
+_YF_STATEMENT_KEYS: Final[Mapping[USStatementType, Mapping[str, str]]] = {
+    USStatementType.INCOME: {
+        "TotalRevenue": "revenue",
+        "GrossProfit": "gross_profit",
+        "CostOfRevenue": "cost_of_revenue",
+        "OperatingIncome": "operating_income",
+        "NetIncome": "net_income",
+        "NetIncomeCommonStockholders": "net_income_attributable_parent",
+        "ResearchAndDevelopment": "research_and_development",
+        "SellingGeneralAndAdministration": "selling_general_admin",
+        "BasicEPS": "eps_basic",
+        "DilutedEPS": "eps_diluted",
+    },
+    USStatementType.BALANCE_SHEET: {
+        "CashAndCashEquivalents": "cash_and_equivalents",
+        "CashCashEquivalentsAndShortTermInvestments": "cash_and_short_term_investments",
+        "OtherShortTermInvestments": "short_term_investments",
+        "AccountsReceivable": "accounts_receivable",
+        "Inventory": "inventory",
+        "CurrentAssets": "current_assets",
+        "TotalAssets": "total_assets",
+        "CurrentDebt": "short_term_debt",
+        "CurrentDebtAndCapitalLeaseObligation": "current_portion_long_term_debt",
+        "CurrentLiabilities": "current_liabilities",
+        "LongTermDebt": "long_term_debt",
+        "TotalLiabilitiesNetMinorityInterest": "total_liabilities",
+        "StockholdersEquity": "stockholders_equity",
+        "OrdinarySharesNumber": "shares_outstanding",
+    },
+    USStatementType.CASH_FLOW: {
+        "OperatingCashFlow": "operating_cash_flow",
+        "CapitalExpenditure": "capital_expenditure",
+        "InvestingCashFlow": "investing_cash_flow",
+        "FinancingCashFlow": "financing_cash_flow",
+        "StockBasedCompensation": "stock_based_compensation",
+        "CashDividendsPaid": "dividends_paid",
+        "RepurchaseOfCapitalStock": "share_repurchases",
+        "DepreciationAndAmortization": "depreciation_and_amortization",
+        "ChangesInCash": "cash_change",
+    },
+}
 
 
 def _contract(message: str, *, operation: str, rule: str) -> DataContractError:
@@ -174,6 +229,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         max_delayed_seconds: int = 900,
         fundamentals_client: YahooFundamentalsClient | None = None,
         breadth_client: YahooBreadthClient | None = None,
+        statements_client: YahooStatementsClient | None = None,
     ) -> None:
         super().__init__(
             transport,
@@ -209,6 +265,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         self._user_agent = user_agent.strip()
         self._fundamentals_client = fundamentals_client or YFinanceFundamentalsClient()
         self._breadth_client = breadth_client or YFinanceBreadthClient()
+        self._statements_client = statements_client or YFinanceStatementsClient()
 
     @property
     def vendor_id(self) -> VendorId:
@@ -548,6 +605,88 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         return ProviderSuccess(
             snapshot,
             self._research_meta(DataCategory.FUNDAMENTALS, as_of, fetched_at, warnings),
+        )
+
+    async def get_financial_statements(
+        self,
+        instrument: Instrument,
+        *,
+        frequency: USStatementFrequency,
+        limit: int,
+        as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
+    ) -> ProviderSuccess[USFinancialStatements]:
+        symbol = self._instrument(instrument)
+        self._as_of(as_of, current_only=True)
+        if not isinstance(frequency, USStatementFrequency):
+            raise DataContractError("frequency must be USStatementFrequency")
+        if view is not USStatementView.LATEST:
+            raise NoMarketData(
+                "Yahoo Finance does not expose filing vintages",
+                details={"vendor": self.vendor_id.value, "operation": "statements"},
+            )
+        cap = 8 if frequency is USStatementFrequency.QUARTERLY else 5
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= cap:
+            raise DataContractError(f"limit must be between 1 and {cap}")
+        yf_frequency = (
+            "quarterly" if frequency is USStatementFrequency.QUARTERLY else "yearly"
+        )
+        tables = await self._statements_client.get_tables(
+            symbol,
+            frequency=yf_frequency,
+            timeout_seconds=self._timeout,
+        )
+        grouped: dict[USStatementType, tuple[USStatementPeriod, ...]] = {}
+        for statement_type, table_name in (
+            (USStatementType.INCOME, "income"),
+            (USStatementType.BALANCE_SHEET, "balance_sheet"),
+            (USStatementType.CASH_FLOW, "cash_flow"),
+        ):
+            periods: list[USStatementPeriod] = []
+            for period_end, values in tuple(tables.get(table_name, ()))[:limit]:
+                line_items: list[tuple[str, Decimal | None]] = []
+                for raw_name, metric_code in _YF_STATEMENT_KEYS[statement_type].items():
+                    amount = _decimal(values.get(raw_name), field=metric_code)
+                    if metric_code == "capital_expenditure" and amount is not None:
+                        amount = abs(amount)
+                    line_items.append((metric_code, amount))
+                periods.append(
+                    USStatementPeriod(
+                        statement_type=statement_type,
+                        frequency=frequency,
+                        fiscal_year=period_end.year,
+                        fiscal_period=None,
+                        period_end=period_end,
+                        filed_at=None,
+                        currency="USD",
+                        line_items=tuple(line_items),
+                    )
+                )
+            grouped[statement_type] = tuple(periods)
+        if not any(grouped.values()):
+            raise NoMarketData(
+                "Yahoo Finance returned no normalized statements",
+                details={"vendor": self.vendor_id.value, "operation": "statements"},
+            )
+        statements = USFinancialStatements(
+            instrument_id=instrument.instrument_id,
+            as_of=as_of,
+            frequency=frequency,
+            income=grouped[USStatementType.INCOME],
+            balance_sheet=grouped[USStatementType.BALANCE_SHEET],
+            cash_flow=grouped[USStatementType.CASH_FLOW],
+            view=view,
+        )
+        fetched_at = self._clock.now()
+        warning = ("YAHOO_STATEMENTS_CURRENT_ONLY",)
+        return ProviderSuccess(
+            statements,
+            self._research_meta(
+                DataCategory.FINANCIAL_STATEMENTS,
+                as_of,
+                fetched_at,
+                warning,
+            ),
         )
 
     async def get_corporate_actions(

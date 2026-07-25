@@ -12,6 +12,9 @@ from pydantic import JsonValue
 
 from application.dto.a_share import (
     AShareGetCapitalSnapshotInput,
+    AShareGetCompanyOperatingMetricsInput,
+    AShareGetFinancialStatementsInput,
+    AShareGetIndustryCycleInput,
     AShareGetLimitUpContextInput,
     AShareGetMarketStructureInput,
     AShareGetSentimentSnapshotInput,
@@ -87,19 +90,19 @@ class _Step:
 
 
 _BASE_SYNTHESIS_SECTIONS = (
-        "rating",
-        "confidence",
-        "investment_thesis",
-        "bull_case",
-        "bear_case",
-        "valuation_context",
-        "technical_context",
-        "catalysts",
-        "risks",
-        "invalidation_conditions",
-        "portfolio_implications",
-        "open_questions",
-        "candidate_state_updates",
+    "rating",
+    "confidence",
+    "investment_thesis",
+    "bull_case",
+    "bear_case",
+    "valuation_context",
+    "technical_context",
+    "catalysts",
+    "risks",
+    "invalidation_conditions",
+    "portfolio_implications",
+    "open_questions",
+    "candidate_state_updates",
 )
 
 
@@ -181,7 +184,7 @@ class ResearchWorkflowOrchestrator:
     def _ensure_deep_dive_case(
         self, request: ResearchRunDeepDiveInput
     ) -> ResearchRunDeepDiveInput | ToolEnvelope[WorkflowRunDTO]:
-        """Reuse one open Case or create one user-confirmed Draft Case."""
+        """Reuse one open instrument research file or create a confirmed Draft file."""
         instrument_id = request.instrument_id
         assert instrument_id is not None
         open_cases = self._investment_cases.list_cases(
@@ -212,7 +215,7 @@ class ResearchWorkflowOrchestrator:
                 case_type=InvestmentCaseType.COMPANY,
                 title=request.case_title or f"{symbol} 深度研究",
                 summary=request.case_summary
-                or "由个股深度研究创建的 Draft Investment Case；尚未确认正式 Thesis 或长期跟踪。",
+                or "由个股深度研究创建的标的研究档案（Draft）；尚未确认投资判断或长期跟踪。",
                 primary_instrument_id=instrument_id,
                 topic_tags=request.case_topic_tags,
                 linked_case_ids=(),
@@ -336,9 +339,7 @@ class ResearchWorkflowOrchestrator:
                     ),
                 )
             )
-        return await self._execute(
-            WorkflowType.US_MARKET_REVIEW, as_of, None, None, tuple(steps)
-        )
+        return await self._execute(WorkflowType.US_MARKET_REVIEW, as_of, None, None, tuple(steps))
 
     async def run_portfolio_review(
         self, request: PortfolioRunReviewInput
@@ -402,6 +403,43 @@ class ResearchWorkflowOrchestrator:
         request: ResearchRunDeepDiveInput | ResearchRunCatalystReviewInput,
     ) -> ToolEnvelope[WorkflowRunDTO]:
         as_of = request.as_of or self._clock.now()
+        ad_hoc = request.case_id is None and request.instrument_id is not None
+        if ad_hoc:
+            instrument_id = request.instrument_id
+            assert instrument_id is not None
+            _, market, _ = parse_instrument_id(instrument_id)
+            since = as_of - timedelta(days=request.lookback_days)
+            steps: list[_Step] = []
+            if market is Market.US:
+                steps.extend(
+                    self._us_case_steps(instrument_id, since, as_of, workflow_type, request)
+                )
+            elif market is Market.A_SHARE:
+                steps.extend(
+                    self._a_share_case_steps(instrument_id, since, as_of, workflow_type, request)
+                )
+            else:
+                return await self._execute(
+                    workflow_type,
+                    as_of,
+                    None,
+                    instrument_id,
+                    (self._portfolio_step((), False),),
+                    missing_capabilities=(f"workflow market {market.value} is unsupported",),
+                )
+            steps.append(self._portfolio_step((), False))
+            return await self._execute(
+                workflow_type,
+                as_of,
+                None,
+                instrument_id,
+                tuple(steps),
+                missing_capabilities=(
+                    "No instrument research file context; research ran in ad-hoc mode",
+                ),
+                serial=market is Market.A_SHARE,
+            )
+
         context_envelope = self._context.build(
             ResearchContextBuildInput(
                 case_id=request.case_id,
@@ -409,48 +447,13 @@ class ResearchWorkflowOrchestrator:
                 token_budget=4_000,
             )
         )
-        ad_hoc = request.case_id is None and request.instrument_id is not None
         context_step = _Step(
             "durable_research_context",
             "research_context_build",
-            not ad_hoc,
+            True,
             lambda: self._async_envelope(context_envelope),
         )
         if not context_envelope.ok or context_envelope.data is None:
-            if ad_hoc:
-                instrument_id = request.instrument_id
-                assert instrument_id is not None
-                _, market, _ = parse_instrument_id(instrument_id)
-                since = as_of - timedelta(days=request.lookback_days)
-                steps = [context_step]
-                if market is Market.US:
-                    steps.extend(
-                        self._us_case_steps(instrument_id, since, as_of, workflow_type, request)
-                    )
-                elif market is Market.A_SHARE:
-                    steps.extend(
-                        self._a_share_case_steps(instrument_id, since, as_of, workflow_type)
-                    )
-                else:
-                    return await self._execute(
-                        workflow_type,
-                        as_of,
-                        None,
-                        instrument_id,
-                        tuple(steps),
-                        missing_capabilities=(f"workflow market {market.value} is unsupported",),
-                    )
-                steps.append(self._portfolio_step((), False))
-                return await self._execute(
-                    workflow_type,
-                    as_of,
-                    None,
-                    instrument_id,
-                    tuple(steps),
-                    missing_capabilities=(
-                        "No Investment Case context; research ran in ad-hoc mode",
-                    ),
-                )
             return await self._execute(
                 workflow_type, as_of, request.case_id, request.instrument_id, (context_step,)
             )
@@ -464,7 +467,7 @@ class ResearchWorkflowOrchestrator:
                 case_id,
                 None,
                 (context_step,),
-                missing_capabilities=("Investment Case has no primary instrument",),
+                missing_capabilities=("Instrument research file has no primary instrument",),
             )
         _, market, _ = parse_instrument_id(instrument_id)
         since = as_of - timedelta(days=request.lookback_days)
@@ -472,7 +475,9 @@ class ResearchWorkflowOrchestrator:
         if market is Market.US:
             steps.extend(self._us_case_steps(instrument_id, since, as_of, workflow_type, request))
         elif market is Market.A_SHARE:
-            steps.extend(self._a_share_case_steps(instrument_id, since, as_of, workflow_type))
+            steps.extend(
+                self._a_share_case_steps(instrument_id, since, as_of, workflow_type, request)
+            )
         else:
             return await self._execute(
                 workflow_type,
@@ -484,7 +489,12 @@ class ResearchWorkflowOrchestrator:
             )
         steps.append(self._portfolio_step((), False))
         return await self._execute(
-            workflow_type, as_of, case_id, instrument_id, tuple(steps)
+            workflow_type,
+            as_of,
+            case_id,
+            instrument_id,
+            tuple(steps),
+            serial=market is Market.A_SHARE,
         )
 
     def _us_case_steps(
@@ -567,9 +577,7 @@ class ResearchWorkflowOrchestrator:
                     "fundamental_get_statements",
                     False,
                     lambda: self._us_research.get_fundamental_statements(
-                        FundamentalGetStatementsInput(
-                            instrument_id=instrument_id, as_of=as_of
-                        )
+                        FundamentalGetStatementsInput(instrument_id=instrument_id, as_of=as_of)
                     ),
                 ),
             )
@@ -593,27 +601,22 @@ class ResearchWorkflowOrchestrator:
         since: datetime,
         as_of: datetime,
         workflow_type: WorkflowType,
+        request: ResearchRunDeepDiveInput | ResearchRunCatalystReviewInput,
     ) -> list[_Step]:
         asset_type, _, _ = parse_instrument_id(instrument_id)
-        capital_metrics = (
-            (CapitalMetricType.DAILY_FLOW,)
-            if asset_type is AssetType.ETF
-            else ()
-        )
+        capital_metrics = (CapitalMetricType.DAILY_FLOW,) if asset_type is AssetType.ETF else ()
         detail = (
             AShareSnapshotDetail.FULL
             if workflow_type is WorkflowType.DEEP_DIVE
             else AShareSnapshotDetail.SUMMARY
         )
-        return [
+        steps = [
             _Step(
                 "company_snapshot",
                 "a_share_get_snapshot",
                 True,
                 lambda: self._a_share.get_snapshot(
-                    AShareGetSnapshotInput(
-                        instrument_id=instrument_id, detail=detail, as_of=as_of
-                    )
+                    AShareGetSnapshotInput(instrument_id=instrument_id, detail=detail, as_of=as_of)
                 ),
             ),
             _Step(
@@ -670,10 +673,63 @@ class ResearchWorkflowOrchestrator:
                 ),
             ),
         ]
+        if workflow_type is WorkflowType.DEEP_DIVE and asset_type is AssetType.EQUITY:
+            steps.insert(
+                1,
+                _Step(
+                    "financial_statements",
+                    "a_share_get_facts",
+                    False,
+                    lambda: self._a_share.get_financial_statements(
+                        AShareGetFinancialStatementsInput(
+                            instrument_id=instrument_id,
+                            periods=8,
+                            as_of=as_of,
+                        )
+                    ),
+                ),
+            )
+        if (
+            workflow_type is WorkflowType.DEEP_DIVE
+            and isinstance(request, ResearchRunDeepDiveInput)
+            and request.industry_cycle == "hog"
+        ):
+            if asset_type is AssetType.EQUITY:
+                steps.insert(
+                    1,
+                    _Step(
+                        "company_operating_metrics",
+                        "a_share_get_facts",
+                        False,
+                        lambda: self._a_share.get_company_operating_metrics(
+                            AShareGetCompanyOperatingMetricsInput(
+                                instrument_id=instrument_id,
+                                lookback_months=request.company_operating_lookback_months,
+                                document_limit=request.company_operating_document_limit,
+                                as_of=as_of,
+                            )
+                        ),
+                    ),
+                )
+            steps.insert(
+                2 if asset_type is AssetType.EQUITY else 1,
+                _Step(
+                    "industry_cycle_hog",
+                    "a_share_get_facts",
+                    False,
+                    lambda: self._a_share.get_industry_cycle(
+                        AShareGetIndustryCycleInput(
+                            cycle="hog",
+                            lookback_months=request.industry_cycle_lookback_months,
+                            view="compact",
+                            as_of=as_of,
+                        )
+                    ),
+                ),
+            )
+        return steps
 
-    def _portfolio_step(
-        self, account_snapshot_ids: tuple[str, ...], required: bool
-    ) -> _Step:
+    def _portfolio_step(self, account_snapshot_ids: tuple[str, ...], required: bool) -> _Step:
         return _Step(
             "portfolio_context",
             "portfolio_analyze",
@@ -709,13 +765,24 @@ class ResearchWorkflowOrchestrator:
         steps: tuple[_Step, ...],
         *,
         missing_capabilities: tuple[str, ...] = (),
+        serial: bool = False,
     ) -> ToolEnvelope[WorkflowRunDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         started_at = self._clock.now()
         try:
-            outcomes = await asyncio.gather(
-                *(step.call() for step in steps), return_exceptions=True
-            )
+            if serial:
+                outcomes: list[ToolEnvelope[Any] | BaseException] = []
+                for step in steps:
+                    try:
+                        outcomes.append(await step.call())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — step receipt boundary
+                        outcomes.append(exc)
+            else:
+                outcomes = list(
+                    await asyncio.gather(*(step.call() for step in steps), return_exceptions=True)
+                )
             receipts: list[WorkflowStepReceipt] = []
             fact_data: list[JsonValue | None] = []
             for ordinal, (step, outcome) in enumerate(zip(steps, outcomes, strict=True), 1):
@@ -807,9 +874,7 @@ class ResearchWorkflowOrchestrator:
         )
 
     @staticmethod
-    def _receipt(
-        ordinal: int, step: _Step, envelope: ToolEnvelope[Any]
-    ) -> WorkflowStepReceipt:
+    def _receipt(ordinal: int, step: _Step, envelope: ToolEnvelope[Any]) -> WorkflowStepReceipt:
         return WorkflowStepReceipt(
             ordinal=ordinal,
             step_name=step.name,

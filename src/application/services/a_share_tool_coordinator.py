@@ -13,8 +13,12 @@ from typing import Protocol, TypeVar
 from application.dto.a_share import (
     AShareCapitalSnapshotDTO,
     AShareCompositeSnapshotDTO,
+    AShareFinancialStatementsDTO,
     AShareGetCapitalSnapshotInput,
+    AShareGetCompanyOperatingMetricsInput,
     AShareGetEtfOptionSnapshotInput,
+    AShareGetFinancialStatementsInput,
+    AShareGetIndustryCycleInput,
     AShareGetLimitUpContextInput,
     AShareGetMarketStructureInput,
     AShareGetSentimentSnapshotInput,
@@ -22,7 +26,9 @@ from application.dto.a_share import (
     AShareLimitUpContextProductDTO,
     AShareMarketStructureSnapshotDTO,
     AShareSentimentSnapshotDTO,
+    CompanyOperatingMetricsSnapshotDTO,
     EtfOptionSnapshotDTO,
+    IndustryCycleSnapshotDTO,
     ResearchReportSearchDTO,
     ResearchSearchReportsInput,
 )
@@ -38,7 +44,11 @@ from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services.a_share_capital_service import AShareCapitalService
+from application.services.a_share_company_operating_metrics_service import (
+    AShareCompanyOperatingMetricsService,
+)
 from application.services.a_share_etf_option_service import AShareEtfOptionService
+from application.services.a_share_industry_cycle_service import AShareIndustryCycleService
 from application.services.a_share_limit_up_service import AShareLimitUpService
 from application.services.a_share_market_structure_service import (
     AShareMarketStructureService,
@@ -148,6 +158,8 @@ class AShareToolCoordinator:
         limit_up_service: AShareLimitUpService,
         sentiment_service: AShareSentimentService,
         etf_option_service: AShareEtfOptionService,
+        industry_cycle_service: AShareIndustryCycleService,
+        company_operating_metrics_service: AShareCompanyOperatingMetricsService,
         report_search_service: ResearchReportSearchService,
     ) -> None:
         self._instrument_master = instrument_master
@@ -160,6 +172,8 @@ class AShareToolCoordinator:
         self._limit_up_service = limit_up_service
         self._sentiment_service = sentiment_service
         self._etf_option_service = etf_option_service
+        self._industry_cycle_service = industry_cycle_service
+        self._company_operating_metrics_service = company_operating_metrics_service
         self._report_search_service = report_search_service
 
     async def get_snapshot(
@@ -170,6 +184,63 @@ class AShareToolCoordinator:
             instrument = self._resolve_required(request.instrument_id)
             result = await self._snapshot_service.get_snapshot(
                 instrument, effective_as_of, request.detail
+            )
+        except TradingPartnerError as exc:
+            return self._exception_failure(request_id, effective_as_of, exc)
+        except Exception as exc:  # noqa: BLE001 — envelope boundary
+            return self._exception_failure(request_id, effective_as_of, exc)
+        return self._envelope_from_result(request_id, effective_as_of, result)
+
+    async def get_financial_statements(
+        self, request: AShareGetFinancialStatementsInput
+    ) -> ToolEnvelope[AShareFinancialStatementsDTO]:
+        request_id, effective_as_of = self._begin(request.as_of)
+        try:
+            instrument = self._resolve_required(request.instrument_id)
+            result = await self._snapshot_service.get_financial_statements(
+                instrument,
+                effective_as_of,
+                statement_types=request.statement_types,
+                periods=request.periods,
+                metric_codes=request.metric_codes,
+            )
+        except TradingPartnerError as exc:
+            return self._exception_failure(request_id, effective_as_of, exc)
+        except Exception as exc:  # noqa: BLE001 — envelope boundary
+            return self._exception_failure(request_id, effective_as_of, exc)
+        return self._envelope_from_result(request_id, effective_as_of, result)
+
+    async def get_industry_cycle(
+        self, request: AShareGetIndustryCycleInput
+    ) -> ToolEnvelope[IndustryCycleSnapshotDTO]:
+        request_id, effective_as_of = self._begin(request.as_of)
+        try:
+            result = await self._industry_cycle_service.get_hog_cycle(
+                lookback_months=request.lookback_months,
+                as_of=effective_as_of,
+                view=request.view,
+                metric_codes=request.metric_codes,
+                offset=request.offset,
+                limit=request.limit,
+            )
+        except TradingPartnerError as exc:
+            return self._exception_failure(request_id, effective_as_of, exc)
+        except Exception as exc:  # noqa: BLE001 — envelope boundary
+            return self._exception_failure(request_id, effective_as_of, exc)
+        return self._envelope_from_result(request_id, effective_as_of, result)
+
+    async def get_company_operating_metrics(
+        self, request: AShareGetCompanyOperatingMetricsInput
+    ) -> ToolEnvelope[CompanyOperatingMetricsSnapshotDTO]:
+        request_id, effective_as_of = self._begin(request.as_of)
+        try:
+            instrument = self._resolve_required(request.instrument_id)
+            result = await self._company_operating_metrics_service.get_company_operating_metrics(
+                instrument,
+                lookback_months=request.lookback_months,
+                document_limit=request.document_limit,
+                metric_codes=request.metric_codes,
+                as_of=effective_as_of,
             )
         except TradingPartnerError as exc:
             return self._exception_failure(request_id, effective_as_of, exc)

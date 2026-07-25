@@ -1,26 +1,27 @@
 {
   "result": {
     "data": {
-      "report": [
-        {
-          "report_date": "2023-12-31",
-          "publish_date": "2023-12-31",
+      "report_list": {
+        "20231231": {
+          "publish_date": "20240110",
+          "rCurrency": "CNY",
+          "is_audit": "已审计",
           "data": [
             {
-              "item_code": "TOTAL_OPERATE_INCOME",
-              "item_name": "营业总收入",
+              "item_field": "BIZTOTINCO",
+              "item_title": "营业总收入",
               "item_value": "150560000000",
-              "unit": "CNY"
+              "item_tongbi": "18.0"
             },
             {
-              "item_code": "NETPROFIT",
-              "item_name": "净利润",
+              "item_field": "NETPROFIT",
+              "item_title": "净利润",
               "item_value": "74734000000",
-              "unit": "CNY"
+              "item_tongbi": "19.0"
             }
           ]
         }
-      ]
+      }
     }
   }
 }

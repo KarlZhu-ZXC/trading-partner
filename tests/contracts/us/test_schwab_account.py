@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -10,9 +11,14 @@ from pydantic import ValidationError
 from application.dto.portfolio import AccountGetSnapshotInput
 from bootstrap import build_application
 from domain.common.enums import AppEnvironment, LogLevel, VendorId
+from domain.common.errors import ProviderAuthenticationError
 from domain.portfolio.enums import AccountPositionSide, AccountTransactionSide
 from infrastructure.config.settings import AppSettings
-from infrastructure.providers.account.schwab import SchwabAccountAdapter, SchwabReadClient
+from infrastructure.providers.account.schwab import (
+    SchwabAccountAdapter,
+    SchwabPyReadClient,
+    SchwabReadClient,
+)
 from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
 _NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
@@ -111,6 +117,41 @@ def _adapter(id_generator: object, fixed_clock: object, client: _Client) -> Schw
         clock=fixed_clock,  # type: ignore[arg-type]
         client_factory=lambda: client,
     )
+
+
+def test_schwab_runtime_never_starts_browser_oauth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token_path = tmp_path / "token.json"
+    called: list[tuple[object, ...]] = []
+
+    def fake_client_from_token_file(*args: object, **_kwargs: object) -> object:
+        called.append(args)
+        return SimpleNamespace(session=object())
+
+    monkeypatch.setattr("schwab.auth.client_from_token_file", fake_client_from_token_file)
+    with pytest.raises(ProviderAuthenticationError, match="dedicated project OAuth setup"):
+        SchwabPyReadClient(
+            client_id="client-id",
+            client_secret="client-secret",
+            redirect_uri="https://127.0.0.1:8182",
+            token_path=token_path,
+        )
+    assert called == []
+
+    token_path.write_text("{}", encoding="utf-8")
+    client = SchwabPyReadClient(
+        client_id="client-id",
+        client_secret="client-secret",
+        redirect_uri="https://127.0.0.1:8182",
+        token_path=token_path,
+    )
+    assert client is not None
+    assert called == [(str(token_path), "client-id", "client-secret")]
+
+    source = Path("src/infrastructure/providers/account/schwab.py").read_text(encoding="utf-8")
+    assert "easy_client" not in source
+    assert "client_from_login_flow" not in source
 
 
 @pytest.mark.asyncio

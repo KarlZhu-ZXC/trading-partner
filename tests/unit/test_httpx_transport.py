@@ -128,6 +128,17 @@ async def test_allowlist_accepts_known_exact_endpoint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_allowlist_accepts_tencent_instrument_hint_endpoint() -> None:
+    handler = _FixedHandler(body=b'v_hint="";')
+    transport = _transport(handler)
+    resp = await transport.send(
+        _req("https://smartbox.gtimg.cn/s3/", params={"q": "query", "t": "all"})
+    )
+    assert resp.status_code == 200
+    await transport.aclose()
+
+
+@pytest.mark.asyncio
 async def test_allowlist_rejects_unknown_host() -> None:
     transport = _transport(_FixedHandler())
     with pytest.raises(DataContractError) as exc:

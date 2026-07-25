@@ -14,7 +14,12 @@ from conftest import FixedClock
 from domain.common.enums import AssetType, DataCategory, Market
 from domain.common.errors import NoMarketData
 from domain.instruments.models import Instrument
-from domain.us_research.enums import USCorporateActionType, USFundamentalBasis
+from domain.us_research.enums import (
+    USCorporateActionType,
+    USFundamentalBasis,
+    USStatementFrequency,
+    USStatementView,
+)
 from infrastructure.providers.us.research_codecs import us_corporate_actions_codec
 from infrastructure.providers.us.yahoo_finance_research import (
     YahooFinanceResearchAdapter,
@@ -46,6 +51,25 @@ class StubFundamentalsClient:
     async def get_info(self, symbol: str, *, timeout_seconds: float) -> dict[str, object]:
         self.calls.append((symbol, timeout_seconds))
         return self.payload
+
+
+class StubStatementsClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, float]] = []
+
+    async def get_tables(self, symbol: str, *, frequency: str, timeout_seconds: float):
+        self.calls.append((symbol, frequency, timeout_seconds))
+        period = date(2026, 3, 31)
+        return {
+            "income": ((period, {"TotalRevenue": 100, "NetIncome": 20}),),
+            "balance_sheet": (
+                (period, {"CashAndCashEquivalents": 50, "CurrentAssets": 80,
+                          "CurrentLiabilities": 40, "LongTermDebt": 10}),
+            ),
+            "cash_flow": (
+                (period, {"OperatingCashFlow": 30, "CapitalExpenditure": -8}),
+            ),
+        }
 
 
 def _instrument() -> Instrument:
@@ -117,6 +141,30 @@ async def test_historical_fundamentals_are_rejected_before_network() -> None:
 
     assert transport.requests == []
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_current_statements_normalize_capex_and_financial_quality_inputs() -> None:
+    client = StubStatementsClient()
+    adapter = YahooFinanceResearchAdapter(
+        StubTransport({}), clock=FixedClock(NOW), statements_client=client
+    )
+
+    success = await adapter.get_financial_statements(
+        _instrument(),
+        frequency=USStatementFrequency.QUARTERLY,
+        limit=4,
+        as_of=NOW,
+        view=USStatementView.LATEST,
+    )
+
+    assert success.value.view is USStatementView.LATEST
+    assert success.value.cash_flow[0].line_items[:2] == (
+        ("operating_cash_flow", Decimal("30")),
+        ("capital_expenditure", Decimal("8")),
+    )
+    assert success.meta.warnings == ("YAHOO_STATEMENTS_CURRENT_ONLY",)
+    assert client.calls == [("NVDA", "quarterly", 15.0)]
 
 
 @pytest.mark.asyncio

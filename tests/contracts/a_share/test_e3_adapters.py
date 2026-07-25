@@ -105,8 +105,10 @@ async def test_sina_statements_success() -> None:
     )
     assert result.meta.vendor is VendorId.SINA
     assert result.value
+    assert {line.item_code for line in result.value} == {"total_revenue", "net_income"}
     assert all(type(line.value) is Decimal or line.value is None for line in result.value)
     assert all(line.published_at is None or line.published_at <= AS_OF for line in result.value)
+    assert transport.requests[0].params["source"] == "lrb"
 
 
 @pytest.mark.asyncio

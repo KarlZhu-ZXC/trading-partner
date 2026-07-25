@@ -117,6 +117,7 @@ class USResearchToolCoordinator:
             result = await self._fundamental.get_statements(
                 instrument,
                 frequency=request.frequency,
+                view=request.view,
                 limit=request.limit,
                 as_of=as_of,
             )

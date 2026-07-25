@@ -70,6 +70,7 @@ class MonitorService:
             confirmed_by=request.confirmed_by,
             idempotency_key=request.idempotency_key.strip(),
             created_at=now,
+            valid_until=request.valid_until,
         )
         self._repository.create(value)
         return MonitorDetailDTO(
@@ -109,6 +110,7 @@ class MonitorService:
             confirmed_by=request.confirmed_by,
             idempotency_key=request.idempotency_key.strip(),
             created_at=self._clock.now(),
+            valid_until=request.valid_until,
         )
         self._repository.append_version(value)
         return self.get(MonitorGetInput(monitor_id=value.monitor_id))
@@ -202,6 +204,7 @@ class MonitorService:
             and value.primary_instrument_id == request.primary_instrument_id
             and value.cadence is request.cadence
             and value.rules == tuple(item.to_domain() for item in request.rules)
+            and value.valid_until == request.valid_until
             and value.confirmed_by == request.confirmed_by
         )
 
@@ -215,5 +218,6 @@ class MonitorService:
             and value.cadence is request.cadence
             and value.status is request.status
             and value.rules == tuple(item.to_domain() for item in request.rules)
+            and value.valid_until == request.valid_until
             and value.confirmed_by == request.confirmed_by
         )

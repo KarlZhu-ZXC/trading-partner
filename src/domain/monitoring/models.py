@@ -103,6 +103,7 @@ class MonitorDefinition:
     confirmed_by: str
     idempotency_key: str
     created_at: datetime
+    valid_until: datetime | None = None
     schema_version: int = MONITORING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -140,6 +141,10 @@ class MonitorDefinition:
             raise DataContractError("confirmed_by is invalid")
         _text(self.idempotency_key, "idempotency_key", 200)
         _aware(self.created_at, "created_at")
+        if self.valid_until is not None:
+            _aware(self.valid_until, "valid_until")
+            if self.valid_until <= self.created_at:
+                raise DataContractError("monitor valid_until must follow created_at")
         if self.schema_version != MONITORING_SCHEMA_VERSION:
             raise DataContractError("monitoring schema_version must be 1")
 

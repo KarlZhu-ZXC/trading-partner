@@ -37,7 +37,7 @@ FORBIDDEN_TABLES = frozenset(
     }
 )
 FORBIDDEN_RUNTIME_DEPENDENCIES = ("tradingagents", "langgraph", "minimax", "grok")
-_PHASE1_MIGRATION_HEADS = frozenset({"0014_phase3_commodity_futures"})
+_PHASE1_MIGRATION_HEADS = frozenset({"0016_monitor_valid_until"})
 
 
 @dataclass(frozen=True, slots=True)

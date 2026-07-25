@@ -52,6 +52,52 @@ class AShareComponentType(StrEnum):
     OPTION_SNAPSHOT = "option_snapshot"
     REPORTS = "reports"
     CONSENSUS = "consensus"
+    INDUSTRY_CYCLE = "industry_cycle"
+    COMPANY_OPERATING_METRICS = "company_operating_metrics"
+
+
+class IndustryCycleType(StrEnum):
+    HOG = "hog"
+
+
+class IndustryMetricFrequency(StrEnum):
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    QUARTERLY = "quarterly"
+    HALF_YEAR = "half_year"
+    ANNUAL = "annual"
+
+
+class IndustryMeasurementBasis(StrEnum):
+    """How an industry observation relates to its stated period."""
+
+    PERIOD_AVERAGE = "period_average"
+    PERIOD_END = "period_end"
+    PERIOD_TOTAL = "period_total"
+    YTD_TOTAL = "ytd_total"
+    POLICY_BASELINE = "policy_baseline"
+
+
+class CompanyDocumentType(StrEnum):
+    """Closed document classes used by company operating-metric parse receipts."""
+
+    MONTHLY_OPERATING_BRIEF = "monthly_operating_brief"
+    EARNINGS_FORECAST = "earnings_forecast"
+    QUARTERLY_REPORT = "quarterly_report"
+    HALF_YEAR_REPORT = "half_year_report"
+    ANNUAL_REPORT = "annual_report"
+    OTHER = "other"
+
+
+class CompanyDocumentParseStatus(StrEnum):
+    """Deterministic parse/download outcome for one official announcement PDF."""
+
+    PARSED = "parsed"
+    NO_METRICS = "no_metrics"
+    DOWNLOAD_FAILED = "download_failed"
+    PARSE_FAILED = "parse_failed"
+    INVALID_PDF = "invalid_pdf"
+    UNSUPPORTED_URL = "unsupported_url"
 
 
 class BarInterval(StrEnum):

@@ -14,28 +14,26 @@
 
 # 0. 当前执行目标（2026-07-21）
 
-以下事项是当前优先队列，尚未标记为完成：
+以下事项记录当前优先队列、已完成基础和明确放弃项：
 
-- [ ] **现货金属追踪：黄金、白银、铜**
-  先扩展正确的 OTC 现货金属 Instrument 语义，禁止用美股指数、ETF 或
-  `GC=F` / `SI=F` 等期货冒充现货。目标数据源必须至少覆盖 `XAUUSD`、
-  `XAGUSD` 与铜现货，提供稳定 quote、日线 OHLC、明确单位/报价币种、
-  provider timestamp、交易时段和 `spot aggregate` / `mid` / `bid` / `ask`
-  basis，并评估分钟线、历史深度、授权、费用和限流。Alpha Vantage 免费额度与
-  close-only 历史不足以担任主数据源，只保留为低频 supplemental/fallback；不得把
-  `date + price` 伪造成 OHLC。多个用户提供的 Alpha Vantage 凭证只能在服务条款
-  允许时用于显式故障切换，不做轮询扩容或绕过免费额度，所有真实 key 仅保存在本地
-  `.env`，永不进入文档、日志或提交。
-  - [x] Phase 3A 免费期货代理已接入：Yahoo `GC=F`、`MGC=F`、`SI=F`、
-    `HG=F`、`PL=F`、`PA=F` 支持 quote、1m–1mo bars 与日/周技术分析；所有
-    输出明确标记非现货及连续合约换月风险。
-  - [ ] OTC 现货与 LME Cash/3M 仍需独立 Provider；不得由上述期货代理冒充。
-- [ ] **StockTwits 正式接入**
-  现有代码已经包含 symbol-stream adapter、Bullish/Bearish 用户标签解析、
-  Provider Router 路由和 `us_get_sentiment_snapshot` 聚合；当前因缺少受支持的
-  官方访问方式而默认关闭。本目标是确认可用的官方鉴权/访问契约，补齐 secret-safe
-  配置、缓存、限流和 typed error，完成代表标的 live smoke，并继续保持 StockTwits
-  用户标签与 Reddit 模型推断严格分源。普通网页登录或未经批准的匿名抓取不算完成。
+- [ ] **Phase 3A 正式期货与跨资产行情**
+  - [x] 免费连续金属期货 foundation：Yahoo `GC=F`、`MGC=F`、`SI=F`、
+    `HG=F`、`PL=F`、`PA=F` 支持 quote、1m–1mo bars 与日/周技术分析；新浪仅提供
+    GC/SI/HG 带时间戳 quote fallback，东方财富仅提供六种金属日线及周/月聚合。
+  - [ ] 正式期货统一接入：具体合约、到期日、乘数、交易时段、结算、持仓量、合约链、
+    期限结构与受控换月；金属期货和 DCE 生猪期货使用同一模型。
+  - [ ] OTC/LME：XAUUSD、XAGUSD、铜现货、LME Cash/LME 3M 与期现基差；不得由
+    `GC=F`、`SI=F` 或 `HG=F` 冒充。数据必须披露 bid/ask/mid、单位、币种、时间戳、
+    session 和 venue/aggregate basis。
+  Alpha Vantage 免费额度和 close-only 历史不足以担任主源，只保留为合规的低频
+  supplemental/fallback；真实 key 只保存在本地 `.env`。
+- [x] **Phase 3B 跨市场公司财务/经营事实与可选行业数据集**
+  A 股/美股三表、确定性财务质量指标、巨潮公司经营披露、全国畜牧总站猪周期数据与历史
+  发布版本已接入。股票 Deep Dive 自动组合标准化财报；行业数据集按需显式选择，不作为
+  所有行业的通用前提。长期官方行业历史按 best effort 延伸，不设固定 20 年 gate。
+- **StockTwits 已退出当前路线图（2026-07-25）**：不再把正式接入作为 Phase 3
+  Action Item、发布目标或退出门槛。现有默认关闭的 adapter 可暂时保留以避免在规划整理中
+  混入代码删除；若未来没有受支持的官方访问方式，可在独立 breaking cleanup 中移除。
 - [x] **Moomoo OpenD 美股 Hot List**
   已内化到现有 `market_get_context`，不新增 MCP 工具或独立 Skill；输出交易、搜索、新闻和
   综合热度，固定披露“注意力不等于多空情绪”，复用统一 OpenD 限流并按 15 分钟缓存。
@@ -336,7 +334,7 @@ trading-execution-mcp
 | Phase 0 | 技术骨架 | Codex、MCP、统一模型、Provider Interface | 完整业务 |
 | Phase 1 | 只读研究伙伴 | A股、美股、账户、研究、组合、记忆 | 回测、模拟、下单 |
 | Phase 2 | Watchlist + Risk + Monitoring + Technical v2 | 自选、只读风险、条件监控、A股/美股专业日周线技术分析 | 回测、模拟和实盘 |
-| Phase 3 | 验证、监控扩展与模拟交易伙伴 | 策略、回测、实验、Monitoring 扩展、Trade Plan、Paper | 真实写入 |
+| Phase 3 | 跨资产、历史验证与模拟评估 | 正式期货/现货、公司财务经营、可选行业数据、历史验证、计划控制链、Paper 与归因 | 真实写入 |
 | Phase 4 | 受控交易助手 | Execution MCP、人工批准、有限实盘 | 无人自主交易 |
 | Phase 5 | 自适应投资系统 | 归因、评估、策略治理、个性化 | 默认自动实盘 |
 
@@ -559,146 +557,111 @@ envelope 与 PNG K线/量能/RSI 图。所有结果固定 `historically_validate
 
 ---
 
-# 10. Phase 3：假设验证、监控与 Paper Trading
+# 10. Phase 3：跨资产、历史验证与模拟评估
 
-## 10.1 目标
+## 10.1 合并后的能力域
 
-把会话中的 Thesis 转为可复现的历史实验，再从一次性研究升级为持续跟踪和模拟执行。
-Phase 2 已能保留但不能研究的 Crypto、Forex/贵金属与期货 Watchlist 标的，统一在本阶段
-扩展数据、Instrument 与研究能力；这属于产品覆盖扩展，不作为 Phase 2 Watchlist 缺陷。
+Phase 3 不再按零散工具或单一品种拆分，而按共享领域模型与依赖关系分为五组：
 
-### 10.1.1 已完成：商品期货行情基础
+| 能力域 | 范围 | 当前状态 |
+|---|---|---|
+| 3A 正式期货与跨资产行情 | 连续代理、正式合约、现货、基差、期限结构 | 连续金属期货基础已完成；正式合约与现货待实施 |
+| 3B 公司财务/经营与可选行业数据 | A股/美股财报、财务质量、公司公告经营指标、按需行业数据、Deep Dive 组合 | 财报与猪周期主链路已完成，行业长期历史 best effort |
+| 3C 历史验证平台 | 历史库、Strategy、Backtest、Experiments、Bias Checks、Artifacts | 待实施 |
+| 3D 判断到计划控制链 | Monitoring v2、Trade Plan、Position Sizing、Risk v2 | Phase 2 基础已完成，扩展待实施 |
+| 3E Paper 模拟与持续评估 | Paper Ledger、Attribution、Scheduler State、周期复盘 | 待实施 |
 
-在不增加 MCP 工具数量的前提下，`instrument_resolve`、`us_get_market`、
-`market_get_bars`、`technical_get_snapshot` 和 `technical_render_chart` 已支持
-Yahoo 连续商品期货。期货使用 `future:US:<ROOT=F>` 身份与不复权价格口径，明确
-`FUTURES_CONTRACT_NOT_SPOT` 和 `CONTINUOUS_FUTURES_ROLL_RISK`；现货金银、LME 铜、
-合约级期限结构、持久化基差与研究级连续合约仍为后续 Action Item。
+## 10.2 Phase 3A：正式期货与跨资产行情
 
-## 10.2 策略、历史数据与回测
+当前 Yahoo 连续金属期货以及新浪 quote/东方财富日线 fallback 只是 foundation，固定披露
+非现货与换月风险。下一步正式期货接入统一覆盖：
 
-新增 `strategy_registry`、`historical_data`、`backtest`、`experiments`、`metrics`、
-`bias_checks` 和 `artifact_store`。
+- 交易所、具体合约月份、到期/最后交易日、乘数、最小跳动、交易时段和结算口径；
+- 成交量、持仓量、合约链、期限结构、主力判定和可控换月；
+- 原始合约与连续序列的可追踪构造；
+- 金属期货和大商所生猪期货使用同一领域模型与 Provider 接口。
+
+生猪期货不再作为猪周期数据集的专用子模块。DCE 生猪只是正式期货接入的首批中国期货
+品种之一；Phase 3B 通过标准期货事实消费它，不重复实现行情或期限结构。
+
+同一能力域还包含 XAUUSD/XAGUSD/铜现货、LME Cash/LME 3M 和期现基差。Crypto 与普通
+Forex 可以复用该模型，但在出现明确产品用例前不作为 Phase 3 退出门槛。
+
+## 10.3 Phase 3B：公司财务/经营与可选行业数据
+
+公司财务是通用核心：A 股通过 `a_share_get_facts(operation="financials")`，美股通过
+`us_get_fundamentals(operation="statements")` 返回标准化三表与缺失输入安全的确定性质量
+指标；股票 Deep Dive 自动组合该财务包。SEC 支持 latest/vintages，yfinance/Alpha Vantage
+只作为 current-only fallback；A 股中报和季报明确保留累计/YTD 口径。
+
+公司公告经营指标用于补充销量、售价、产能、成本等非标准化披露。猪周期只是首个按需行业
+数据集，已经包含全国价格/饲料/猪粮比/周期性产能、历史发布版本和显式 Deep Dive 组合，
+并不要求所有行业建立周期模型。剩余工作合并为两类：
+
+- 同行比较与周期估值；
+- 官方长期历史按 best effort 补充并持续披露缺口。
+
+DCE 生猪期限结构属于 3A，不在此重复列为独立 Provider。
+
+## 10.4 Phase 3C：历史验证平台
+
+`historical_data`、`strategy_registry`、`backtest`、`experiments`、`metrics`、
+`bias_checks` 和 `artifact_store` 合并建设，共享同一 point-in-time 与数据版本契约。
+存储目标为 DuckDB + Parquet + dataset manifest。
 
 A 股回测必须覆盖 T+1、100 股整数倍、涨跌停、停牌、ST、新股、板块差异、除权除息、
-流动性、佣金与印花税。美股回测必须覆盖交易时段、碎股配置、Cash/Margin、PDT、拆股、
-分红、美元现金、费用、滑点与流动性。
+流动性、佣金与印花税；美股覆盖交易时段、碎股、Cash/Margin、PDT、拆股、分红、费用、
+滑点与流动性。实验支持 Walk-forward、OOS、Event Study、Monte Carlo、Benchmark 与成本
+敏感性，并检查 Look-ahead、Survivorship、Data Snooping、Filing/News/Adjusted Price
+Leakage、样本不足和过拟合。
 
-实验支持单/多标的、参数扫描、Walk-forward、Out-of-sample、Market Regime、Event Study、
-Monte Carlo、Benchmark 和成本敏感性。自动检查 Look-ahead、Survivorship、Data Snooping、
-Future Function、Filing/News/Adjusted Price Leakage、不合理成交、样本不足与过拟合。
+Strategy 是版本化实验说明，不是订单或 Thesis 确认。
 
-## 10.3 Monitoring extensions
+## 10.5 Phase 3D：判断到计划控制链
 
-在 Phase 2C v1 基础上扩展：
-
-- 技术位
-- 成交量
-- 财务与 SEC
-- A 股公告
-- 研报预期
-- Insider
-- 资金和筹码
-- 宏观
-- Sentiment
-- Thesis 失效条件
-
-## 10.4 Trade Plan
-
-包含：
-
-- Thesis
-- 时间周期
-- 入场条件
-- 分批规则
-- 最大风险
-- 止损和失效
-- 退出条件
-- 有效期
-- 目标仓位区间
-- 需要监控的数据
-
-## 10.5 Position Sizing
-
-- 固定比例
-- 单笔风险预算
-- ATR
-- Volatility Targeting
-- 分批建仓
-- 网格草案
-- 主题上限
-- 相关持仓约束
-
-## 10.6 Risk Engine extensions
-
-在 Phase 2B v1 基础上增加需要历史数据、交易计划或订单状态的检查：
-
-- 主题上限
-- 回撤
-- 流动性
-- 财报和事件
-- A 股 T+1
-- 涨跌停和停牌
-- 数据过期
-- 重复订单
-
-## 10.7 Paper Trading
-
-- 模拟账户
-- 订单状态
-- 部分成交
-- 费用和滑点
-- 组合净值
-- Shadow Portfolio
-- 策略、Agent 和实际账户比较
-
-## 10.8 Attribution
-
-- 标的选择
-- 择时
-- 仓位
-- Beta
-- 行业和主题
-- 汇率
-- 成本
-- 主观干预
-- 计划遵守率
-
-## 10.9 MCP
+Monitoring v2、Trade Plan、Position Sizing 与 Risk Engine v2 合并为一条确定性控制链：
 
 ```text
-strategy_create_from_thesis
-strategy_get
-backtest_run
-backtest_compare
-backtest_explain_trades
-experiment_get
-experiment_list
-experiment_promote_result
-monitor_create
-monitor_query
-trade_plan_create
-trade_plan_validate
-position_size_calculate
-risk_check
-paper_order_preview
-paper_order_submit
-paper_portfolio_get
-performance_attribute
-review_run_weekly
+Current Thesis + verified facts
+→ versioned Trade Plan
+→ deterministic sizing range
+→ expanded risk checks
+→ monitorable conditions and invalidations
 ```
 
-## 10.10 出口门槛
+统一覆盖技术位/成交量/财务/SEC/A 股公告/研报预期/Insider/资金筹码/宏观/Sentiment/
+Thesis 失效监控；入场、分批、退出、有效期和目标仓位计划；风险预算、ATR、波动率目标与
+相关持仓约束；以及主题上限、回撤、流动性、事件、T+1、涨跌停、停牌、数据过期和重复订单。
 
-- 回测可复现、数据版本可追踪且无明显历史泄漏
-- A 股和美股规则、费用与滑点正确
-- 至少 20 个基准策略验证
-- Paper 连续运行 8–12 周
-- 账户和订单对账稳定
-- Risk Tests 完整
-- 监控具备重试和去重
-- 无 Critical 风控绕过
-- 研究、模拟和真实账户清楚区分
+所有结果仍是计划、区间或检查，不产生订单、成交或确认权限。
+
+## 10.6 Phase 3E：Paper 模拟与持续评估
+
+Paper Trading、Attribution、周期复盘和 Scheduler State 共享模拟账本与时钟，因此合并建设：
+
+- 模拟账户、订单生命周期、部分成交、费用、滑点、净值与 Shadow Portfolio；
+- 标的选择、择时、仓位、Beta、行业主题、汇率、成本、主观干预和计划遵守率归因；
+- 幂等的每日持仓、每周组合和事后复盘运行；
+- 策略、Agent 建议、Paper 结果与真实账户观察结果分源比较。
+
+现有 CLI 和 Codex Automation 是外部调度入口，不等同于内部 Paper Engine 或 Scheduler State。
+Paper 与真实券商永久隔离，真实订单写入仍属于 Phase 4 的独立 Execution MCP。
+
+## 10.7 MCP 公共面原则
+
+能力域不等于一项能力一个 MCP 工具。Phase 3 继续使用闭合 `operation`、聚合 coordinator 和
+已有工具扩展公共面；`monitor_*`、`risk_check`、`portfolio_run_review` 不创建重复别名。
+具体工具 schema 在各能力域设计冻结时确定，公共面保持紧凑且可审计。
+
+## 10.8 出口门槛
+
+- 正式期货与现货不会混淆，合约、连续、期现和基差口径可追踪；
+- 回测可复现，数据版本可追踪且无明显历史泄漏；
+- A 股和美股规则、费用与滑点正确；
+- 至少 20 个基准策略验证；
+- Paper 连续运行 8–12 周；
+- 模拟账本、Risk Tests、监控重试去重和 Scheduler State 稳定；
+- 研究、计划、模拟和真实账户清楚区分，无 Critical 风控绕过。
 
 ---
 
@@ -843,8 +806,8 @@ Codex
 ```text
 Codex
 → trading-partner-mcp
-→ Research + Backtest + Paper
-→ Scheduler Worker
+→ Cross-Asset Facts + Historical Validation + Plan Controls + Paper Evaluation
+→ DuckDB/Parquet + Scheduler State
 ```
 
 ## Phase 4–5
@@ -930,16 +893,11 @@ render_technical_chart
 ## Phase 3
 
 ```text
-hypothesis_to_strategy
-backtest_hypothesis
-compare_experiments
-stress_test_strategy
-build_trade_plan
-monitor_thesis
-paper_execute_plan
-daily_position_review
-weekly_portfolio_review
-post_trade_review
+research_formal_cross_asset
+validate_hypothesis_history
+manage_judgment_to_plan_controls
+simulate_paper_plan
+evaluate_strategy_and_portfolio
 ```
 
 ## Phase 4
@@ -973,7 +931,8 @@ Phase 2 → Phase 3
 Moomoo/CSV Watchlist 可恢复、可审计，外部成员关系与研究历史边界可靠
 
 Phase 3 → Phase 4
-回测可复现且无明显泄漏；Paper 8–12 周稳定，Risk 和 Reconciliation 可靠
+正式期货/现货口径可靠；回测可复现且无明显泄漏；Paper 8–12 周稳定，
+Risk、Scheduler State 和模拟账本可靠
 
 Phase 4 → Phase 5
 小额实盘稳定，无严重安全事件

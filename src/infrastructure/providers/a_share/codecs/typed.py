@@ -1261,7 +1261,7 @@ from domain.common.enums import ReliabilityLevel  # noqa: E402
 
 CODEC_FUNDAMENTALS: Final[str] = "a_share_fundamentals.v1"
 CODEC_F10: Final[str] = "a_share_f10.v1"
-CODEC_STATEMENTS: Final[str] = "a_share_statements.v1"
+CODEC_STATEMENTS: Final[str] = "a_share_statements.v2"
 CODEC_REPORTS: Final[str] = "a_share_reports.v1"
 CODEC_CONSENSUS: Final[str] = "a_share_consensus.v1"
 CODEC_ANNOUNCEMENTS: Final[str] = "a_share_announcements.v1"

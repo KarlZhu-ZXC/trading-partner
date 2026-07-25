@@ -22,6 +22,13 @@ class USStatementFrequency(StrEnum):
     ANNUAL = "annual"
 
 
+class USStatementView(StrEnum):
+    """One current row per fiscal period or all visible filing vintages."""
+
+    LATEST = "latest"
+    VINTAGES = "vintages"
+
+
 class USFundamentalBasis(StrEnum):
     """Fundamental metric reporting basis (design §3)."""
 

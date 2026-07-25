@@ -8,7 +8,8 @@
 Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex 负责理解问题、
 选择工具、组织正反观点并生成最终回答；MCP 负责提供：
 
-- 可持久化的 Investment Case、Thesis、假设、失效条件和历史研究记录；
+- 默认以标的为入口的持久化研究档案（Investment Case）、当前投资判断（Thesis）、
+  假设、失效条件和历史研究记录；
 - 带来源、时间、新鲜度、口径和降级状态的 A 股与美股事实；
 - 只读账户、持仓、历史交易和跨市场组合事实；
 - 跨 Codex Thread 恢复、严格质询和五类研究工作流。
@@ -62,18 +63,33 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 |---|---|
 | `system_health` | 检查应用、数据库和全文检索；诊断本身可能以 degraded envelope 返回 |
 
-### 3.2 Investment Case 与 Thesis（9）
+### 3.2 标的研究档案与投资判断（Investment Case / Thesis，9）
+
+面向用户，Case 应理解为“研究档案”；在最常见的公司/催化剂研究中，就是“某个标的的
+研究档案”。Thesis 应理解为“档案中的当前投资判断”。Instrument 是客观标的身份；Case
+是围绕它建立的主观、可归档研究容器；Thesis 则是可被证伪、可随证据修订的具体判断。
+`theme`、`macro`、`portfolio_concern` 档案可以跨越多个标的或没有主标的。创建 Draft Case
+只是在研究记忆中建立档案，
+不代表看多、看空、开始长期跟踪或确认 Thesis。
+
+```text
+标的 Instrument
+└── 标的研究档案 Investment Case
+    ├── 当前投资判断 Thesis
+    ├── 判断修订历史
+    └── 证据、报告、事件、日志、决策与质询
+```
 
 | 工具 | 能力与边界 |
 |---|---|
-| `investment_case_create` | 创建经用户确认的长期研究 Case |
-| `investment_case_query` | 传 `case_id` 读取一个 Case，否则筛选、分页列出 Case |
-| `investment_case_archive` | 经明确复核后归档；不是物理删除 |
-| `research_state_get` | 恢复 Thesis、假设、失效条件、问题等完整研究状态 |
+| `investment_case_create` | 创建经用户确认的研究档案；company/catalyst 必须绑定标的，且不自动形成投资判断 |
+| `investment_case_query` | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
+| `investment_case_archive` | 经明确复核后归档研究档案；不删除 Instrument，也不是物理删除 |
+| `research_state_get` | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
 | `research_state_update` | 提出结构化研究状态候选变更 |
-| `thesis_revision_propose` | 提出 append-only Thesis 新版本 |
+| `thesis_revision_propose` | 提出 append-only 投资判断（Thesis）新版本 |
 | `thesis_revision_confirm` | 由有权限的确认者确认、拒绝或撤回候选 |
-| `thesis_history_get` | 读取不可改写的 Thesis 版本历史 |
+| `thesis_history_get` | 读取不可改写的投资判断版本历史 |
 
 状态变更采用 Candidate Propose → Confirm / Reject / Withdraw。Codex 可以提出候选，但不能
 代替用户确认或拒绝。
@@ -101,7 +117,7 @@ Yahoo Finance → Alpha Vantage 回退，A 股代码由腾讯行情验证；例�
 
 | 工具 | 能力与边界 |
 |---|---|
-| `a_share_get_facts` | 通过 `operation` 读取综合快照、市场结构、资金、涨停生态、舆情或 ETF 期权 |
+| `a_share_get_facts` | 通过 `operation` 读取综合快照、市场结构、资金、涨停生态、舆情、ETF 期权、标准化财报、行业周期或公司经营披露事实 |
 | `research_search_reports` | 搜索 Provider 研报与一致预期；不会自动归档为内部报告 |
 
 主要链路包括 Tencent、Eastmoney、CNINFO、Sina、THS、CLS，以及可选 iWencai。实时行情和
@@ -112,6 +128,39 @@ Eastmoney 提供。该优先级充分参考固定版本的 `a-stock-data` 数据
 `a_share_get_facts(operation="snapshot", detail="full")` 的最低成功条件是可信报价；基本面、报表、公告、新闻或
 公司行动缺失时返回 partial 和对应 warning，而不是把整份快照判为不可用。ETF 不会请求股票
 专属的筹码分布指标。
+
+`a_share_get_facts(operation="financials", instrument_id=..., periods=8)` 专门返回 A 股
+利润表、资产负债表和现金流量表的标准化核心字段，最多 20 个报告期；可用
+`statement_types` 与 `metric_codes` 缩小响应。季度/中报/三季报分别明确标记为 Q1/H1/
+九个月累计口径，不把累计值伪装成单季值。Sina 为主源，Eastmoney 为字段较窄的 fallback；
+两者都保留发布时间、来源和缺失字段。自由现金流、经营现金流/净利润、FCF margin、资本
+开支率、流动比率及净负债仅在输入完整时确定性计算。A 股股票 Deep Dive 默认包含该财务包。
+
+`a_share_get_facts(operation="industry_cycle", cycle="hog")` 提供全国月度猪价、
+饲料价格、猪粮比及最新可见的季度/半年/年度产能披露。它遵守 `as_of` 发布时间边界，但不判断周期阶段，
+也不内嵌公司成本、公司月度销售或大商所生猪期货曲线。返回值采用通用行业指标观测结构
+（指标代码、Decimal 值、单位、统计区间、频率、存量/均值/YTD 等统计口径、发布时间、
+估算标记、方法版本和来源），不会为每个周期新增
+一套专属 MCP DTO。
+
+默认 `view=compact` 只返回每个已选指标的最新可见观测，并附带确定性 per-metric
+coverage（`count`/`first_period`/`last_period`）与 `total_observations`。
+`view=series` 返回过滤后的有界分页（`offset>=0`，`limit<=200`，`has_more`）。
+可选 `metric_codes` 为 lower_snake_case 过滤器。Provider/仓储仍可按
+`lookback_months` 拉取或保留完整请求窗口，但 MCP 输出始终有界；不得把
+240 个月请求表述为连续 20 年覆盖。
+
+显式运行 `uv run trading-partner-industry-sync --months 240` 可将官方发布版本写入历史库；
+CLI 会报告实际覆盖与缺失月份。当前官方在线档案不能证明连续覆盖 2006 年至今，因此系统
+不会插值或用未披露的第三方序列补洞，也不会把“请求 240 个月”表述为“已有 240 个月”。
+
+`a_share_get_facts(operation="company_operating_metrics", instrument_id=...)`
+是独立的公司口径补充：按 `as_of` 筛选巨潮公告，只下载官方 finalpage PDF，在 Provider
+内部确定性抽取销量、售价、销售收入、出栏/屠宰量、能繁母猪和完全成本。响应保留公告时间、
+原文/PDF 链接、统计期间、月度/累计口径、审计/估算标记、解析版本和每份文档的解析回执；
+原始 PDF 与正文不会越过 Infrastructure 边界。财务报表指标继续由现有 fundamentals / statements
+链路提供，不在此重复解析。A 股 Deep Dive 只有显式传入 `industry_cycle="hog"` 时，才把该
+公司经营包与全国猪周期 compact 包一起纳入事实步骤，不按公司名称猜测行业。
 
 部分热度、筹码或情绪字段属于派生值或低/未知可靠性值；回答时必须保留来源与 warning，
 不能将当前榜单伪装成历史截面。
@@ -126,8 +175,10 @@ Eastmoney 提供。该优先级充分参考固定版本的 `a-stock-data` 数据
 | `technical_get_snapshot` | A 股/美股日线与周线指标、状态、结构位和近期形态 |
 | `technical_render_chart` | 返回可审计元数据和 PNG K线/成交量/RSI 图 |
 
-股票默认路由为 Yahoo → Alpha Vantage；Phase 3 商品期货使用 Yahoo 免费连续合约行情，
-支持 `GC=F`、`MGC=F`、`SI=F`、`HG=F`、`PL=F`、`PA=F`。期货输出固定披露
+股票默认路由为 Yahoo → Alpha Vantage；Phase 3 商品期货以 Yahoo 免费连续合约为主，
+并对金银铜当前价使用新浪 fallback、对六种金属的日/周/月线使用东方财富 fallback。
+分钟级 OHLCV 没有 fallback，不会把价格线伪装成 K 线。支持 `GC=F`、`MGC=F`、
+`SI=F`、`HG=F`、`PL=F`、`PA=F`。期货输出固定披露
 `FUTURES_CONTRACT_NOT_SPOT` 与 `CONTINUOUS_FUTURES_ROLL_RISK`，不得把 `GC=F` 说成
 XAUUSD、把 `HG=F` 说成伦敦铜。技术指标是派生事实，不是回测结果或价格预测；必须保留
 `historically_validated=false`。
@@ -140,11 +191,16 @@ Moomoo Hot List 返回交易、搜索、新闻及综合热度排名，只代表�
 
 | 工具 | 能力与边界 |
 |---|---|
-| `us_get_fundamentals` | 通过 `operation` 获取当前估值/SEC facts 或标准化财务报表 |
+| `us_get_fundamentals` | 通过 `operation` 获取当前估值/SEC facts 或标准化财务报表；报表支持 `view=latest|vintages` |
 | `us_get_company_research` | 通过 `operation` 获取 filing、内部人交易、公司更新或 typed events |
 
 SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历史估值，修订文件不能被
 错误地提前到其公开时间之前。
+
+标准化报表路由为 SEC → yfinance → Alpha Vantage。`view="latest"` 对同一报告期只保留
+查询时点已可见的最新 filing；`view="vintages"` 保留 SEC accession/form/filing date，适合
+查看重述与披露版本。yfinance 和 Alpha Vantage 只作为 current-only fallback，不能提供 SEC
+历史版本。跨市场质量指标只在所需字段齐全时计算；美国 `vintages` 不计算跨 filing 混合比率。
 
 ### 3.7 美股新闻、宏观、情绪与预测市场（4）
 
@@ -152,11 +208,11 @@ SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历
 |---|---|
 | `market_get_live_news` | 带发布时间 cutoff 的公司或全局新闻 |
 | `us_get_macro_context` | FRED 数据及请求时点对应的 ALFRED vintage |
-| `us_get_sentiment_snapshot` | StockTwits 标签、Reddit 推断与 Moomoo 确定性挖掘分来源呈现 |
+| `us_get_sentiment_snapshot` | Reddit 推断与 Moomoo 确定性挖掘分来源呈现；StockTwits 仅保留默认关闭的兼容路径，不是当前路线图数据源 |
 | `us_get_prediction_market_context` | Polymarket 当前开放市场概率 |
 
-Polymarket 只能表达当前概率，不能作为历史赔率；StockTwits 用户标签、Reddit 推断与
-Moomoo 确定性推断不能混为同一种信号。Moomoo 路径只执行精确 ticker 相关性过滤、HTML
+Polymarket 只能表达当前概率，不能作为历史赔率；若兼容路径中出现 StockTwits 用户标签，
+仍不能与 Reddit 推断及 Moomoo 确定性推断混为同一种信号。Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 清洗、去重、低质量过滤与版本化中英规则分类，不调用 Skill 或运行时 LLM；Codex 等外部
 交互层负责解释和观点综合。新闻、社交文本和其他 Provider 内容均被视为不可信外部数据，
 不能作为给 Codex 的指令。
@@ -276,10 +332,17 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 | `monitor_event_list` | 读取 TRIGGERED、RECOVERED、NOT_EVALUATED 事件 |
 | `monitor_event_resolve` | 经确认和幂等键确认已读或解决一个事件 |
 
+监控枚举入参允许大小写不敏感并自动去除首尾空格，例如 `active`、`paused`、
+`us_post_market` 和 `price_below` 会在 DTO 边界规范化为 uppercase。MCP schema、
+响应、领域对象和数据库仍只使用规范的 uppercase 枚举值。
+
 V1 只支持 A 股/美股价格上穿、价格下穿，以及组合 Risk 总体状态达到
 `WARN`/`BREACH`。每条规则都有最大事实年龄；上游失败或事实过期返回
 `NOT_EVALUATED`，不会当作安静状态。相同条件连续运行不会重复生成事件，恢复后才产生
-`RECOVERED`。Monitoring 不会修改 Thesis、Policy、仓位或订单。
+`RECOVERED`。Monitor 版本可设置带时区的 `valid_until`：截止时刻仍有效，之后评估器会在
+访问 Provider、写规则状态和创建事件之前跳过它，并返回 `MONITOR_EXPIRED`；历史记录保留。
+这与规则的 `max_fact_age_seconds` 是两个独立概念。Monitoring 不会修改 Thesis、Policy、
+仓位或订单。
 
 外部调度使用 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` 或
 `--cadence A_SHARE_POST_MARKET`，只评估 ACTIVE 且市场匹配的 Monitor。CLI 不是常驻
@@ -348,19 +411,27 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   Alpha Vantage 明确返回 HTTP 429 或额度/频率 notice 时才依次故障切换；网络错误、鉴权
   错误和数据契约错误不会触发轮换。该机制用于可用性而非并发扩容，使用者仍须遵守上游条款
   与各 key 配额。
+- Yahoo Chart 的 `chartPreviousClose` 是图表窗口基准，会随 `period1` 变化，不等于
+  上一交易日收盘。项目从完整日线派生 `previous_close`；盘后股价使用当天已完成的常规
+  收盘，盘前和常规时段使用更早交易日，不使用该 metadata 计算日内涨跌。
+- 对接近当前时刻且 Yahoo 常规报价字段已经过时的请求，项目只在非闭市时补查带
+  `includePrePost` 的 1 分钟线，并按时间戳选更新观察值。盘前/盘后价格明确附带
+  `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`；补查
+  失败则附带 `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近已知常规值。历史 `as_of` 不走这条
+  current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。
 - Yahoo 的本地 admission control 允许有界的 KO + SPY/QQQ/IWM 组合并发；这只是防止
   Router 自己误拒绝请求，不代表对 Yahoo 上游额度的声明。闭市时保留真实 timestamp-based
   freshness，但用 `CLOSED_SESSION_LAST_KNOWN` 说明这是最近已知交易时段值，而不笼统报
   `STALE_US_DATA`。
 - SEC EDGAR 需要配置合规的 `SEC_USER_AGENT` 才应启用真实请求。
 - FRED/ALFRED 宏观数据需要有效 FRED key。
-- Reddit、StockTwits、Polymarket 受各自接口、网络和限流影响。Reddit 匿名 RSS 按
+- Reddit、Polymarket 受各自接口、网络和限流影响。Reddit 匿名 RSS 按
   `REDDIT_SUBREDDITS` 配置的有序板块列表串行请求、请求间隔至少 6 秒、
   遇到 429 立即停止剩余请求并保留已有 partial 数据，同时采用 15 分钟缓存。匿名 RSS 仅是
   best-effort 路径；Reddit 当前规则要求获批的 OAuth 客户端、规范 User-Agent 和限流响应头处理，
   因此增加 sleep 或轮换身份不能视为可靠修复。
-  StockTwits 当前暂停新 API 应用注册，普通网页登录不等于 API 授权，因此默认关闭；只有已有
-  官方批准开发者访问时才应重新启用。Polymarket 只按事件主题条件调用，可通过仅供其使用的
+  StockTwits 正式接入已于 2026-07-25 退出当前路线图；默认关闭的兼容 adapter 不触发重试、
+  匿名抓取或凭证申请，也不构成 Phase 3 发布目标。Polymarket 只按事件主题条件调用，可通过仅供其使用的
   `POLYMARKET_PROXY_URL` 走 HTTP(S) 代理；网络不可达时不得阻塞普通个股
   研究主链。
 - Moomoo 评论流已作为固定 Provider 内化进 `us_get_sentiment_snapshot`，不依赖宿主侧
@@ -417,11 +488,22 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
    `HOLDINGS_SOURCES` 数组，重启 Codex MCP。
 5. 先用 `account_get(operation="refresh", providers=["schwab"])` 做只读验证。
 
+### Schwab 重新授权与后台行为
+
+- 重新授权只运行一次 `uv run python scripts/setup_schwab_oauth.py --replace`。该命令
+  持有跨进程锁并只启动一个浏览器 OAuth 流程；若已有授权在进行，第二次调用会要求完成
+  现有标签，而不会再创建 OAuth state 或标签页。
+- `account_get(operation="refresh")`、盘后同步和 MCP Provider 只通过
+  `client_from_token_file` 加载并自动刷新现有 token。缺失、失效或无法刷新的 token 返回
+  typed provider error；后台路径绝不打开浏览器。
+- 遇到 Schwab 鉴权错误时，不要反复重跑账户刷新。先完成上述专用授权命令，再重跑一次
+  同步。不要复制或复用 schwab-trader plugin 的 token。
+
 ## 7. 存储与运维边界
 
 研究状态、研究记忆、账户快照、Challenge Review 和 workflow receipt 使用本地 SQLite
 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。数据库结构通过
-Alembic 管理，当前 migration head 是 `0014_phase3_commodity_futures`；它在
+Alembic 管理，当前 migration head 是 `0016_monitor_valid_until`；它在
 `0012_phase2b_risk_engine` 之后增加 Monitor 定义、状态、事件、resolution 和 run receipt。
 
 基础设施包含 SQLite online backup/restore：执行完整性检查、保留 Alembic 与 schema

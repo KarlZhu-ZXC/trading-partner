@@ -118,3 +118,28 @@ async def test_tencent_validates_and_classifies_a_share_etf() -> None:
 
     assert result.meta.vendor is VendorId.TENCENT
     assert result.value[0].instrument_id == "etf:A_SHARE:510050.SH"
+
+
+@pytest.mark.asyncio
+async def test_tencent_resolves_exact_a_share_chinese_name_then_validates_quote() -> None:
+    transport = _SequenceTransport(
+        [
+            b'v_hint="sz~002714~\\u7267\\u539f\\u80a1\\u4efd~mygf~GP-A^'
+            b'hk~02714~\\u7267\\u539f\\u80a1\\u4efd~mygf~GP";',
+            'v_sz002714="1~牧原股份~002714~45.00";'.encode("gbk"),
+        ]
+    )
+    adapter = TencentInstrumentDirectoryAdapter(transport, clock=FixedClock(NOW))
+
+    result = await adapter.lookup(
+        market=Market.A_SHARE,
+        query="牧原股份",
+        asset_type_hint=AssetType.EQUITY,
+        as_of=NOW,
+    )
+
+    assert result.value[0].instrument_id == "equity:A_SHARE:002714.SZ"
+    assert [request.url for request in transport.requests] == [
+        "https://smartbox.gtimg.cn/s3/",
+        "https://qt.gtimg.cn/q",
+    ]

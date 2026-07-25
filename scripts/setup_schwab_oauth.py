@@ -9,11 +9,17 @@ from pathlib import Path
 
 from infrastructure.config.settings import AppSettings
 from infrastructure.providers.account.schwab import SchwabPyReadClient
+from infrastructure.system.process_file_lock import ProcessFileLock
 
 
 def _secure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
+
+
+def _lock_path(token_path: Path) -> Path:
+    """Keep OAuth coordination outside the provider-managed secrets directory."""
+    return token_path.parent.parent / "locks/schwab_oauth.lock"
 
 
 def main() -> int:
@@ -55,27 +61,40 @@ def main() -> int:
         for index, account_hash in enumerate(hashes, start=1):
             print(f"schwab_account_hash_{index}={account_hash}")
         return 0
-    if token_path.exists() and not args.replace:
-        raise SystemExit("Schwab token already exists; use --replace only for reauthorization")
     _secure_directory(token_path.parent)
-    try:
-        from schwab.auth import client_from_login_flow
-    except ImportError:
-        raise SystemExit("schwab-py is not installed; run uv sync") from None
-    try:
-        client_from_login_flow(
-            settings.schwab_client_id,
-            settings.schwab_client_secret,
-            settings.schwab_redirect_uri,
-            str(token_path),
-            callback_timeout=300,
-            interactive=False,
-        )
-    except Exception:
+    lock = ProcessFileLock(_lock_path(token_path))
+    if not lock.acquire():
         raise SystemExit(
-            "Schwab browser OAuth failed; no manual fallback was started. "
-            "Close stale OAuth tabs and rerun this command."
-        ) from None
+            "Schwab OAuth setup is already running; complete the existing browser tab "
+            "instead of starting another authorization."
+        )
+    try:
+        if token_path.exists() and not args.replace:
+            raise SystemExit(
+                "Schwab token already exists; use --replace only for reauthorization"
+            )
+        try:
+            from schwab.auth import client_from_login_flow
+        except ImportError:
+            raise SystemExit("schwab-py is not installed; run uv sync") from None
+        try:
+            # This is the only Trading Partner path allowed to open a browser.
+            # The process lock guarantees one live OAuth state and one login flow.
+            client_from_login_flow(
+                settings.schwab_client_id,
+                settings.schwab_client_secret,
+                settings.schwab_redirect_uri,
+                str(token_path),
+                callback_timeout=300,
+                interactive=False,
+            )
+        except Exception:
+            raise SystemExit(
+                "Schwab browser OAuth failed; no manual fallback was started. "
+                "Close the failed OAuth tab and rerun this command once."
+            ) from None
+    finally:
+        lock.release()
     token_path.chmod(0o600)
     print("Schwab OAuth token created for Trading Partner.")
     return 0

@@ -2402,21 +2402,33 @@ class EastmoneyAShareAdapter:
         lines: list[FinancialStatementLine] = []
         unknown_excluded = False
         # Frozen item columns per statement type (subset locked by fixtures).
-        item_columns: Mapping[FinancialStatementType, tuple[tuple[str, str], ...]] = {
+        item_columns: Mapping[
+            FinancialStatementType, tuple[tuple[str, str, str], ...]
+        ] = {
             FinancialStatementType.BALANCE_SHEET: (
-                ("TOTAL_ASSETS", "总资产"),
-                ("TOTAL_LIABILITIES", "总负债"),
-                ("TOTAL_EQUITY", "股东权益合计"),
+                ("MONETARYFUNDS", "cash_and_equivalents", "货币资金"),
+                ("ACCOUNTS_RECE", "accounts_receivable", "应收账款"),
+                ("INVENTORY", "inventory", "存货"),
+                ("TOTAL_ASSETS", "total_assets", "总资产"),
+                ("TOTAL_LIABILITIES", "total_liabilities", "总负债"),
+                ("TOTAL_EQUITY", "stockholders_equity", "股东权益合计"),
             ),
             FinancialStatementType.INCOME_STATEMENT: (
-                ("TOTAL_OPERATE_INCOME", "营业总收入"),
-                ("OPERATE_PROFIT", "营业利润"),
-                ("NETPROFIT", "净利润"),
+                ("TOTAL_OPERATE_INCOME", "total_revenue", "营业总收入"),
+                ("TOTAL_OPERATE_COST", "cost_of_revenue", "营业总成本"),
+                ("OPERATE_PROFIT", "operating_income", "营业利润"),
+                (
+                    "PARENT_NETPROFIT",
+                    "net_income_attributable_parent",
+                    "归属于母公司股东的净利润",
+                ),
             ),
             FinancialStatementType.CASH_FLOW: (
-                ("NETCASH_OPERATE", "经营活动现金流净额"),
-                ("NETCASH_INVEST", "投资活动现金流净额"),
-                ("NETCASH_FINANCE", "筹资活动现金流净额"),
+                ("NETCASH_OPERATE", "operating_cash_flow", "经营活动现金流净额"),
+                ("CONSTRUCT_LONG_ASSET", "capital_expenditure", "资本性支出"),
+                ("NETCASH_INVEST", "investing_cash_flow", "投资活动现金流净额"),
+                ("NETCASH_FINANCE", "financing_cash_flow", "筹资活动现金流净额"),
+                ("CCE_ADD", "cash_change", "现金及现金等价物净增加额"),
             ),
         }
         for stype in statement_types:
@@ -2428,7 +2440,7 @@ class EastmoneyAShareAdapter:
             report = _STATEMENT_REPORT_NAMES[stype]
             cols = ",".join(
                 ["SECUCODE", "SECURITY_CODE", "REPORT_DATE", "NOTICE_DATE"]
-                + [c for c, _ in item_columns[stype]]
+                + [raw_code for raw_code, _, _ in item_columns[stype]]
             )
             payload = await self._datacenter_get(
                 report_name=report,
@@ -2458,16 +2470,16 @@ class EastmoneyAShareAdapter:
                     unknown_excluded = True
                 if not keep:
                     continue
-                for code, name in item_columns[stype]:
-                    if code not in row:
+                for raw_code, item_code, name in item_columns[stype]:
+                    if raw_code not in row:
                         continue
-                    value = decimal_from_text(row.get(code), field=code)
+                    value = decimal_from_text(row.get(raw_code), field=raw_code)
                     lines.append(
                         FinancialStatementLine(
                             statement_type=stype,
                             period_end=period_end,
                             published_at=published_at,
-                            item_code=code[:64],
+                            item_code=item_code,
                             item_name=name[:200],
                             value=value,
                             unit="CNY",

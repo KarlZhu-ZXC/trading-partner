@@ -1,6 +1,6 @@
 ---
 name: trading-partner
-description: Use Trading Partner MCP for investment research facts, health checks, Investment Cases, thesis candidates, instrument resolve, A-share and US provider facts, professional technical analysis, accounts, portfolio exposure, risk and monitoring, durable context restore, Challenge Review, research workflows, and research memory. The public surface is exactly 52 tools.
+description: Use Trading Partner MCP for investment research facts, health checks, research files (instrument-centered Investment Cases by default), investment-judgment candidates (Theses), instrument resolve, A-share and US provider facts, professional technical analysis, accounts, portfolio exposure, risk and monitoring, durable context restore, Challenge Review, research workflows, and research memory. The public surface is exactly 52 tools.
 ---
 
 # Trading Partner Skill
@@ -28,7 +28,14 @@ Even when the database or search backend is unhealthy, `ok` on the envelope rema
 `true` so diagnostics remain available; expect `degraded=true` and warnings such as
 `DATABASE_HEALTH_ERROR` or `SEARCH_BACKEND_UNAVAILABLE`.
 
-### Investment Case / thesis (Phase 1B)
+### Research file / investment judgment (Phase 1B)
+
+Use the user-facing terms **research file** for `InvestmentCase` and **current
+investment judgment** for `Thesis`. In company/catalyst flows, an Instrument is the
+objective identity and the Case is its durable research file. Theme, macro, and
+portfolio-concern Cases may omit a primary Instrument. A Thesis is one falsifiable
+judgment inside a file. Do not imply that creating a Draft Case confirms a Thesis
+or starts long-term tracking.
 
 - `investment_case_create` / `investment_case_query` / `investment_case_archive`
 - `research_state_get` / `research_state_update`
@@ -63,7 +70,7 @@ Withdraw. Codex may propose, but must not confirm or reject.
 
 | Tool | Purpose |
 |---|---|
-| `a_share_get_facts` | `snapshot`, `market_structure`, `capital`, `limit_up`, `sentiment`, or `etf_option` facts |
+| `a_share_get_facts` | `snapshot`, `market_structure`, `capital`, `limit_up`, `sentiment`, `etf_option`, normalized `financials`, deterministic `industry_cycle`, or CNINFO `company_operating_metrics` facts |
 | `research_search_reports` | Provider report/consensus search; does not archive reports |
 
 These tools may legally return degraded envelopes when a fallback, delayed,
@@ -86,31 +93,72 @@ support A-share and US equity/ETF/index instruments. Preserve
 Yahoo breadth uses a disclosed listed-security universe that may include ETFs and
 ADRs; never describe it as official exchange common-stock breadth. New-high/low
 and moving-average participation remain unavailable rather than fabricated.
+For near-current non-closed US requests, a stale Yahoo regular quote may be
+replaced only by a newer timestamped one-minute `includePrePost` bar. Preserve
+`EXTENDED_HOURS_PRICE`, `INTRADAY_QUOTE_RECOVERY`, or
+`INTRADAY_QUOTE_UNAVAILABLE`; do not describe Yahoo extended-hours coverage as a
+complete overnight equity market. Historical `as_of` requests stay cutoff-safe.
 Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
 its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
 warning when the local OpenD predates 10.9.
 
-Phase 3A also supports Yahoo continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`,
-`PL=F`, and `PA=F` under `future:US:*` IDs. Futures default to unadjusted bars and
-must preserve `FUTURES_CONTRACT_NOT_SPOT` and `CONTINUOUS_FUTURES_ROLL_RISK`.
+Phase 3A supports continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`,
+and `PA=F` under `future:US:*` IDs. Yahoo is primary; Sina provides timestamped
+quote fallback only for GC/SI/HG, and Eastmoney provides daily-derived bar fallback
+for all six. There is no intraday OHLCV fallback. Futures default to unadjusted bars
+and must preserve `FUTURES_CONTRACT_NOT_SPOT` and `CONTINUOUS_FUTURES_ROLL_RISK`.
 Never call GC/SI spot XAUUSD/XAGUSD, or call HG London/LME copper.
+
+For a national hog-cycle fact package, call
+`a_share_get_facts(operation="industry_cycle", cycle="hog", lookback_months=12)`.
+Default `view=compact` returns the latest visible observation per selected metric
+plus per-metric coverage and `total_observations`. Use `view=series` with optional
+`metric_codes`, `offset`, and `limit<=200` for a bounded page (`has_more`).
+The input accepts up to 240 requested months for backend history depth, but the
+response's explicit periods, coverage fields, and partial-history warning—not the
+requested window—define actual coverage. Never claim continuous 20-year history
+from a 240-month request. Period-end stocks, period averages, policy baselines,
+and YTD totals must not be conflated. Interpret the observations externally; the
+MCP does not label a cycle phase. Industry-cycle payloads use normalized metric
+observations rather than a cycle-specific business DTO; preserve metric units,
+periods, publication times, source URLs, and missing-component disclosures.
+
+For official company operating disclosures, call
+`a_share_get_facts(operation="company_operating_metrics", instrument_id=...)`.
+It returns structured operating facts plus bounded per-document parse receipts;
+raw PDF bytes/text never leave the Provider. Do not treat monthly sales briefs as
+audited, and do not substitute this path for financial statements.
+
+For A-share company accounts, call
+`a_share_get_facts(operation="financials", instrument_id=..., periods=8)`.
+Interim income and cash-flow periods are cumulative/YTD, not standalone quarters.
+Preserve statement provenance and missing metrics. Equity Deep Dive includes this
+package automatically; industry-cycle/company-operating facts remain explicit.
 
 ### US research and context facts (Phase 1G–1H)
 
 | Tool | Purpose |
 |---|---|
-| `us_get_fundamentals` | Current snapshot or normalized statements |
+| `us_get_fundamentals` | Current snapshot or normalized statements (`view=latest|vintages`) |
 | `us_get_company_research` | Filings, insider activity, company updates, or typed events |
 | `market_get_live_news` | Dated company/global news with publication cutoff |
 | `us_get_macro_context` | FRED observations with requested ALFRED vintage cutoff |
-| `us_get_sentiment_snapshot` | Source-separated StockTwits labels, Reddit inference, and deterministic Moomoo feed mining |
+| `us_get_sentiment_snapshot` | Reddit inference and deterministic Moomoo feed mining; dormant StockTwits parsing remains source-separated but is not an active roadmap source |
 | `us_get_prediction_market_context` | Current-only open Polymarket probabilities |
 
-Do not relabel current Polymarket odds as historical. Keep StockTwits user labels,
-versioned Reddit inference, and versioned Moomoo deterministic inference separate.
+Do not relabel current Polymarket odds as historical. Keep any dormant StockTwits
+labels, versioned Reddit inference, and versioned Moomoo deterministic inference separate.
+StockTwits formal access was removed from the active roadmap on 2026-07-25; treat
+disabled/unconfigured StockTwits as expected and do not retry, scrape, or ask the
+user to obtain credentials for it.
 Moomoo samples are current-only, exact-symbol filtered, and may have nullable
 engagement. The MCP runtime only cleans, filters, deduplicates, and classifies with
 fixed rules; interpretation and narrative synthesis remain the host's responsibility.
+SEC is the point-in-time statement primary. Use `view="latest"` for one visible
+filing per period and `view="vintages"` to inspect visible SEC filing versions.
+yfinance/Alpha Vantage are current-only fallbacks; they are not restatement
+history. Financial-quality ratios are deterministic, missing-input-safe, and only
+emitted for the deduplicated latest view.
 
 ### Read-only accounts and portfolio (Phase 1I)
 
@@ -138,6 +186,14 @@ hash allowlist. Its adapter reads balances, positions, and at most the documente
 warning; it has no place/replace/cancel surface and never reuses the schwab-trader
 plugin token.
 
+Background account refresh, post-market sync, and MCP calls never start Schwab
+browser OAuth. On a Schwab authentication failure, do not retry `account_get`
+or the post-market CLI to obtain a login page. Run exactly one foreground
+`uv run python scripts/setup_schwab_oauth.py --replace`, let the user complete
+that single browser tab, and only then retry the failed read once. The setup
+command is cross-process locked; an already-running message means reuse the
+existing tab rather than launching another flow.
+
 ### Durable context restore (Phase 1J)
 
 - `research_context_build` selects one Case by `case_id` or an unambiguous primary
@@ -164,7 +220,7 @@ resolve a review.
 
 | Tool | Purpose |
 |---|---|
-| `research_run_deep_dive` | Gather a cross-market Deep Equity Research fact package; an instrument-only call creates/reuses one Draft Case by default (`create_case=false` keeps ad-hoc mode) |
+| `research_run_deep_dive` | Gather a cross-market Deep Equity Research fact package; an instrument-only call creates/reuses one Draft Case by default (`create_case=false` keeps ad-hoc mode); for A shares, explicit `industry_cycle="hog"` adds company operating and national cycle facts |
 | `research_run_catalyst_review` | Gather dated catalyst, reaction, and expectation facts |
 | `a_share_run_market_review` | Gather A-share board, industry, limit, capital, and heat facts |
 | `us_run_market_review` | Gather US index, macro, news, and portfolio-impact facts |
@@ -175,10 +231,11 @@ sections to cover. Codex synthesizes; the backend does not run a second LLM.
 Preserve partial/degraded step receipts, and never turn descriptive correlation or
 beta into a forecast, backtest, order, or sizing instruction.
 
-A Deep Dive Draft Case is a durable research folder, not an active tracking decision
-and not a confirmed Thesis. Catalyst Review does not auto-create a Case; pass the
-Deep Dive `case_id` to continue the same judgment history. When multiple open Cases
-match one instrument, require an explicit `case_id` instead of guessing.
+A Deep Dive Draft Case is a durable instrument research file, not an active tracking
+decision and not a confirmed investment judgment. Catalyst Review does not
+auto-create a Case; pass the Deep Dive `case_id` to continue the same judgment
+history. When multiple open Cases match one instrument, require an explicit
+`case_id` instead of guessing.
 
 ### Watchlist hub (Phase 2)
 
@@ -223,10 +280,17 @@ policy emits `RISK_POLICY_DEFAULT_UNCONFIRMED`; `execution_effect` is always fal
 | `monitor_event_list` | Read durable trigger/recovery/not-evaluated events |
 | `monitor_event_resolve` | Acknowledge or resolve an event with confirmation/idempotency |
 
+Monitoring enum inputs are case-insensitive and whitespace-tolerant at the DTO
+boundary. Canonical tool schemas, responses, domain objects, and persisted values
+remain uppercase; do not treat normalized lowercase input as a distinct status.
+
 V1 rule types are A-share/US `PRICE_ABOVE`, `PRICE_BELOW`, and portfolio
 `RISK_OVERALL_AT_LEAST`. Treat stale or unavailable facts as `NOT_EVALUATED`, not
 quiet. Repeated unchanged conditions do not create another event; a later recovery
-does. Monitoring never changes a Thesis, policy, position, or order. The external
+does. A version may set an aware `valid_until`; after that inclusive deadline it is
+skipped without a provider call, state mutation, or new event and returns
+`MONITOR_EXPIRED`. This alarm lifetime is separate from each rule's
+`max_fact_age_seconds`. Monitoring never changes a Thesis, policy, position, or order. The external
 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` (or
 `A_SHARE_POST_MARKET`) evaluates only active monitors for that market cadence and
 is not a scheduler itself.

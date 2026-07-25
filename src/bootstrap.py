@@ -14,6 +14,7 @@ from application.ports.challenge_review_repository import ChallengeReviewReposit
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpTransport
 from application.ports.id_generator import IdGenerator
+from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
 from application.ports.monitor_repository import MonitorRepository
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
@@ -23,7 +24,11 @@ from application.ports.secret_redactor import SecretRedactor
 from application.ports.watchlist_source_provider import WatchlistSourceProvider
 from application.ports.workflow_run_repository import WorkflowRunRepository
 from application.services.a_share_capital_service import AShareCapitalService
+from application.services.a_share_company_operating_metrics_service import (
+    AShareCompanyOperatingMetricsService,
+)
 from application.services.a_share_etf_option_service import AShareEtfOptionService
+from application.services.a_share_industry_cycle_service import AShareIndustryCycleService
 from application.services.a_share_limit_up_service import AShareLimitUpService
 from application.services.a_share_market_structure_service import (
     AShareMarketStructureService,
@@ -111,6 +116,9 @@ from infrastructure.persistence.database import (
     SqlAlchemyDatabase,
     create_engine_from_url,
 )
+from infrastructure.persistence.industry_metric_repository import (
+    SqlAlchemyIndustryMetricRepository,
+)
 from infrastructure.persistence.instrument_unit_of_work import (
     SqlAlchemyInstrumentUnitOfWork,
 )
@@ -176,6 +184,7 @@ from infrastructure.providers.a_share.iwencai import IwencaiAShareAdapter
 from infrastructure.providers.a_share.mock_market import (
     MockAShareMarketSnapshotProvider,
 )
+from infrastructure.providers.a_share.nahs import NahsHogCycleAdapter
 from infrastructure.providers.a_share.sina import SinaAShareAdapter
 from infrastructure.providers.a_share.tencent import TencentAShareAdapter
 from infrastructure.providers.a_share.ths import ThsAShareAdapter
@@ -213,6 +222,7 @@ from infrastructure.providers.us.context_codecs import (
     us_prediction_market_context_codec,
     us_sentiment_samples_codec,
 )
+from infrastructure.providers.us.eastmoney_futures import EastmoneyMetalFuturesAdapter
 from infrastructure.providers.us.fred import FredMacroAdapter
 from infrastructure.providers.us.mock_market import MockUSMarketSnapshotProvider
 from infrastructure.providers.us.moomoo_community import MoomooCommunityHeatAdapter
@@ -227,6 +237,7 @@ from infrastructure.providers.us.research_codecs import (
     us_insider_activity_codec,
 )
 from infrastructure.providers.us.sec_research import SECResearchAdapter
+from infrastructure.providers.us.sina_futures import SinaMetalFuturesAdapter
 from infrastructure.providers.us.stocktwits import StockTwitsSentimentAdapter
 from infrastructure.providers.us.yahoo_finance_research import YahooFinanceResearchAdapter
 from infrastructure.providers.watchlist.manual_csv import ManualCsvWatchlistAdapter
@@ -297,6 +308,7 @@ class ApplicationContainer:
     a_share_limit_up_service: AShareLimitUpService
     a_share_sentiment_service: AShareSentimentService
     a_share_etf_option_service: AShareEtfOptionService
+    industry_metric_repository: IndustryMetricRepository
     research_report_search_service: ResearchReportSearchService
     a_share_tool_coordinator: AShareToolCoordinator
     # Phase 1F F3c US market product services + tool coordinator
@@ -399,6 +411,9 @@ def build_application(
         SqlAlchemyAccountTransactionRepository(engine)
     )
     workflow_run_repository: WorkflowRunRepository = SqlAlchemyWorkflowRunRepository(engine)
+    industry_metric_repository: IndustryMetricRepository = (
+        SqlAlchemyIndustryMetricRepository(engine)
+    )
     post_market_sync_run_repository: PostMarketSyncRunRepository = (
         SqlAlchemyPostMarketSyncRunRepository(engine)
     )
@@ -527,6 +542,13 @@ def build_application(
             current_window_seconds=settings.a_share_current_window_seconds,
         ),
     )
+    nahs_hog_cycle_provider = NahsHogCycleAdapter(
+        a_share_transport,
+        clock=clock,
+        enabled=settings.nahs_enabled,
+        timeout_seconds=settings.provider_timeout_default_seconds,
+    )
+    vendor_registry.register(VendorId.NAHS, nahs_hog_cycle_provider)
     vendor_registry.register(
         VendorId.THS,
         ThsAShareAdapter(
@@ -595,6 +617,25 @@ def build_application(
             breadth_timeout_seconds=settings.provider_timeout_us_breadth_seconds,
             max_fresh_seconds=settings.us_max_fresh_seconds,
             max_delayed_seconds=settings.us_max_delayed_seconds,
+        ),
+    )
+    vendor_registry.register(
+        VendorId.SINA_FUTURES,
+        SinaMetalFuturesAdapter(
+            a_share_transport,
+            clock=clock,
+            enabled=settings.sina_enabled,
+            timeout_seconds=market_timeout,
+        ),
+    )
+    vendor_registry.register(
+        VendorId.EASTMONEY_FUTURES,
+        EastmoneyMetalFuturesAdapter(
+            a_share_transport,
+            eastmoney_gate,
+            clock=clock,
+            enabled=settings.eastmoney_enabled,
+            timeout_seconds=market_timeout,
         ),
     )
     vendor_registry.register(
@@ -987,6 +1028,13 @@ def build_application(
         clock=clock,
         option_snapshot_codec=option_snapshot_cache_codec,
     )
+    a_share_industry_cycle_service = AShareIndustryCycleService(
+        provider_router,
+        industry_metric_repository,
+    )
+    a_share_company_operating_metrics_service = AShareCompanyOperatingMetricsService(
+        provider_router,
+    )
     research_report_search_service = ResearchReportSearchService(
         router=provider_router,
         clock=clock,
@@ -1005,6 +1053,8 @@ def build_application(
         limit_up_service=a_share_limit_up_service,
         sentiment_service=a_share_sentiment_service,
         etf_option_service=a_share_etf_option_service,
+        industry_cycle_service=a_share_industry_cycle_service,
+        company_operating_metrics_service=a_share_company_operating_metrics_service,
         report_search_service=research_report_search_service,
     )
 
@@ -1267,6 +1317,7 @@ def build_application(
         a_share_limit_up_service=a_share_limit_up_service,
         a_share_sentiment_service=a_share_sentiment_service,
         a_share_etf_option_service=a_share_etf_option_service,
+        industry_metric_repository=industry_metric_repository,
         research_report_search_service=research_report_search_service,
         a_share_tool_coordinator=a_share_tool_coordinator,
         us_market_data_service=us_market_data_service,

@@ -38,6 +38,7 @@ from domain.us_research.enums import (
     USFundamentalBasis,
     USStatementFrequency,
     USStatementType,
+    USStatementView,
 )
 from domain.us_research.models import (
     USCompanyProfile,
@@ -249,6 +250,7 @@ class _GroupKey:
     fp: str
     filed: date
     form: str
+    start: date | None
 
 
 class SECCompanyFactsAdapter:
@@ -626,6 +628,7 @@ class SECCompanyFactsAdapter:
                 fp=p.fp,
                 filed=p.filed,
                 form=p.form,
+                start=p.start,
             )
             bucket = groups.setdefault(gk, {})
             # First value for key in group wins (stable alias order already applied).
@@ -633,13 +636,26 @@ class SECCompanyFactsAdapter:
                 bucket[p.key] = p.value
         return groups
 
-    def _dedupe_periods(
-        self, groups: Mapping[_GroupKey, Mapping[str, Decimal]]
+    def _select_periods(
+        self,
+        groups: Mapping[_GroupKey, Mapping[str, Decimal]],
+        *,
+        view: USStatementView,
     ) -> list[tuple[_GroupKey, dict[str, Decimal]]]:
-        """Keep latest filed group per (end, fy, fp); amendments win by filed date."""
-        best: dict[tuple[date, int, str], tuple[_GroupKey, dict[str, Decimal]]] = {}
+        """Select one latest visible group or retain bounded filing vintages."""
+        if view is USStatementView.VINTAGES:
+            rows = [(gk, dict(lines)) for gk, lines in groups.items()]
+            rows.sort(
+                key=lambda pair: (pair[0].end, pair[0].filed, pair[0].accession),
+                reverse=True,
+            )
+            return rows
+        best: dict[tuple[date, str], tuple[_GroupKey, dict[str, Decimal]]] = {}
         for gk, lines in groups.items():
-            period_id = (gk.end, gk.fy, gk.fp)
+            # SEC comparison facts may reuse the current filing's fiscal year for
+            # a prior period.  End date + fiscal period identifies the economic
+            # period; latest visible filing wins without calling it a restatement.
+            period_id = (gk.end, gk.fp)
             prev = best.get(period_id)
             if prev is None:
                 best[period_id] = (gk, dict(lines))
@@ -670,6 +686,7 @@ class SECCompanyFactsAdapter:
         duration_points: Sequence[_FactPoint],
         instant_points: Sequence[_FactPoint],
         limit: int,
+        view: USStatementView,
     ) -> tuple[USStatementPeriod, ...]:
         # Statement-specific duration keys only.
         key_set = frozenset(keys)
@@ -680,7 +697,7 @@ class SECCompanyFactsAdapter:
         # For income/CF, optionally attach nothing from instant.
         # For balance sheet, instants already grouped alone.
         # When income/CF groups exist, do not mix foreign accessions.
-        rows = self._dedupe_periods(groups)
+        rows = self._select_periods(groups, view=view)
         out: list[USStatementPeriod] = []
         for gk, lines in rows[:limit]:
             currency = "USD"
@@ -694,6 +711,10 @@ class SECCompanyFactsAdapter:
                     filed_at=filed_visibility_utc(gk.filed),
                     currency=currency,
                     line_items=self._line_items(keys, lines),
+                    period_start=gk.start,
+                    accession=gk.accession,
+                    filing_form=gk.form,
+                    is_amendment=gk.form.endswith("/A"),
                 )
             )
         return tuple(out)
@@ -726,12 +747,19 @@ class SECCompanyFactsAdapter:
         frequency: USStatementFrequency,
         limit: int,
         as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
     ) -> ProviderSuccess[USFinancialStatements]:
         self._require_configured()
         self._require_as_of(as_of)
         if not isinstance(frequency, USStatementFrequency):
             raise _contract(
                 "frequency must be USStatementFrequency",
+                operation="financial_statements",
+                rule="type",
+            )
+        if not isinstance(view, USStatementView):
+            raise _contract(
+                "view must be USStatementView",
                 operation="financial_statements",
                 rule="type",
             )
@@ -774,6 +802,7 @@ class SECCompanyFactsAdapter:
             duration_points=duration,
             instant_points=(),
             limit=effective_limit,
+            view=view,
         )
         cash_flow = self._build_periods(
             statement_type=USStatementType.CASH_FLOW,
@@ -782,6 +811,7 @@ class SECCompanyFactsAdapter:
             duration_points=duration,
             instant_points=(),
             limit=effective_limit,
+            view=view,
         )
         balance = self._build_periods(
             statement_type=USStatementType.BALANCE_SHEET,
@@ -790,6 +820,7 @@ class SECCompanyFactsAdapter:
             duration_points=(),
             instant_points=instant,
             limit=effective_limit,
+            view=view,
         )
         statements = USFinancialStatements(
             instrument_id=instrument.instrument_id,
@@ -798,6 +829,7 @@ class SECCompanyFactsAdapter:
             income=income,
             balance_sheet=balance,
             cash_flow=cash_flow,
+            view=view,
         )
         fetched_at = self._clock.now()
         require_aware_datetime(fetched_at, field_name="fetched_at")
@@ -910,11 +942,12 @@ class SECCompanyFactsAdapter:
                 fp=p.fp,
                 filed=p.filed,
                 form=p.form,
+                start=None,
             )
             bucket = merged_groups.setdefault(gk, {})
             if p.key not in bucket:
                 bucket[p.key] = p.value
-        rows = self._dedupe_periods(merged_groups)
+        rows = self._select_periods(merged_groups, view=USStatementView.LATEST)
         metrics: USFundamentalMetrics | None = None
         if rows:
             metrics = self._metrics_from_annual_group(rows[0][0], rows[0][1])

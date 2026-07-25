@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 from application.dto.provider_routing import ProviderSuccess
 from application.ports.category_provider import CategoryProvider
 from domain.instruments.models import Instrument
-from domain.us_research.enums import USFilingForm, USStatementFrequency
+from domain.us_research.enums import USFilingForm, USStatementFrequency, USStatementView
 from domain.us_research.models import (
     USCorporateAction,
     USFiling,
@@ -41,6 +41,7 @@ class USFinancialStatementsProvider(CategoryProvider, Protocol):
         frequency: USStatementFrequency,
         limit: int,
         as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
     ) -> ProviderSuccess[USFinancialStatements]: ...
 
 

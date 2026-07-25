@@ -73,17 +73,19 @@ class SchwabPyReadClient:
         # Provider exceptions are translated below, so the SDK logger is not an
         # application observability channel and must not cross the adapter boundary.
         logging.getLogger("schwab.auth").disabled = True
+        if not token_path.is_file():
+            raise ProviderAuthenticationError(
+                "Schwab OAuth token is missing; run the dedicated project OAuth setup"
+            )
         try:
-            from schwab.auth import easy_client
+            from schwab.auth import client_from_token_file
         except ImportError:
             raise ProviderNotConfigured("schwab-py is unavailable") from None
         try:
-            self._client = easy_client(
-                api_key=client_id,
-                app_secret=client_secret,
-                callback_url=redirect_uri,
-                token_path=str(token_path),
-                interactive=False,
+            self._client = client_from_token_file(
+                str(token_path),
+                client_id,
+                client_secret,
             )
         except Exception:
             raise ProviderAuthenticationError("Schwab OAuth client initialization failed") from None

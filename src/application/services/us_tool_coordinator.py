@@ -139,12 +139,87 @@ _FUTURES_CONTRACT_NOT_SPOT = WarningInfo(
 _CONTINUOUS_FUTURES_ROLL_RISK = WarningInfo(
     code="CONTINUOUS_FUTURES_ROLL_RISK",
     message=(
-        "The Yahoo ROOT=F series follows a front-month continuous future; contract "
-        "rolls can create basis changes or artificial discontinuities."
+        "The ROOT=F series follows a vendor-defined continuous future; contract "
+        "rolls and cross-vendor construction can create basis changes or artificial "
+        "discontinuities."
+    ),
+    details={},
+)
+_BEST_EFFORT_PUBLIC_FEED_NO_SLA = WarningInfo(
+    code="BEST_EFFORT_PUBLIC_FEED_NO_SLA",
+    message="The fallback is a public best-effort feed without a delay or availability SLA.",
+    details={},
+)
+_FUTURES_SESSION_UNKNOWN = WarningInfo(
+    code="FUTURES_SESSION_UNKNOWN",
+    message="The fallback does not provide a verified futures-session state.",
+    details={},
+)
+_EASTMONEY_DAILY_DERIVED_BARS = WarningInfo(
+    code="EASTMONEY_DAILY_DERIVED_BARS",
+    message=(
+        "Fallback bars originate from Eastmoney daily continuous-futures rows; "
+        "date-only rows are anchored to the 17:00 New York futures trade-date "
+        "boundary, and weekly/monthly bars are deterministic aggregations."
+    ),
+    details={},
+)
+_EXTENDED_HOURS_PRICE = WarningInfo(
+    code="EXTENDED_HOURS_PRICE",
+    message=(
+        "The latest price came from a Yahoo pre-market or post-market minute bar; "
+        "extended-hours liquidity may be sparse."
+    ),
+    details={},
+)
+_INTRADAY_QUOTE_RECOVERY = WarningInfo(
+    code="INTRADAY_QUOTE_RECOVERY",
+    message=(
+        "The latest quote was recovered from a newer Yahoo minute bar because the "
+        "regular quote metadata lagged."
+    ),
+    details={},
+)
+_INTRADAY_QUOTE_UNAVAILABLE = WarningInfo(
+    code="INTRADAY_QUOTE_UNAVAILABLE",
+    message=(
+        "Yahoo intraday quote recovery was unavailable; the regular-session "
+        "latest-known value remains."
     ),
     details={},
 )
 _GENERIC_CODE_MESSAGE = "US market data warning."
+
+_KNOWN_WARNINGS = {
+    item.code: item
+    for item in (
+        _FALLBACK_WARNING,
+        _DELAYED_WARNING,
+        _STALE_WARNING,
+        _CLOSED_SESSION_LAST_KNOWN_WARNING,
+        _UNKNOWN_FRESHNESS_WARNING,
+        _CONTEXT_UNAVAILABLE,
+        _TECHNICAL_UNAVAILABLE,
+        _BREADTH_UNAVAILABLE,
+        _SECTOR_ROTATION_UNAVAILABLE,
+        _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE,
+        _FUTURES_CONTRACT_NOT_SPOT,
+        _CONTINUOUS_FUTURES_ROLL_RISK,
+        _BEST_EFFORT_PUBLIC_FEED_NO_SLA,
+        _FUTURES_SESSION_UNKNOWN,
+        _EASTMONEY_DAILY_DERIVED_BARS,
+        _EXTENDED_HOURS_PRICE,
+        _INTRADAY_QUOTE_RECOVERY,
+        _INTRADAY_QUOTE_UNAVAILABLE,
+    )
+}
+
+
+def _warning_from_code(code: str) -> WarningInfo:
+    return _KNOWN_WARNINGS.get(
+        code,
+        WarningInfo(code=code, message=_GENERIC_CODE_MESSAGE, details={}),
+    )
 
 
 class USToolCoordinator:
@@ -615,35 +690,18 @@ def _synthesized_from_metas(
         for code in meta.warnings:
             if code not in seen:
                 seen.add(code)
-                out.append(WarningInfo(code=code, message=_GENERIC_CODE_MESSAGE, details={}))
+                out.append(_warning_from_code(code))
     return tuple(out)
 
 
 def _warnings_from_codes(codes: tuple[str, ...]) -> tuple[WarningInfo, ...]:
     out: list[WarningInfo] = []
     seen: set[str] = set()
-    known = {
-        _FALLBACK_WARNING.code: _FALLBACK_WARNING,
-        _DELAYED_WARNING.code: _DELAYED_WARNING,
-        _STALE_WARNING.code: _STALE_WARNING,
-        _CLOSED_SESSION_LAST_KNOWN_WARNING.code: _CLOSED_SESSION_LAST_KNOWN_WARNING,
-        _UNKNOWN_FRESHNESS_WARNING.code: _UNKNOWN_FRESHNESS_WARNING,
-        _CONTEXT_UNAVAILABLE.code: _CONTEXT_UNAVAILABLE,
-        _TECHNICAL_UNAVAILABLE.code: _TECHNICAL_UNAVAILABLE,
-        _BREADTH_UNAVAILABLE.code: _BREADTH_UNAVAILABLE,
-        _SECTOR_ROTATION_UNAVAILABLE.code: _SECTOR_ROTATION_UNAVAILABLE,
-        _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE.code: _YAHOO_BREADTH_UNOFFICIAL_UNIVERSE,
-        _FUTURES_CONTRACT_NOT_SPOT.code: _FUTURES_CONTRACT_NOT_SPOT,
-        _CONTINUOUS_FUTURES_ROLL_RISK.code: _CONTINUOUS_FUTURES_ROLL_RISK,
-    }
     for code in codes:
         if code in seen:
             continue
         seen.add(code)
-        if code in known:
-            out.append(known[code])
-        else:
-            out.append(WarningInfo(code=code, message=_GENERIC_CODE_MESSAGE, details={}))
+        out.append(_warning_from_code(code))
     return tuple(out)
 
 

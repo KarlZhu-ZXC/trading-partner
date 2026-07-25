@@ -4,7 +4,7 @@
 > Design version: Phase 2 v4  
 > Public MCP target: 52 tools  
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
-> `0014_phase3_commodity_futures`.
+> `0016_monitor_valid_until`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
 
 ## 1. Product outcome
@@ -521,6 +521,17 @@ Definitions are append-only versions with optimistic concurrency, explicit
 must match that market, preventing an A-share rule from being evaluated after the
 US close (or vice versa) against an inevitably stale quote. V1 rules are:
 
+Each version may also have an aware `valid_until` timestamp. The timestamp is an
+inclusive alarm lifetime, not a market-data freshness limit: once `as_of` is later
+than it, the evaluator skips the Monitor before any provider request, state write,
+or event creation and reports `MONITOR_EXPIRED`. Existing history is retained.
+`max_fact_age_seconds` remains the separate per-rule guard against stale facts.
+
+Public monitoring enum inputs are case-insensitive and whitespace-tolerant at the
+DTO boundary (`active`, ` Active `, and `ACTIVE` normalize to `ACTIVE`). MCP schemas,
+responses, domain objects, and persisted values always use the canonical uppercase
+wire vocabulary.
+
 - `PRICE_ABOVE` for one resolved A-share/US instrument;
 - `PRICE_BELOW` for one resolved A-share/US instrument;
 - `RISK_OVERALL_AT_LEAST` with `WARN` or `BREACH` threshold, using the latest
@@ -532,6 +543,20 @@ state is `QUIET`, `TRIGGERED`, or `NOT_EVALUATED`. A first trigger produces a
 state produces `RECOVERED`. Missing or stale facts produce `NOT_EVALUATED`, never
 a quiet result. Events can be explicitly acknowledged or resolved, but neither
 action changes a Thesis, Investment Case, Risk Policy, position, or order.
+
+Phase 3A continuous futures reuse the same US price-rule path. Futures quote and
+bars routing is asset-aware. Alpha Vantage is never sent a future. `GC=F`, `SI=F`,
+and `HG=F` quotes may fall back from Yahoo to the timestamped Sina external-futures
+feed; daily/weekly/monthly bars for all six seeded metals may fall back to
+Eastmoney. Sina's unverified price-only minute line is not treated as OHLCV.
+Fallback results preserve their source, unknown SLA/session status, observed delay,
+non-spot warning, and contract-roll warning.
+
+Regression receipts on 2026-07-23: the original live `GC=F` Yahoo evaluation
+produced observations for all five configured rules with no run error codes.
+After fallback implementation, direct live Sina checks returned timestamped GC,
+SI, and HG quotes. Provider attempts and warnings remain visible, so fallback use
+does not masquerade as Yahoo or as OTC spot.
 
 External schedulers use:
 

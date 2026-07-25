@@ -27,6 +27,7 @@ from domain.us_research.enums import (
     USInsiderAcquiredDisposed,
     USStatementFrequency,
     USStatementType,
+    USStatementView,
 )
 from domain.us_research.models import (
     USCompanyProfile,
@@ -391,11 +392,17 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
         frequency: USStatementFrequency,
         limit: int,
         as_of: datetime,
+        view: USStatementView = USStatementView.LATEST,
     ) -> ProviderSuccess[USFinancialStatements]:
         symbol = self._equity(instrument)
         self._current(as_of)
         if not isinstance(frequency, USStatementFrequency):
             raise DataContractError("frequency is invalid", details={"field": "frequency"})
+        if view is not USStatementView.LATEST:
+            raise NoMarketData(
+                "Alpha Vantage does not expose filing vintages",
+                details={"vendor": self.vendor_id.value, "operation": "statements"},
+            )
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise DataContractError("limit must be positive", details={"field": "limit"})
         report_key = (
@@ -459,6 +466,7 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
             income=groups[USStatementType.INCOME],
             balance_sheet=groups[USStatementType.BALANCE_SHEET],
             cash_flow=groups[USStatementType.CASH_FLOW],
+            view=view,
         )
         return ProviderSuccess(
             statements,

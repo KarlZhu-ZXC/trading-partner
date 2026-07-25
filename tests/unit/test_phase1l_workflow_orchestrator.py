@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from application.dto.a_share import AShareGetCapitalSnapshotInput
+from application.dto.a_share import (
+    AShareGetCapitalSnapshotInput,
+    AShareGetFinancialStatementsInput,
+)
 from application.dto.tool_envelope import ErrorInfo, ToolEnvelope
 from application.dto.workflow import (
     AShareRunMarketReviewInput,
@@ -145,6 +148,9 @@ def _orchestrator(
             dependencies.a_share,
             (
                 "get_snapshot",
+                "get_financial_statements",
+                "get_company_operating_metrics",
+                "get_industry_cycle",
                 "get_market_structure",
                 "get_capital_snapshot",
                 "get_limit_up_context",
@@ -280,21 +286,22 @@ async def test_portfolio_review_defaults_to_durable_accounts() -> None:
 @pytest.mark.asyncio
 async def test_deep_dive_can_run_ad_hoc_when_instrument_has_no_case() -> None:
     service, dependencies = _orchestrator()
-    dependencies.context.build.return_value = _failure()
 
     result = await service.run_deep_dive(
         ResearchRunDeepDiveInput(instrument_id="equity:US:NVDA", as_of=NOW, create_case=False)
     )
 
     assert result.ok is True and result.data is not None
-    assert result.data.status is WorkflowRunStatus.PARTIAL
+    assert result.data.status is WorkflowRunStatus.COMPLETE
     assert result.data.case_id is None
     assert result.data.instrument_id == "equity:US:NVDA"
     assert result.data.report_id is None
-    assert "No Investment Case context; research ran in ad-hoc mode" in (
+    assert "No instrument research file context; research ran in ad-hoc mode" in (
         result.data.missing_capabilities
     )
     assert len(result.data.facts) > 1
+    assert all(fact.receipt.step_name != "durable_research_context" for fact in result.data.facts)
+    dependencies.context.build.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -468,3 +475,60 @@ async def test_a_share_case_capital_metrics_follow_asset_type(
     request = dependencies.a_share.get_capital_snapshot.call_args.args[0]
     assert isinstance(request, AShareGetCapitalSnapshotInput)
     assert request.metrics == expected_metrics
+
+
+@pytest.mark.asyncio
+async def test_a_share_equity_deep_dive_includes_structured_financial_statements() -> None:
+    service, dependencies = _orchestrator("equity:A_SHARE:600519.SH")
+
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW)
+    )
+
+    assert result.ok is True and result.data is not None
+    step_names = {fact.receipt.step_name for fact in result.data.facts}
+    assert "financial_statements" in step_names
+    request = dependencies.a_share.get_financial_statements.call_args.args[0]
+    assert isinstance(request, AShareGetFinancialStatementsInput)
+    assert request.instrument_id == "equity:A_SHARE:600519.SH"
+    assert request.periods == 8
+
+
+@pytest.mark.asyncio
+async def test_a_share_deep_dive_explicit_hog_cycle_adds_company_and_cycle_facts() -> None:
+    service, dependencies = _orchestrator("equity:A_SHARE:002714.SZ")
+
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(
+            case_id="case_1",
+            as_of=NOW,
+            industry_cycle="hog",
+            industry_cycle_lookback_months=180,
+            company_operating_lookback_months=48,
+            company_operating_document_limit=25,
+        )
+    )
+
+    assert result.ok is True and result.data is not None
+    step_names = {fact.receipt.step_name for fact in result.data.facts}
+    assert "company_operating_metrics" in step_names
+    assert "industry_cycle_hog" in step_names
+    company_request = dependencies.a_share.get_company_operating_metrics.call_args.args[0]
+    assert company_request.instrument_id == "equity:A_SHARE:002714.SZ"
+    assert company_request.lookback_months == 48
+    assert company_request.document_limit == 25
+    cycle_request = dependencies.a_share.get_industry_cycle.call_args.args[0]
+    assert cycle_request.cycle == "hog"
+    assert cycle_request.lookback_months == 180
+    assert cycle_request.view == "compact"
+
+
+@pytest.mark.asyncio
+async def test_a_share_deep_dive_does_not_infer_hog_cycle_from_instrument() -> None:
+    service, dependencies = _orchestrator("equity:A_SHARE:002714.SZ")
+
+    result = await service.run_deep_dive(ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW))
+
+    assert result.ok is True
+    dependencies.a_share.get_company_operating_metrics.assert_not_awaited()
+    dependencies.a_share.get_industry_cycle.assert_not_awaited()

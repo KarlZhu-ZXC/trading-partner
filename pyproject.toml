@@ -27,6 +27,7 @@ dependencies = [
     "exchange-calendars>=4.5,<5",
     "ta-lib>=0.6.8,<0.7",
     "matplotlib>=3.10,<4",
+    "pypdf>=5.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +44,9 @@ dev = [
 trading-partner-mcp = "interfaces.mcp.server:main"
 trading-partner-watchlist-sync = "interfaces.cli.watchlist_sync:main"
 trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
+trading-partner-account-transactions = "interfaces.cli.account_transactions:main"
 trading-partner-monitor-run = "interfaces.cli.monitor_run:main"
+trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
 
 # Editable installs: put src/ on sys.path so bootstrap.py and the four packages
 # resolve to live workspace sources. Do not use force-include for bootstrap —

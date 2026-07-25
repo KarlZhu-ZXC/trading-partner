@@ -795,6 +795,7 @@ def test_orm_models_registered() -> None:
         "candidate_thesis_revisions",
         "schema_versions",
         "system_audit_log",
+        "industry_metric_observations",
     ):
         assert name in tables
 

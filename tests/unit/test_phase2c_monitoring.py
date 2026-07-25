@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import create_engine
 
-from application.dto.monitoring import MonitorEvaluateInput, MonitorRuleInput
+from application.dto.monitoring import (
+    MonitorCreateInput,
+    MonitorEvaluateInput,
+    MonitorEventResolveInput,
+    MonitorListInput,
+    MonitorRuleInput,
+    MonitorUpdateInput,
+)
 from application.dto.tool_envelope import ErrorInfo, ToolEnvelope
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import MonitorEvaluationService
@@ -160,6 +168,92 @@ def test_monitor_repository_keeps_append_only_versions(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_expired_monitor_is_skipped_without_fetch_or_event(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    rule = MonitorRuleInput(
+        rule_code="price_floor",
+        rule_type="PRICE_BELOW",
+        instrument_id="equity:US:NVDA",
+        price_threshold=Decimal("100"),
+    )
+    repository = _repository(tmp_path)
+    repository.create(
+        replace(
+            _monitor(rule),
+            created_at=NOW - timedelta(hours=2),
+            valid_until=NOW - timedelta(hours=1),
+        )
+    )
+    fixed_clock.set(NOW)
+    us = MagicMock()
+    us.get_market_snapshot = AsyncMock()
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        us,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+
+    result = await evaluator.evaluate(
+        MonitorEvaluateInput(cadence="US_POST_MARKET", as_of=NOW)
+    )
+
+    assert result.monitors_evaluated == 0
+    assert result.rules_evaluated == 0
+    assert result.events_created == 0
+    assert result.warning_codes == ("MONITOR_EXPIRED",)
+    assert repository.list_events(None, 10) == ()
+    us.get_market_snapshot.assert_not_awaited()
+
+
+def test_monitor_inputs_normalize_conversational_enum_casing() -> None:
+    rule = MonitorRuleInput(
+        rule_code="price_floor",
+        rule_type=" price_below ",
+        severity="high",
+        instrument_id="equity:US:NVDA",
+        price_threshold=Decimal("100"),
+    )
+    created = MonitorCreateInput(
+        name="NVDA floor",
+        cadence="us_post_market",
+        rules=(rule,),
+        valid_until=NOW + timedelta(days=7),
+        confirmed_by="user",
+        idempotency_key="monitor-create-lowercase",
+    )
+    updated = MonitorUpdateInput(
+        monitor_id="monitor_example",
+        expected_version=1,
+        name="NVDA floor",
+        cadence="on_demand",
+        status="paused",
+        rules=(rule,),
+        confirmed_by="user",
+        idempotency_key="monitor-update-lowercase",
+    )
+    resolved = MonitorEventResolveInput(
+        event_id="monitor_event_example",
+        action="acknowledge",
+        note="reviewed",
+        confirmed_by="user",
+        idempotency_key="monitor-resolve-lowercase",
+    )
+
+    assert MonitorListInput(status=" active ").status is MonitorStatus.ACTIVE
+    assert created.cadence is MonitorCadence.US_POST_MARKET
+    assert created.valid_until == NOW + timedelta(days=7)
+    assert rule.rule_type is MonitorRuleType.PRICE_BELOW
+    assert rule.severity is MonitorSeverity.HIGH
+    assert updated.cadence is MonitorCadence.ON_DEMAND
+    assert updated.status is MonitorStatus.PAUSED
+    assert resolved.action.value == "ACKNOWLEDGE"
+
+
+@pytest.mark.asyncio
 async def test_six_monitoring_mcp_handlers_are_registered() -> None:
     failure = ToolEnvelope.failure(
         request_id="req_monitor",
@@ -178,9 +272,20 @@ async def test_six_monitoring_mcp_handlers_are_registered() -> None:
     container.monitor_tool_coordinator = coordinator
     manager = create_mcp_server(container)._tool_manager
 
-    assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
+    tools = manager.list_tools()
+    assert {tool.name for tool in tools} == set(PUBLIC_TOOL_NAMES)
     assert len(PUBLIC_TOOL_NAMES) == 52
     assert len(PHASE2C_MONITORING_TOOL_NAMES) == 6
+    query_schema = next(tool for tool in tools if tool.name == "monitor_query").parameters
+    assert query_schema["$defs"]["MonitorStatus"]["enum"] == [
+        "ACTIVE",
+        "PAUSED",
+        "ARCHIVED",
+    ]
+    create_schema = next(tool for tool in tools if tool.name == "monitor_create").parameters
+    update_schema = next(tool for tool in tools if tool.name == "monitor_update").parameters
+    assert "valid_until" in create_schema["properties"]
+    assert "valid_until" in update_schema["properties"]
     rule = {
         "rule_code": "price_floor",
         "rule_type": "PRICE_BELOW",
@@ -200,6 +305,7 @@ async def test_six_monitoring_mcp_handlers_are_registered() -> None:
     )
     await manager.call_tool("monitor_query", {"monitor_id": "monitor_example"})
     await manager.call_tool("monitor_query", {})
+    await manager.call_tool("monitor_query", {"status": "active"})
     await manager.call_tool(
         "monitor_update",
         {
@@ -227,6 +333,7 @@ async def test_six_monitoring_mcp_handlers_are_registered() -> None:
     await manager.call_tool("monitor_evaluate", {})
 
     coordinator.create.assert_called_once()
+    assert coordinator.list.call_args.args[0].status is MonitorStatus.ACTIVE
     coordinator.update.assert_called_once()
     coordinator.resolve_event.assert_called_once()
     coordinator.evaluate.assert_awaited_once()

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from application.dto.a_share_provenance import AShareComponentProvenanceDTO
+from application.dto.financial_quality import (
+    FinancialQualityMetricDTO,
+    derive_financial_quality_metrics,
+)
 from application.dto.market import DecimalWire
 from domain.a_share.enums import (
     AShareComponentType,
@@ -21,7 +26,12 @@ from domain.a_share.enums import (
     AShareSnapshotDetail,
     BarInterval,
     CapitalMetricType,
+    CompanyDocumentParseStatus,
+    CompanyDocumentType,
     FinancialStatementType,
+    IndustryCycleType,
+    IndustryMeasurementBasis,
+    IndustryMetricFrequency,
     LimitPoolType,
     OptionType,
     SentimentSourceType,
@@ -35,8 +45,11 @@ from domain.a_share.models import (
     BlockTradeRecord,
     ChipDistributionBin,
     ChipDistributionSnapshot,
+    CompanyOperatingMetricObservation,
+    CompanyOperatingMetricsSnapshot,
     ConsensusEstimate,
     DividendRecord,
+    DocumentParseReceipt,
     DragonTigerRecord,
     DragonTigerSeat,
     EtfOptionContract,
@@ -46,6 +59,8 @@ from domain.a_share.models import (
     FinancialStatementLine,
     FundamentalMetric,
     FundFlowPoint,
+    IndustryCycleSnapshot,
+    IndustryMetricObservation,
     IndustryPerformanceRow,
     InteractiveQAItem,
     LimitPoolEntry,
@@ -87,9 +102,11 @@ def _require_exact_date_wire(value: object) -> object:
         raise ValueError("must be an exact date")
     return value
 
+
 # Statically decidable asset matrix for MCP inputs (design §19).
 # Repository existence remains a service responsibility.
 _SNAPSHOT_STRUCTURE_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
+_EQUITY_ONLY = frozenset({AssetType.EQUITY})
 _CAPITAL_INSTRUMENT_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF})
 _SENTIMENT_INSTRUMENT_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
 _REPORT_INSTRUMENT_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
@@ -139,6 +156,150 @@ class AShareGetSnapshotInput(_FrozenForbid):
     def _aware_as_of(cls, value: datetime | None) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("as_of must be timezone-aware")
+        return value
+
+
+A_SHARE_DEFAULT_FINANCIAL_METRICS: tuple[str, ...] = (
+    "cash_and_equivalents",
+    "short_term_investments",
+    "accounts_receivable",
+    "inventory",
+    "current_assets",
+    "total_assets",
+    "short_term_debt",
+    "current_portion_long_term_debt",
+    "current_liabilities",
+    "long_term_debt",
+    "bonds_payable",
+    "total_liabilities",
+    "stockholders_equity",
+    "total_revenue",
+    "revenue",
+    "cost_of_revenue",
+    "research_and_development",
+    "selling_expense",
+    "general_and_administrative_expense",
+    "finance_expense",
+    "operating_income",
+    "net_income",
+    "net_income_attributable_parent",
+    "eps_basic",
+    "eps_diluted",
+    "operating_cash_flow",
+    "capital_expenditure",
+    "investing_cash_flow",
+    "financing_cash_flow",
+    "cash_change",
+)
+_FINANCIAL_METRIC_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class AShareGetFinancialStatementsInput(_FrozenForbid):
+    instrument_id: str
+    statement_types: tuple[FinancialStatementType, ...] = tuple(FinancialStatementType)
+    periods: int = Field(default=8, ge=1, le=20)
+    metric_codes: tuple[str, ...] = Field(default=(), max_length=30)
+    as_of: datetime | None = None
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _instrument_id(cls, value: str) -> str:
+        return _validate_a_share_instrument_id(value, allowed_assets=_EQUITY_ONLY)
+
+    @field_validator("statement_types")
+    @classmethod
+    def _statement_types(
+        cls, value: tuple[FinancialStatementType, ...]
+    ) -> tuple[FinancialStatementType, ...]:
+        if not value:
+            raise ValueError("statement_types must be non-empty")
+        if len(set(value)) != len(value):
+            raise ValueError("statement_types must be unique")
+        return value
+
+    @field_validator("metric_codes")
+    @classmethod
+    def _metric_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("metric_codes must be unique")
+        if any(_FINANCIAL_METRIC_CODE_RE.fullmatch(code) is None for code in value):
+            raise ValueError("metric_codes must use lower_snake_case")
+        return value
+
+    @field_validator("as_of")
+    @classmethod
+    def _aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("as_of must be timezone-aware")
+        return value
+
+
+_INDUSTRY_METRIC_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
+
+
+class AShareGetIndustryCycleInput(_FrozenForbid):
+    """Industry-cycle facts input.
+
+    ``lookback_months`` controls provider/repository history depth. MCP output is
+    always bounded by ``view`` / ``metric_codes`` / ``offset`` / ``limit`` so a
+    240-month request never dumps the full raw series into one response.
+    """
+
+    cycle: Literal["hog"] = "hog"
+    lookback_months: int = Field(default=12, ge=3, le=240)
+    view: Literal["compact", "series"] = "compact"
+    metric_codes: tuple[str, ...] = Field(default=(), max_length=100)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=200)
+    as_of: datetime | None = None
+
+    @field_validator("as_of")
+    @classmethod
+    def _aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("as_of must be timezone-aware")
+        return value
+
+    @field_validator("metric_codes")
+    @classmethod
+    def _metric_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("metric_codes must not contain duplicates")
+        for code in value:
+            if _INDUSTRY_METRIC_CODE_RE.fullmatch(code) is None:
+                raise ValueError("metric_codes must use lower_snake_case")
+        return value
+
+
+class AShareGetCompanyOperatingMetricsInput(_FrozenForbid):
+    """Company operating metrics from official disclosures (not industry-cycle national series)."""
+
+    instrument_id: str
+    lookback_months: int = Field(default=12, ge=3, le=120)
+    document_limit: int = Field(default=10, ge=1, le=30)
+    metric_codes: tuple[str, ...] = Field(default=(), max_length=100)
+    as_of: datetime | None = None
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _instrument_id(cls, value: str) -> str:
+        return _validate_a_share_instrument_id(value, allowed_assets=_EQUITY_ONLY)
+
+    @field_validator("as_of")
+    @classmethod
+    def _aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("as_of must be timezone-aware")
+        return value
+
+    @field_validator("metric_codes")
+    @classmethod
+    def _metric_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("metric_codes must not contain duplicates")
+        for code in value:
+            if _INDUSTRY_METRIC_CODE_RE.fullmatch(code) is None:
+                raise ValueError("metric_codes must use lower_snake_case")
         return value
 
 
@@ -547,6 +708,106 @@ class FinancialStatementLineDTO(_FrozenForbid):
     @classmethod
     def from_domain(cls, line: FinancialStatementLine) -> FinancialStatementLineDTO:
         return cls.model_validate(line, from_attributes=True)
+
+
+class AShareFinancialMetricDTO(_FrozenForbid):
+    statement_type: FinancialStatementType
+    metric_code: str
+    item_name: str
+    value: DecimalWire | None
+    unit: str
+    published_at: datetime | None
+
+
+class AShareFinancialPeriodDTO(_FrozenForbid):
+    period_end: date
+    basis: Literal["q1_ytd", "h1_ytd", "nine_month_ytd", "annual", "reported"]
+    metrics: tuple[AShareFinancialMetricDTO, ...]
+
+
+class AShareFinancialStatementsDTO(_FrozenForbid):
+    """Bounded, canonical A-share statement facts plus deterministic ratios."""
+
+    instrument_id: str
+    as_of: datetime
+    requested_periods: int
+    metric_codes: tuple[str, ...]
+    periods: tuple[AShareFinancialPeriodDTO, ...]
+    quality_metrics: tuple[FinancialQualityMetricDTO, ...]
+    provenance: tuple[AShareComponentProvenanceDTO, ...]
+
+    @classmethod
+    def from_lines(
+        cls,
+        *,
+        instrument_id: str,
+        as_of: datetime,
+        requested_periods: int,
+        metric_codes: tuple[str, ...],
+        lines: tuple[FinancialStatementLine, ...],
+        provenance: tuple[AShareComponentProvenanceDTO, ...],
+    ) -> AShareFinancialStatementsDTO:
+        selected_codes = metric_codes or A_SHARE_DEFAULT_FINANCIAL_METRICS
+        allowed = frozenset(selected_codes)
+        grouped: dict[date, list[FinancialStatementLine]] = {}
+        all_by_period: dict[date, dict[str, Decimal | None]] = {}
+        for line in lines:
+            all_by_period.setdefault(line.period_end, {})[line.item_code] = line.value
+            if line.item_code in allowed:
+                grouped.setdefault(line.period_end, []).append(line)
+
+        periods: list[AShareFinancialPeriodDTO] = []
+        quality: list[FinancialQualityMetricDTO] = []
+        for period_end in sorted(all_by_period, reverse=True)[:requested_periods]:
+            selected = grouped.get(period_end, [])
+            selected.sort(key=lambda line: (line.statement_type.value, line.item_code))
+            periods.append(
+                AShareFinancialPeriodDTO(
+                    period_end=period_end,
+                    basis=_a_share_statement_basis(period_end),
+                    metrics=tuple(
+                        AShareFinancialMetricDTO(
+                            statement_type=line.statement_type,
+                            metric_code=line.item_code,
+                            item_name=line.item_name,
+                            value=line.value,
+                            unit=line.unit,
+                            published_at=line.published_at,
+                        )
+                        for line in selected
+                    ),
+                )
+            )
+            quality.extend(
+                derive_financial_quality_metrics(
+                    period_end=period_end,
+                    line_items=all_by_period[period_end],
+                    currency="CNY",
+                )
+            )
+        return cls(
+            instrument_id=instrument_id,
+            as_of=as_of,
+            requested_periods=requested_periods,
+            metric_codes=selected_codes,
+            periods=tuple(periods),
+            quality_metrics=tuple(quality),
+            provenance=provenance,
+        )
+
+
+def _a_share_statement_basis(
+    period_end: date,
+) -> Literal["q1_ytd", "h1_ytd", "nine_month_ytd", "annual", "reported"]:
+    if (period_end.month, period_end.day) == (3, 31):
+        return "q1_ytd"
+    if (period_end.month, period_end.day) == (6, 30):
+        return "h1_ytd"
+    if (period_end.month, period_end.day) == (9, 30):
+        return "nine_month_ytd"
+    if (period_end.month, period_end.day) == (12, 31):
+        return "annual"
+    return "reported"
 
 
 class F10SectionDTO(_FrozenForbid):
@@ -1102,6 +1363,139 @@ class AShareCapitalSnapshotDTO(_FrozenForbid):
     provenance: tuple[AShareComponentProvenanceDTO, ...]
 
 
+class IndustryMetricObservationDTO(_FrozenForbid):
+    metric_code: str
+    value: DecimalWire
+    unit: str
+    period_start: date
+    period_end: date
+    frequency: IndustryMetricFrequency
+    published_at: datetime
+    source_url: str
+    geography: str
+    measurement_basis: IndustryMeasurementBasis
+    is_estimated: bool
+    methodology_version: str
+    methodology_break: str | None
+
+    @classmethod
+    def from_domain(cls, value: IndustryMetricObservation) -> IndustryMetricObservationDTO:
+        return cls.model_validate(value, from_attributes=True)
+
+
+class IndustryMetricCoverageDTO(_FrozenForbid):
+    """Deterministic per-metric coverage over the selected filtered history."""
+
+    metric_code: str
+    count: int = Field(ge=0)
+    first_period: date
+    last_period: date
+
+
+class IndustryCycleSnapshotDTO(_FrozenForbid):
+    """Bounded industry-cycle fact package.
+
+    Provider/repository may retain the full requested lookback. MCP payloads use
+    ``view=compact`` (default: latest visible observation per selected metric) or
+    ``view=series`` (offset/limit page, max 200 rows). Coverage always describes
+    the full selected filtered history, not only the returned page.
+    """
+
+    cycle: IndustryCycleType
+    dataset_code: str
+    as_of: datetime
+    view: Literal["compact", "series"] = "compact"
+    observations: tuple[IndustryMetricObservationDTO, ...]
+    coverage: tuple[IndustryMetricCoverageDTO, ...]
+    total_observations: int = Field(ge=0)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=200)
+    has_more: bool = False
+    interpretation_owner: Literal["external_host"] = "external_host"
+    missing_components: tuple[str, ...]
+    provenance: tuple[AShareComponentProvenanceDTO, ...]
+
+    @classmethod
+    def from_domain(
+        cls,
+        value: IndustryCycleSnapshot,
+        *,
+        provenance: tuple[AShareComponentProvenanceDTO, ...],
+        view: Literal["compact", "series"] = "compact",
+        metric_codes: tuple[str, ...] = (),
+        offset: int = 0,
+        limit: int = 50,
+    ) -> IndustryCycleSnapshotDTO:
+        selected = _filter_industry_observations(value.observations, metric_codes)
+        coverage = _industry_metric_coverage(selected)
+        total = len(selected)
+        if view == "compact":
+            page = _compact_industry_observations(selected)
+            page_offset = 0
+            page_limit = limit
+            has_more = False
+        else:
+            page_offset = offset
+            page_limit = limit
+            page = selected[page_offset : page_offset + page_limit]
+            has_more = page_offset + len(page) < total
+        return cls(
+            cycle=value.cycle,
+            dataset_code=value.dataset_code,
+            as_of=value.as_of,
+            view=view,
+            observations=tuple(IndustryMetricObservationDTO.from_domain(item) for item in page),
+            coverage=coverage,
+            total_observations=total,
+            offset=page_offset,
+            limit=page_limit,
+            has_more=has_more,
+            missing_components=value.missing_components,
+            provenance=provenance,
+        )
+
+
+def _filter_industry_observations(
+    observations: tuple[IndustryMetricObservation, ...],
+    metric_codes: tuple[str, ...],
+) -> tuple[IndustryMetricObservation, ...]:
+    if not metric_codes:
+        return observations
+    allowed = frozenset(metric_codes)
+    return tuple(item for item in observations if item.metric_code in allowed)
+
+
+def _industry_metric_coverage(
+    observations: tuple[IndustryMetricObservation, ...],
+) -> tuple[IndustryMetricCoverageDTO, ...]:
+    by_code: dict[str, list[IndustryMetricObservation]] = {}
+    for item in observations:
+        by_code.setdefault(item.metric_code, []).append(item)
+    return tuple(
+        IndustryMetricCoverageDTO(
+            metric_code=code,
+            count=len(items),
+            first_period=min(item.period_end for item in items),
+            last_period=max(item.period_end for item in items),
+        )
+        for code, items in sorted(by_code.items(), key=lambda pair: pair[0])
+    )
+
+
+def _compact_industry_observations(
+    observations: tuple[IndustryMetricObservation, ...],
+) -> tuple[IndustryMetricObservation, ...]:
+    latest: dict[str, IndustryMetricObservation] = {}
+    for item in observations:
+        current = latest.get(item.metric_code)
+        if current is None or (item.period_end, item.published_at) > (
+            current.period_end,
+            current.published_at,
+        ):
+            latest[item.metric_code] = item
+    return tuple(sorted(latest.values(), key=lambda item: (item.period_end, item.metric_code)))
+
+
 class AShareLimitUpContextProductDTO(_FrozenForbid):
     """Product composite for limit-up service."""
 
@@ -1137,3 +1531,88 @@ class ResearchReportSearchDTO(_FrozenForbid):
     reports: tuple[AnalystReportItemDTO, ...]
     consensus: tuple[ConsensusEstimateDTO, ...]
     provenance: tuple[AShareComponentProvenanceDTO, ...]
+
+
+class DocumentParseReceiptDTO(_FrozenForbid):
+    announcement_key: str
+    title: str
+    document_type: CompanyDocumentType
+    published_at: datetime
+    source_url: str
+    pdf_url: str | None
+    parser_version: str
+    page_count: int | None
+    status: CompanyDocumentParseStatus
+    extracted_metric_count: int
+    warning_code: str | None = None
+
+    @classmethod
+    def from_domain(cls, value: DocumentParseReceipt) -> DocumentParseReceiptDTO:
+        return cls.model_validate(value, from_attributes=True)
+
+
+class CompanyOperatingMetricObservationDTO(_FrozenForbid):
+    instrument_id: str
+    metric_code: str
+    value: DecimalWire
+    unit: str
+    period_start: date
+    period_end: date
+    frequency: IndustryMetricFrequency
+    measurement_basis: IndustryMeasurementBasis
+    published_at: datetime
+    source_url: str
+    parser_version: str
+    pdf_url: str | None
+    announcement_key: str | None
+    is_audited: bool
+    is_estimated: bool
+
+    @classmethod
+    def from_domain(
+        cls, value: CompanyOperatingMetricObservation
+    ) -> CompanyOperatingMetricObservationDTO:
+        return cls.model_validate(value, from_attributes=True)
+
+
+class CompanyOperatingMetricsSnapshotDTO(_FrozenForbid):
+    """Bounded company operating-metric package (max 200 observations)."""
+
+    instrument_id: str
+    as_of: datetime
+    lookback_months: int
+    observations: tuple[CompanyOperatingMetricObservationDTO, ...]
+    documents: tuple[DocumentParseReceiptDTO, ...]
+    missing_metric_codes: tuple[str, ...]
+    provenance: tuple[AShareComponentProvenanceDTO, ...]
+
+    @classmethod
+    def from_domain(
+        cls,
+        value: CompanyOperatingMetricsSnapshot,
+        *,
+        provenance: tuple[AShareComponentProvenanceDTO, ...],
+        metric_codes: tuple[str, ...] = (),
+    ) -> CompanyOperatingMetricsSnapshotDTO:
+        selected = value.observations
+        if metric_codes:
+            allowed = frozenset(metric_codes)
+            selected = tuple(item for item in value.observations if item.metric_code in allowed)
+        present = {item.metric_code for item in selected}
+        missing = (
+            tuple(code for code in metric_codes if code not in present)
+            if metric_codes
+            else value.missing_metric_codes
+        )
+        # Preserve newest-first order from the domain snapshot.
+        return cls(
+            instrument_id=value.instrument_id,
+            as_of=value.as_of,
+            lookback_months=value.lookback_months,
+            observations=tuple(
+                CompanyOperatingMetricObservationDTO.from_domain(item) for item in selected
+            ),
+            documents=tuple(DocumentParseReceiptDTO.from_domain(item) for item in value.documents),
+            missing_metric_codes=missing,
+            provenance=provenance,
+        )

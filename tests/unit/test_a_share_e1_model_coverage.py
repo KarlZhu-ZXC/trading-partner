@@ -14,7 +14,12 @@ from domain.a_share import enums as a_share_enums
 from domain.a_share import models as a_share_models
 from domain.a_share.enums import (
     BarInterval,
+    CompanyDocumentParseStatus,
+    CompanyDocumentType,
     FinancialStatementType,
+    IndustryCycleType,
+    IndustryMeasurementBasis,
+    IndustryMetricFrequency,
     LimitPoolType,
     OptionType,
     SentimentSourceType,
@@ -28,8 +33,11 @@ from domain.a_share.models import (
     BlockTradeRecord,
     ChipDistributionBin,
     ChipDistributionSnapshot,
+    CompanyOperatingMetricObservation,
+    CompanyOperatingMetricsSnapshot,
     ConsensusEstimate,
     DividendRecord,
+    DocumentParseReceipt,
     DragonTigerRecord,
     DragonTigerSeat,
     EtfOptionContract,
@@ -39,6 +47,8 @@ from domain.a_share.models import (
     FinancialStatementLine,
     FundamentalMetric,
     FundFlowPoint,
+    IndustryCycleSnapshot,
+    IndustryMetricObservation,
     IndustryPerformanceRow,
     InteractiveQAItem,
     LimitPoolEntry,
@@ -75,6 +85,70 @@ US_EQUITY = "equity:US:NVDA"
 
 # Design §4 / §17 frozen field inventory (name → field names).
 DESIGN_FIELD_INVENTORY: dict[str, frozenset[str]] = {
+    "IndustryMetricObservation": frozenset(
+        {
+            "metric_code",
+            "value",
+            "unit",
+            "period_start",
+            "period_end",
+            "frequency",
+            "published_at",
+            "source_url",
+            "geography",
+            "measurement_basis",
+            "is_estimated",
+            "methodology_version",
+            "methodology_break",
+        }
+    ),
+    "IndustryCycleSnapshot": frozenset(
+        {"cycle", "dataset_code", "as_of", "observations", "missing_components"}
+    ),
+    "DocumentParseReceipt": frozenset(
+        {
+            "announcement_key",
+            "title",
+            "document_type",
+            "published_at",
+            "source_url",
+            "pdf_url",
+            "parser_version",
+            "page_count",
+            "status",
+            "extracted_metric_count",
+            "warning_code",
+        }
+    ),
+    "CompanyOperatingMetricObservation": frozenset(
+        {
+            "instrument_id",
+            "metric_code",
+            "value",
+            "unit",
+            "period_start",
+            "period_end",
+            "frequency",
+            "measurement_basis",
+            "published_at",
+            "source_url",
+            "parser_version",
+            "pdf_url",
+            "announcement_key",
+            "is_audited",
+            "is_estimated",
+        }
+    ),
+    "CompanyOperatingMetricsSnapshot": frozenset(
+        {
+            "instrument_id",
+            "as_of",
+            "lookback_months",
+            "observations",
+            "documents",
+            "missing_metric_codes",
+        }
+    ),
     "AShareQuote": frozenset(
         {
             "instrument_id",
@@ -459,6 +533,16 @@ def _contract(**overrides: object) -> EtfOptionContract:
 
 
 def _all_domain_instances() -> dict[str, object]:
+    industry_observation = IndustryMetricObservation(
+        metric_code="live_hog_cny_per_kg",
+        value=Decimal("15.2"),
+        unit="CNY/kg",
+        period_start=DAY,
+        period_end=DAY,
+        frequency=IndustryMetricFrequency.MONTHLY,
+        published_at=NOW,
+        source_url="https://www.nahs.org.cn/jcyj/scxs/example.htm",
+    )
     seat = DragonTigerSeat(
         rank=1,
         side="buy",
@@ -537,7 +621,53 @@ def _all_domain_instances() -> dict[str, object]:
         instrument_count=1,
         instrument_ids=(EQUITY,),
     )
+    company_observation = CompanyOperatingMetricObservation(
+        instrument_id=EQUITY,
+        metric_code="commercial_hog_sales_volume_10k_head",
+        value=Decimal("622.7"),
+        unit="10k_head",
+        period_start=date(2024, 1, 1),
+        period_end=date(2024, 1, 31),
+        frequency=IndustryMetricFrequency.MONTHLY,
+        measurement_basis=IndustryMeasurementBasis.PERIOD_TOTAL,
+        published_at=NOW,
+        source_url="https://static.cninfo.com.cn/finalpage/2024-01-10/1.PDF",
+        parser_version="company_operating_cn_text_v1",
+        pdf_url="https://static.cninfo.com.cn/finalpage/2024-01-10/1.PDF",
+        announcement_key="1",
+        is_audited=False,
+    )
+    document_receipt = DocumentParseReceipt(
+        announcement_key="1",
+        title="2024年1月销售简报",
+        document_type=CompanyDocumentType.MONTHLY_OPERATING_BRIEF,
+        published_at=NOW,
+        source_url="https://www.cninfo.com.cn/new/disclosure/detail?announceId=1",
+        pdf_url="https://static.cninfo.com.cn/finalpage/2024-01-10/1.PDF",
+        parser_version="company_operating_cn_text_v1",
+        page_count=1,
+        status=CompanyDocumentParseStatus.PARSED,
+        extracted_metric_count=1,
+    )
     return {
+        "IndustryMetricObservation": industry_observation,
+        "IndustryCycleSnapshot": IndustryCycleSnapshot(
+            cycle=IndustryCycleType.HOG,
+            dataset_code="nahs_national_hog_cycle",
+            as_of=NOW,
+            observations=(industry_observation,),
+            missing_components=("company_operating_data",),
+        ),
+        "DocumentParseReceipt": document_receipt,
+        "CompanyOperatingMetricObservation": company_observation,
+        "CompanyOperatingMetricsSnapshot": CompanyOperatingMetricsSnapshot(
+            instrument_id=EQUITY,
+            as_of=NOW,
+            lookback_months=12,
+            observations=(company_observation,),
+            documents=(document_receipt,),
+            missing_metric_codes=(),
+        ),
         "AShareQuote": _quote(),
         "OrderBookLevel": OrderBookLevel(
             level=1,
@@ -819,7 +949,16 @@ def test_every_output_dto_from_domain_path() -> None:
 
     for dto_cls, domain_name in dto_pairs:
         domain_obj = instances[domain_name]
-        kwargs = {"provenance": ()} if dto_cls.__name__ == "EtfOptionSnapshotDTO" else {}
+        kwargs = (
+            {"provenance": ()}
+            if dto_cls.__name__
+            in {
+                "EtfOptionSnapshotDTO",
+                "IndustryCycleSnapshotDTO",
+                "CompanyOperatingMetricsSnapshotDTO",
+            }
+            else {}
+        )
         dto = dto_cls.from_domain(domain_obj, **kwargs)
         assert isinstance(dto, dto_cls)
 

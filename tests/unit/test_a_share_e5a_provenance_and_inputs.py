@@ -94,6 +94,8 @@ def test_component_type_wire_inventory_is_stable() -> None:
         "option_snapshot",
         "reports",
         "consensus",
+        "industry_cycle",
+        "company_operating_metrics",
     )
 
 

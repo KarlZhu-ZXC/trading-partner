@@ -155,6 +155,8 @@ def _coordinator(
         limit_up_service=MagicMock(),
         sentiment_service=MagicMock(),
         etf_option_service=MagicMock(),
+        industry_cycle_service=MagicMock(),
+        company_operating_metrics_service=MagicMock(),
         report_search_service=MagicMock(),
     )
     return coord, master, snap, clock, ids

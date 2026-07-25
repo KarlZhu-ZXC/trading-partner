@@ -29,6 +29,7 @@ from domain.us_research.enums import (
     USFilingForm,
     USInsiderAcquiredDisposed,
     USStatementFrequency,
+    USStatementView,
 )
 from domain.us_research.models import (
     USCorporateAction,
@@ -92,8 +93,12 @@ class Provider:
         )
         return ProviderSuccess(value, _meta(DataCategory.FUNDAMENTALS))
 
-    async def get_financial_statements(self, instrument: Instrument, *, frequency, limit, as_of):
-        value = USFinancialStatements(instrument.instrument_id, as_of, frequency, (), (), ())
+    async def get_financial_statements(
+        self, instrument: Instrument, *, frequency, limit, as_of, view=USStatementView.LATEST
+    ):
+        value = USFinancialStatements(
+            instrument.instrument_id, as_of, frequency, (), (), (), view=view
+        )
         return ProviderSuccess(value, _meta(DataCategory.FINANCIAL_STATEMENTS))
 
     async def get_corporate_actions(self, instrument: Instrument, *, start, end, as_of):
