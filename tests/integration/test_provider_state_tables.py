@@ -182,8 +182,8 @@ def test_instrument_table_checks_and_unique_symbol(
             )
 
     with engine.connect() as conn:
-        # Head seeds: 10 Phase 1 instruments plus 6 Phase 3 commodity futures.
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 16
+        # Head seeds: 10 Phase 1, 6 continuous futures, and 3 OTC metal identities.
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 19
         assert conn.execute(
             text(
                 "SELECT COUNT(*) FROM instruments "

@@ -85,10 +85,27 @@ _PHASE2_TABLES = {
     "monitor_runs",
 }
 
-_PHASE3_TABLES = {"industry_metric_observations"}
+_HARDENING_TABLES = {
+    "challenge_review_resolutions",
+    "research_run_fact_artifacts",
+}
+
+_PHASE3_TABLES = {
+    "industry_metric_observations",
+    "futures_products",
+    "futures_product_versions",
+    "futures_contracts",
+    "futures_contract_versions",
+    "futures_contract_statistics",
+    "continuous_series_definitions",
+    "continuous_contract_mappings",
+    "trade_plan_identities",
+    "trade_plan_versions",
+    "trade_plan_conditions",
+}
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0016_monitor_valid_until"})
+_HEAD_REVISIONS = frozenset({"0022_workflow_execution_replay"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -108,6 +125,12 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0014_phase3_commodity_futures",
     "0015_phase3b_industry_metrics",
     "0016_monitor_valid_until",
+    "0017_phase3a_futures_definitions",
+    "0018_phase3a_otc_spot_seeds",
+    "0019_phase3a_futures_statistics",
+    "0020_phase3d_plan_controls",
+    "0021_challenge_review_idempotency",
+    "0022_workflow_execution_replay",
 }
 
 
@@ -135,6 +158,7 @@ def test_migration_round_trip(
     assert _PHASE1C_TABLES.issubset(tables_after_first)
     assert _PHASE2_TABLES.issubset(tables_after_first)
     assert _PHASE3_TABLES.issubset(tables_after_first)
+    assert _HARDENING_TABLES.issubset(tables_after_first)
 
     with engine.connect() as conn:
         versions = {
@@ -154,12 +178,14 @@ def test_migration_round_trip(
     assert not _PHASE1C_TABLES.intersection(tables_after_down)
     assert not _PHASE2_TABLES.intersection(tables_after_down)
     assert not _PHASE3_TABLES.intersection(tables_after_down)
+    assert not _HARDENING_TABLES.intersection(tables_after_down)
 
     # upgrade head again
     command.upgrade(cfg, _HEAD_TARGET)
     insp = inspect(engine)
     tables_after_second = set(insp.get_table_names())
     assert _PHASE2_TABLES.issubset(tables_after_second)
+    assert _HARDENING_TABLES.issubset(tables_after_second)
     assert tables_after_second == tables_after_first
     engine.dispose()
 
@@ -221,8 +247,8 @@ def test_phase1d_migration_round_trip_preserves_1b_data(
                 "1, '2026-07-17T12:00:00+00:00', '2026-07-17T12:00:00+00:00')"
             )
         )
-        # Confirm migration seed is present before downgrade (16 head seeds + AAPL).
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 17
+        # Confirm migration seeds are present before downgrade (19 head seeds + AAPL).
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 20
 
     # Explicit downgrade to 0002 (not relative -1): 1D+1C gone, 1A+1B data remain.
     command.downgrade(cfg, _PHASE1B_REVISION)
@@ -259,8 +285,8 @@ def test_phase1d_migration_round_trip_preserves_1b_data(
         assert _alembic_heads(engine) == _HEAD_REVISIONS
         assert conn.execute(text("SELECT COUNT(*) FROM investment_cases")).scalar() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM system_audit_log")).scalar() == 1
-        # Manual row was dropped; re-upgrade reseeds 10 equity/index/ETF + 6 futures.
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 16
+        # Manual row was dropped; re-upgrade restores 16 legacy seeds and 3 OTC seeds.
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 19
 
     # second upgrade is idempotent
     command.upgrade(cfg, _HEAD_TARGET)

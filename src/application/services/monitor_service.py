@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from application.dto.monitoring import (
     MonitorCreateInput,
     MonitorDefinitionDTO,
@@ -28,11 +30,18 @@ from domain.common.errors import (
     MonitorVersionConflict,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.monitoring.enums import MonitorEventAction, MonitorStatus
+from domain.monitoring.enums import (
+    MonitorEventAction,
+    MonitorRuleType,
+    MonitorSeverity,
+    MonitorStatus,
+)
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEventResolution,
+    MonitorRule,
 )
+from domain.trade_plan.enums import TradePlanConditionMode, TradePlanStatus
 
 
 class MonitorService:
@@ -49,28 +58,35 @@ class MonitorService:
         self._ids = id_generator
 
     def create(self, request: MonitorCreateInput) -> MonitorDetailDTO:
+        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(
+            request
+        )
         existing = self._repository.get_by_idempotency_key(request.idempotency_key)
         if existing is not None:
-            if not self._matches_create(existing, request):
+            if not self._matches_create(
+                existing, request, rules, case_id, instrument_id, valid_until
+            ):
                 raise IdempotencyConflict(
                     "idempotency_key belongs to a different monitor definition"
                 )
             return self.get(MonitorGetInput(monitor_id=existing.monitor_id))
-        self._validate_case(request.case_id)
+        self._validate_case(case_id)
         now = self._clock.now()
         value = MonitorDefinition(
             monitor_id=self._ids.new(EntityIdPrefix.MONITOR),
             version=1,
             name=request.name.strip(),
-            case_id=request.case_id,
-            primary_instrument_id=request.primary_instrument_id,
+            case_id=case_id,
+            primary_instrument_id=instrument_id,
+            trade_plan_id=request.trade_plan_id,
+            trade_plan_version=request.trade_plan_version,
             cadence=request.cadence,
             status=MonitorStatus.ACTIVE,
-            rules=tuple(item.to_domain() for item in request.rules),
+            rules=rules,
             confirmed_by=request.confirmed_by,
             idempotency_key=request.idempotency_key.strip(),
             created_at=now,
-            valid_until=request.valid_until,
+            valid_until=valid_until,
         )
         self._repository.create(value)
         return MonitorDetailDTO(
@@ -79,10 +95,13 @@ class MonitorService:
         )
 
     def update(self, request: MonitorUpdateInput) -> MonitorDetailDTO:
+        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(
+            request
+        )
         replay = self._repository.get_by_idempotency_key(request.idempotency_key)
         if replay is not None:
             if replay.monitor_id != request.monitor_id or not self._matches_update(
-                replay, request
+                replay, request, rules, case_id, instrument_id, valid_until
             ):
                 raise IdempotencyConflict(
                     "idempotency_key belongs to a different monitor update"
@@ -97,20 +116,22 @@ class MonitorService:
                     "current_version": current.version,
                 },
             )
-        self._validate_case(request.case_id)
+        self._validate_case(case_id)
         value = MonitorDefinition(
             monitor_id=current.monitor_id,
             version=current.version + 1,
             name=request.name.strip(),
-            case_id=request.case_id,
-            primary_instrument_id=request.primary_instrument_id,
+            case_id=case_id,
+            primary_instrument_id=instrument_id,
+            trade_plan_id=request.trade_plan_id,
+            trade_plan_version=request.trade_plan_version,
             cadence=request.cadence,
             status=request.status,
-            rules=tuple(item.to_domain() for item in request.rules),
+            rules=rules,
             confirmed_by=request.confirmed_by,
             idempotency_key=request.idempotency_key.strip(),
             created_at=self._clock.now(),
-            valid_until=request.valid_until,
+            valid_until=valid_until,
         )
         self._repository.append_version(value)
         return self.get(MonitorGetInput(monitor_id=value.monitor_id))
@@ -195,29 +216,109 @@ class MonitorService:
         with self._research_uow_factory() as uow:
             uow.cases.get(case_id)
 
+    def _resolve_definition_inputs(
+        self, request: MonitorCreateInput | MonitorUpdateInput
+    ) -> tuple[tuple[MonitorRule, ...], str | None, str | None, datetime | None]:
+        rules = list(item.to_domain() for item in request.rules)
+        case_id = request.case_id
+        instrument_id = request.primary_instrument_id
+        valid_until = request.valid_until
+        if request.trade_plan_id is not None:
+            assert request.trade_plan_version is not None
+            with self._research_uow_factory() as uow:
+                plan = uow.trade_plans.get_version(
+                    request.trade_plan_id, request.trade_plan_version
+                )
+            if plan is None:
+                raise DataContractError("Specified Trade Plan version was not found")
+            if plan.status is not TradePlanStatus.ACTIVE:
+                raise DataContractError("Monitor compilation requires an ACTIVE Trade Plan")
+            if case_id is not None and case_id != plan.case_id:
+                raise DataContractError("Monitor case_id conflicts with Trade Plan")
+            if instrument_id is not None and instrument_id != plan.instrument_id:
+                raise DataContractError(
+                    "Monitor primary_instrument_id conflicts with Trade Plan"
+                )
+            case_id = plan.case_id
+            instrument_id = plan.instrument_id
+            if plan.valid_until is not None and (
+                valid_until is None or plan.valid_until < valid_until
+            ):
+                valid_until = plan.valid_until
+            if request.compile_trade_plan_conditions:
+                for condition in plan.conditions:
+                    if condition.mode is TradePlanConditionMode.MANUAL:
+                        continue
+                    assert condition.fact_type is not None
+                    assert condition.metric_key is not None
+                    assert condition.comparator is not None
+                    assert condition.max_fact_age_seconds is not None
+                    rules.append(
+                        MonitorRule(
+                            rule_code=condition.condition_code,
+                            rule_type=MonitorRuleType.FACT_COMPARISON,
+                            severity=MonitorSeverity(condition.severity),
+                            instrument_id=condition.instrument_id,
+                            price_threshold=None,
+                            risk_status_threshold=None,
+                            max_fact_age_seconds=condition.max_fact_age_seconds,
+                            fact_type=condition.fact_type,
+                            metric_key=condition.metric_key,
+                            comparator=condition.comparator,
+                            numeric_threshold=condition.threshold,
+                            event_after=condition.event_after,
+                        )
+                    )
+        if not rules:
+            raise DataContractError("Monitor has no machine-evaluable rules")
+        if len(rules) > 50:
+            raise DataContractError("Monitor supports at most 50 rules")
+        codes = [item.rule_code for item in rules]
+        if len(codes) != len(set(codes)):
+            raise DataContractError("Monitor rule_code values must be unique")
+        return tuple(rules), case_id, instrument_id, valid_until
+
     @staticmethod
-    def _matches_create(value: MonitorDefinition, request: MonitorCreateInput) -> bool:
+    def _matches_create(
+        value: MonitorDefinition,
+        request: MonitorCreateInput,
+        rules: tuple[MonitorRule, ...],
+        case_id: str | None,
+        instrument_id: str | None,
+        valid_until: datetime | None,
+    ) -> bool:
         return (
             value.version == 1
             and value.name == request.name.strip()
-            and value.case_id == request.case_id
-            and value.primary_instrument_id == request.primary_instrument_id
+            and value.case_id == case_id
+            and value.primary_instrument_id == instrument_id
+            and value.trade_plan_id == request.trade_plan_id
+            and value.trade_plan_version == request.trade_plan_version
             and value.cadence is request.cadence
-            and value.rules == tuple(item.to_domain() for item in request.rules)
-            and value.valid_until == request.valid_until
+            and value.rules == rules
+            and value.valid_until == valid_until
             and value.confirmed_by == request.confirmed_by
         )
 
     @staticmethod
-    def _matches_update(value: MonitorDefinition, request: MonitorUpdateInput) -> bool:
+    def _matches_update(
+        value: MonitorDefinition,
+        request: MonitorUpdateInput,
+        rules: tuple[MonitorRule, ...],
+        case_id: str | None,
+        instrument_id: str | None,
+        valid_until: datetime | None,
+    ) -> bool:
         return (
             value.version == request.expected_version + 1
             and value.name == request.name.strip()
-            and value.case_id == request.case_id
-            and value.primary_instrument_id == request.primary_instrument_id
+            and value.case_id == case_id
+            and value.primary_instrument_id == instrument_id
+            and value.trade_plan_id == request.trade_plan_id
+            and value.trade_plan_version == request.trade_plan_version
             and value.cadence is request.cadence
             and value.status is request.status
-            and value.rules == tuple(item.to_domain() for item in request.rules)
-            and value.valid_until == request.valid_until
+            and value.rules == rules
+            and value.valid_until == valid_until
             and value.confirmed_by == request.confirmed_by
         )

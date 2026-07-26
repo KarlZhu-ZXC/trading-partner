@@ -4,81 +4,93 @@
 
 Trading Partner is a long-horizon investment judgment companion. Codex (or another
 agent host) talks to the user; Trading Partner MCP supplies facts, research state,
-and structured tools. The current Phase 1–2 boundary covers A-share/US research,
-accounts, Investment Cases, Watchlist Hub, Risk, Monitoring, and professional
-daily/weekly technical analysis — **not** backtests, paper trading, or live order writes.
+and structured tools. The implemented Phase 1–3D boundary covers A-share/US research,
+accounts, Investment Cases, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
+Plans, deterministic Position Sizing, and professional daily/weekly technical
+analysis — **not** backtests or live order writes.
 
 ## Implemented boundary
 
-The public MCP surface is exactly **52** tools. Related read operations are grouped
-behind closed `operation` enums; the underlying application services remain separate.
+The sole public MCP surface is exactly **28** tools (`compact_28`). Grouped tools
+accept one required `request` object
+whose closed `operation` union rejects fields from other operations. Application
+services remain separate; compact routing belongs only to `interfaces/mcp/`.
 
-**Phase 1A**
+**System and identity**
 
-- `system_health` (includes `components.research_search` FTS probe when wired)
-
-**Phase 1B research state**
-
-- `investment_case_create`
-- `investment_case_query` (`case_id` for one Case; otherwise filtered list)
-- `investment_case_archive`
-- `research_state_get`
-- `research_state_update`
-- `thesis_revision_propose`
-- `thesis_revision_confirm`
-- `thesis_history_get`
-
-**Phase 1D**
-
-- `instrument_resolve`
+- `system_health` — health plus `mcp_surface_profile`, `public_tool_count`, and
+  `surface_schema_version`.
+- `instrument_resolve` — local-first lookup; a unique provider result may be cached.
 
 Instrument resolution is local-first, not local-only. A local miss may use the
 configured US/A-share instrument directories; only one validated candidate is
 atomically cached in the Instrument Master. The Master is a registry/cache, not
 an allowlist. Directory failures remain typed provider errors.
 
-**Phase 1C research memory**
+**Research files, judgment, and memory**
 
-- `research_search`
-- `research_report_get`
-- `research_timeline_get`
-- `journal_append`
-- `decision_record_append`
+- `investment_case_read` (`query`, `context`)
+- `investment_case_manage` (`create`, `archive`)
+- `research_judgment_get` (`state`, `thesis_history`)
+- `research_judgment_propose` (`research_state`, `thesis_revision`)
+- `research_judgment_confirm`
+- `research_memory_get` (`search`, `report`, `timeline`)
+- `research_memory_append` (`journal`, `decision`)
 
-**Phase 1E A-share facts**
+Candidate Propose → Confirm / Reject / Withdraw remains mandatory. Codex must not
+autonomously choose confirm or reject. When the user explicitly states the exact
+decision in the current Codex chat, Codex must relay it as `reviewed_by="user"`,
+`submitted_via="codex_chat"`, with the user's bounded instruction in
+`authorization_note`; do not refuse or require a separate UI. This explicit chat
+authorization is the highest authority inside the implemented, non-executing product
+scope. Journal/Decision append and confirmed manage operations follow the same rule
+and retain confirmer, idempotency, expected-version, and actor gates. Ambiguous target
+or action references require clarification, and no confirmation authorizes orders or
+other out-of-scope execution.
+
+**Provider facts and technicals**
 
 - `a_share_get_facts` (`snapshot`, `market_structure`, `capital`, `limit_up`,
-  `sentiment`, `etf_option`, `financials`, `industry_cycle`, or
-  `company_operating_metrics`)
-- `research_search_reports`
-
-**Phase 1F US market facts**
-
-- `us_get_market` (`quote` or `composite`)
-- `market_get_bars`
-- `market_get_context` (SPY/QQQ/IWM, best-effort Yahoo breadth/sector rotation,
-  and optional Moomoo OpenD US community-attention Hot List)
+  `sentiment`, `etf_option`, `financials`, `industry_cycle`,
+  `company_operating_metrics`, or `research_reports`)
+- `market_data_get` (`quote`, `composite`, `bars`, `us_market`, `futures_curve`,
+  or `spot_future_basis`)
 - `technical_get_snapshot`
+- `technical_render_chart`
+- `us_company_get` (`fundamentals_snapshot`, `fundamental_statements`, `filings`,
+  `insider_activity`, `company_updates`, `events`, or `live_news`)
+- `us_context_get` (`macro`, `sentiment`, `prediction_market`)
 
 **Phase 3A commodity futures facts**
 
-- The existing `instrument_resolve`, `us_get_market`, `market_get_bars`,
-  `technical_get_snapshot`, and `technical_render_chart` tools support Yahoo
+- The existing `instrument_resolve`, `market_data_get`, `technical_get_snapshot`,
+  and `technical_render_chart` tools support Yahoo
   continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`, and `PA=F` through
   `future:US:*` IDs. Futures are unadjusted and always disclose non-spot and roll risk.
 - Futures routing is asset-aware: Yahoo is primary; timestamped Sina quotes are a
   best-effort fallback for GC/SI/HG; Eastmoney daily bars are a best-effort fallback
   for all six metals and may be aggregated to weekly/monthly. There is no intraday
   OHLCV fallback, and a price-only minute line must never be promoted to candles.
+- Formal CME metal contracts use `future:CME:*` identities, CME public contract/
+  settlement facts, and Yahoo active-contract quote/bars. DCE `future:DCE:LH*`
+  supplies official EOD chain/settlement facts only. Dukascopy supplies free
+  broker/SWFX `commodity_spot:OTC:XAUUSD`, `XAGUSD`, and the separately labelled
+  rolling copper CFD. None may be relabelled as LBMA/LME benchmark data.
+- Dukascopy follows the current keyless `dukascopy-node` Jetta strategy: minute/
+  hour/day data use UTC day/month/year buckets, up to 10 requests run per batch,
+  and batches pause for one second. Completed buckets are cached; active `from`
+  buckets are not. `DUKASCOPY_API_KEY` is legacy-fallback-only.
+- `uv run trading-partner-futures-sync` explicitly refreshes contract definitions
+  and persists EOD statistics vintages. It is idempotent and has no order effect.
 
 **Phase 3B company financial/operating facts and optional industry datasets**
 
-- `a_share_get_facts(operation="financials")` returns normalized A-share income,
+- `a_share_get_facts(request={"operation":"financials",...})` returns normalized A-share income,
   balance-sheet, and cash-flow facts for up to 20 reported periods. It labels
   interim statements as cumulative/YTD, preserves publication cutoffs and
   provenance, and derives only ratios whose inputs are present. Sina is primary;
   Eastmoney is a narrower fallback. Equity Deep Dive includes this fact package.
-- `a_share_get_facts(operation="industry_cycle", cycle="hog")` returns official
+- `a_share_get_facts(request={"operation":"industry_cycle","cycle":"hog",...})` returns official
   national monthly hog/pork/feed prices and pig-grain ratios plus the latest visible
   periodic capacity observation. Default `view=compact` returns the latest visible
   observation per selected metric with per-metric coverage; `view=series` pages a
@@ -87,29 +99,16 @@ an allowlist. Directory failures remain typed provider errors.
   makes no cycle-phase verdict, and discloses missing company operating data and
   live-hog futures curves. Explicit historical synchronization persists publication
   vintages and reports gaps; a 240-month request never implies continuous coverage.
-- `a_share_get_facts(operation="company_operating_metrics", instrument_id=...)`
+- `a_share_get_facts(request={"operation":"company_operating_metrics","instrument_id":...})`
   downloads publication-cutoff-safe official CNINFO finalpage PDFs and returns a
   bounded, generic company operating series plus per-document parse receipts. It
   extracts explicit sales volume/price/revenue, slaughter/output, breeding-sow,
   and full-cost disclosures; financial statements remain owned by the existing
   fundamentals/statements path. Raw PDFs and extracted text never leave the Provider.
 
-**Phase 1G US research facts**
-
-- `us_get_fundamentals` (`snapshot` or `statements`; statement `view` is `latest`
-  or SEC `vintages`)
-- `us_get_company_research` (`filings`, `insider_activity`, `company_updates`,
-  or `events`)
-
-**Phase 1H US context facts**
-
-- `market_get_live_news`
-- `us_get_macro_context`
-- `us_get_sentiment_snapshot`
-- `us_get_prediction_market_context`
-
-`us_get_sentiment_snapshot` keeps StockTwits user labels, Reddit inference, and
-Moomoo public-feed inference source-separated. The Moomoo path is deterministic:
+`us_context_get(request={"operation":"sentiment",...})` keeps Reddit inference and Moomoo
+public-feed inference
+source-separated. The Moomoo path is deterministic:
 it performs exact-symbol relevance filtering, HTML cleanup, deduplication,
 low-quality filtering, and versioned bilingual rule classification. It never
 invokes a Skill or an LLM; Codex or another external host interprets the returned
@@ -121,15 +120,28 @@ period ends while `vintages` keeps visible filing versions. yfinance and Alpha
 Vantage are current-only fallbacks and must not be described as historical filing
 vintages. Derived financial-quality metrics are emitted only for the deduplicated
 latest view.
-StockTwits formal access is no longer an active roadmap deliverable. Its dormant,
-default-disabled adapter may remain for compatibility, but agents must not retry,
-scrape, or request credentials when it is unavailable.
+StockTwits formal access is no longer an active roadmap deliverable. The runtime
+adapter, setting, and network allowlist were removed; historical enum/database
+values remain readable for compatibility. Agents must not retry, scrape, or request
+credentials for it.
 
-**Phase 1I read-only accounts and portfolio**
+**Accounts, sync, portfolio, workflows, and Challenge Review**
 
-- `account_get` (`positions`, explicit `refresh`, or `transactions`)
-- `portfolio_analyze`
-- `portfolio_simulate_addition`
+- `account_get` — durable positions only
+- `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
+  upstream refresh entry
+- `portfolio_analyze` (`exposure`, `simulate_addition`)
+- `challenge_review_get`
+- `challenge_review_manage` (`start`, `resolve`)
+- `research_workflow_run` (`deep_dive`, `catalyst_review`,
+  `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`)
+
+Compact workflows never accept hidden Case creation or account refresh. Create a
+Case first with `investment_case_manage(request={"operation":"create",...})`;
+refresh accounts first with `external_state_sync(request={"operation":"accounts"})`.
+Peer Comparison accepts one primary and 1–5 caller-specified same-market A-share/US
+equity peers. It aligns normalized statements and optional current valuation facts,
+does not discover/rank peers, and never mutates a Case, Thesis, Trade Plan, or account.
 
 **Scheduled operational CLI (not a public MCP tool)**
 
@@ -138,48 +150,30 @@ scrape, or request credentials when it is unavailable.
   providers before the exact active-source Watchlist sync, persists one terminal
   receipt per market session, and never executes an order.
 
-**Phase 1J durable context**
+**Watchlist, Risk v2, and Monitoring v2**
 
-- `research_context_build`
-
-**Phase 1K Challenge Review**
-
-- `challenge_review_start`
-- `challenge_review_get`
-- `challenge_review_resolve`
-
-**Phase 1L workflows**
-
-- `research_run_deep_dive`
-- `research_run_catalyst_review`
-- `a_share_run_market_review`
-- `us_run_market_review`
-- `portfolio_run_review`
-
-**Phase 2 watchlist hub**
-
-- `watchlist_get` (`groups` or `items`)
-- `watchlist_add`
-- `watchlist_remove`
-
-**Phase 2B Portfolio Risk Engine v1**
-
-- `risk_policy_get`
+- `watchlist_get` (`groups`, `items`) — durable only
+- `watchlist_manage` (`add`, `remove`)
+- `portfolio_risk_get` (`policy`, `check`)
 - `risk_policy_update`
-- `risk_check`
-
-**Phase 2C Monitoring v1**
-
-- `monitor_create`
-- `monitor_query` (`monitor_id` for one Monitor; otherwise filtered list)
-- `monitor_update`
+- `monitor_read` (`definitions`, `events`)
+- `monitor_manage` (`create`, `update`, `resolve_event`)
 - `monitor_evaluate`
-- `monitor_event_list`
-- `monitor_event_resolve`
 
-**Phase 2D Technical Engine v2**
+**Phase 3D judgment-to-plan controls**
 
-- `technical_render_chart`
+- `research_judgment_propose(request={"operation":"research_state","kind":"trade_plan",...})`
+  proposes a versioned Trade Plan; `research_judgment_confirm` remains the explicit
+  user/external-agent confirmation gate.
+- `research_judgment_get(request={"operation":"state",...})` returns the current Trade Plan and history.
+- `portfolio_risk_get(request={"operation":"check","trade_plan_id":...})` returns deterministic
+  A-share/US Position Sizing plus
+  Risk Engine v2 checks; missing NAV, cash, FX, stop, freshness, or optional facts remain
+  `NOT_EVALUATED`/`INCOMPLETE`.
+- `monitor_manage` operations `create` and `update` can bind one exact confirmed Trade Plan version and
+  compile its `MONITORABLE` conditions. `MANUAL` conditions remain human review items.
+- Monitoring v2 fact comparisons cover price, volume, technical, fundamental, company
+  event, macro, sentiment, Thesis state, and portfolio risk with typed unavailability.
 
 Phase 2D also upgrades the existing `technical_get_snapshot` from the Phase 1F
 US-only v1 calculation to one shared A-share/US daily-and-weekly engine.
@@ -203,27 +197,31 @@ through a project-owned `schwab-py` OAuth token, Moomoo OpenD, or a strict manua
 CSV; persist account snapshots; and compute deterministic gross portfolio exposure
 without implicit FX conversion. The Schwab adapter exposes only balances,
 positions, and transactions — no order method or plugin CLI runtime dependency.
-Moomoo Hot List is an optional `market_get_context` component, not directional
+Moomoo Hot List is an optional `market_data_get(request={"operation":"us_market",...})` component,
+not directional
 sentiment. It uses the shared cross-process OpenD limiter, is cached in 15-minute
 buckets, and requires OpenD 10.9 or newer. Older versions remain a typed
 `MOOMOO_OPEND_VERSION_UNSUPPORTED` degradation. Moomoo discussion-post retrieval
-is a separate public-feed Provider under `us_get_sentiment_snapshot`; it never
+is a separate public-feed Provider under `us_context_get(request={"operation":"sentiment",...})`;
+it never
 uses OpenD, a Skill, or an LLM at runtime.
 Ordinary holdings, portfolio, and risk questions read the latest durable account
-snapshots. Broker refresh is explicit: only `account_get(operation="refresh")`, or a workflow
-called with `refresh_accounts=true` after an explicit user request, may fetch and
-persist new account facts. Snapshot staleness is disclosed, not an implicit trigger.
+snapshots. Broker refresh is explicit: only
+`external_state_sync(request={"operation":"accounts"})` may fetch and persist new account facts.
+Snapshot staleness is disclosed, not an implicit trigger.
 Phase 1J restores one current durable research file (`InvestmentCase`)
 context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.
 Phase 1K bypasses ordinary discussion but persists material strict reviews with a
 versioned ten-dimension checklist and explicit non-executing user resolution.
-Phase 1L returns actual fact packages for five workflows while Codex remains the
+The workflow surface returns actual fact packages for six workflows while Codex remains the
 synthesizer. Workflow receipts/reports and normalized historical transactions are
 durable; workflow outputs never execute or directly mutate a current investment
 judgment (`Thesis`). An
-instrument-only `research_run_deep_dive` creates or reuses one non-archived Draft
-instrument research file by default; `create_case=false` preserves ad-hoc mode.
+instrument-only `research_workflow_run(request={"operation":"deep_dive",...})` reuses one
+non-archived Draft instrument
+research file by default. Creating a new Draft requires explicit confirmer and
+idempotency key; `create_case=false` preserves ad-hoc mode.
 Draft case creation is a research-folder write, not long-term tracking, Thesis confirmation,
 or trading authority. Catalyst Review does not auto-create a Case.
 For A-share Deep Dive, `industry_cycle="hog"` explicitly adds the compact national
@@ -232,7 +230,8 @@ workflow never infers an industry cycle from an instrument or company name.
 
 Phase 2 selects exactly one active watchlist upstream (`MOOMOO` or `MANUAL_CSV`).
 The database persists complete group/membership lifecycle history and mutation
-receipts. Reads may refresh explicitly and fall back to stale durable state with a
+receipts. Reads are durable-first by default, may refresh only when explicitly
+requested, and fall back to stale durable state with a
 typed warning. Adds/removes require an allowed confirmer and idempotency key;
 external deletion never deletes Phase 1 Research WatchlistItems or Investment
 Cases. Unsupported provider codes stay visible without fabricated instruments.
@@ -276,7 +275,12 @@ strategies, trade signals, or execution authority.
 Report / Event writes are internal services only.
 
 Thesis/research-state changes follow Candidate Propose → Confirm / Reject /
-Withdraw. Codex may propose changes, but may not confirm or reject them.
+Withdraw. Codex may propose changes but must not choose the review outcome itself.
+An explicit user decision in the current chat is user authorization, not a Codex
+self-confirmation: relay the exact candidate/action with `reviewed_by="user"`,
+`submitted_via="codex_chat"`, and a bounded `authorization_note` containing the
+user's instruction. Do not claim authenticated identity—the local stdio boundary is
+caller-asserted—but do preserve this provenance in the audit record.
 Journal and Decision append require explicit `user` or `external_agent`
 confirmation. Decision records are research/position **intent** only — never
 orders, fills, or positions.
@@ -289,6 +293,10 @@ orders, fills, or positions.
 4. Only `src/bootstrap.py` wires application + infrastructure.
 5. Provider raw payloads never cross the infrastructure boundary.
 6. Precise numbers come from tool snapshots with source, time, freshness, and basis.
+7. The sole FastMCP server directly composes compact capability adapters; do not
+   reintroduce legacy tool registrars, handler-name lookup, or a second argument-model registry.
+8. Public schema minimization must preserve resolvable local `$ref` targets and closed
+   discriminated unions; repeated schema may be shared only within one tool schema.
 
 ## Source layout
 
@@ -335,7 +343,7 @@ user guides, and historical archives.
 ## Out of scope until later phases
 
 ```text
-strategies, backtest, paper, execution, orders, fills
+strategies, backtest, execution, orders, fills
 automated evidence ingestion, runtime LLM synthesis
 order writes
 ```

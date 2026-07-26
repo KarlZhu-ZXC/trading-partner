@@ -34,6 +34,7 @@ data/*.db-*
 data/secrets/
 data/locks/
 data/artifacts/
+data/research/hog_cycle/
 !data/.gitkeep
 
 # IDE / OS

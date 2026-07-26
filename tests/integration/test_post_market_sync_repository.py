@@ -40,8 +40,10 @@ def test_repository_inserts_and_updates_one_receipt_per_market_session() -> None
     repository.save(_run())
     repository.save(_run(attempt_count=2))
     restored = repository.get_for_session(date(2026, 7, 17))
+    latest = repository.get_latest()
 
     assert restored is not None
+    assert latest is not None and latest.run_id == restored.run_id
     assert restored.attempt_count == 2
     assert restored.account_snapshot_ids == ("snapshot_1", "snapshot_2")
     assert restored.watchlist_membership_relations_synced == 143
@@ -54,6 +56,7 @@ def test_get_for_session_is_none_when_no_receipt_exists() -> None:
     repository = SqlAlchemyPostMarketSyncRunRepository(engine)
 
     assert repository.get_for_session(date(2026, 7, 17)) is None
+    assert repository.get_latest() is None
     engine.dispose()
 
 

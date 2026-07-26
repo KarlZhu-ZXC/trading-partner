@@ -104,7 +104,10 @@ class PortfolioReviewFactService:
                     as_of=as_of,
                 )
             markets = {parse_instrument_id(item)[1] for item in selected}
-            benchmark_series = {
+            benchmark_series: dict[
+                Market,
+                tuple[dict[date, Decimal], tuple[SourceReference, ...]],
+            ] = {
                 market: await self._bars(
                     self._benchmark(market), as_of, lookback_sessions
                 )

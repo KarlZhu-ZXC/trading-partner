@@ -191,13 +191,17 @@ def _require_us_instrument_id(
             f"{field} must be a well-formed instrument_id",
             details={"field": field, "rule": "instrument_id_syntax"},
         ) from exc
-    if market is not Market.US:
+    market_asset_allowed = market is Market.US or (
+        market is Market.CME and asset_type is AssetType.FUTURE
+    )
+    if not market_asset_allowed:
         raise DataContractError(
-            f"{field} must use Market.US",
+            f"{field} must use Market.US, or Market.CME for a future",
             details={
                 "field": field,
-                "rule": "us_market",
+                "rule": "market_asset_pair",
                 "market": market.value,
+                "asset_type": asset_type.value,
             },
         )
     if asset_type not in allowed_assets:

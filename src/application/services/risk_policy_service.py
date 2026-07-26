@@ -68,6 +68,14 @@ class RiskPolicyService:
             confirmed_by=RiskConfirmer(request.confirmed_by),
             created_at=self._clock.now(),
             idempotency_key=request.idempotency_key,
+            risk_budget_max_percent=request.risk_budget_max_percent,
+            theme_exposure_max_percent=request.theme_exposure_max_percent,
+            drawdown_max_percent=request.drawdown_max_percent,
+            liquidity_participation_max_percent=(
+                request.liquidity_participation_max_percent
+            ),
+            correlation_max_absolute=request.correlation_max_absolute,
+            event_blackout_days=request.event_blackout_days,
             schema_version=1,
         )
         return self._repository.append(policy)
@@ -85,5 +93,13 @@ class RiskPolicyService:
             and policy.max_account_age_seconds == request.max_account_age_seconds
             and policy.max_price_age_seconds == request.max_price_age_seconds
             and policy.confirmed_by == requested_by
+            and policy.risk_budget_max_percent == request.risk_budget_max_percent
+            and policy.theme_exposure_max_percent
+            == request.theme_exposure_max_percent
+            and policy.drawdown_max_percent == request.drawdown_max_percent
+            and policy.liquidity_participation_max_percent
+            == request.liquidity_participation_max_percent
+            and policy.correlation_max_absolute == request.correlation_max_absolute
+            and policy.event_blackout_days == request.event_blackout_days
             and policy.version == request.expected_version + 1
         )

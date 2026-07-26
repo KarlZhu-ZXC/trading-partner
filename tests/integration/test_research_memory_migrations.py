@@ -18,7 +18,7 @@ from sqlalchemy import create_engine, inspect, text
 
 _PHASE1C_REVISION = "0004_phase1c_research_memory"
 _PHASE1D_REVISION = "0003_phase1d_instrument_provider"
-_HEAD_REVISIONS = frozenset({"0016_monitor_valid_until"})
+_HEAD_REVISIONS = frozenset({"0022_workflow_execution_replay"})
 
 _PHASE1C_BUSINESS_TABLES = {
     "research_evidence",
@@ -133,10 +133,10 @@ def _insert_representative_prior_rows(conn: object) -> None:
     )
 
 
-def test_alembic_head_is_0016_monitor_valid_until(
+def test_alembic_head_is_phase3d_plan_controls(
     project_root: Path,
 ) -> None:
-    """Current chain has a single Phase 2 head 0010; Phase 1C remains 0004."""
+    """Current chain has one Phase 3D head; Phase 1C remains 0004."""
     cfg = _alembic_config("sqlite:///:memory:", project_root)
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()

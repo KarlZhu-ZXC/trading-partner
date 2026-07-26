@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trading-partner"
-version = "0.1.0"
+version = "0.2.0"
 description = "Long-horizon investment research and judgment companion for A-share and US markets"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -22,22 +22,20 @@ dependencies = [
     "uuid6>=2024.7.10",
     "httpx>=0.28.1",
     "yfinance>=1.4.1,<2",
-    "moomoo-api>=10.8,<11",
-    "schwab-py>=1.5,<2",
     "exchange-calendars>=4.5,<5",
     "ta-lib>=0.6.8,<0.7",
-    "matplotlib>=3.10,<4",
-    "pypdf>=5.0,<7",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "pytest-cov>=5.0",
-    "ruff>=0.8",
-    "mypy>=1.13",
-    "types-PyYAML>=6.0",
+accounts-moomoo = ["moomoo-api>=10.8,<11"]
+accounts-schwab = ["schwab-py>=1.5,<2"]
+chart = ["matplotlib>=3.10,<4"]
+company-pdf = ["pypdf>=5.0,<7"]
+all = [
+    "moomoo-api>=10.8,<11",
+    "schwab-py>=1.5,<2",
+    "matplotlib>=3.10,<4",
+    "pypdf>=5.0,<7",
 ]
 
 [project.scripts]
@@ -47,6 +45,7 @@ trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
 trading-partner-account-transactions = "interfaces.cli.account_transactions:main"
 trading-partner-monitor-run = "interfaces.cli.monitor_run:main"
 trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
+trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
 
 # Editable installs: put src/ on sys.path so bootstrap.py and the four packages
 # resolve to live workspace sources. Do not use force-include for bootstrap —
@@ -84,6 +83,10 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-PyYAML>=6.0",
+    "moomoo-api>=10.8,<11",
+    "schwab-py>=1.5,<2",
+    "matplotlib>=3.10,<4",
+    "pypdf>=5.0,<7",
 ]
 
 [tool.pytest.ini_options]

@@ -19,7 +19,6 @@ DEFAULT_YAML = PROJECT_ROOT / "config" / "vendor_chains.default.yaml"
 
 A_SHARE_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     DataCategory.INSTRUMENT_MASTER: (VendorId.LOCAL_MASTER, VendorId.SEED_FIXTURE),
-    DataCategory.MARKET_SNAPSHOT: (VendorId.MOCK_A_SHARE,),
     DataCategory.MARKET_QUOTE: (VendorId.TENCENT, VendorId.EASTMONEY),
     DataCategory.MARKET_OHLCV: (VendorId.TENCENT, VendorId.EASTMONEY),
     DataCategory.MARKET_STRUCTURE: (VendorId.EASTMONEY,),
@@ -50,7 +49,6 @@ A_SHARE_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
 
 US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     DataCategory.INSTRUMENT_MASTER: (VendorId.LOCAL_MASTER, VendorId.SEED_FIXTURE),
-    DataCategory.MARKET_SNAPSHOT: (VendorId.MOCK_US,),
     DataCategory.MARKET_QUOTE: (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
     DataCategory.MARKET_OHLCV: (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
     DataCategory.MARKET_BREADTH: (VendorId.YFINANCE,),
@@ -73,7 +71,6 @@ US_EXPECTED: dict[DataCategory, tuple[VendorId, ...]] = {
     DataCategory.MACRO: (VendorId.FRED,),
     DataCategory.SENTIMENT: (
         VendorId.MOOMOO_FEED,
-        VendorId.STOCKTWITS,
         VendorId.REDDIT,
     ),
     DataCategory.PREDICTION_MARKET: (VendorId.POLYMARKET,),
@@ -115,10 +112,32 @@ def test_default_yaml_file_is_available_and_contract_export_is_consistent() -> N
         for category, chain in expected.items():
             assert config.chain_for(market, category) == chain
 
-    assert config.chain_for(Market.A_SHARE, DataCategory.MARKET_SNAPSHOT) == (
-        VendorId.MOCK_A_SHARE,
+    assert config.chain_for(Market.A_SHARE, DataCategory.MARKET_SNAPSHOT) == ()
+    assert config.chain_for(Market.US, DataCategory.MARKET_SNAPSHOT) == ()
+    assert config.chain_for(Market.OTC, DataCategory.MARKET_QUOTE) == (
+        VendorId.DUKASCOPY,
     )
-    assert config.chain_for(Market.US, DataCategory.MARKET_SNAPSHOT) == (VendorId.MOCK_US,)
+    assert config.chain_for(Market.OTC, DataCategory.MARKET_OHLCV) == (
+        VendorId.DUKASCOPY,
+    )
+    assert config.chain_for(Market.CME, DataCategory.MARKET_QUOTE) == (
+        VendorId.YFINANCE,
+    )
+    assert config.chain_for(Market.CME, DataCategory.MARKET_OHLCV) == (
+        VendorId.YFINANCE,
+    )
+    assert config.chain_for(Market.CME, DataCategory.FUTURES_REFERENCE) == (
+        VendorId.CME_PUBLIC,
+    )
+    assert config.chain_for(Market.CME, DataCategory.FUTURES_STATISTICS) == (
+        VendorId.CME_PUBLIC,
+    )
+    assert config.chain_for(Market.DCE, DataCategory.FUTURES_REFERENCE) == (
+        VendorId.DCE_OFFICIAL,
+    )
+    assert config.chain_for(Market.DCE, DataCategory.FUTURES_STATISTICS) == (
+        VendorId.DCE_OFFICIAL,
+    )
 
 
 def test_default_vendor_sets_respect_phase_boundaries() -> None:
@@ -138,7 +157,6 @@ def test_default_vendor_sets_respect_phase_boundaries() -> None:
         VendorId.SEC_EDGAR,
         VendorId.FRED,
         VendorId.MOOMOO_FEED,
-        VendorId.STOCKTWITS,
         VendorId.REDDIT,
         VendorId.POLYMARKET,
         VendorId.SCHWAB,

@@ -2,7 +2,7 @@
 
 > Status: Watchlist completed 2026-07-18; Risk, Monitoring, and Technical Engine v2 completed 2026-07-20  
 > Design version: Phase 2 v4  
-> Public MCP target: 52 tools  
+> Public MCP surface: 28 compact tools; the former 52-tool rollback profile is removed.
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
 > `0016_monitor_valid_until`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
@@ -311,7 +311,7 @@ The Watchlist Hub exposes exactly three tools.
 Inputs:
 
 ```text
-refresh: bool = true
+refresh: bool = false
 include_inactive: bool = false
 ```
 
@@ -322,7 +322,7 @@ Inputs:
 
 ```text
 group_name: string | null = configured default group
-refresh: bool = true
+refresh: bool = false
 include_inactive: bool = false
 limit: 1..500 = 100
 offset: >=0 = 0
@@ -331,7 +331,7 @@ offset: >=0 = 0
 Returns memberships plus normalized instrument/research support and optional
 Research WatchlistItem/Case references.
 
-### `watchlist_add`
+### `watchlist_manage` (`add`)
 
 Inputs:
 
@@ -347,7 +347,7 @@ CSV accepts normalized A-share/US instruments. Moomoo converts supported
 instrument ids to exact provider codes. Unsupported raw-code creation is deferred;
 unsupported existing Moomoo members remain readable/removable by membership id.
 
-### `watchlist_remove`
+### `watchlist_manage` (`remove`)
 
 Inputs:
 
@@ -438,16 +438,16 @@ Historical Watchlist Hub closeout evidence (before the three Phase 2B tools):
 ## 13. Phase 2B — Portfolio Risk Engine v1
 
 Phase 2B pulls the deterministic account/portfolio risk gate forward so Codex can
-challenge a proposed addition before the later strategy, backtest, monitoring, or
-Paper Trading layers exist. It adds exactly three public MCP tools:
+challenge a proposed addition before the later strategy, backtest, or monitoring
+layers exist. It adds exactly three public MCP tools:
 
 ```text
-risk_policy_get
+portfolio_risk_get (policy)
 risk_policy_update
-risk_check
+portfolio_risk_get (check)
 ```
 
-`risk_policy_get` returns the current append-only policy version.
+`portfolio_risk_get` (`policy`) returns the current append-only policy version.
 `risk_policy_update` requires `user` or authorized `external_agent` confirmation,
 an expected current version, and an idempotency key. Migration `0012` seeds a
 visible system-default policy (20% single position, 120% gross exposure/NAV, 5%
@@ -455,7 +455,7 @@ minimum cash, 25% maximum margin usage, 3600-second account age, 900-second pric
 age). Until explicitly confirmed, checks carry
 `RISK_POLICY_DEFAULT_UNCONFIRMED` and cannot silently report a clean pass.
 
-`risk_check` uses specified durable account snapshot ids, the latest durable
+`portfolio_risk_get` (`check`) uses specified durable account snapshot ids, the latest durable
 snapshot per account, or an explicit read-only provider refresh. It can optionally
 evaluate one hypothetical addition using caller-supplied quantity, assumed price,
 and currency. It returns independent checks with `PASS`, `WARN`, `BREACH`, or
@@ -476,7 +476,7 @@ through an assumed rate. `execution_effect` is always false.
 
 The following remain Phase 3 extensions: themes, drawdown, liquidity, event/earnings
 risk, A-share T+1 and price limits, duplicate orders, historically calibrated
-thresholds, Trade Plans, position sizing, monitoring, and Paper Trading.
+thresholds, Trade Plans, position sizing, and monitoring.
 
 Phase 2B acceptance is intentionally focused: domain/policy persistence and
 idempotency, representative pass/breach/incomplete evaluation, MCP inventory and
@@ -506,12 +506,12 @@ creates an event only when that state changes.
 Public tools:
 
 ```text
-monitor_create
-monitor_query
-monitor_update
+monitor_manage (create)
+monitor_read (definitions)
+monitor_manage (update)
 monitor_evaluate
-monitor_event_list
-monitor_event_resolve
+monitor_read (events)
+monitor_manage (resolve_event)
 ```
 
 Definitions are append-only versions with optimistic concurrency, explicit
@@ -629,19 +629,22 @@ chart blob or base64 payload is persisted to the database.
 TA-Lib and Matplotlib are local open-source runtime libraries, not market-data
 providers and not paid services. Provider data still follows the existing Router
 and Tool Envelope policies. Minute bars, benchmark-relative strength, automated
-signals, strategy scoring, parameter optimization, backtests, paper trading, and
-orders remain outside Phase 2D.
+signals, strategy scoring, parameter optimization, backtests, and orders remain
+outside Phase 2D.
 
 Completion evidence on 2026-07-20:
 
-- runtime inventory exposes exactly 52 tools;
+- default runtime inventory exposes exactly 28 tools;
 - Ruff and mypy pass across the repository source tree;
 - compact acceptance covers standard indicators, disclosed structure output,
   PNG rendering, MCP registration, bootstrap wiring, and public inventory;
 - no setting, secret, migration, database table, scheduler, or order surface was
   added.
 
-## 16. Explicitly deferred to Phase 3
+## 16. Outside the Phase 2 boundary
+
+Some successor capabilities below are now implemented in Phase 3A/3D; they remain
+outside the Phase 2 contract documented here.
 
 ```text
 push alerts
@@ -649,6 +652,5 @@ historical data lake
 backtests and experiments
 crypto, Forex/metals, and futures research coverage
 Trade Plans and position sizing
-Paper Trading
 order writes
 ```

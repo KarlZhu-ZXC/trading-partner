@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -15,6 +16,7 @@ from application.dto.challenge import (
 )
 from application.dto.tool_envelope import ToolEnvelope
 from application.services.challenge_review_service import ChallengeReviewService
+from application.services.idempotency import canonical_payload_sha256
 from domain.challenge.enums import (
     ChallengeDimension,
     ChallengeFindingSeverity,
@@ -30,11 +32,7 @@ from infrastructure.persistence.challenge_review_repository import (
 )
 from infrastructure.persistence.metadata import Base
 from infrastructure.system.redactor import DefaultSecretRedactor
-from interfaces.mcp.server import (
-    PHASE1K_CHALLENGE_TOOL_NAMES,
-    PUBLIC_TOOL_NAMES,
-    create_mcp_server,
-)
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 REVIEW_ID = "run_00000000-0000-7000-8000-000000000001"
@@ -118,7 +116,11 @@ def test_repository_resolves_once_and_preserves_children() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     repository = SqlAlchemyChallengeReviewRepository(engine)
-    review = repository.append(_review())
+    review = repository.append(
+        _review(),
+        idempotency_key="challenge-start-1",
+        payload_sha256="a" * 64,
+    )
 
     resolved = repository.resolve(
         review.review_id,
@@ -126,12 +128,30 @@ def test_repository_resolves_once_and_preserves_children() -> None:
         rationale="I accept the risk and keep the original judgment.",
         confirmed_by="user",
         resolved_at=NOW,
+        resolution_id="rev_resolution-1",
+        idempotency_key="challenge-resolution-1",
+        payload_sha256="b" * 64,
     )
 
     assert resolved.status is ChallengeReviewStatus.RESOLVED
     assert resolved.resolution is ChallengeResolution.REJECT
     assert len(resolved.questions) == 10
     assert resolved.execution_effect is False
+    replayed = repository.resolve(
+        review.review_id,
+        resolution=ChallengeResolution.REJECT,
+        rationale="I accept the risk and keep the original judgment.",
+        confirmed_by="user",
+        resolved_at=NOW,
+        resolution_id="rev_resolution-replay",
+        idempotency_key="challenge-resolution-1",
+        payload_sha256="b" * 64,
+    )
+    assert replayed == resolved
+    persisted_start = repository.get_by_start_idempotency_key("challenge-start-1")
+    persisted_resolution = repository.get_by_resolution_idempotency_key("challenge-resolution-1")
+    assert persisted_start is not None and persisted_start[1] == "a" * 64
+    assert persisted_resolution is not None and persisted_resolution[1] == "b" * 64
     with pytest.raises(ChallengeReviewAlreadyResolved):
         repository.resolve(
             review.review_id,
@@ -139,13 +159,17 @@ def test_repository_resolves_once_and_preserves_children() -> None:
             rationale="later",
             confirmed_by="user",
             resolved_at=NOW,
+            resolution_id="rev_resolution-2",
+            idempotency_key="challenge-resolution-2",
+            payload_sha256="c" * 64,
         )
     engine.dispose()
 
 
 def test_service_bypasses_discussion_and_persists_material_review() -> None:
     repository = MagicMock()
-    repository.append.side_effect = lambda review: review
+    repository.append.side_effect = lambda review, **_: review
+    repository.get_by_start_idempotency_key.return_value = None
     context_builder = MagicMock()
     context_builder.build.return_value = SimpleNamespace(
         ok=True,
@@ -181,6 +205,7 @@ def test_service_bypasses_discussion_and_persists_material_review() -> None:
             case_id="case_1",
             trigger=ChallengeTrigger.CONFIDENCE_WITHOUT_EVIDENCE,
             proposed_action="Raise confidence",
+            idempotency_key="challenge-start-1",
         )
     )
 
@@ -195,8 +220,98 @@ def test_service_bypasses_discussion_and_persists_material_review() -> None:
     repository.append.assert_called_once()
 
 
+def test_service_replays_material_start_and_rejects_changed_payload() -> None:
+    repository = MagicMock()
+    repository.get_by_start_idempotency_key.return_value = None
+    repository.append.side_effect = lambda review, **_: review
+    context_builder = MagicMock()
+    context_builder.build.return_value = SimpleNamespace(
+        ok=True,
+        data=SimpleNamespace(
+            research_state=SimpleNamespace(invalidations=()),
+            evidence=(),
+            positions=(),
+        ),
+        as_of=NOW,
+    )
+    service = ChallengeReviewService(
+        repository,
+        context_builder,
+        _Clock(),
+        _Ids(),
+        DefaultSecretRedactor(),
+    )
+    request = ChallengeReviewStartInput(
+        case_id="case_1",
+        trigger=ChallengeTrigger.CONFIDENCE_INCREASE,
+        proposed_action="Raise confidence",
+        idempotency_key="challenge-start-replay",
+    )
+    first = service.start(request)
+    assert first.ok and first.data is not None and first.data.review is not None
+    persisted = repository.append.call_args.args[0]
+    payload_sha256 = canonical_payload_sha256(
+        request.model_dump(mode="json", exclude={"idempotency_key"})
+    )
+    repository.get_by_start_idempotency_key.return_value = (
+        persisted,
+        payload_sha256,
+    )
+
+    replay = service.start(request)
+    conflict = service.start(
+        request.model_copy(update={"proposed_action": "Raise confidence further"})
+    )
+
+    assert replay.ok and replay.data is not None
+    assert replay.data.review == first.data.review
+    assert not conflict.ok
+    assert conflict.errors[0].code == "IDEMPOTENCY_CONFLICT"
+    context_builder.build.assert_called_once()
+    repository.append.assert_called_once()
+
+
+def test_service_replays_resolution_without_second_write() -> None:
+    repository = MagicMock()
+    request = ChallengeReviewResolveInput(
+        review_id=REVIEW_ID,
+        resolution=ChallengeResolution.DEFER,
+        rationale="Need more evidence",
+        confirmed_by="user",
+        idempotency_key="challenge-resolution-replay",
+    )
+    resolved = replace(
+        _review(),
+        status=ChallengeReviewStatus.RESOLVED,
+        resolution=ChallengeResolution.DEFER,
+        resolution_rationale=request.rationale,
+        resolved_at=NOW,
+        confirmed_by="user",
+    )
+    payload_sha256 = canonical_payload_sha256(
+        request.model_dump(mode="json", exclude={"idempotency_key"})
+    )
+    repository.get_by_resolution_idempotency_key.return_value = (
+        resolved,
+        payload_sha256,
+    )
+    service = ChallengeReviewService(
+        repository,
+        MagicMock(),
+        _Clock(),
+        _Ids(),
+        DefaultSecretRedactor(),
+    )
+
+    replay = service.resolve(request)
+
+    assert replay.ok and replay.data is not None
+    assert replay.data.status is ChallengeReviewStatus.RESOLVED
+    repository.resolve.assert_not_called()
+
+
 @pytest.mark.asyncio
-async def test_challenge_mcp_delegates_three_tools_in_exact_inventory() -> None:
+async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
     container = MagicMock()
     container.settings.mcp_server_name = "phase1k-test"
     review = _review()
@@ -222,29 +337,31 @@ async def test_challenge_mcp_delegates_three_tools_in_exact_inventory() -> None:
     )
     manager = create_mcp_server(container)._tool_manager
 
-    assert {
-        "challenge_review_start",
-        "challenge_review_get",
-        "challenge_review_resolve",
-    } == PHASE1K_CHALLENGE_TOOL_NAMES
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
-    assert len(PUBLIC_TOOL_NAMES) == 52
     started = await manager.call_tool(
-        "challenge_review_start",
+        "challenge_review_manage",
         {
-            "case_id": "case_1",
-            "trigger": "confidence_increase",
-            "proposed_action": "Raise confidence",
+            "request": {
+                "operation": "start",
+                "case_id": "case_1",
+                "trigger": "confidence_increase",
+                "proposed_action": "Raise confidence",
+                "idempotency_key": "challenge-start-1",
+            }
         },
     )
     await manager.call_tool("challenge_review_get", {"review_id": REVIEW_ID})
     await manager.call_tool(
-        "challenge_review_resolve",
+        "challenge_review_manage",
         {
-            "review_id": REVIEW_ID,
-            "resolution": "defer",
-            "rationale": "Need more primary evidence",
-            "confirmed_by": "user",
+            "request": {
+                "operation": "resolve",
+                "review_id": REVIEW_ID,
+                "resolution": "defer",
+                "rationale": "Need more primary evidence",
+                "confirmed_by": "user",
+                "idempotency_key": "challenge-resolution-1",
+            }
         },
     )
     assert started["request_id"] == "req_start"

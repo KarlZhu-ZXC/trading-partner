@@ -21,8 +21,19 @@ from domain.monitoring.enums import (
     MonitorStatus,
 )
 from domain.risk.enums import RiskOverallStatus
+from domain.trade_plan.enums import (
+    TradePlanComparator,
+    TradePlanFactType,
+)
 
 MONITORING_SCHEMA_VERSION = 1
+
+# Price rules may target A-share equities, US exchange instruments, CME/DCE
+# futures identities, and OTC spot/CFD seeds. Evaluation remains asset-aware:
+# DCE has no quote path and stays NOT_EVALUATED without invented settlements.
+_PRICE_RULE_MARKETS = frozenset(
+    {Market.A_SHARE, Market.US, Market.CME, Market.DCE, Market.OTC}
+)
 
 
 def _text(value: object, field: str, maximum: int) -> str:
@@ -60,6 +71,11 @@ class MonitorRule:
     price_threshold: Decimal | None
     risk_status_threshold: RiskOverallStatus | None
     max_fact_age_seconds: int
+    fact_type: TradePlanFactType | None = None
+    metric_key: str | None = None
+    comparator: TradePlanComparator | None = None
+    numeric_threshold: Decimal | None = None
+    event_after: datetime | None = None
 
     def __post_init__(self) -> None:
         _text(self.rule_code, "rule_code", 64)
@@ -76,11 +92,27 @@ class MonitorRule:
         if price_rule:
             if self.instrument_id is None or self.price_threshold is None:
                 raise DataContractError("price rule requires instrument_id and price_threshold")
-            parse_instrument_id(self.instrument_id)
+            _asset, market, _symbol = parse_instrument_id(self.instrument_id)
+            if market not in _PRICE_RULE_MARKETS:
+                raise DataContractError(
+                    "price rule market must be A_SHARE, US, CME, DCE, or OTC",
+                    details={"market": market.value},
+                )
             _decimal(self.price_threshold, "price_threshold", positive=True)
             if self.risk_status_threshold is not None:
                 raise DataContractError("price rule cannot set risk_status_threshold")
-        else:
+            if any(
+                value is not None
+                for value in (
+                    self.fact_type,
+                    self.metric_key,
+                    self.comparator,
+                    self.numeric_threshold,
+                    self.event_after,
+                )
+            ):
+                raise DataContractError("legacy price rule cannot set fact-comparison fields")
+        elif self.rule_type is MonitorRuleType.RISK_OVERALL_AT_LEAST:
             if self.instrument_id is not None or self.price_threshold is not None:
                 raise DataContractError("risk rule cannot set instrument or price threshold")
             if self.risk_status_threshold not in {
@@ -88,6 +120,58 @@ class MonitorRule:
                 RiskOverallStatus.BREACH,
             }:
                 raise DataContractError("risk rule threshold must be WARN or BREACH")
+            if any(
+                value is not None
+                for value in (
+                    self.fact_type,
+                    self.metric_key,
+                    self.comparator,
+                    self.numeric_threshold,
+                    self.event_after,
+                )
+            ):
+                raise DataContractError("legacy risk rule cannot set fact-comparison fields")
+        else:
+            if self.price_threshold is not None or self.risk_status_threshold is not None:
+                raise DataContractError("fact rule cannot set legacy threshold fields")
+            if not isinstance(self.fact_type, TradePlanFactType):
+                raise DataContractError("fact rule requires fact_type")
+            _text(self.metric_key, "metric_key", 128)
+            if not isinstance(self.comparator, TradePlanComparator):
+                raise DataContractError("fact rule requires comparator")
+            if self.comparator is TradePlanComparator.OCCURRED:
+                if self.numeric_threshold is not None:
+                    raise DataContractError("OCCURRED rule cannot set numeric_threshold")
+            else:
+                if self.numeric_threshold is None:
+                    raise DataContractError("numeric fact rule requires numeric_threshold")
+                _decimal(self.numeric_threshold, "numeric_threshold")
+            if self.event_after is not None:
+                _aware(self.event_after, "event_after")
+            requires_instrument = self.fact_type in {
+                TradePlanFactType.PRICE,
+                TradePlanFactType.VOLUME,
+                TradePlanFactType.TECHNICAL,
+                TradePlanFactType.FUNDAMENTAL,
+                TradePlanFactType.COMPANY_EVENT,
+                TradePlanFactType.SENTIMENT,
+            }
+            if requires_instrument and self.instrument_id is None:
+                raise DataContractError("fact rule requires instrument_id")
+            if self.instrument_id is not None:
+                parse_instrument_id(self.instrument_id)
+            if (
+                self.fact_type is TradePlanFactType.COMPANY_EVENT
+                and self.comparator is not TradePlanComparator.OCCURRED
+            ):
+                raise DataContractError("COMPANY_EVENT fact rule requires OCCURRED")
+            if (
+                self.fact_type is TradePlanFactType.PORTFOLIO_RISK
+                and self.metric_key != "overall_status"
+            ):
+                raise DataContractError(
+                    "PORTFOLIO_RISK fact rule metric_key must be overall_status"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +187,8 @@ class MonitorDefinition:
     confirmed_by: str
     idempotency_key: str
     created_at: datetime
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = None
     valid_until: datetime | None = None
     schema_version: int = MONITORING_SCHEMA_VERSION
 
@@ -115,6 +201,14 @@ class MonitorDefinition:
             _text(self.case_id, "case_id", 128)
         if self.primary_instrument_id is not None:
             parse_instrument_id(self.primary_instrument_id)
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise DataContractError(
+                "trade_plan_id and trade_plan_version must be provided together"
+            )
+        if self.trade_plan_id is not None:
+            _text(self.trade_plan_id, "trade_plan_id", 128)
+            if type(self.trade_plan_version) is not int or self.trade_plan_version <= 0:
+                raise DataContractError("trade_plan_version must be positive")
         if not isinstance(self.cadence, MonitorCadence) or not isinstance(
             self.status, MonitorStatus
         ):

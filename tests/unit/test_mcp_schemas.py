@@ -34,23 +34,6 @@ from interfaces.mcp.schemas import (
 )
 from interfaces.mcp.server import (
     FORBIDDEN_PUBLIC_TOOL_NAMES,
-    LEGACY_PUBLIC_TOOL_NAMES,
-    PHASE1A_TOOL_NAMES,
-    PHASE1B_RESEARCH_TOOL_NAMES,
-    PHASE1C_RESEARCH_TOOL_NAMES,
-    PHASE1D_TOOL_NAMES,
-    PHASE1E_A_SHARE_TOOL_NAMES,
-    PHASE1F_US_MARKET_TOOL_NAMES,
-    PHASE1G_US_RESEARCH_TOOL_NAMES,
-    PHASE1H_US_CONTEXT_TOOL_NAMES,
-    PHASE1I_PORTFOLIO_TOOL_NAMES,
-    PHASE1J_CONTEXT_TOOL_NAMES,
-    PHASE1K_CHALLENGE_TOOL_NAMES,
-    PHASE1L_WORKFLOW_TOOL_NAMES,
-    PHASE2_WATCHLIST_TOOL_NAMES,
-    PHASE2B_RISK_TOOL_NAMES,
-    PHASE2C_MONITORING_TOOL_NAMES,
-    PHASE2D_TECHNICAL_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
     RETIRED_PUBLIC_TOOL_NAMES,
 )
@@ -90,92 +73,8 @@ def test_schema_rejects_naive_as_of_string() -> None:
         )
 
 
-def test_public_tool_surface_is_exactly_fifty_two_tools() -> None:
-    assert len(LEGACY_PUBLIC_TOOL_NAMES) == 15
-    assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
-    assert len(PHASE1F_US_MARKET_TOOL_NAMES) == 4
-    assert len(PHASE1G_US_RESEARCH_TOOL_NAMES) == 2
-    assert len(PHASE1H_US_CONTEXT_TOOL_NAMES) == 4
-    assert len(PHASE1I_PORTFOLIO_TOOL_NAMES) == 3
-    assert len(PHASE1J_CONTEXT_TOOL_NAMES) == 1
-    assert len(PHASE1K_CHALLENGE_TOOL_NAMES) == 3
-    assert len(PHASE2_WATCHLIST_TOOL_NAMES) == 3
-    assert len(PHASE2B_RISK_TOOL_NAMES) == 3
-    assert len(PHASE2C_MONITORING_TOOL_NAMES) == 6
-    assert len(PHASE1L_WORKFLOW_TOOL_NAMES) == 5
-    assert len(PUBLIC_TOOL_NAMES) == 52
-    assert len(PHASE1A_TOOL_NAMES) == 1
-    assert len(PHASE1B_RESEARCH_TOOL_NAMES) == 8
-    assert len(PHASE1C_RESEARCH_TOOL_NAMES) == 5
-    assert len(PHASE1D_TOOL_NAMES) == 1
-    assert PUBLIC_TOOL_NAMES == (
-        LEGACY_PUBLIC_TOOL_NAMES
-        | PHASE1E_A_SHARE_TOOL_NAMES
-        | PHASE1F_US_MARKET_TOOL_NAMES
-        | PHASE1G_US_RESEARCH_TOOL_NAMES
-        | PHASE1H_US_CONTEXT_TOOL_NAMES
-        | PHASE1I_PORTFOLIO_TOOL_NAMES
-        | PHASE1J_CONTEXT_TOOL_NAMES
-        | PHASE1K_CHALLENGE_TOOL_NAMES
-        | PHASE2_WATCHLIST_TOOL_NAMES
-        | PHASE2B_RISK_TOOL_NAMES
-        | PHASE2C_MONITORING_TOOL_NAMES
-        | PHASE2D_TECHNICAL_TOOL_NAMES
-        | PHASE1L_WORKFLOW_TOOL_NAMES
-    )
-    assert LEGACY_PUBLIC_TOOL_NAMES == (
-        PHASE1A_TOOL_NAMES
-        | PHASE1B_RESEARCH_TOOL_NAMES
-        | PHASE1C_RESEARCH_TOOL_NAMES
-        | PHASE1D_TOOL_NAMES
-    )
-    core = PHASE1A_TOOL_NAMES | PHASE1B_RESEARCH_TOOL_NAMES | PHASE1D_TOOL_NAMES
-    assert core <= PUBLIC_TOOL_NAMES
-    assert len(core) == 10
-    expected_research = {
-        "investment_case_create",
-        "investment_case_query",
-        "investment_case_archive",
-        "research_state_get",
-        "research_state_update",
-        "thesis_revision_propose",
-        "thesis_revision_confirm",
-        "thesis_history_get",
-    }
-    assert expected_research == PHASE1B_RESEARCH_TOOL_NAMES
-    assert (
-        frozenset(
-            {
-                "research_search",
-                "research_report_get",
-                "research_timeline_get",
-                "journal_append",
-                "decision_record_append",
-            }
-        )
-        == PHASE1C_RESEARCH_TOOL_NAMES
-    )
-    assert frozenset({"instrument_resolve"}) == PHASE1D_TOOL_NAMES
-    assert (
-        frozenset(
-            {
-                "a_share_get_facts",
-                "research_search_reports",
-            }
-        )
-        == PHASE1E_A_SHARE_TOOL_NAMES
-    )
-    assert (
-        frozenset(
-            {
-                "market_get_bars",
-                "market_get_context",
-                "technical_get_snapshot",
-                "us_get_market",
-            }
-        )
-        == PHASE1F_US_MARKET_TOOL_NAMES
-    )
+def test_public_tool_surface_excludes_forbidden_and_retired_names() -> None:
+    assert len(PUBLIC_TOOL_NAMES) == 28
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
 
@@ -310,6 +209,49 @@ def test_thesis_revision_confirm_action_rules() -> None:
         }
     )
     assert confirm.action == "confirm"
+
+    relayed = ThesisRevisionConfirmInput.model_validate(
+        {
+            "candidate_id": "run_00000000-0000-7000-8000-000000000001",
+            "action": "confirm",
+            "reviewed_by": "user",
+            "submitted_via": "codex_chat",
+            "authorization_note": "我确认这个候选",
+        }
+    )
+    assert relayed.reviewed_by == "user"
+    assert relayed.submitted_via == "codex_chat"
+
+    with pytest.raises(ValidationError, match="authorization_note"):
+        ThesisRevisionConfirmInput.model_validate(
+            {
+                "candidate_id": "run_00000000-0000-7000-8000-000000000001",
+                "action": "confirm",
+                "reviewed_by": "user",
+                "submitted_via": "codex_chat",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="reviewed_by=user"):
+        ThesisRevisionConfirmInput.model_validate(
+            {
+                "candidate_id": "run_00000000-0000-7000-8000-000000000001",
+                "action": "confirm",
+                "reviewed_by": "external_agent",
+                "submitted_via": "codex_chat",
+                "authorization_note": "approve",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="submitted_via=codex_chat"):
+        ThesisRevisionConfirmInput.model_validate(
+            {
+                "candidate_id": "run_00000000-0000-7000-8000-000000000001",
+                "action": "confirm",
+                "reviewed_by": "user",
+                "authorization_note": "approve",
+            }
+        )
 
     with pytest.raises(ValidationError, match="rejection_reason"):
         ThesisRevisionConfirmInput.model_validate(

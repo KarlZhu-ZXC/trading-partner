@@ -14,23 +14,9 @@ from alembic.config import Config
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from interfaces.mcp.server import (
-    PHASE1A_TOOL_NAMES,
-    PHASE1B_RESEARCH_TOOL_NAMES,
-    PHASE1C_RESEARCH_TOOL_NAMES,
-    PHASE1D_TOOL_NAMES,
-    PHASE1E_A_SHARE_TOOL_NAMES,
-    PHASE2_WATCHLIST_TOOL_NAMES,
-    PUBLIC_TOOL_NAMES,
-)
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
-EXPECTED_TOOLS = frozenset(PUBLIC_TOOL_NAMES)
-assert len(EXPECTED_TOOLS) == 52
-assert len(PHASE1B_RESEARCH_TOOL_NAMES) == 8
-assert len(PHASE1C_RESEARCH_TOOL_NAMES) == 5
-assert len(PHASE1A_TOOL_NAMES) == 1
-assert len(PHASE1D_TOOL_NAMES) == 1
-assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
+EXPECTED_TOOLS = PUBLIC_TOOL_NAMES
 
 
 def _alembic_config(project_root: Path) -> Config:
@@ -80,6 +66,33 @@ def _parse_envelope(result: Any) -> dict[str, Any]:
     return payload
 
 
+class _CompactSession:
+    """Route lifecycle semantics through the sole compact public names."""
+
+    _GROUPED = {
+        "investment_case_create": ("investment_case_manage", "create"),
+        "investment_case_query": ("investment_case_read", "query"),
+        "investment_case_archive": ("investment_case_manage", "archive"),
+        "research_state_get": ("research_judgment_get", "state"),
+        "research_state_update": ("research_judgment_propose", "research_state"),
+        "thesis_revision_propose": ("research_judgment_propose", "thesis_revision"),
+        "thesis_history_get": ("research_judgment_get", "thesis_history"),
+    }
+    _RENAMED = {"thesis_revision_confirm": "research_judgment_confirm"}
+
+    def __init__(self, session: ClientSession) -> None:
+        self._session = session
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name in self._GROUPED:
+            target, operation = self._GROUPED[name]
+            return await self._session.call_tool(
+                target,
+                {"request": {"operation": operation, **arguments}},
+            )
+        return await self._session.call_tool(self._RENAMED.get(name, name), arguments)
+
+
 def _revision_payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "kind": "thesis_revision",
@@ -126,18 +139,14 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
         await session.initialize()
+        api = _CompactSession(session)
 
         # ---- exact tool list: 1A(2)+1B(9)+1C(6)+1D(1)+1E(7)=25 ----
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert names == EXPECTED_TOOLS
-        assert len(names) == 52
-        assert PHASE1B_RESEARCH_TOOL_NAMES.issubset(names)
-        assert PHASE1C_RESEARCH_TOOL_NAMES.issubset(names)
-        assert PHASE1A_TOOL_NAMES.issubset(names)
-        assert PHASE1E_A_SHARE_TOOL_NAMES.issubset(names)
-        # No aliases / extra research tools / internal Evidence writes
-        assert PHASE2_WATCHLIST_TOOL_NAMES.issubset(names)
+        assert len(names) == 28
+        # No old aliases or internal Evidence writes.
         assert "open_question_create" not in names
         assert "thesis_revision_reject" not in names
         assert "thesis_revision_withdraw" not in names
@@ -145,12 +154,12 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert "report_create" not in names
 
         # Phase 1A health tool remains wired.
-        health = _parse_envelope(await session.call_tool("system_health", {}))
+        health = _parse_envelope(await api.call_tool("system_health", {}))
         assert health["ok"] is True
 
         # ---- investment_case create / query ----
         created = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "investment_case_create",
                 {
                     "case_type": "company",
@@ -169,15 +178,13 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert case_id.startswith("case_")
         assert created["data"]["status"] == "draft"
 
-        got = _parse_envelope(
-            await session.call_tool("investment_case_query", {"case_id": case_id})
-        )
+        got = _parse_envelope(await api.call_tool("investment_case_query", {"case_id": case_id}))
         assert got["ok"] is True
         assert got["data"]["case_id"] == case_id
         assert got["data"]["title"] == "NVDA long-horizon"
 
         listed = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "investment_case_query",
                 {"include_archived": False, "limit": 50, "offset": 0},
             )
@@ -188,7 +195,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- thesis_revision propose + confirm ----
         proposed = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_propose",
                 {
                     "case_id": case_id,
@@ -209,7 +216,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # Idempotent re-propose returns same candidate + DUPLICATE warning
         reprop = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_propose",
                 {
                     "case_id": case_id,
@@ -229,7 +236,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # Pending candidates appear in research_state_get before confirm
         pending_state = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "research_state_get",
                 {
                     "case_id": case_id,
@@ -243,7 +250,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert candidate_id in pending_ids
 
         # codex cannot confirm (schema → JSON-RPC/tool error, not envelope)
-        codex_confirm = await session.call_tool(
+        codex_confirm = await api.call_tool(
             "thesis_revision_confirm",
             {
                 "candidate_id": candidate_id,
@@ -254,12 +261,14 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert codex_confirm.isError is True
 
         confirmed = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_confirm",
                 {
                     "candidate_id": candidate_id,
                     "action": "confirm",
                     "reviewed_by": "user",
+                    "submitted_via": "codex_chat",
+                    "authorization_note": "我确认这个候选",
                     "review_note": "User confirmed primary thesis",
                 },
             )
@@ -275,7 +284,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # history after confirm
         history = _parse_envelope(
-            await session.call_tool("thesis_history_get", {"thesis_id": thesis_id})
+            await api.call_tool("thesis_history_get", {"thesis_id": thesis_id})
         )
         assert history["ok"] is True, history
         assert history["data"]["thesis"]["thesis_id"] == thesis_id
@@ -283,7 +292,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- reject path ----
         reject_prop = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_propose",
                 {
                     "case_id": case_id,
@@ -304,7 +313,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         reject_cand = reject_prop["data"]["candidate_id"]
 
         rejected = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_confirm",
                 {
                     "candidate_id": reject_cand,
@@ -319,7 +328,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- withdraw path ----
         withdraw_prop = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_propose",
                 {
                     "case_id": case_id,
@@ -340,7 +349,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         withdraw_cand = withdraw_prop["data"]["candidate_id"]
 
         withdrawn = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_confirm",
                 {
                     "candidate_id": withdraw_cand,
@@ -355,7 +364,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # research_state_update must not create cases (envelope business error)
         blocked_create = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "research_state_update",
                 {
                     "case_id": case_id,
@@ -379,7 +388,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- research_state_update: open_question + watchlist ----
         oq = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "research_state_update",
                 {
                     "case_id": case_id,
@@ -400,7 +409,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert oq["data"]["status"] == "proposed"
 
         oq_confirm = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_confirm",
                 {
                     "candidate_id": oq["data"]["candidate_id"],
@@ -412,7 +421,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert oq_confirm["ok"] is True, oq_confirm
 
         wl = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "research_state_update",
                 {
                     "case_id": case_id,
@@ -437,7 +446,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert wl["data"]["kind"] == "watchlist_item"
 
         wl_confirm = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "thesis_revision_confirm",
                 {
                     "candidate_id": wl["data"]["candidate_id"],
@@ -450,7 +459,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- research_state_get snapshot ----
         state = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "research_state_get",
                 {
                     "case_id": case_id,
@@ -469,7 +478,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # ---- archive ----
         archived = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "investment_case_archive",
                 {
                     "case_id": case_id,
@@ -485,7 +494,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # business error still ToolEnvelope (not JSON-RPC)
         missing = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "investment_case_query",
                 {"case_id": "case_00000000-0000-7000-8000-000000000099"},
             )
@@ -495,7 +504,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert missing["errors"][0]["code"]
 
         # schema validation failure is MCP tool error (not ToolEnvelope ok=false)
-        bad_id = await session.call_tool(
+        bad_id = await api.call_tool(
             "investment_case_query",
             {"case_id": "case_not-a-uuid"},
         )
@@ -503,7 +512,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
 
         # create-case idempotency warning path
         create_again = _parse_envelope(
-            await session.call_tool(
+            await api.call_tool(
                 "investment_case_create",
                 {
                     "case_type": "company",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from application import __version__
 from application.dto.health import HealthStatusDTO
@@ -17,6 +17,7 @@ from domain.common.errors import MigrationError, PersistenceError
 from domain.common.ids import EntityIdPrefix
 
 SearchBackendProbe = Callable[[], bool]
+ComponentProbe = Callable[[], bool]
 
 
 class HealthService:
@@ -29,6 +30,7 @@ class HealthService:
         secret_redactor: SecretRedactor,
         app_version: str = __version__,
         search_backend_probe: SearchBackendProbe | None = None,
+        component_probes: Mapping[str, ComponentProbe] | None = None,
     ) -> None:
         self._database = database
         self._settings = settings
@@ -37,6 +39,7 @@ class HealthService:
         self._secret_redactor = secret_redactor
         self._app_version = app_version
         self._search_backend_probe = search_backend_probe
+        self._component_probes = dict(component_probes or {})
 
     def check(self) -> ToolEnvelope[HealthStatusDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
@@ -82,6 +85,23 @@ class HealthService:
                         code="SEARCH_BACKEND_UNAVAILABLE",
                         message="Research search backend is unavailable",
                         details={"component": "research_search"},
+                    )
+                )
+
+        for component, probe in sorted(self._component_probes.items()):
+            state = HealthState.OK
+            try:
+                if not probe():
+                    state = HealthState.DEGRADED
+            except Exception:  # noqa: BLE001 — health probes never expose internals
+                state = HealthState.DEGRADED
+            components[component] = state
+            if state is not HealthState.OK:
+                warnings.append(
+                    WarningInfo(
+                        code="COMPONENT_UNAVAILABLE",
+                        message="Configured component is unavailable",
+                        details={"component": component},
                     )
                 )
 

@@ -13,7 +13,7 @@ import pytest
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.watchlist_hub_service import WatchlistHubService
 from bootstrap import ApplicationContainer, BootstrapOverrides, build_application
-from domain.common.enums import AppEnvironment, LogLevel, Market, VendorId
+from domain.common.enums import AppEnvironment, LogLevel, VendorId
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.in_memory_provider_state import (
@@ -45,7 +45,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_PACKAGES = ("application", "domain", "infrastructure", "interfaces")
 AS_OF = datetime(2026, 7, 16, 16, 0, tzinfo=UTC)
 
-# Exact registry: 10 real A-share + US research/context vendors + mocks + NULL.
+# Exact registry: real A-share/US/cross-asset vendors plus NULL.
 _REAL_A_SHARE_VENDORS = (
     VendorId.TENCENT,
     VendorId.EASTMONEY,
@@ -66,24 +66,18 @@ _REAL_US_VENDORS = (
     VendorId.ALPHA_VANTAGE,
     VendorId.SEC_EDGAR,
     VendorId.FRED,
-    VendorId.STOCKTWITS,
     VendorId.REDDIT,
     VendorId.MOOMOO_FEED,
     VendorId.POLYMARKET,
     VendorId.SCHWAB,
     VendorId.MOOMOO,
     VendorId.MANUAL_CSV,
+    VendorId.CME_PUBLIC,
+    VendorId.DCE_OFFICIAL,
+    VendorId.DUKASCOPY,
 )
 _EXPECTED_REGISTERED = (
-    frozenset(_REAL_A_SHARE_VENDORS)
-    | frozenset(_REAL_US_VENDORS)
-    | frozenset(
-        {
-            VendorId.MOCK_A_SHARE,
-            VendorId.MOCK_US,
-            VendorId.NULL,
-        }
-    )
+    frozenset(_REAL_A_SHARE_VENDORS) | frozenset(_REAL_US_VENDORS) | frozenset({VendorId.NULL})
 )
 
 
@@ -128,7 +122,6 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert isinstance(container, ApplicationContainer)
         assert container.settings is test_settings
         assert container.health_service is not None
-        assert container.mock_market_snapshot_coordinator is not None
         assert container.clock is not None
         # Phase 1B research wiring (third-batch services)
         assert container.investment_case_service is not None
@@ -146,8 +139,6 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         # Phase 1D D8b router surface
         assert container.provider_router is not None
         assert isinstance(container.vendor_registry, VendorRegistry)
-        assert container.routed_market_snapshot_service is not None
-        assert container.mock_market_snapshot_coordinator is not None
         # Phase 1C C5 research-memory services (shared research UoW factory)
         assert container.evidence_service is not None
         assert container.research_archive_service is not None
@@ -208,8 +199,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert VendorId.BROKER not in registered
         # Fresh unmigrated SQLite → schema not ready (in-memory state path).
         assert provider_state_schema_ready(container.database.engine) is False
-        # Public MCP inventory includes the four read-only portfolio tools.
-        assert len(PUBLIC_TOOL_NAMES) == 52
+        assert len(PUBLIC_TOOL_NAMES) == 28
     finally:
         container.close()
 
@@ -272,39 +262,6 @@ def test_build_application_passes_exact_settings_to_router_engine(
         container.close()
 
 
-@pytest.mark.asyncio
-async def test_explicit_allow_closed_last_bar_false_rejects_a_share_closed(
-    tmp_sqlite_url: str,
-) -> None:
-    """User override false must remain false and reject A-share CLOSED fixtures."""
-    settings = AppSettings(
-        _env_file=None,  # type: ignore[call-arg]
-        app_name="trading-partner-test",
-        app_env=AppEnvironment.TEST,
-        log_level=LogLevel.INFO,
-        database_url=tmp_sqlite_url,
-        mcp_server_name="trading-partner-test",
-        default_timezone="UTC",
-        provider_timeout_seconds=5.0,
-        stale_guard_allow_closed_last_bar=False,
-    )
-    container = build_application(settings)
-    try:
-        engine = container.provider_router._engine  # type: ignore[attr-defined]
-        assert engine._settings is settings  # type: ignore[attr-defined]
-        assert engine._settings.stale_guard_allow_closed_last_bar is False  # type: ignore[attr-defined]
-
-        envelope = await container.mock_market_snapshot_coordinator.get_snapshot(
-            Market.A_SHARE, "600519.SH", AS_OF
-        )
-        assert envelope.ok is False
-        assert envelope.errors
-        assert envelope.errors[0].code == "STALE_MARKET_DATA"
-        assert any(w.code == "STALE_DATA_REJECTED" for w in envelope.warnings)
-    finally:
-        await container.aclose()
-
-
 def test_e5b_registry_disabled_vendor_remains_registered_unconfigured(
     tmp_sqlite_url: str,
 ) -> None:
@@ -345,10 +302,7 @@ def test_e5b_registry_disabled_vendor_remains_registered_unconfigured(
         assert isinstance(eastmoney, EastmoneyAShareAdapter)
         assert tencent.is_configured() is False
         assert eastmoney.is_configured() is False
-        assert (
-            container.vendor_registry.get(VendorId.EASTMONEY_FUTURES).is_configured()
-            is False
-        )
+        assert container.vendor_registry.get(VendorId.EASTMONEY_FUTURES).is_configured() is False
         assert iwencai.is_configured() is False
         # SSE/SZSE/HKEX remain configured (no enable flags in Phase 1E).
         assert container.vendor_registry.get(VendorId.SSE).is_configured() is True
@@ -377,6 +331,11 @@ def test_e5b_single_transport_gate_calendar_and_codec_identity(
         ),
     )
     try:
+        assert container.providers.router is container.provider_router
+        assert container.providers.registry is container.vendor_registry
+        assert container.services.a_share is container.a_share_tool_coordinator
+        assert container.services.workflows is container.research_workflow_orchestrator
+        assert container.resources.database is container.database
         assert container.a_share_trading_calendar is calendar
         assert container._owned_a_share_transport is None
 
@@ -456,19 +415,46 @@ def test_e5b_owned_transport_is_httpx_and_construction_is_offline(
         container.close()
 
 
-def test_polymarket_proxy_uses_a_dedicated_owned_transport(
+def test_legacy_polymarket_proxy_migrates_to_cross_asset_transport(
     test_settings: AppSettings,
 ) -> None:
     settings = test_settings.model_copy(update={"polymarket_proxy_url": "http://127.0.0.1:7890"})
     container = build_application(settings)
     try:
         shared = container._owned_a_share_transport
-        dedicated = container._owned_polymarket_transport
+        cross_asset = container._owned_cross_asset_transport
         polymarket = container.vendor_registry.get(VendorId.POLYMARKET)
+        dukascopy = container.vendor_registry.get(VendorId.DUKASCOPY)
         assert isinstance(shared, HttpxTransport)
-        assert isinstance(dedicated, HttpxTransport)
-        assert dedicated is not shared
-        assert polymarket._transport is dedicated  # type: ignore[attr-defined]
+        assert isinstance(cross_asset, HttpxTransport)
+        assert cross_asset is not shared
+        assert container._owned_polymarket_transport is None
+        assert polymarket._transport is cross_asset  # type: ignore[attr-defined]
+        assert dukascopy._transport is cross_asset  # type: ignore[attr-defined]
+    finally:
+        container.close()
+
+
+def test_general_and_specific_proxy_can_use_separate_transports(
+    test_settings: AppSettings,
+) -> None:
+    settings = test_settings.model_copy(
+        update={
+            "provider_proxy_url": "http://127.0.0.1:7891",
+            "polymarket_proxy_url": "http://127.0.0.1:7890",
+        }
+    )
+    container = build_application(settings)
+    try:
+        cross_asset = container._owned_cross_asset_transport
+        polymarket_transport = container._owned_polymarket_transport
+        polymarket = container.vendor_registry.get(VendorId.POLYMARKET)
+        cme = container.vendor_registry.get(VendorId.CME_PUBLIC)
+        assert isinstance(cross_asset, HttpxTransport)
+        assert isinstance(polymarket_transport, HttpxTransport)
+        assert cross_asset is not polymarket_transport
+        assert cme._transport is cross_asset  # type: ignore[attr-defined]
+        assert polymarket._transport is polymarket_transport  # type: ignore[attr-defined]
     finally:
         container.close()
 
@@ -601,7 +587,6 @@ assert "instrument_master_service" in fields
 assert "instrument_resolve_service" in fields
 assert "provider_router" in fields
 assert "vendor_registry" in fields
-assert "routed_market_snapshot_service" in fields
 assert "a_share_snapshot_service" in fields
 assert "a_share_trading_calendar" in fields
 assert "research_report_search_service" in fields
@@ -644,11 +629,13 @@ def test_package_scripts_register_post_market_and_watchlist_cli() -> None:
         "interfaces.cli.account_transactions:main"
     )
     assert scripts["trading-partner-watchlist-sync"] == "interfaces.cli.watchlist_sync:main"
+    assert scripts["trading-partner-futures-sync"] == "interfaces.cli.futures_sync:main"
     # Resolve load targets without invoking side-effecting main() bodies.
     for name in (
         "trading-partner-post-market-sync",
         "trading-partner-account-transactions",
         "trading-partner-watchlist-sync",
+        "trading-partner-futures-sync",
     ):
         ep = next(e for e in entry_points(group="console_scripts") if e.name == name)
         loaded = ep.load()

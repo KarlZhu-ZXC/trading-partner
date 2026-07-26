@@ -39,17 +39,10 @@ from domain.us_context.models import (
 
 OP_NEWS = "us.news_feed.v1"
 OP_MACRO = "us.macro_context.v1"
-OP_SENTIMENT_STOCKTWITS = "us.sentiment.stocktwits.v1"
 OP_SENTIMENT_REDDIT = "us.sentiment.reddit.v1"
 OP_SENTIMENT_MOOMOO = "us.sentiment.moomoo.v1"
 OP_PREDICTION = "us.prediction_market_context.v1"
 
-_STOCKTWITS_POLICY = ToolDataPolicy(
-    tool_name="us_get_sentiment_snapshot",
-    required_categories=(),
-    optional_categories=(DataCategory.SENTIMENT,),
-    category_chain_overrides={DataCategory.SENTIMENT: (VendorId.STOCKTWITS,)},
-)
 _REDDIT_POLICY = ToolDataPolicy(
     tool_name="us_get_sentiment_snapshot",
     required_categories=(),
@@ -210,16 +203,6 @@ class USSentimentService:
         results = await asyncio.gather(
             self._source(
                 instrument,
-                source=USSentimentSource.STOCKTWITS,
-                policy=_STOCKTWITS_POLICY,
-                operation=OP_SENTIMENT_STOCKTWITS,
-                start=start,
-                end=end,
-                limit=limit,
-                as_of=as_of,
-            ),
-            self._source(
-                instrument,
                 source=USSentimentSource.REDDIT,
                 policy=_REDDIT_POLICY,
                 operation=OP_SENTIMENT_REDDIT,
@@ -248,12 +231,7 @@ class USSentimentService:
         summaries = tuple(
             self._summary(source, tuple(item for item in samples if item.source is source))
             for source in USSentimentSource
-            if source
-            in {
-                USSentimentSource.STOCKTWITS,
-                USSentimentSource.REDDIT,
-                USSentimentSource.MOOMOO,
-            }
+            if source in {USSentimentSource.REDDIT, USSentimentSource.MOOMOO}
             and any(item.source is source for item in samples)
         )
         scores = [item.weighted_score for item in summaries if item.weighted_score is not None]

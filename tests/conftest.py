@@ -107,8 +107,6 @@ def test_settings(tmp_sqlite_url: str) -> AppSettings:
         provider_timeout_seconds=5.0,
         alpha_vantage_api_keys=(),
         fred_api_key=None,
-        broker_api_key=None,
-        broker_api_secret=None,
     )
 
 

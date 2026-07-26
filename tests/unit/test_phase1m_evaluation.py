@@ -10,7 +10,7 @@ from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_phase1_eval_catalogs_cover_80_dialogues_and_three_longitudinal_cases() -> None:
+def test_eval_catalogs_cover_89_dialogues_all_tools_and_three_longitudinal_cases() -> None:
     validate_dialogue_catalog(
         PROJECT_ROOT / "evals" / "phase1-dialogues.v1.json", PUBLIC_TOOL_NAMES
     )

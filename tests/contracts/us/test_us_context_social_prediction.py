@@ -24,7 +24,6 @@ from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
 from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
 from infrastructure.providers.us.reddit import RedditSentimentAdapter
 from infrastructure.providers.us.reddit_apify import ApifyRedditClient, ApifyRedditPost
-from infrastructure.providers.us.stocktwits import StockTwitsSentimentAdapter
 
 UTC = ZoneInfo("UTC")
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
@@ -108,40 +107,6 @@ class BlockingTransport(PayloadTransport):
         self.started.set()
         await self.release.wait()
         return HttpResponse(200, {"content-type": self.content_type}, self.payload)
-
-
-@pytest.mark.asyncio
-async def test_stocktwits_keeps_only_explicit_user_labels() -> None:
-    transport = PayloadTransport(
-        json.dumps(
-            {
-                "messages": [
-                    {
-                        "id": 1,
-                        "body": "Demand remains strong",
-                        "created_at": "2026-07-18T11:00:00Z",
-                        "entities": {"sentiment": {"basic": "Bullish"}},
-                        "likes": {"total": 7},
-                    },
-                    {
-                        "id": 2,
-                        "body": "No label",
-                        "created_at": "2026-07-18T11:30:00Z",
-                        "entities": {"sentiment": None},
-                    },
-                ]
-            }
-        ).encode(),
-        "application/json",
-    )
-    success = await StockTwitsSentimentAdapter(
-        transport, clock=FixedClock(NOW)
-    ).get_sentiment_samples(_instrument(), start=None, end=None, limit=20, as_of=NOW)
-
-    assert len(success.value) == 1
-    assert success.value[0].label_origin is USSentimentLabelOrigin.USER_LABEL
-    assert success.value[0].direction is USSentimentDirection.BULLISH
-    assert success.value[0].likes == 7
 
 
 @pytest.mark.asyncio

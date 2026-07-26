@@ -165,7 +165,7 @@ def test_invalid_negative_last_and_ohlc_and_bar_range() -> None:
         (
             MarketGetSnapshotInput.model_validate,
             {"instrument_id": "equity:A_SHARE:600519.SH"},
-            "Market.US",
+            "market must be one of",
         ),
         (
             MarketGetSnapshotInput.model_validate,

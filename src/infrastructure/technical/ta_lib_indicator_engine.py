@@ -207,6 +207,7 @@ class TALibIndicatorEngine:
         volume_state = _state(float(relative_volume[-1]), upper=1.5, lower=0.7)
 
         metrics = (
+            _metric("volume", volume, "shares_or_contracts", "latest provider bar volume"),
             _metric("ema_10", ema10, "price", "TA-Lib EMA(10)"),
             _metric("ema_20", ema20, "price", "TA-Lib EMA(20)"),
             _metric("sma_50", sma50, "price", "TA-Lib SMA(50)"),

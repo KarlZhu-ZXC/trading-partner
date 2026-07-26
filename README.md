@@ -1,6 +1,6 @@
 # Trading Partner
 
-**A local-first investment judgment companion for A-shares and US markets.**
+**A local-first investment judgment companion for A-shares, US markets, and selected cross-asset facts.**
 
 [![CI](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml/badge.svg)](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml)
 [![Release](https://img.shields.io/github/v/release/KarlZhu-ZXC/trading-partner)](https://github.com/KarlZhu-ZXC/trading-partner/releases)
@@ -43,25 +43,32 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Read positions and transactions from Schwab, Moomoo OpenD, or strict manual CSV
   sources; account refresh is explicit and read-only.
 - Persist Moomoo or CSV Watchlists with group and membership history.
-- Analyze portfolio exposure, simulate additions, and run deterministic risk-policy
+- Analyze portfolio exposure, simulate additions, and run deterministic Risk Engine v2
   checks without placing orders.
-- Create durable price and portfolio-risk monitors with transition-only events.
+- Propose and explicitly confirm versioned Trade Plans, calculate non-executing A-share/US
+  position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
+- Create durable price, volume, technical, fundamental, company-event, macro, sentiment,
+  Thesis-state, and portfolio-risk monitors with transition-only events.
 - Produce shared A-share/US daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
 - Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
   scoped Sina quote and Eastmoney daily-derived fallbacks, and 1m–monthly
   bars with explicit non-spot and contract-roll warnings.
+- Resolve formal CME metal contracts, build official-reference settlement curves,
+  and read DCE live-hog EOD contract facts through one shared futures model.
+- Read free Dukascopy XAUUSD/XAGUSD broker-feed quotes and bars plus a separately
+  labelled rolling copper CFD; never relabel them as LBMA/LME benchmarks.
 - Retrieve official national hog-cycle price, feed, pig-grain-ratio, and capacity
   observations with publication-time cutoffs and no fabricated phase verdict.
-- Run repeatable deep-dive, catalyst, market-review, and portfolio-review workflows
-  while keeping the AI host as the synthesizer.
+- Run repeatable deep-dive, catalyst, market-review, portfolio-review, and explicit
+  same-market peer-comparison workflows while keeping the AI host as the synthesizer.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
 Trading Partner is a research service, not a broker or autonomous trading agent.
 
-It does **not** expose order placement, fills, paper trading, live execution, backtests,
-or autonomous thesis confirmation. Technical outputs are derived facts—not forecasts,
+It does **not** expose order placement, fills, live execution, backtests, or
+autonomous thesis confirmation. Technical outputs are derived facts—not forecasts,
 strategies, or trade signals. Ordinary portfolio questions read durable snapshots;
 broker refreshes happen only when explicitly requested.
 
@@ -80,6 +87,11 @@ uv sync
 cp .env.example .env
 uv run alembic upgrade head
 ```
+
+`uv sync` installs the complete development environment in a source checkout. For a
+minimal production installation, install the core package and select only the
+capabilities you use: `accounts-moomoo`, `accounts-schwab`, `chart`, or `company-pdf`.
+`trading-partner[all]` installs every optional runtime integration.
 
 Edit `.env` only for the providers and account sources you want to use. Safe defaults
 work without broker credentials; unavailable optional providers return explicit
@@ -126,6 +138,9 @@ uv run trading-partner-post-market-sync
 # Evaluate active monitors from cron, launchd, or Codex Automation
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
+
+# Explicitly refresh free futures definitions and persist EOD statistics
+uv run trading-partner-futures-sync --product CME:GC --trade-date 2026-07-24
 ```
 
 These commands never execute an order.
@@ -149,6 +164,78 @@ infrastructure ───→ application ports ─→ domain
 The domain has no dependency on MCP, SQLAlchemy, Alembic, settings, or provider SDKs.
 Provider payloads are normalized at the infrastructure boundary, and only
 `src/bootstrap.py` composes the application.
+
+## <img src="docs/assets/readme/sections/data.svg" alt="" width="24" /> Data-source routing
+
+The diagram shows the runtime source chain, including scoped fallbacks. A fallback
+never changes an instrument's identity or silently upgrades a broker/derived value
+into an official benchmark.
+
+```mermaid
+flowchart TB
+    Host[Codex or another MCP host] --> MCP[Trading Partner MCP<br/>28 compact research tools]
+    MCP --> App[Application services<br/>cutoffs · freshness · typed degradation]
+    App --> Router[Asset-aware Provider Router<br/>cache · limiter · fallback policy]
+    App <--> Store[(SQLite / configured DB<br/>research memory · cases · plans<br/>snapshots · watchlists · monitors)]
+
+    subgraph CN[A-share facts]
+        CNMarket[Tencent · Eastmoney · Sina<br/>quotes · bars · capital]
+        CNDisclosure[CNINFO · SSE · SZSE<br/>filings · operating disclosures]
+        CNSentiment[THS · Eastmoney rankings<br/>CLS · optional iWencai]
+        CNIndustry[NAHS<br/>official hog-cycle observations]
+    end
+
+    subgraph US[US market and company facts]
+        Yahoo[Yahoo Finance<br/>quotes · bars · screeners · news]
+        AV[Alpha Vantage key pool<br/>market/company fallback]
+        SEC[SEC EDGAR<br/>filings · point-in-time company facts]
+        FRED[FRED / ALFRED<br/>vintage-safe macro]
+        Social[Reddit RSS → Apify fallback<br/>Moomoo public community feed]
+        Prediction[Polymarket<br/>current probabilities]
+    end
+
+    subgraph Cross[Metals, futures, and cross-asset]
+        Continuous[Yahoo continuous futures<br/>→ Sina quote fallback<br/>→ Eastmoney daily-bar fallback]
+        CME[CME public reference<br/>contracts · settlement · curve]
+        DCE[DCE public EOD<br/>live-hog contracts · settlement]
+        Jetta[Dukascopy Jetta keyless<br/>XAUUSD · XAGUSD · rolling copper CFD]
+        Legacy[optional legacy Dukascopy key API]
+        Jetta -. failure with configured key .-> Legacy
+    end
+
+    subgraph Personal[Personal read-only context]
+        Accounts[Schwab · Moomoo OpenD · manual CSV<br/>balances · positions · transactions]
+        Watchlists[Moomoo OpenD or manual CSV<br/>one active upstream]
+        Hot[Moomoo OpenD Hot List<br/>optional market context]
+    end
+
+    Router --> CNMarket
+    Router --> CNDisclosure
+    Router --> CNSentiment
+    Router --> CNIndustry
+    Router --> Yahoo
+    Router --> AV
+    Router --> SEC
+    Router --> FRED
+    Router --> Social
+    Router --> Prediction
+    Router --> Continuous
+    Router --> CME
+    Router --> DCE
+    Router --> Jetta
+    App --> Accounts
+    App --> Watchlists
+    Router --> Hot
+
+    Proxy[optional PROVIDER_PROXY_URL<br/>CME · DCE · Dukascopy · Polymarket] -. network route .-> Router
+```
+
+Dukascopy follows the current `dukascopy-node` Jetta strategy: 1-minute data is
+requested by UTC day, hourly data by UTC month, and daily data by UTC year. Requests
+run in batches of at most 10 with a one-second inter-batch pause; completed buckets
+are cached, active `from` buckets are not, and automatic retries default to zero.
+These are client pacing rules—not a claim that Dukascopy publishes a fixed requests-
+per-minute quota.
 
 ## <img src="docs/assets/readme/sections/data.svg" alt="" width="24" /> Data and secrets
 

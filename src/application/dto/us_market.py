@@ -36,6 +36,19 @@ _QUOTE_ASSET_TYPES = frozenset(
     {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
 )
 
+# Phase 3A market_get_snapshot / market_get_bars quote+bars matrix.
+_SNAPSHOT_BARS_ASSET_TYPES = frozenset(
+    {
+        AssetType.EQUITY,
+        AssetType.ETF,
+        AssetType.INDEX,
+        AssetType.FUTURE,
+        AssetType.COMMODITY_SPOT,
+        AssetType.CFD,
+    }
+)
+_SNAPSHOT_BARS_MARKETS = frozenset({Market.US, Market.CME, Market.DCE, Market.OTC})
+
 # US wire adjustment values (design §5; excludes A-share forward/backward).
 _US_ADJUSTMENT = frozenset(
     {
@@ -44,6 +57,9 @@ _US_ADJUSTMENT = frozenset(
         AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
     }
 )
+
+# market_get_context closed operation enum (default preserves US-only callers).
+_CONTEXT_OPERATIONS = frozenset({"us_market", "futures_curve", "spot_future_basis"})
 
 
 def _require_exact_date_wire(value: object) -> object:
@@ -81,6 +97,42 @@ def _validate_us_instrument_id(
     return value
 
 
+def _validate_snapshot_bars_instrument_id(
+    value: str,
+    *,
+    field_name: str = "instrument_id",
+) -> str:
+    """Accept US equity/ETF/index/future, CME futures, and OTC spot/CFD ids."""
+    try:
+        asset_type, market, _symbol = parse_instrument_id(value)
+    except TradingPartnerError:
+        raise ValueError("invalid instrument_id syntax") from None
+    if market not in _SNAPSHOT_BARS_MARKETS:
+        raise ValueError(
+            f"{field_name} market must be one of "
+            f"[{', '.join(sorted(m.value for m in _SNAPSHOT_BARS_MARKETS))}]"
+        )
+    if asset_type not in _SNAPSHOT_BARS_ASSET_TYPES:
+        allowed = ", ".join(sorted(a.value for a in _SNAPSHOT_BARS_ASSET_TYPES))
+        raise ValueError(
+            f"{field_name} asset type must be one of [{allowed}] for this tool"
+        )
+    if market is Market.US and asset_type not in _QUOTE_ASSET_TYPES:
+        raise ValueError(
+            f"{field_name} Market.US only supports equity/etf/index/future"
+        )
+    if market in {Market.CME, Market.DCE} and asset_type is not AssetType.FUTURE:
+        raise ValueError(f"{field_name} futures exchange markets only support future")
+    if market is Market.OTC and asset_type not in {
+        AssetType.COMMODITY_SPOT,
+        AssetType.CFD,
+    }:
+        raise ValueError(
+            f"{field_name} Market.OTC only supports commodity_spot or cfd"
+        )
+    return value
+
+
 def _require_aware_as_of(value: datetime | None) -> datetime | None:
     if value is not None and (value.tzinfo is None or value.utcoffset() is None):
         raise ValueError("as_of must be timezone-aware")
@@ -99,7 +151,7 @@ class MarketGetSnapshotInput(_FrozenForbid):
     @field_validator("instrument_id")
     @classmethod
     def _instrument_id(cls, value: str) -> str:
-        return _validate_us_instrument_id(value, allowed_assets=_QUOTE_ASSET_TYPES)
+        return _validate_snapshot_bars_instrument_id(value)
 
     @field_validator("as_of")
     @classmethod
@@ -113,14 +165,16 @@ class MarketGetBarsInput(_FrozenForbid):
     end: date
     interval: USBarInterval = USBarInterval.ONE_DAY
     # None selects the asset-aware default in the coordinator: unadjusted for
-    # futures, split-and-dividend-adjusted for equities/ETFs/indexes.
+    # futures/OTC, split-and-dividend-adjusted for equities/ETFs/indexes.
     adjustment: AdjustmentMethod | None = None
+    # Dukascopy historical offer side; ignored for exchange instruments.
+    offer_side: str | None = None
     as_of: datetime | None = None
 
     @field_validator("instrument_id")
     @classmethod
     def _instrument_id(cls, value: str) -> str:
-        return _validate_us_instrument_id(value, allowed_assets=_QUOTE_ASSET_TYPES)
+        return _validate_snapshot_bars_instrument_id(value)
 
     @field_validator("as_of")
     @classmethod
@@ -141,7 +195,16 @@ class MarketGetBarsInput(_FrozenForbid):
             return None
         if value not in _US_ADJUSTMENT:
             allowed = ", ".join(sorted(a.value for a in _US_ADJUSTMENT))
-            raise ValueError(f"adjustment must be one of [{allowed}] for US bars")
+            raise ValueError(f"adjustment must be one of [{allowed}] for bars")
+        return value
+
+    @field_validator("offer_side")
+    @classmethod
+    def _offer_side(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value not in {"B", "A", "bid", "ask", "BID", "ASK"}:
+            raise ValueError("offer_side must be B/A (or bid/ask)")
         return value
 
     @model_validator(mode="after")
@@ -152,12 +215,84 @@ class MarketGetBarsInput(_FrozenForbid):
 
 
 class MarketGetContextInput(_FrozenForbid):
+    """US market context (default) or Phase 3A futures curve / basis operations."""
+
+    operation: str = "us_market"
     as_of: datetime | None = None
+    # futures_curve
+    product_key: str | None = None
+    price_basis: str = "settlement"
+    trade_date: date | None = None
+    contract_limit: int = Field(default=6, ge=1, le=24)
+    # spot_future_basis
+    left_instrument_id: str | None = None
+    right_instrument_id: str | None = None
+    max_observation_lag_seconds: int = Field(default=300, ge=0)
+
+    @field_validator("operation")
+    @classmethod
+    def _operation(cls, value: str) -> str:
+        if value not in _CONTEXT_OPERATIONS:
+            allowed = ", ".join(sorted(_CONTEXT_OPERATIONS))
+            raise ValueError(f"operation must be one of [{allowed}]")
+        return value
 
     @field_validator("as_of")
     @classmethod
     def _aware_as_of(cls, value: datetime | None) -> datetime | None:
         return _require_aware_as_of(value)
+
+    @field_validator("trade_date", mode="before")
+    @classmethod
+    def _exact_trade_date(cls, value: object) -> object:
+        return _require_exact_date_wire(value)
+
+    @field_validator("price_basis")
+    @classmethod
+    def _price_basis(cls, value: str) -> str:
+        allowed = {"last", "mid", "settlement"}
+        if value not in allowed:
+            raise ValueError(
+                f"price_basis must be one of [{', '.join(sorted(allowed))}]"
+            )
+        return value
+
+    @field_validator("left_instrument_id", "right_instrument_id")
+    @classmethod
+    def _optional_instrument(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parse_instrument_id(value)
+        except TradingPartnerError:
+            raise ValueError("invalid instrument_id syntax") from None
+        return value
+
+    @field_validator("product_key")
+    @classmethod
+    def _product_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        key = value.strip()
+        if not key:
+            return None
+        if ":" not in key:
+            raise ValueError("product_key must match MARKET:ROOT")
+        return key
+
+    @model_validator(mode="after")
+    def _operation_fields(self) -> Self:
+        if self.operation == "futures_curve" and not self.product_key:
+            raise ValueError("product_key is required for futures_curve")
+        if self.operation == "spot_future_basis":
+            if not self.left_instrument_id or not self.right_instrument_id:
+                raise ValueError(
+                    "left_instrument_id and right_instrument_id are required "
+                    "for spot_future_basis"
+                )
+            if self.left_instrument_id == self.right_instrument_id:
+                raise ValueError("left and right instrument ids must differ")
+        return self
 
 
 class TechnicalGetSnapshotInput(_FrozenForbid):

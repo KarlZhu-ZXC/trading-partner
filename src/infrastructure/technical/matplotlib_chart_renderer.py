@@ -5,14 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from io import BytesIO
 
-import matplotlib
+import numpy as np
+import talib
 
-matplotlib.use("Agg")
-import numpy as np  # noqa: E402
-import talib  # noqa: E402
-from matplotlib import pyplot as plt  # noqa: E402
-from matplotlib.patches import Rectangle  # noqa: E402
-
+from domain.common.errors import ProviderNotConfigured
 from domain.market.models import MarketBar
 from domain.technical.models import TechnicalTimeframe
 
@@ -25,6 +21,16 @@ class MatplotlibChartRenderer:
         bars: Sequence[MarketBar],
         analysis: TechnicalTimeframe,
     ) -> bytes:
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            from matplotlib import pyplot as plt
+            from matplotlib.patches import Rectangle
+        except ImportError:
+            raise ProviderNotConfigured(
+                "PNG chart rendering is unavailable; install trading-partner[chart]"
+            ) from None
         visible = tuple(bars[-120:])
         close = np.asarray([float(bar.close) for bar in visible])
         volume = np.asarray([float(bar.volume) for bar in visible])

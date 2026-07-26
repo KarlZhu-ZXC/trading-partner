@@ -25,10 +25,12 @@ from application.dto.tool_envelope import (
     ToolEnvelope,
     WarningInfo,
 )
+from application.dto.trade_plan import TradePlanDTO
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
+from domain.common.actor import ActorContext
 from domain.common.enums import (
     CandidateKind,
     CandidateStatus,
@@ -37,6 +39,7 @@ from domain.common.enums import (
     ThesisStatus,
 )
 from domain.common.errors import (
+    ConfirmerMismatch,
     DuplicateIdempotencyKey,
     InputValidationError,
     TradingPartnerError,
@@ -68,17 +71,60 @@ def normalize_idempotency_key(key: str) -> str:
     return normalized
 
 
-def require_confirm_reviewer(reviewed_by: str, *, action: str) -> None:
+def require_confirm_reviewer(
+    reviewed_by: str,
+    *,
+    action: str,
+    actor_context: ActorContext | None = None,
+) -> ActorContext:
     actor = reviewed_by.strip()
     if actor not in CONFIRM_REVIEWERS:
         raise UnauthorizedReviewer(
             f"{action} requires reviewed_by in {{user, external_agent}}; got {actor!r}",
             details={"reviewed_by": actor, "action": action},
         )
+    context = actor_context or ActorContext.caller_asserted(
+        actor, request_id=f"caller-asserted:{action}"
+    )
+    if context.actor_type.value != actor:
+        raise ConfirmerMismatch(
+            "confirmed_by does not match the transport actor",
+            details={
+                "confirmed_by": actor,
+                "actor_type": context.actor_type.value,
+                "assurance": context.assurance.value,
+                "action": action,
+            },
+        )
+    return context
 
 
-def require_non_codex_confirmer(confirmed_by: str, *, action: str) -> None:
-    require_confirm_reviewer(confirmed_by, action=action)
+def require_non_codex_confirmer(
+    confirmed_by: str,
+    *,
+    action: str,
+    actor_context: ActorContext | None = None,
+) -> ActorContext:
+    return require_confirm_reviewer(
+        confirmed_by,
+        action=action,
+        actor_context=actor_context,
+    )
+
+
+def actor_audit_fields(context: ActorContext) -> dict[str, str]:
+    """Stable, non-secret actor fields for append-only audit payloads."""
+    fields = {
+        "actor_type": context.actor_type.value,
+        "actor_principal_id": context.principal_id,
+        "actor_assurance": context.assurance.value,
+        "submitted_via": context.submitted_via.value,
+    }
+    if context.authorization_note is not None:
+        # Avoid secret-key redactors treating the word "authorization" as a
+        # credential field while still value-redacting any actual secret patterns.
+        fields["user_instruction"] = context.authorization_note.strip()
+    return fields
 
 
 def envelope_success[T](
@@ -162,6 +208,12 @@ def build_research_state(
         limit=500,
         offset=0,
     )
+    current_plan = uow.trade_plans.get_current_by_case(case_id)
+    plan_versions = (
+        uow.trade_plans.list_versions(current_plan.plan_id)
+        if current_plan is not None
+        else ()
+    )
 
     return ResearchStateDTO(
         case=InvestmentCaseDTO.from_domain(case),
@@ -172,6 +224,10 @@ def build_research_state(
         open_questions=OpenQuestionDTO.from_domain_list(questions),
         watchlist_items=WatchlistItemDTO.from_domain_list(watchlist),
         pending_candidates=CandidateRevisionDTO.from_domain_list(pending),
+        current_trade_plan=(
+            TradePlanDTO.from_domain(current_plan) if current_plan is not None else None
+        ),
+        trade_plan_versions=TradePlanDTO.from_domain_list(plan_versions),
     )
 
 

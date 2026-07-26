@@ -40,6 +40,8 @@ class _FakeWatchlistProvider:
 
     def __init__(self) -> None:
         self.fail_reads = False
+        self.group_reads = 0
+        self.membership_reads = 0
         self.add_calls = 0
         self.remove_calls = 0
         self.groups = (
@@ -66,6 +68,7 @@ class _FakeWatchlistProvider:
         }
 
     async def list_groups(self) -> tuple[WatchlistSourceGroup, ...]:
+        self.group_reads += 1
         if self.fail_reads:
             raise ProviderUnavailableError("watchlist source unavailable")
         return self.groups
@@ -73,6 +76,7 @@ class _FakeWatchlistProvider:
     async def list_memberships(
         self, group_name: str | None = None
     ) -> tuple[WatchlistSourceMembership, ...]:
+        self.membership_reads += 1
         if self.fail_reads:
             raise ProviderUnavailableError("watchlist source unavailable")
         if group_name is not None:
@@ -157,17 +161,17 @@ async def test_watchlist_hub_refresh_restart_mutate_and_stale_fallback(
     provider = _FakeWatchlistProvider()
     service, engine = _service(database_url, provider)
 
-    groups = await service.get_groups(WatchlistGetGroupsInput())
+    groups = await service.get_groups(WatchlistGetGroupsInput(refresh=True))
     assert groups.ok is True
     assert groups.data is not None
     assert [group.name for group in groups.data.groups] == ["Favorites"]
 
-    initial = await service.get_items(WatchlistGetItemsInput())
+    initial = await service.get_items(WatchlistGetItemsInput(refresh=True))
     assert initial.ok is True
     assert initial.data is not None
     assert [item.provider_code for item in initial.data.items] == ["US.NVDA"]
     nvda_membership_id = initial.data.items[0].membership_id
-    refreshed_again = await service.get_items(WatchlistGetItemsInput())
+    refreshed_again = await service.get_items(WatchlistGetItemsInput(refresh=True))
     assert refreshed_again.data is not None
     assert refreshed_again.data.items[0].membership_id == nvda_membership_id
 
@@ -279,6 +283,33 @@ async def test_watchlist_hub_refresh_restart_mutate_and_stale_fallback(
     assert stale_empty.data is not None and stale_empty.data.items == ()
 
     restarted_engine.dispose()
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_watchlist_reads_are_durable_first_by_default(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'watchlist-durable-first.db'}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    config = Config(str(project_root / "alembic.ini"))
+    config.set_main_option("script_location", str(project_root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    provider = _FakeWatchlistProvider()
+    service, engine = _service(database_url, provider)
+
+    groups = await service.get_groups(WatchlistGetGroupsInput())
+    items = await service.get_items(WatchlistGetItemsInput())
+
+    assert groups.ok is True and groups.data is not None
+    assert groups.data.groups == ()
+    assert items.ok is False
+    assert items.errors[0].code == "WATCHLIST_GROUP_NOT_FOUND"
+    assert provider.group_reads == 0
+    assert provider.membership_reads == 0
     engine.dispose()
 
 

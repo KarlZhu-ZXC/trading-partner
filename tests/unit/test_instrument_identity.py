@@ -459,5 +459,9 @@ class TestPhase1DEnumsWireValues:
             "snapshot",
             "run",
             "audit",
+            "futures_product",
+            "futures_product_version",
+            "futures_contract_version",
+            "trade_plan",
         }
         assert {p.value for p in EntityIdPrefix} == expected

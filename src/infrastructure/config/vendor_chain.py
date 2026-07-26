@@ -184,7 +184,7 @@ def _parse_document(
         seen_markets.add(market)
         parsed_markets[market] = _parse_market_categories(market, categories_raw)
 
-    if seen_markets != _REQUIRED_MARKETS:
+    if not _REQUIRED_MARKETS.issubset(seen_markets):
         missing = sorted(m.value for m in _REQUIRED_MARKETS - seen_markets)
         raise _config_error(
             "Vendor chain configuration requires both A_SHARE and US markets",

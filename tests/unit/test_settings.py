@@ -128,6 +128,7 @@ def test_env_example_contains_required_keys() -> None:
         "A_SHARE_CURRENT_WINDOW_SECONDS=300",
         "A_SHARE_MAX_FRESH_SECONDS=30",
         "A_SHARE_MAX_DELAYED_SECONDS=900",
+        "PROVIDER_PROXY_URL=",
     ):
         assert line in text, f"missing .env.example key line: {line}"
 
@@ -158,17 +159,20 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
         default_timezone="UTC",
         provider_timeout_seconds=1.0,
         alpha_vantage_api_keys=("REAL_SECRET_KEY", "SECOND_REAL_SECRET_KEY"),
-        broker_api_secret="REAL_BROKER_SECRET",
+        schwab_client_secret="REAL_SCHWAB_SECRET",
+        provider_proxy_url="http://general-user:general-secret@127.0.0.1:7891",
         polymarket_proxy_url="http://proxy-user:proxy-secret@127.0.0.1:7890",
     )
     redacted = settings.redacted_dict()
     assert redacted["alpha_vantage_api_keys"] == "***REDACTED***"
-    assert redacted["broker_api_secret"] == "***REDACTED***"
+    assert redacted["schwab_client_secret"] == "***REDACTED***"
     assert redacted["database_url"] == "***REDACTED***"
     assert "REAL_SECRET_KEY" not in repr(settings)
     assert "SECOND_REAL_SECRET_KEY" not in repr(settings)
-    assert "REAL_BROKER_SECRET" not in str(settings)
+    assert "REAL_SCHWAB_SECRET" not in str(settings)
+    assert redacted["provider_proxy_url"] == "***REDACTED***"
     assert redacted["polymarket_proxy_url"] == "***REDACTED***"
+    assert "general-secret" not in repr(settings)
     assert "proxy-secret" not in repr(settings)
     assert redacted["provider_timeout_default_seconds"] == 30.0
     assert redacted["provider_timeout_market_seconds"] == 15.0
@@ -191,6 +195,17 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert "vendor_chain_path" in redacted
     assert redacted["vendor_chain_path"] == str(settings.vendor_chain_path)
     assert redacted["vendor_chain_path"] != "***REDACTED***"
+
+
+def test_general_proxy_precedence_and_legacy_fallback() -> None:
+    legacy = _base_settings(polymarket_proxy_url="http://127.0.0.1:7890")
+    assert legacy.effective_provider_proxy_url == "http://127.0.0.1:7890"
+
+    general = _base_settings(
+        provider_proxy_url="http://127.0.0.1:7891",
+        polymarket_proxy_url="http://127.0.0.1:7890",
+    )
+    assert general.effective_provider_proxy_url == "http://127.0.0.1:7891"
 
 
 def test_alpha_vantage_key_pool_loads_comma_separated_env(
@@ -486,7 +501,6 @@ def test_d5b_resilience_defaults() -> None:
     }
     assert s.reddit_apify_max_charge_usd == Decimal("0.20")
     assert s.apify_api_token is None
-    assert s.stocktwits_enabled is False
     assert s.moomoo_sentiment_enabled is True
 
 

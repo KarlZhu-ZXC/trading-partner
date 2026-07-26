@@ -36,6 +36,7 @@ from domain.monitoring.models import (
     MonitorRun,
 )
 from domain.risk.enums import RiskOverallStatus
+from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 
 
 class _DTO(BaseModel):
@@ -59,6 +60,12 @@ MonitorEventActionInput = Annotated[
 RiskOverallStatusInput = Annotated[
     RiskOverallStatus, BeforeValidator(_normalize_enum_wire_value)
 ]
+TradePlanFactTypeInput = Annotated[
+    TradePlanFactType, BeforeValidator(_normalize_enum_wire_value)
+]
+TradePlanComparatorInput = Annotated[
+    TradePlanComparator, BeforeValidator(_normalize_enum_wire_value)
+]
 
 
 class MonitorRuleInput(_DTO):
@@ -69,6 +76,18 @@ class MonitorRuleInput(_DTO):
     price_threshold: Decimal | None = Field(default=None, gt=0)
     risk_status_threshold: RiskOverallStatusInput | None = None
     max_fact_age_seconds: int = Field(default=3600, gt=0)
+    fact_type: TradePlanFactTypeInput | None = None
+    metric_key: str | None = Field(default=None, min_length=1, max_length=128)
+    comparator: TradePlanComparatorInput | None = None
+    numeric_threshold: Decimal | None = None
+    event_after: datetime | None = None
+
+    @field_validator("event_after")
+    @classmethod
+    def validate_event_after(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value, field_name="event_after")
+        return value
 
     @model_validator(mode="after")
     def validate_rule(self) -> Self:
@@ -84,6 +103,11 @@ class MonitorRuleInput(_DTO):
             price_threshold=self.price_threshold,
             risk_status_threshold=self.risk_status_threshold,
             max_fact_age_seconds=self.max_fact_age_seconds,
+            fact_type=self.fact_type,
+            metric_key=self.metric_key,
+            comparator=self.comparator,
+            numeric_threshold=self.numeric_threshold,
+            event_after=self.event_after,
         )
 
 
@@ -92,7 +116,10 @@ class MonitorCreateInput(_DTO):
     case_id: str | None = None
     primary_instrument_id: str | None = None
     cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND
-    rules: tuple[MonitorRuleInput, ...] = Field(min_length=1, max_length=50)
+    rules: tuple[MonitorRuleInput, ...] = Field(default=(), max_length=50)
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = Field(default=None, ge=1)
+    compile_trade_plan_conditions: bool = False
     valid_until: datetime | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -103,6 +130,16 @@ class MonitorCreateInput(_DTO):
         if value is not None:
             require_aware_datetime(value, field_name="valid_until")
         return value
+
+    @model_validator(mode="after")
+    def validate_rules_or_plan(self) -> Self:
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise ValueError("trade_plan_id and trade_plan_version are required together")
+        if self.compile_trade_plan_conditions and self.trade_plan_id is None:
+            raise ValueError("compile_trade_plan_conditions requires a Trade Plan version")
+        if not self.rules and not self.compile_trade_plan_conditions:
+            raise ValueError("monitor requires rules or Trade Plan condition compilation")
+        return self
 
 
 class MonitorUpdateInput(_DTO):
@@ -113,7 +150,10 @@ class MonitorUpdateInput(_DTO):
     primary_instrument_id: str | None = None
     cadence: MonitorCadenceInput
     status: MonitorStatusInput
-    rules: tuple[MonitorRuleInput, ...] = Field(min_length=1, max_length=50)
+    rules: tuple[MonitorRuleInput, ...] = Field(default=(), max_length=50)
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = Field(default=None, ge=1)
+    compile_trade_plan_conditions: bool = False
     valid_until: datetime | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -124,6 +164,16 @@ class MonitorUpdateInput(_DTO):
         if value is not None:
             require_aware_datetime(value, field_name="valid_until")
         return value
+
+    @model_validator(mode="after")
+    def validate_rules_or_plan(self) -> Self:
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise ValueError("trade_plan_id and trade_plan_version are required together")
+        if self.compile_trade_plan_conditions and self.trade_plan_id is None:
+            raise ValueError("compile_trade_plan_conditions requires a Trade Plan version")
+        if not self.rules and not self.compile_trade_plan_conditions:
+            raise ValueError("monitor requires rules or Trade Plan condition compilation")
+        return self
 
 
 class MonitorGetInput(_DTO):
@@ -171,6 +221,11 @@ class MonitorRuleDTO(_DTO):
     price_threshold: DecimalWire | None
     risk_status_threshold: RiskOverallStatus | None
     max_fact_age_seconds: int
+    fact_type: TradePlanFactType | None
+    metric_key: str | None
+    comparator: TradePlanComparator | None
+    numeric_threshold: DecimalWire | None
+    event_after: datetime | None
 
 
 class MonitorDefinitionDTO(_DTO):
@@ -182,6 +237,8 @@ class MonitorDefinitionDTO(_DTO):
     cadence: MonitorCadence
     status: MonitorStatus
     rules: tuple[MonitorRuleDTO, ...]
+    trade_plan_id: str | None
+    trade_plan_version: int | None
     valid_until: datetime | None
     confirmed_by: str
     idempotency_key: str
@@ -211,10 +268,12 @@ class MonitorRuleStateDTO(_DTO):
 class MonitorDetailDTO(_DTO):
     monitor: MonitorDefinitionDTO
     rule_states: tuple[MonitorRuleStateDTO, ...]
+    execution_effect: Literal[False] = False
 
 
 class MonitorListDTO(_DTO):
     monitors: tuple[MonitorDefinitionDTO, ...]
+    execution_effect: Literal[False] = False
 
 
 class MonitorEventResolutionDTO(_DTO):
@@ -225,6 +284,7 @@ class MonitorEventResolutionDTO(_DTO):
     confirmed_by: str
     idempotency_key: str
     created_at: datetime
+    execution_effect: Literal[False] = False
 
     @classmethod
     def from_domain(cls, value: MonitorEventResolution) -> MonitorEventResolutionDTO:
@@ -263,6 +323,7 @@ class MonitorEventDTO(_DTO):
 
 class MonitorEventListDTO(_DTO):
     events: tuple[MonitorEventDTO, ...]
+    execution_effect: Literal[False] = False
 
 
 class MonitorRunDTO(_DTO):

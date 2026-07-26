@@ -30,14 +30,13 @@ FORBIDDEN_TABLES = frozenset(
         "strategies",
         "backtest_runs",
         "backtest_trades",
-        "paper_accounts",
         "orders",
         "fills",
         "execution_approvals",
     }
 )
 FORBIDDEN_RUNTIME_DEPENDENCIES = ("tradingagents", "langgraph", "minimax", "grok")
-_PHASE1_MIGRATION_HEADS = frozenset({"0016_monitor_valid_until"})
+_PHASE1_MIGRATION_HEADS = frozenset({"0022_workflow_execution_replay"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +44,7 @@ class Phase1DeliveryAuditReceipt:
     public_tool_count: int
     table_count: int
     migration_head: str
-    dialogue_count: int = 80
+    dialogue_count: int = 89
     longitudinal_case_count: int = 3
 
 
@@ -54,7 +53,7 @@ class Phase1DeliveryAuditor:
         self, project_root: Path, public_tools: frozenset[str]
     ) -> Phase1DeliveryAuditReceipt:
         root = project_root.resolve()
-        if len(public_tools) != 52 or public_tools & FORBIDDEN_PUBLIC:
+        if len(public_tools) != 28 or public_tools & FORBIDDEN_PUBLIC:
             raise DataContractError("Public tool surface is invalid")
         tables = frozenset(Base.metadata.tables)
         if tables & FORBIDDEN_TABLES:

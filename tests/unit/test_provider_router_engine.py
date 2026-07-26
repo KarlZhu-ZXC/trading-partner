@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import count
 from typing import Any
 
 import pytest
@@ -46,9 +48,6 @@ from domain.market.models import MarketBar, TechnicalIndicators, VerifiedMarketS
 from infrastructure.config.settings import AppSettings
 from infrastructure.providers.common.circuit_breaker import CircuitBreaker
 from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
-from infrastructure.providers.common.verified_snapshot_cache_codec import (
-    VerifiedMarketSnapshotCacheCodec,
-)
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.router_engine import ProviderRouterEngine
 
@@ -288,6 +287,29 @@ def _success(
     )
 
 
+class _SnapshotCodec:
+    """Small in-process codec fixture; production snapshot mocks were retired."""
+
+    codec_id = "test.snapshot.v1"
+    _sequence = count(1)
+    _values: dict[str, ProviderSuccess[VerifiedMarketSnapshot]] = {}
+
+    def encode(self, success: ProviderSuccess[VerifiedMarketSnapshot]) -> str:
+        token = f"snapshot-{next(self._sequence)}"
+        self._values[token] = success
+        return json.dumps({"codec": self.codec_id, "token": token})
+
+    def decode(self, entry: CacheEntry) -> ProviderSuccess[VerifiedMarketSnapshot]:
+        payload = json.loads(entry.payload_json)
+        if payload.get("codec") != self.codec_id:
+            raise DataContractError("test cache codec mismatch")
+        success = self._values[payload["token"]]
+        return replace(
+            success,
+            meta=replace(success.meta, cache_disposition=CacheDisposition.HIT),
+        )
+
+
 def _settings(**overrides: object) -> AppSettings:
     base: dict[str, object] = {
         "app_name": "tp",
@@ -376,7 +398,7 @@ async def _run(
     instrument: Instrument | None = ...,
 ) -> Any:
     if cache_codec is ...:
-        cache_codec = VerifiedMarketSnapshotCacheCodec()
+        cache_codec = _SnapshotCodec()
     if instrument is ...:
         instrument = _instrument()
 
@@ -779,7 +801,7 @@ async def test_cache_miss_then_write_on_success() -> None:
 
 @pytest.mark.asyncio
 async def test_cache_hit_serves_without_adapter_call() -> None:
-    codec = VerifiedMarketSnapshotCacheCodec()
+    codec = _SnapshotCodec()
     engine, cache, _, clock, registry = _engine()
     adapter = _register(registry, VendorId.MOCK_US)
     # Seed via first call
@@ -834,7 +856,7 @@ async def test_cache_failures_continue_workflow() -> None:
     assert SECRET not in "".join(w.message for w in result.warnings)
 
     # expired entries are deleted and workflow proceeds via adapter
-    codec = VerifiedMarketSnapshotCacheCodec()
+    codec = _SnapshotCodec()
     clock = FixedClock(AS_OF)
     engine, cache, _, _, registry = _engine(clock=clock)
     adapter = _register(registry, VendorId.MOCK_US)
@@ -1257,48 +1279,3 @@ async def test_supports_errors_stop_or_fallback_as_expected() -> None:
             assert len(result.attempts) == 1
             assert primary.call_count == 0
             assert secondary.call_count == 0
-
-
-@pytest.mark.asyncio
-async def test_d8a_adapter_non_bool_supports_through_engine_is_contract() -> None:
-    """Integration: MarketSnapshotCategoryAdapter exact-bool → DATA_CONTRACT_ERROR.
-
-    Non-bool old provider.supports must surface as contract error (not
-    PROVIDER_UNAVAILABLE) with no raw return-value leak.
-    """
-    from infrastructure.providers.common.market_snapshot_category_adapter import (
-        MarketSnapshotCategoryAdapter,
-    )
-
-    class _NonBoolOldProvider:
-        provider_name = "bad-old"
-
-        def supports(self, market: Market) -> object:
-            return f"yes-{SECRET}"  # truthy non-bool
-
-        async def get_snapshot(self, instrument: Instrument, as_of: datetime) -> Any:
-            raise AssertionError("must not be called")
-
-    engine, _, _, _, registry = _engine(settings=_settings(provider_retry_max_attempts=1))
-    adapter = MarketSnapshotCategoryAdapter(
-        vendor_id=VendorId.MOCK_US,
-        provider=_NonBoolOldProvider(),  # type: ignore[arg-type]
-    )
-    registry.register(VendorId.MOCK_US, adapter)
-
-    async def _must_not_call(adapter: Any) -> ProviderSuccess[Any]:
-        raise AssertionError("provider call must not run after supports contract fail")
-
-    result = await _run(engine, call=_must_not_call, cache_codec=None)
-    assert result.ok is False
-    assert isinstance(result.error, DataContractError)
-    assert result.error.code == "DATA_CONTRACT_ERROR"
-    assert result.attempts[0].outcome is ProviderAttemptOutcome.CONTRACT_ERROR
-    assert result.attempts[0].error_code == "DATA_CONTRACT_ERROR"
-    assert not isinstance(result.error, ProviderUnavailableError)
-    assert result.error.details.get("rule") == "exact_bool"
-    assert result.error.details.get("field") == "provider.supports"
-    blob = _blob(result.error)
-    assert SECRET not in blob
-    assert "yes-" not in blob
-    assert "value" not in result.error.details

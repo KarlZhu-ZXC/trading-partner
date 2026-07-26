@@ -223,7 +223,10 @@ def _warning_from_code(code: str) -> WarningInfo:
 
 
 class USToolCoordinator:
-    """Application-layer coordinator for the five US market product tools."""
+    """US/CME exchange market product coordinator (quote, bars, US context, composite).
+
+    OTC spot/CFD, futures curves, and basis live on :class:`MarketToolCoordinator`.
+    """
 
     def __init__(
         self,
@@ -256,6 +259,7 @@ class USToolCoordinator:
                 effective_as_of,
                 result,
                 dto_factory=USQuoteDTO.from_domain,
+                market=instrument.market,
             )
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
@@ -284,6 +288,7 @@ class USToolCoordinator:
                 effective_as_of,
                 result,
                 dto_factory=USBarSeriesDTO.from_domain,
+                market=instrument.market,
             )
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
@@ -291,8 +296,14 @@ class USToolCoordinator:
     async def get_market_context(
         self, request: MarketGetContextInput
     ) -> ToolEnvelope[USMarketContextDTO]:
+        """US market proxy/breadth/rotation context only (operation=us_market)."""
         request_id, effective_as_of = self._begin(request.as_of)
         try:
+            if request.operation != "us_market":
+                raise DataContractError(
+                    "USToolCoordinator only serves operation=us_market",
+                    details={"operation": request.operation},
+                )
             result = await self._context_service.get_context_result(effective_as_of)
             return self._envelope_from_context(request_id, effective_as_of, result)
         except Exception as exc:  # noqa: BLE001 — envelope boundary
@@ -345,6 +356,15 @@ class USToolCoordinator:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
             instrument = self._resolve(request.instrument_id)
+            if instrument.market is not Market.US:
+                raise DataContractError(
+                    "composite snapshot remains US-only",
+                    details={
+                        "field": "instrument_id",
+                        "rule": "composite_us_only",
+                        "market": instrument.market.value,
+                    },
+                )
             lookback = request.lookback_sessions
             quote_coro = self._data_service.get_quote(instrument, effective_as_of)
             bars_coro = self._fetch_technical_bars(
@@ -490,9 +510,12 @@ class USToolCoordinator:
         result: RouterExecutionResult[T],
         *,
         dto_factory: Callable[[T], U],
+        market: Market = Market.US,
     ) -> ToolEnvelope[U]:
         if not result.ok or result.value is None:
-            return self._router_failure(request_id, effective_as_of, result)
+            return self._router_failure(
+                request_id, effective_as_of, result, market=market
+            )
 
         data = dto_factory(result.value)
         metas = _metas_from_router(result)
@@ -507,6 +530,7 @@ class USToolCoordinator:
             data=data,
             metas=metas,
             warnings=warnings,
+            market=market,
         )
 
     def _envelope_from_context(
@@ -536,6 +560,7 @@ class USToolCoordinator:
         data: U,
         metas: tuple[ProviderResultMeta, ...],
         warnings: tuple[WarningInfo, ...],
+        market: Market = Market.US,
     ) -> ToolEnvelope[U]:
         sources = _sources_from_metas(metas)
         freshness = _worst_freshness(metas)
@@ -545,7 +570,7 @@ class USToolCoordinator:
         degraded = bool(warnings)
         return ToolEnvelope.success(
             request_id=request_id,
-            market=Market.US,
+            market=market,
             as_of=effective_as_of,
             fetched_at=fetched_at,
             freshness=freshness,
@@ -563,6 +588,7 @@ class USToolCoordinator:
         *,
         extra_metas: tuple[ProviderResultMeta, ...] = (),
         extra_router_warnings: tuple[WarningInfo, ...] = (),
+        market: Market = Market.US,
     ) -> ToolEnvelope[T]:
         metas = (*extra_metas, *_metas_from_router(result))
         router_warnings = (*extra_router_warnings, *result.warnings)
@@ -579,7 +605,7 @@ class USToolCoordinator:
         error = _error_from_router(result, self._secret_redactor)
         return ToolEnvelope.failure(
             request_id=request_id,
-            market=Market.US,
+            market=market,
             as_of=effective_as_of,
             fetched_at=fetched_at,
             freshness=freshness,

@@ -17,6 +17,13 @@ class PostMarketSyncDisposition(StrEnum):
     SKIPPED_ALREADY_COMPLETED = "SKIPPED_ALREADY_COMPLETED"
 
 
+class PostMarketSyncHealth(StrEnum):
+    HEALTHY = "HEALTHY"
+    RECEIPT_MISSING = "RECEIPT_MISSING"
+    RECEIPT_IMPERFECT = "RECEIPT_IMPERFECT"
+    NO_DUE_SESSION = "NO_DUE_SESSION"
+
+
 class PostMarketSyncResultDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -33,3 +40,25 @@ class PostMarketSyncResultDTO(BaseModel):
     watchlist_membership_relations_synced: int | None = None
     warning_codes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
+
+
+class PostMarketSyncStatusDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    health: PostMarketSyncHealth
+    expected_session_date: date | None = None
+    expected_scheduled_for: datetime | None = None
+    receipt_session_date: date | None = None
+    run_status: PostMarketSyncRunStatus | None = None
+    portfolio_status: PostMarketSyncStepStatus | None = None
+    watchlist_status: PostMarketSyncStepStatus | None = None
+    attempt_count: int | None = None
+    warning_codes: tuple[str, ...] = ()
+    error_codes: tuple[str, ...] = ()
+
+    @property
+    def healthy(self) -> bool:
+        return self.health in {
+            PostMarketSyncHealth.HEALTHY,
+            PostMarketSyncHealth.NO_DUE_SESSION,
+        }

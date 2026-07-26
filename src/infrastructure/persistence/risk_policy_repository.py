@@ -55,6 +55,23 @@ def _to_domain(row: RiskPolicyRow) -> RiskPolicy:
         confirmed_by=RiskConfirmer(row.confirmed_by),
         created_at=dt_from_db(row.created_at, field_name="created_at"),
         idempotency_key=row.idempotency_key,
+        risk_budget_max_percent=_required_decimal(
+            row.risk_budget_max_percent, field_name="risk_budget_max_percent"
+        ),
+        theme_exposure_max_percent=_required_decimal(
+            row.theme_exposure_max_percent, field_name="theme_exposure_max_percent"
+        ),
+        drawdown_max_percent=_required_decimal(
+            row.drawdown_max_percent, field_name="drawdown_max_percent"
+        ),
+        liquidity_participation_max_percent=_required_decimal(
+            row.liquidity_participation_max_percent,
+            field_name="liquidity_participation_max_percent",
+        ),
+        correlation_max_absolute=_required_decimal(
+            row.correlation_max_absolute, field_name="correlation_max_absolute"
+        ),
+        event_blackout_days=row.event_blackout_days,
         schema_version=row.schema_version,
     )
 
@@ -73,6 +90,14 @@ def _to_row(policy: RiskPolicy) -> RiskPolicyRow:
         confirmed_by=policy.confirmed_by.value,
         created_at=dt_to_db(policy.created_at),
         idempotency_key=policy.idempotency_key,
+        risk_budget_max_percent=decimal_to_db(policy.risk_budget_max_percent),
+        theme_exposure_max_percent=decimal_to_db(policy.theme_exposure_max_percent),
+        drawdown_max_percent=decimal_to_db(policy.drawdown_max_percent),
+        liquidity_participation_max_percent=decimal_to_db(
+            policy.liquidity_participation_max_percent
+        ),
+        correlation_max_absolute=decimal_to_db(policy.correlation_max_absolute),
+        event_blackout_days=policy.event_blackout_days,
         schema_version=policy.schema_version,
     )
 
@@ -97,6 +122,13 @@ def _same_update(left: RiskPolicy, right: RiskPolicy) -> bool:
         and left.is_system_default == right.is_system_default
         and left.confirmed_by is right.confirmed_by
         and left.idempotency_key == right.idempotency_key
+        and left.risk_budget_max_percent == right.risk_budget_max_percent
+        and left.theme_exposure_max_percent == right.theme_exposure_max_percent
+        and left.drawdown_max_percent == right.drawdown_max_percent
+        and left.liquidity_participation_max_percent
+        == right.liquidity_participation_max_percent
+        and left.correlation_max_absolute == right.correlation_max_absolute
+        and left.event_blackout_days == right.event_blackout_days
     )
 
 

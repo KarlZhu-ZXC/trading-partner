@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -43,7 +44,7 @@ def _step(*, ok: bool = True, degraded: bool = False) -> WorkflowStepReceipt:
     )
 
 
-def _run(status: WorkflowRunStatus = WorkflowRunStatus.COMPLETE) -> WorkflowRun:
+def _run(status: WorkflowRunStatus = WorkflowRunStatus.SUCCEEDED) -> WorkflowRun:
     return WorkflowRun(
         run_id="run_1",
         workflow_type=WorkflowType.US_MARKET_REVIEW,
@@ -66,7 +67,7 @@ def test_workflow_status_is_derived_and_dto_keeps_synthesis_boundary() -> None:
         fact_data=({"proxy_count": 3},),
         synthesis_contract=WorkflowSynthesisContractDTO(
             required_sections=("bull_case", "bear_case", "risk_critique"),
-            candidate_update_tools=("thesis_revision_propose",),
+            candidate_update_tools=("research_judgment_propose",),
             prohibited_outputs=("orders", "position_sizing"),
         ),
     )
@@ -79,10 +80,43 @@ def test_workflow_repository_round_trips_receipts() -> None:
     Base.metadata.create_all(engine)
     repository = SqlAlchemyWorkflowRunRepository(engine)
 
-    repository.append(_run())
+    started = replace(
+        _run(),
+        completed_at=None,
+        status=WorkflowRunStatus.STARTED,
+        steps=(),
+    )
+    claim = repository.claim(
+        started,
+        idempotency_key="workflow-1",
+        request_payload_sha256="a" * 64,
+        heartbeat_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    assert claim.claimed
+    repository.mark_running(
+        started.run_id,
+        heartbeat_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    repository.complete(
+        _run(),
+        fact_data=({"proxy_count": 3},),
+        missing_capabilities=(),
+    )
     restored = repository.get("run_1")
 
     assert restored == _run()
+    replay = repository.get_by_idempotency_key("workflow-1")
+    assert replay is not None and replay.fact_data == ({"proxy_count": 3},)
+    duplicate = repository.claim(
+        started,
+        idempotency_key="workflow-1",
+        request_payload_sha256="a" * 64,
+        heartbeat_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    assert duplicate.claimed is False
     engine.dispose()
 
 

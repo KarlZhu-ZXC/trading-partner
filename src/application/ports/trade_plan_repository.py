@@ -1,0 +1,19 @@
+"""Append-only Trade Plan repository protocol."""
+
+from typing import Protocol
+
+from domain.trade_plan.models import TradePlan
+
+
+class TradePlanRepository(Protocol):
+    def get_current(self, plan_id: str) -> TradePlan | None: ...
+
+    def get_current_by_case(self, case_id: str) -> TradePlan | None: ...
+
+    def get_version(self, plan_id: str, version: int) -> TradePlan | None: ...
+
+    def list_versions(self, plan_id: str) -> tuple[TradePlan, ...]: ...
+
+    def get_by_idempotency_key(self, key: str) -> TradePlan | None: ...
+
+    def append(self, plan: TradePlan) -> TradePlan: ...

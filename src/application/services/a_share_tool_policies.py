@@ -211,6 +211,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "quote_market",
                 AssetType.OPTION: "reject",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
         "structure": MappingProxyType(
@@ -220,6 +223,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "yes",
                 AssetType.OPTION: "reject",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
         "capital": MappingProxyType(
@@ -229,6 +235,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "market_scope_only",
                 AssetType.OPTION: "reject",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
         "limit_sentiment": MappingProxyType(
@@ -238,6 +247,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "market_context",
                 AssetType.OPTION: "reject",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
         "etf_options": MappingProxyType(
@@ -247,6 +259,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "reject",
                 AssetType.OPTION: "contracts_only_in_output",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
         "reports": MappingProxyType(
@@ -256,6 +271,9 @@ A_SHARE_TOOL_ASSET_SUPPORT: Mapping[str, Mapping[AssetType, str]] = MappingProxy
                 AssetType.INDEX: "optional_industry_theme",
                 AssetType.OPTION: "reject",
                 AssetType.FUTURE: "reject",
+                AssetType.COMMODITY_SPOT: "reject",
+                AssetType.CFD: "reject",
+                AssetType.BENCHMARK: "reject",
             }
         ),
     }

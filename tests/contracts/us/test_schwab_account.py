@@ -19,7 +19,6 @@ from infrastructure.providers.account.schwab import (
     SchwabPyReadClient,
     SchwabReadClient,
 )
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
 _NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 _ACCOUNT_HASH = "encrypted-account-hash"
@@ -288,4 +287,3 @@ async def test_schwab_is_wired_through_existing_tools_without_inventory_growth(
 
     assert envelope.ok is False
     assert envelope.errors[0].code == "PROVIDER_NOT_CONFIGURED"
-    assert len(PUBLIC_TOOL_NAMES) == 52

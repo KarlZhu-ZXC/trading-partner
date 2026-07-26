@@ -15,8 +15,6 @@ from mcp.client.stdio import stdio_client
 
 from interfaces.mcp.server import (
     FORBIDDEN_PUBLIC_TOOL_NAMES,
-    PHASE1E_A_SHARE_TOOL_NAMES,
-    PHASE2_WATCHLIST_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
 )
 
@@ -73,10 +71,6 @@ async def test_stdio_exact_public_surface_and_a_share_snapshot(
     project_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
-    assert len(PHASE2_WATCHLIST_TOOL_NAMES) == 3
-    assert len(PUBLIC_TOOL_NAMES) == 52
-
     database_path = tmp_path / "a_share_stdio.db"
     database_url = f"sqlite:///{database_path}"
     _migrate(database_url, project_root, monkeypatch)
@@ -93,16 +87,18 @@ async def test_stdio_exact_public_surface_and_a_share_snapshot(
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert names == set(PUBLIC_TOOL_NAMES)
-        assert len(names) == 52
-        assert PHASE1E_A_SHARE_TOOL_NAMES.issubset(names)
-        assert PHASE2_WATCHLIST_TOOL_NAMES.issubset(names)
+        assert len(names) == 28
+        assert {"a_share_get_facts", "watchlist_get", "watchlist_manage"} <= names
         assert names.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
 
         snapshot = _parse_envelope(
             await session.call_tool(
                 "a_share_get_facts",
                 {
-                    "instrument_id": "equity:A_SHARE:600519.SH",
+                    "request": {
+                        "operation": "snapshot",
+                        "instrument_id": "equity:A_SHARE:600519.SH",
+                    },
                 },
             )
         )

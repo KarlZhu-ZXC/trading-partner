@@ -1,4 +1,4 @@
-"""Closed shared DTOs for the five Phase 1L workflows."""
+"""Closed shared DTOs for persisted research workflows."""
 
 from __future__ import annotations
 
@@ -23,7 +23,16 @@ def _aware(value: datetime | None) -> datetime | None:
     return value
 
 
-class _CaseWorkflowInput(_DTO):
+class _WorkflowInput(_DTO):
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class _CaseWorkflowInput(_WorkflowInput):
     case_id: str | None = Field(default=None, min_length=1, max_length=128)
     instrument_id: str | None = None
     as_of: datetime | None = None
@@ -55,7 +64,7 @@ class ResearchRunDeepDiveInput(_CaseWorkflowInput):
     case_title: str | None = Field(default=None, min_length=1, max_length=200)
     case_summary: str | None = Field(default=None, min_length=1, max_length=4_000)
     case_topic_tags: tuple[str, ...] = ()
-    case_creation_confirmed_by: Literal["user", "external_agent"] = "user"
+    case_creation_confirmed_by: Literal["user", "external_agent"] | None = None
     case_creation_idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
     industry_cycle: Literal["hog"] | None = None
     industry_cycle_lookback_months: int = Field(default=120, ge=3, le=240)
@@ -70,12 +79,23 @@ class ResearchRunDeepDiveInput(_CaseWorkflowInput):
             raise ValueError("case_topic_tags must not contain duplicates")
         return normalized
 
+    @model_validator(mode="after")
+    def explicit_case_creation_confirmation(self) -> Self:
+        has_confirmer = self.case_creation_confirmed_by is not None
+        has_key = self.case_creation_idempotency_key is not None
+        if has_confirmer != has_key:
+            raise ValueError(
+                "case_creation_confirmed_by and case_creation_idempotency_key "
+                "must be provided together"
+            )
+        return self
+
 
 class ResearchRunCatalystReviewInput(_CaseWorkflowInput):
     topic: str | None = Field(default=None, max_length=256)
 
 
-class AShareRunMarketReviewInput(_DTO):
+class AShareRunMarketReviewInput(_WorkflowInput):
     trade_date: date | None = None
     as_of: datetime | None = None
 
@@ -85,7 +105,7 @@ class AShareRunMarketReviewInput(_DTO):
         return _aware(value)
 
 
-class USRunMarketReviewInput(_DTO):
+class USRunMarketReviewInput(_WorkflowInput):
     as_of: datetime | None = None
     prediction_topic: str | None = Field(default=None, max_length=256)
 
@@ -95,7 +115,7 @@ class USRunMarketReviewInput(_DTO):
         return _aware(value)
 
 
-class PortfolioRunReviewInput(_DTO):
+class PortfolioRunReviewInput(_WorkflowInput):
     refresh_accounts: bool = False
     providers: tuple[VendorId, ...] = ()
     account_snapshot_ids: tuple[str, ...] = ()
@@ -169,6 +189,8 @@ class WorkflowRunDTO(_DTO):
     ) -> WorkflowRunDTO:
         if len(fact_data) != len(run.steps):
             raise ValueError("fact_data must align with workflow steps")
+        if run.completed_at is None:
+            raise ValueError("only terminal workflow runs can be rendered")
         return cls(
             run_id=run.run_id,
             workflow_type=run.workflow_type,

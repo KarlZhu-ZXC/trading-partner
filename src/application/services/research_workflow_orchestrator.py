@@ -1,4 +1,4 @@
-"""Shared fact orchestration for the five Phase 1L research recipes."""
+"""Shared fact orchestration for the closed research workflow recipes."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from application.dto.a_share import (
 )
 from application.dto.account_transactions import AccountGetTransactionsInput
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
+from application.dto.peer_comparison import PeerComparisonRunInput
 from application.dto.portfolio import (
     AccountGetPositionsInput,
     AccountGetSnapshotInput,
@@ -54,10 +55,12 @@ from application.dto.workflow import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
-from application.ports.workflow_run_repository import WorkflowRunRepository
+from application.ports.workflow_run_repository import WorkflowRunRecord, WorkflowRunRepository
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.idempotency import canonical_payload_sha256
 from application.services.investment_case_service import InvestmentCaseService
+from application.services.peer_comparison_service import PeerComparisonService
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.research_archive_service import ResearchArchiveService
@@ -74,7 +77,7 @@ from domain.common.enums import (
     ResearchReportType,
     VendorId,
 )
-from domain.common.errors import TradingPartnerError
+from domain.common.errors import InputValidationError, TradingPartnerError, WorkflowRunInProgress
 from domain.common.ids import EntityIdPrefix
 from domain.common.values import parse_instrument_id
 from domain.workflow.enums import WorkflowRunStatus, WorkflowType
@@ -105,8 +108,23 @@ _BASE_SYNTHESIS_SECTIONS = (
     "candidate_state_updates",
 )
 
+_WORKFLOW_LEASE = timedelta(minutes=5)
+
 
 def _synthesis_contract(workflow_type: WorkflowType) -> WorkflowSynthesisContractDTO:
+    if workflow_type is WorkflowType.PEER_COMPARISON:
+        return WorkflowSynthesisContractDTO(
+            required_sections=(
+                "comparison_basis",
+                "material_differences",
+                "cash_flow_quality",
+                "balance_sheet_resilience",
+                "valuation_basis_and_gaps",
+                "peer_data_limitations",
+            ),
+            candidate_update_tools=("research_judgment_propose",),
+            prohibited_outputs=("orders", "position_sizing", "trade_approval"),
+        )
     extras = {
         WorkflowType.DEEP_DIVE: (),
         WorkflowType.CATALYST_REVIEW: (
@@ -133,8 +151,8 @@ def _synthesis_contract(workflow_type: WorkflowType) -> WorkflowSynthesisContrac
     }[workflow_type]
     return WorkflowSynthesisContractDTO(
         required_sections=_BASE_SYNTHESIS_SECTIONS + extras,
-        candidate_update_tools=("thesis_revision_propose", "research_state_update"),
-        prohibited_outputs=("orders", "position_sizing", "simulated_fills", "trade_approval"),
+        candidate_update_tools=("research_judgment_propose",),
+        prohibited_outputs=("orders", "position_sizing", "trade_approval"),
     )
 
 
@@ -152,6 +170,7 @@ class ResearchWorkflowOrchestrator:
         portfolio: PortfolioToolCoordinator,
         transactions: AccountTransactionCoordinator,
         portfolio_review_facts: PortfolioReviewFactService,
+        peer_comparison: PeerComparisonService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -167,6 +186,7 @@ class ResearchWorkflowOrchestrator:
         self._portfolio = portfolio
         self._transactions = transactions
         self._portfolio_review_facts = portfolio_review_facts
+        self._peer_comparison = peer_comparison
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
@@ -202,6 +222,22 @@ class ResearchWorkflowOrchestrator:
             # guess which existing research judgment the user meant.
             return request
         else:
+            if (
+                request.case_creation_confirmed_by is None
+                or request.case_creation_idempotency_key is None
+            ):
+                exc = InputValidationError(
+                    "Creating a Draft research file requires explicit "
+                    "case_creation_confirmed_by and case_creation_idempotency_key"
+                )
+                now = self._clock.now()
+                return ToolEnvelope.failure(
+                    request_id=self._ids.new(EntityIdPrefix.REQ),
+                    market=None,
+                    as_of=request.as_of or now,
+                    fetched_at=now,
+                    errors=(to_error_info(exc, self._redactor),),
+                )
             all_cases = self._investment_cases.list_cases(
                 primary_instrument_id=instrument_id,
                 include_archived=True,
@@ -220,8 +256,7 @@ class ResearchWorkflowOrchestrator:
                 topic_tags=request.case_topic_tags,
                 linked_case_ids=(),
                 confirmed_by=request.case_creation_confirmed_by,
-                idempotency_key=request.case_creation_idempotency_key
-                or f"deep-dive-case:{instrument_id}:v{all_cases.data.total + 1}",
+                idempotency_key=request.case_creation_idempotency_key,
             )
             if not created.ok or created.data is None:
                 return cast(ToolEnvelope[WorkflowRunDTO], created)
@@ -243,7 +278,7 @@ class ResearchWorkflowOrchestrator:
         steps = (
             _Step(
                 "market_board",
-                "a_share_get_market_structure",
+                "a_share_get_facts",
                 True,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -256,7 +291,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "industry_rotation",
-                "a_share_get_market_structure",
+                "a_share_get_facts",
                 False,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -269,7 +304,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "limit_ecology",
-                "a_share_get_limit_up_context",
+                "a_share_get_facts",
                 True,
                 lambda: self._a_share.get_limit_up_context(
                     AShareGetLimitUpContextInput(trade_date=trade_date, as_of=as_of)
@@ -277,7 +312,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "northbound_capital",
-                "a_share_get_capital_snapshot",
+                "a_share_get_facts",
                 False,
                 lambda: self._a_share.get_capital_snapshot(
                     AShareGetCapitalSnapshotInput(
@@ -287,7 +322,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_sentiment",
-                "a_share_get_sentiment_snapshot",
+                "a_share_get_facts",
                 False,
                 lambda: self._a_share.get_sentiment_snapshot(
                     AShareGetSentimentSnapshotInput(trade_date=trade_date, as_of=as_of)
@@ -295,7 +330,15 @@ class ResearchWorkflowOrchestrator:
             ),
             self._portfolio_step((), False),
         )
-        return await self._execute(WorkflowType.A_SHARE_MARKET_REVIEW, as_of, None, None, steps)
+        return await self._execute(
+            WorkflowType.A_SHARE_MARKET_REVIEW,
+            as_of,
+            None,
+            None,
+            steps,
+            idempotency_key=request.idempotency_key,
+            request_payload_sha256=self._request_payload_sha256(request),
+        )
 
     async def run_us_market_review(
         self, request: USRunMarketReviewInput
@@ -339,7 +382,15 @@ class ResearchWorkflowOrchestrator:
                     ),
                 )
             )
-        return await self._execute(WorkflowType.US_MARKET_REVIEW, as_of, None, None, tuple(steps))
+        return await self._execute(
+            WorkflowType.US_MARKET_REVIEW,
+            as_of,
+            None,
+            None,
+            tuple(steps),
+            idempotency_key=request.idempotency_key,
+            request_payload_sha256=self._request_payload_sha256(request),
+        )
 
     async def run_portfolio_review(
         self, request: PortfolioRunReviewInput
@@ -350,7 +401,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "account_refresh",
-                    "account_get_snapshot",
+                    "account_get",
                     False,
                     lambda: self._portfolio.get_account_snapshot(
                         AccountGetSnapshotInput(providers=request.providers, as_of=as_of)
@@ -361,7 +412,7 @@ class ResearchWorkflowOrchestrator:
             (
                 _Step(
                     "current_positions",
-                    "account_get_positions",
+                    "account_get",
                     True,
                     lambda: self._async_envelope(
                         self._portfolio.get_account_positions(AccountGetPositionsInput())
@@ -370,15 +421,17 @@ class ResearchWorkflowOrchestrator:
                 self._portfolio_step(request.account_snapshot_ids, True),
                 _Step(
                     "historical_transactions",
-                    "account_get_transactions",
+                    "account_get",
                     False,
-                    lambda: self._transactions.get_transactions(
-                        self._transaction_request(request.providers, as_of)
+                    lambda: self._async_envelope(
+                        self._transactions.list_durable_transactions(
+                            self._transaction_request(request.providers, as_of)
+                        )
                     ),
                 ),
                 _Step(
                     "industry_theme_correlation_beta",
-                    "portfolio_run_review.derived_facts",
+                    "portfolio_run_review",
                     False,
                     lambda: self._portfolio_review_facts.build(
                         account_snapshot_ids=request.account_snapshot_ids,
@@ -395,6 +448,30 @@ class ResearchWorkflowOrchestrator:
             None,
             None,
             tuple(steps),
+            idempotency_key=request.idempotency_key,
+            request_payload_sha256=self._request_payload_sha256(request),
+        )
+
+    async def run_peer_comparison(
+        self, request: PeerComparisonRunInput
+    ) -> ToolEnvelope[WorkflowRunDTO]:
+        """Run one replay-safe, caller-specified cross-company fact comparison."""
+        as_of = request.as_of or self._clock.now()
+        step = _Step(
+            "peer_comparison_facts",
+            "research_workflow_run",
+            True,
+            lambda: self._peer_comparison.compare(request),
+        )
+        return await self._execute(
+            WorkflowType.PEER_COMPARISON,
+            as_of,
+            None,
+            request.primary_instrument_id,
+            (step,),
+            serial=True,
+            idempotency_key=request.idempotency_key,
+            request_payload_sha256=self._request_payload_sha256(request),
         )
 
     async def _run_case_recipe(
@@ -403,6 +480,7 @@ class ResearchWorkflowOrchestrator:
         request: ResearchRunDeepDiveInput | ResearchRunCatalystReviewInput,
     ) -> ToolEnvelope[WorkflowRunDTO]:
         as_of = request.as_of or self._clock.now()
+        request_payload_sha256 = self._request_payload_sha256(request)
         ad_hoc = request.case_id is None and request.instrument_id is not None
         if ad_hoc:
             instrument_id = request.instrument_id
@@ -426,6 +504,8 @@ class ResearchWorkflowOrchestrator:
                     instrument_id,
                     (self._portfolio_step((), False),),
                     missing_capabilities=(f"workflow market {market.value} is unsupported",),
+                    idempotency_key=request.idempotency_key,
+                    request_payload_sha256=request_payload_sha256,
                 )
             steps.append(self._portfolio_step((), False))
             return await self._execute(
@@ -438,6 +518,8 @@ class ResearchWorkflowOrchestrator:
                     "No instrument research file context; research ran in ad-hoc mode",
                 ),
                 serial=market is Market.A_SHARE,
+                idempotency_key=request.idempotency_key,
+                request_payload_sha256=request_payload_sha256,
             )
 
         context_envelope = self._context.build(
@@ -455,7 +537,13 @@ class ResearchWorkflowOrchestrator:
         )
         if not context_envelope.ok or context_envelope.data is None:
             return await self._execute(
-                workflow_type, as_of, request.case_id, request.instrument_id, (context_step,)
+                workflow_type,
+                as_of,
+                request.case_id,
+                request.instrument_id,
+                (context_step,),
+                idempotency_key=request.idempotency_key,
+                request_payload_sha256=request_payload_sha256,
             )
         context = context_envelope.data
         case_id = context.case.case_id
@@ -468,6 +556,8 @@ class ResearchWorkflowOrchestrator:
                 None,
                 (context_step,),
                 missing_capabilities=("Instrument research file has no primary instrument",),
+                idempotency_key=request.idempotency_key,
+                request_payload_sha256=request_payload_sha256,
             )
         _, market, _ = parse_instrument_id(instrument_id)
         since = as_of - timedelta(days=request.lookback_days)
@@ -486,6 +576,8 @@ class ResearchWorkflowOrchestrator:
                 instrument_id,
                 tuple(steps),
                 missing_capabilities=(f"workflow market {market.value} is unsupported",),
+                idempotency_key=request.idempotency_key,
+                request_payload_sha256=request_payload_sha256,
             )
         steps.append(self._portfolio_step((), False))
         return await self._execute(
@@ -495,6 +587,8 @@ class ResearchWorkflowOrchestrator:
             instrument_id,
             tuple(steps),
             serial=market is Market.A_SHARE,
+            idempotency_key=request.idempotency_key,
+            request_payload_sha256=request_payload_sha256,
         )
 
     def _us_case_steps(
@@ -508,7 +602,7 @@ class ResearchWorkflowOrchestrator:
         steps = [
             _Step(
                 "market_technical_context",
-                "us_get_snapshot",
+                "market_get_snapshot",
                 True,
                 lambda: self._us_market.get_us_snapshot(
                     USGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
@@ -516,7 +610,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "fundamentals",
-                "fundamental_get_snapshot",
+                "us_get_fundamentals",
                 workflow_type is WorkflowType.DEEP_DIVE,
                 lambda: self._us_research.get_fundamental_snapshot(
                     FundamentalGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
@@ -524,7 +618,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "company_events",
-                "research_get_company_updates",
+                "us_get_company_research",
                 True,
                 lambda: self._us_research.get_company_updates(
                     ResearchGetCompanyUpdatesInput(
@@ -574,7 +668,7 @@ class ResearchWorkflowOrchestrator:
                 2,
                 _Step(
                     "financial_statements",
-                    "fundamental_get_statements",
+                    "us_get_fundamentals",
                     False,
                     lambda: self._us_research.get_fundamental_statements(
                         FundamentalGetStatementsInput(instrument_id=instrument_id, as_of=as_of)
@@ -613,7 +707,7 @@ class ResearchWorkflowOrchestrator:
         steps = [
             _Step(
                 "company_snapshot",
-                "a_share_get_snapshot",
+                "a_share_get_facts",
                 True,
                 lambda: self._a_share.get_snapshot(
                     AShareGetSnapshotInput(instrument_id=instrument_id, detail=detail, as_of=as_of)
@@ -621,7 +715,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_technical_context",
-                "a_share_get_market_structure",
+                "a_share_get_facts",
                 True,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -637,7 +731,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "capital_ownership",
-                "a_share_get_capital_snapshot",
+                "a_share_get_facts",
                 False,
                 lambda: self._a_share.get_capital_snapshot(
                     AShareGetCapitalSnapshotInput(
@@ -651,7 +745,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "sentiment_crowding",
-                "a_share_get_sentiment_snapshot",
+                "a_share_get_facts",
                 False,
                 lambda: self._a_share.get_sentiment_snapshot(
                     AShareGetSentimentSnapshotInput(
@@ -766,10 +860,46 @@ class ResearchWorkflowOrchestrator:
         *,
         missing_capabilities: tuple[str, ...] = (),
         serial: bool = False,
+        idempotency_key: str,
+        request_payload_sha256: str,
     ) -> ToolEnvelope[WorkflowRunDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         started_at = self._clock.now()
         try:
+            claimed_run = WorkflowRun(
+                run_id=self._ids.new(EntityIdPrefix.RUN),
+                workflow_type=workflow_type,
+                case_id=case_id,
+                instrument_id=instrument_id,
+                requested_as_of=as_of,
+                started_at=started_at,
+                completed_at=None,
+                status=WorkflowRunStatus.STARTED,
+                steps=(),
+            )
+            claim = self._repository.claim(
+                claimed_run,
+                idempotency_key=idempotency_key,
+                request_payload_sha256=request_payload_sha256,
+                heartbeat_at=started_at,
+                lease_expires_at=started_at + _WORKFLOW_LEASE,
+            )
+            if not claim.claimed:
+                if claim.record.run.status in {
+                    WorkflowRunStatus.STARTED,
+                    WorkflowRunStatus.RUNNING,
+                }:
+                    raise WorkflowRunInProgress(
+                        "The same Workflow request is already running",
+                        details={"run_id": claim.record.run.run_id},
+                    )
+                return self._render_record(request_id, claim.record)
+            run_id = claim.record.run.run_id
+            self._repository.mark_running(
+                run_id,
+                heartbeat_at=started_at,
+                lease_expires_at=started_at + _WORKFLOW_LEASE,
+            )
             if serial:
                 outcomes: list[ToolEnvelope[Any] | BaseException] = []
                 for step in steps:
@@ -797,10 +927,10 @@ class ResearchWorkflowOrchestrator:
                 if required_failed
                 else WorkflowRunStatus.PARTIAL
                 if imperfect
-                else WorkflowRunStatus.COMPLETE
+                else WorkflowRunStatus.SUCCEEDED
             )
             run = WorkflowRun(
-                run_id=self._ids.new(EntityIdPrefix.RUN),
+                run_id=run_id,
                 workflow_type=workflow_type,
                 case_id=case_id,
                 instrument_id=instrument_id,
@@ -817,30 +947,12 @@ class ResearchWorkflowOrchestrator:
                     run = replace(run, report_id=report.data.report_id)
                 else:
                     archive_missing.append("case-bound fact report could not be archived")
-            self._repository.append(run)
-            data = WorkflowRunDTO.from_domain(
+            record = self._repository.complete(
                 run,
                 fact_data=tuple(fact_data),
-                synthesis_contract=_synthesis_contract(workflow_type),
                 missing_capabilities=tuple(archive_missing),
             )
-            warning = WarningInfo(
-                code="WORKFLOW_INCOMPLETE",
-                message="One or more workflow facts are degraded, failed, or unavailable.",
-                details={"status": status.value},
-            )
-            warnings = (warning,) if status is not WorkflowRunStatus.COMPLETE else ()
-            return ToolEnvelope.success(
-                request_id=request_id,
-                market=None,
-                as_of=as_of,
-                fetched_at=self._clock.now(),
-                freshness=Freshness.UNKNOWN,
-                sources=(),
-                data=data,
-                degraded=bool(warnings),
-                warnings=warnings,
-            )
+            return self._render_record(request_id, record)
         except Exception as exc:  # noqa: BLE001
             error = (
                 to_error_info(exc, self._redactor)
@@ -854,6 +966,40 @@ class ResearchWorkflowOrchestrator:
                 fetched_at=self._clock.now(),
                 errors=(error,),
             )
+
+    def _render_record(
+        self, request_id: str, record: WorkflowRunRecord
+    ) -> ToolEnvelope[WorkflowRunDTO]:
+        run = record.run
+        data = WorkflowRunDTO.from_domain(
+            run,
+            fact_data=record.fact_data,
+            synthesis_contract=_synthesis_contract(run.workflow_type),
+            missing_capabilities=record.missing_capabilities,
+        )
+        warning = WarningInfo(
+            code="WORKFLOW_INCOMPLETE",
+            message="One or more workflow facts are degraded, failed, or unavailable.",
+            details={"status": run.status.value},
+        )
+        warnings = (warning,) if run.status is not WorkflowRunStatus.SUCCEEDED else ()
+        return ToolEnvelope.success(
+            request_id=request_id,
+            market=None,
+            as_of=run.requested_as_of,
+            fetched_at=self._clock.now(),
+            freshness=Freshness.UNKNOWN,
+            sources=(),
+            data=data,
+            degraded=bool(warnings),
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _request_payload_sha256(request: Any) -> str:
+        return canonical_payload_sha256(
+            request.model_dump(mode="json", exclude={"idempotency_key"})
+        )
 
     def _coerce_outcome(
         self, outcome: ToolEnvelope[Any] | BaseException, as_of: datetime

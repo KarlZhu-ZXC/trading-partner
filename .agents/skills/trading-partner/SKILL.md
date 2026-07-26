@@ -1,6 +1,6 @@
 ---
 name: trading-partner
-description: Use Trading Partner MCP for investment research facts, health checks, research files (instrument-centered Investment Cases by default), investment-judgment candidates (Theses), instrument resolve, A-share and US provider facts, professional technical analysis, accounts, portfolio exposure, risk and monitoring, durable context restore, Challenge Review, research workflows, and research memory. The public surface is exactly 52 tools.
+description: Use Trading Partner MCP for investment research facts, health checks, research files, investment judgments and Trade Plans, instrument resolution, A-share/US/cross-asset facts, technical analysis, durable accounts, explicit upstream sync, portfolio risk, monitoring, Challenge Review, workflows, and research memory. The default public surface is compact_28.
 ---
 
 # Trading Partner Skill
@@ -12,7 +12,12 @@ description: Use Trading Partner MCP for investment research facts, health check
 - You need to search historical evidence, reports, events, decisions, or journals.
 - You need to check whether the Trading Partner backend is healthy.
 
-## Public tools (exactly 52)
+## Public tools (exactly 28, `compact_28`)
+
+Every grouped tool takes one required `request` object with a closed `operation`
+discriminator. Put operation-specific fields inside `request`; never send retired
+tool names or flatten variant fields at the top level. `compact_28` is the only
+runtime surface; there is no compatibility profile.
 
 ### Health
 
@@ -23,6 +28,7 @@ No input. Returns a Tool Envelope with `HealthStatusDTO`:
 - Overall and database health states: `ok` | `degraded` | `error`
 - `components.research_search`: FTS backend probe (`ok` | `degraded`)
 - App name, version, environment
+- `mcp_surface_profile`, `public_tool_count`, and `surface_schema_version`
 
 Even when the database or search backend is unhealthy, `ok` on the envelope remains
 `true` so diagnostics remain available; expect `degraded=true` and warnings such as
@@ -37,12 +43,21 @@ portfolio-concern Cases may omit a primary Instrument. A Thesis is one falsifiab
 judgment inside a file. Do not imply that creating a Draft Case confirms a Thesis
 or starts long-term tracking.
 
-- `investment_case_create` / `investment_case_query` / `investment_case_archive`
-- `research_state_get` / `research_state_update`
-- `thesis_revision_propose` / `thesis_revision_confirm` / `thesis_history_get`
+- `investment_case_read`: `query` or bounded durable `context`
+- `investment_case_manage`: confirmed/idempotent `create` or `archive`
+- `research_judgment_get`: current `state` or `thesis_history`
+- `research_judgment_propose`: `research_state` or `thesis_revision`
+- `research_judgment_confirm`: explicit confirm/reject/withdraw gate
 
 Research-state and thesis changes use Candidate Propose → Confirm / Reject /
-Withdraw. Codex may propose, but must not confirm or reject.
+Withdraw. Codex must not decide confirm/reject autonomously. If the user explicitly
+names or unambiguously refers to the candidate and says to confirm or reject it in
+the current chat, immediately relay that exact decision with `reviewed_by="user"`,
+`submitted_via="codex_chat"`, and the user's instruction in `authorization_note`.
+Do not refuse, request a separate UI, or relabel the decision as `reviewed_by="codex"`.
+Ask one concise clarification only when the target or action is genuinely ambiguous.
+This authority does not extend to orders, fills, position mutation, or other
+out-of-scope execution.
 
 ### Instrument resolve (Phase 1D)
 
@@ -56,11 +71,8 @@ Withdraw. Codex may propose, but must not confirm or reject.
 
 | Tool | Purpose |
 |---|---|
-| `research_search` | Full-text + structured search over evidence/report/event/decision/journal |
-| `research_report_get` | Read one immutable report by `report_<uuid7>` |
-| `research_timeline_get` | Unified case timeline |
-| `journal_append` | Append journal only after explicit user confirmation |
-| `decision_record_append` | Record research/position **intent**; never orders/fills |
+| `research_memory_get` | `search`, immutable `report`, or unified case `timeline` |
+| `research_memory_append` | Confirmed/idempotent `journal` or research/position `decision` intent; never orders/fills |
 
 **Do not call** (not registered): `evidence_create`, `evidence_update`,
 `report_create`, `event_create`, `decision_update`, `journal_update`,
@@ -70,20 +82,17 @@ Withdraw. Codex may propose, but must not confirm or reject.
 
 | Tool | Purpose |
 |---|---|
-| `a_share_get_facts` | `snapshot`, `market_structure`, `capital`, `limit_up`, `sentiment`, `etf_option`, normalized `financials`, deterministic `industry_cycle`, or CNINFO `company_operating_metrics` facts |
-| `research_search_reports` | Provider report/consensus search; does not archive reports |
+| `a_share_get_facts` | `snapshot`, `market_structure`, `capital`, `limit_up`, `sentiment`, `etf_option`, normalized `financials`, deterministic `industry_cycle`, CNINFO `company_operating_metrics`, or provider `research_reports` facts |
 
 These tools may legally return degraded envelopes when a fallback, delayed,
 stale, non-authoritative, derived, or low/unknown-reliability component is used.
 Preserve their warnings and source timestamps when answering the user.
 
-### US market facts (Phase 1F)
+### Market facts (Phase 1F / Phase 3A)
 
 | Tool | Purpose |
 |---|---|
-| `us_get_market` | Provider-backed US `quote` or `composite` snapshot |
-| `market_get_bars` | Inclusive-end US equity/index and commodity-futures OHLCV with asset-aware adjustment |
-| `market_get_context` | SPY/QQQ/IWM, best-effort Yahoo breadth/11-sector rotation, and optional Moomoo OpenD US community-attention Hot List; unavailable components stay explicit |
+| `market_data_get` | Cross-market `quote`, US-only `composite`, inclusive-end `bars`, `us_market`, official-settlement `futures_curve`, or gated `spot_future_basis` |
 | `technical_get_snapshot` | Cross-market daily/weekly indicators, regimes, structure levels, and recent patterns |
 | `technical_render_chart` | Auditable envelope plus an in-memory PNG candlestick/volume/RSI chart |
 
@@ -102,15 +111,25 @@ Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
 its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
 warning when the local OpenD predates 10.9.
 
-Phase 3A supports continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`,
+Phase 3A preserves continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`,
 and `PA=F` under `future:US:*` IDs. Yahoo is primary; Sina provides timestamped
 quote fallback only for GC/SI/HG, and Eastmoney provides daily-derived bar fallback
 for all six. There is no intraday OHLCV fallback. Futures default to unadjusted bars
 and must preserve `FUTURES_CONTRACT_NOT_SPOT` and `CONTINUOUS_FUTURES_ROLL_RISK`.
 Never call GC/SI spot XAUUSD/XAGUSD, or call HG London/LME copper.
 
+Formal contracts use `future:CME:*` and `future:DCE:LH*`. CME public facts are
+reference/delayed and Yahoo active-contract bars have no SLA. DCE is official EOD
+only. `commodity_spot:OTC:XAUUSD` and `XAGUSD` are Dukascopy broker/SWFX observations,
+not LBMA benchmarks; `cfd:OTC:COPPER_CMD_USD` is a rolling CFD, not copper spot.
+The default route is the keyless Jetta bucket API used by current `dukascopy-node`;
+`DUKASCOPY_API_KEY` only enables the legacy compatibility fallback.
+Preserve basis comparability, offer side, volume-basis, delay, and warning fields.
+Use `uv run trading-partner-futures-sync` only for explicit definition/EOD refresh;
+it persists facts but never trades.
+
 For a national hog-cycle fact package, call
-`a_share_get_facts(operation="industry_cycle", cycle="hog", lookback_months=12)`.
+`a_share_get_facts(request={"operation":"industry_cycle","cycle":"hog","lookback_months":12})`.
 Default `view=compact` returns the latest visible observation per selected metric
 plus per-metric coverage and `total_observations`. Use `view=series` with optional
 `metric_codes`, `offset`, and `limit<=200` for a bounded page (`has_more`).
@@ -124,13 +143,13 @@ observations rather than a cycle-specific business DTO; preserve metric units,
 periods, publication times, source URLs, and missing-component disclosures.
 
 For official company operating disclosures, call
-`a_share_get_facts(operation="company_operating_metrics", instrument_id=...)`.
+`a_share_get_facts(request={"operation":"company_operating_metrics","instrument_id":...})`.
 It returns structured operating facts plus bounded per-document parse receipts;
 raw PDF bytes/text never leave the Provider. Do not treat monthly sales briefs as
 audited, and do not substitute this path for financial statements.
 
 For A-share company accounts, call
-`a_share_get_facts(operation="financials", instrument_id=..., periods=8)`.
+`a_share_get_facts(request={"operation":"financials","instrument_id":...,"periods":8})`.
 Interim income and cash-flow periods are cumulative/YTD, not standalone quarters.
 Preserve statement provenance and missing metrics. Equity Deep Dive includes this
 package automatically; industry-cycle/company-operating facts remain explicit.
@@ -139,18 +158,14 @@ package automatically; industry-cycle/company-operating facts remain explicit.
 
 | Tool | Purpose |
 |---|---|
-| `us_get_fundamentals` | Current snapshot or normalized statements (`view=latest|vintages`) |
-| `us_get_company_research` | Filings, insider activity, company updates, or typed events |
-| `market_get_live_news` | Dated company/global news with publication cutoff |
-| `us_get_macro_context` | FRED observations with requested ALFRED vintage cutoff |
-| `us_get_sentiment_snapshot` | Reddit inference and deterministic Moomoo feed mining; dormant StockTwits parsing remains source-separated but is not an active roadmap source |
-| `us_get_prediction_market_context` | Current-only open Polymarket probabilities |
+| `us_company_get` | `fundamentals_snapshot`, normalized `fundamental_statements`, `filings`, `insider_activity`, `company_updates`, typed `events`, or dated `live_news` |
+| `us_context_get` | Vintage-safe `macro`, source-separated `sentiment`, or current-only `prediction_market` context |
 
-Do not relabel current Polymarket odds as historical. Keep any dormant StockTwits
-labels, versioned Reddit inference, and versioned Moomoo deterministic inference separate.
-StockTwits formal access was removed from the active roadmap on 2026-07-25; treat
-disabled/unconfigured StockTwits as expected and do not retry, scrape, or ask the
-user to obtain credentials for it.
+Do not relabel current Polymarket odds as historical. Keep versioned Reddit inference
+and versioned Moomoo deterministic inference separate. StockTwits formal access was
+removed from the active roadmap on 2026-07-25, and its runtime adapter was later
+removed; historical source values remain readable only for compatibility. Do not
+retry, scrape, or ask the user to obtain credentials for it.
 Moomoo samples are current-only, exact-symbol filtered, and may have nullable
 engagement. The MCP runtime only cleans, filters, deduplicates, and classifies with
 fixed rules; interpretation and narrative synthesis remain the host's responsibility.
@@ -164,17 +179,17 @@ emitted for the deduplicated latest view.
 
 | Tool | Purpose |
 |---|---|
-| `account_get` | Read durable positions, explicitly refresh, or fetch historical transactions |
-| `portfolio_analyze` | Compute native-currency gross market/currency/instrument exposure |
-| `portfolio_simulate_addition` | Pure before/after hypothetical addition; never executes |
+| `account_get` | Read durable positions only; it cannot contact a broker |
+| `external_state_sync` | Explicitly fetch/persist `accounts`, `transactions`, or the active `watchlist` upstream |
+| `portfolio_analyze` | `exposure` or pure before/after `simulate_addition`; never executes |
 
 For ordinary holdings, exposure, portfolio-review, and risk questions, read the
-latest durable snapshots first. Do **not** call `account_get(operation="refresh")` and do not
-set `refresh_accounts=true` merely because the user says “current”, “my holdings”,
-or asks a portfolio question. Refresh brokers only when the user explicitly asks
-to refresh/sync/fetch from the broker, or when no durable snapshot exists; disclose
-the refresh before doing it. A stale durable snapshot should still be returned with
-its timestamp and warnings rather than silently causing a broker refresh.
+latest durable snapshots first. Do **not** call
+`external_state_sync(request={"operation":"accounts"})` merely because the user says
+“current”, “my holdings”, or asks a portfolio question. Refresh only when the user
+explicitly asks to refresh/sync/fetch from the broker. A stale durable snapshot
+should still be returned with its timestamp and warnings rather than silently
+causing a broker refresh.
 
 Schwab and Moomoo account/transaction identifiers are redacted stable hashes. A missing price
 timestamp remains missing. Never sum currencies through an assumed FX rate, and
@@ -196,7 +211,8 @@ existing tab rather than launching another flow.
 
 ### Durable context restore (Phase 1J)
 
-- `research_context_build` selects one Case by `case_id` or an unambiguous primary
+- `investment_case_read(request={"operation":"context", ...})` selects one Case by
+  `case_id` or an unambiguous primary
   `instrument_id`, then returns current research state, contrary-first evidence,
   compact history, latest durable positions, missing facts, and budget metadata.
 
@@ -208,9 +224,8 @@ invalidation conditions or contrary evidence when summarizing it.
 
 | Tool | Purpose |
 |---|---|
-| `challenge_review_start` | Bypass ordinary discussion or persist a material strict review |
 | `challenge_review_get` | Restore one persisted review with ten questions and findings |
-| `challenge_review_resolve` | Record an explicit accept/revise/reject/defer resolution |
+| `challenge_review_manage` | `start` a strict review or explicitly `resolve` it |
 
 Challenge Review never executes a trade and never mutates a Thesis, candidate, or
 position directly. Only `user` or an explicitly authorized `external_agent` may
@@ -220,16 +235,23 @@ resolve a review.
 
 | Tool | Purpose |
 |---|---|
-| `research_run_deep_dive` | Gather a cross-market Deep Equity Research fact package; an instrument-only call creates/reuses one Draft Case by default (`create_case=false` keeps ad-hoc mode); for A shares, explicit `industry_cycle="hog"` adds company operating and national cycle facts |
-| `research_run_catalyst_review` | Gather dated catalyst, reaction, and expectation facts |
-| `a_share_run_market_review` | Gather A-share board, industry, limit, capital, and heat facts |
-| `us_run_market_review` | Gather US index, macro, news, and portfolio-impact facts |
-| `portfolio_run_review` | Gather positions, transactions, exposure, industry/theme, correlation, and beta |
+| `research_workflow_run` | Run one closed `deep_dive`, `catalyst_review`, `a_share_market_review`, `us_market_review`, durable `portfolio_review`, or caller-specified `peer_comparison` fact package |
+
+Compact `deep_dive` cannot create a Case and compact `portfolio_review` cannot
+refresh brokers. Use `investment_case_manage(request={"operation":"create",...})`
+or `external_state_sync(request={"operation":"accounts"})` first when the user explicitly asks
+for those separate effects.
 
 Workflow `synthesis_contract` tells the host which bull/bear/risk/portfolio-fit
 sections to cover. Codex synthesizes; the backend does not run a second LLM.
 Preserve partial/degraded step receipts, and never turn descriptive correlation or
 beta into a forecast, backtest, order, or sizing instruction.
+
+For `peer_comparison`, require one A-share/US equity primary and 1–5 explicit
+same-market equity peers. Resolve instruments first; do not ask the MCP to discover
+peers. Preserve period, currency, source, missing-cell, and comparability labels.
+Never invent a rank, score, target price, FX conversion, or Thesis update from the
+fact package.
 
 A Deep Dive Draft Case is a durable instrument research file, not an active tracking
 decision and not a confirmed investment judgment. Catalyst Review does not
@@ -239,10 +261,10 @@ history. When multiple open Cases match one instrument, require an explicit
 
 ### Watchlist hub (Phase 2)
 
-- `watchlist_get(operation="groups"|"items")` reads the durable database and may
-  explicitly refresh the single configured Moomoo or Manual CSV upstream.
-- `watchlist_add` / `watchlist_remove` require `user` or authorized
-  `external_agent` confirmation plus an idempotency key.
+- `watchlist_get` reads durable `groups` or `items` and cannot refresh upstream.
+- `watchlist_manage` performs confirmed/idempotent `add` or `remove`.
+- `external_state_sync(request={"operation":"watchlist"})` is the only public
+  upstream refresh.
 
 Moomoo and Manual CSV are alternatives, not merged or reconciled sources. External
 removal keeps inactive membership history and never deletes a research
@@ -254,13 +276,12 @@ refreshes all configured durable account snapshots before the exact Watchlist
 full sync. It is due ten minutes after the XNYS session close, including early
 closes; it is an operational CLI, not an MCP tool or order surface.
 
-### Portfolio Risk Engine (Phase 2B)
+### Portfolio Risk Engine v2 (Phase 2B / Phase 3D)
 
 | Tool | Purpose |
 |---|---|
-| `risk_policy_get` | Read the current append-only policy version and disclose an unconfirmed system default |
+| `portfolio_risk_get` | Read the current `policy` or run a deterministic non-executing `check` |
 | `risk_policy_update` | Append a confirmed version with optimistic version and idempotency checks |
-| `risk_check` | Evaluate durable or explicitly refreshed accounts and an optional hypothetical addition without execution |
 
 Preserve every rule status (`PASS`, `WARN`, `BREACH`, `NOT_EVALUATED`) and the
 overall `PASS`, `WARN`, `BREACH`, or `INCOMPLETE`. Never convert missing NAV,
@@ -269,23 +290,42 @@ age, position concentration within currency, gross exposure/NAV only on a common
 currency basis, cash, margin, and duplicate instruments across accounts. A default
 policy emits `RISK_POLICY_DEFAULT_UNCONFIRMED`; `execution_effect` is always false.
 
-### Monitoring (Phase 2C)
+With `trade_plan_id`, preserve the returned Position Sizing constraint list and do not
+collapse it into one asserted recommendation. A-share quantities are rounded down to
+100-share lots; US equity/ETF quantities may be fractional to four decimals. Missing
+same-currency NAV/cash, FX, stop distance, or fresh reference price suppresses the sizing
+range. Optional liquidity, ATR, volatility, theme, correlation, and event facts remain
+explicitly unevaluated when absent.
+
+### Trade Plans and Monitoring v2 (Phase 3D)
+
+Use `research_judgment_propose(request={"operation":"research_state",...})` with
+`payload.kind="trade_plan"` to propose a plan and `research_judgment_confirm` for
+explicit user/external-agent confirmation. Codex cannot choose the outcome itself,
+but must relay an explicit current-chat user decision using `reviewed_by="user"`,
+`submitted_via="codex_chat"`, and `authorization_note`.
+`research_judgment_get(request={"operation":"state",...})` restores the current
+plan and versions.
+A Trade Plan is a research control document, not an order; every response has
+`execution_effect=false`.
 
 | Tool | Purpose |
 |---|---|
-| `monitor_create` | Create one confirmed versioned monitor with closed rule types |
-| `monitor_query` | Restore one definition or list current definitions and latest rule states |
-| `monitor_update` | Append a confirmed version, including pause/archive changes |
+| `monitor_read` | Read `definitions` or durable `events` |
+| `monitor_manage` | Confirmed/idempotent `create`, `update`, or `resolve_event` |
 | `monitor_evaluate` | Evaluate active rules and persist only state transitions |
-| `monitor_event_list` | Read durable trigger/recovery/not-evaluated events |
-| `monitor_event_resolve` | Acknowledge or resolve an event with confirmation/idempotency |
 
 Monitoring enum inputs are case-insensitive and whitespace-tolerant at the DTO
 boundary. Canonical tool schemas, responses, domain objects, and persisted values
 remain uppercase; do not treat normalized lowercase input as a distinct status.
 
-V1 rule types are A-share/US `PRICE_ABOVE`, `PRICE_BELOW`, and portfolio
-`RISK_OVERALL_AT_LEAST`. Treat stale or unavailable facts as `NOT_EVALUATED`, not
+Legacy rules remain A-share/US `PRICE_ABOVE`, `PRICE_BELOW`, and portfolio
+`RISK_OVERALL_AT_LEAST`. Monitoring v2 also supports deterministic fact comparisons for
+price, volume, technical, fundamental, company-event, macro, sentiment, Thesis-state,
+and portfolio-risk facts. `monitor_manage` operations `create` and `update` may bind an
+exact Trade Plan version and compile its `MONITORABLE` conditions; `MANUAL`
+conditions stay human-only.
+Treat stale or unavailable facts as `NOT_EVALUATED`, not
 quiet. Repeated unchanged conditions do not create another event; a later recovery
 does. A version may set an aware `valid_until`; after that inclusive deadline it is
 skipped without a provider call, state mutation, or new event and returns
@@ -353,6 +393,6 @@ args = ["run", "trading-partner-mcp"]
 
 ## Later phases (not yet available)
 
-Spot-metals providers, additional brokers, automated evidence ingestion, runtime
-LLM synthesis, backtest, paper trading, and order execution remain out
+Additional brokers, automated evidence ingestion, runtime LLM synthesis, backtest,
+and order execution remain out
 of scope. Do not call tools that are not registered.

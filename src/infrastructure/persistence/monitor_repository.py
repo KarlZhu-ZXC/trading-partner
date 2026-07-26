@@ -30,6 +30,7 @@ from domain.monitoring.models import (
     MonitorRun,
 )
 from domain.risk.enums import RiskOverallStatus
+from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 from infrastructure.persistence.models import (
     MonitorEventResolutionRow,
     MonitorEventRow,
@@ -65,6 +66,19 @@ def _rules_to_json(rules: tuple[MonitorRule, ...]) -> str:
                     else None
                 ),
                 "max_fact_age_seconds": item.max_fact_age_seconds,
+                "fact_type": item.fact_type.value if item.fact_type is not None else None,
+                "metric_key": item.metric_key,
+                "comparator": (
+                    item.comparator.value if item.comparator is not None else None
+                ),
+                "numeric_threshold": (
+                    str(item.numeric_threshold)
+                    if item.numeric_threshold is not None
+                    else None
+                ),
+                "event_after": (
+                    item.event_after.isoformat() if item.event_after is not None else None
+                ),
             }
             for item in rules
         ],
@@ -95,6 +109,23 @@ def _rules_from_json(payload: str) -> tuple[MonitorRule, ...]:
                     else None
                 ),
                 max_fact_age_seconds=int(item["max_fact_age_seconds"]),
+                fact_type=(
+                    TradePlanFactType(item["fact_type"])
+                    if item.get("fact_type") is not None
+                    else None
+                ),
+                metric_key=item.get("metric_key"),
+                comparator=(
+                    TradePlanComparator(item["comparator"])
+                    if item.get("comparator") is not None
+                    else None
+                ),
+                numeric_threshold=(
+                    Decimal(item["numeric_threshold"])
+                    if item.get("numeric_threshold") is not None
+                    else None
+                ),
+                event_after=_dt(item.get("event_after")),
             )
             for item in raw
             if isinstance(item, dict)
@@ -112,6 +143,8 @@ def _definition(row: MonitorVersionRow) -> MonitorDefinition:
         name=row.name,
         case_id=row.case_id,
         primary_instrument_id=row.primary_instrument_id,
+        trade_plan_id=row.trade_plan_id,
+        trade_plan_version=row.trade_plan_version,
         cadence=MonitorCadence(row.cadence),
         status=MonitorStatus(row.status),
         rules=_rules_from_json(row.rules_json),
@@ -130,6 +163,8 @@ def _version_row(value: MonitorDefinition) -> MonitorVersionRow:
         name=value.name,
         case_id=value.case_id,
         primary_instrument_id=value.primary_instrument_id,
+        trade_plan_id=value.trade_plan_id,
+        trade_plan_version=value.trade_plan_version,
         cadence=value.cadence.value,
         status=value.status.value,
         rules_json=_rules_to_json(value.rules),

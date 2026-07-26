@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from application.dto.portfolio import AccountGetSnapshotInput
 from application.dto.post_market_sync import (
     PostMarketSyncDisposition,
+    PostMarketSyncHealth,
     PostMarketSyncResultDTO,
+    PostMarketSyncStatusDTO,
 )
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
-from application.ports.market_session_calendar import MarketSessionCalendar
+from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
@@ -61,6 +63,78 @@ class PostMarketSyncService:
                 disposition=PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED,
             )
 
+        return await self._execute(session, scheduled_for, existing)
+
+    def status(self) -> PostMarketSyncStatusDTO:
+        expected = self._latest_due_session(self._clock.now())
+        latest = self._repository.get_latest()
+        if expected is None:
+            return PostMarketSyncStatusDTO(
+                health=PostMarketSyncHealth.NO_DUE_SESSION,
+                receipt_session_date=(latest.market_session_date if latest else None),
+                run_status=latest.status if latest else None,
+                portfolio_status=latest.portfolio_status if latest else None,
+                watchlist_status=latest.watchlist_status if latest else None,
+                attempt_count=latest.attempt_count if latest else None,
+                warning_codes=latest.warning_codes if latest else (),
+                error_codes=latest.error_codes if latest else (),
+            )
+        receipt = self._repository.get_for_session(expected.session_date)
+        if receipt is None:
+            return PostMarketSyncStatusDTO(
+                health=PostMarketSyncHealth.RECEIPT_MISSING,
+                expected_session_date=expected.session_date,
+                expected_scheduled_for=expected.close_at + self._delay,
+                receipt_session_date=(latest.market_session_date if latest else None),
+                error_codes=("POST_MARKET_SYNC_RECEIPT_MISSING",),
+            )
+        health = (
+            PostMarketSyncHealth.HEALTHY
+            if receipt.status is PostMarketSyncRunStatus.SUCCEEDED
+            else PostMarketSyncHealth.RECEIPT_IMPERFECT
+        )
+        return PostMarketSyncStatusDTO(
+            health=health,
+            expected_session_date=expected.session_date,
+            expected_scheduled_for=expected.close_at + self._delay,
+            receipt_session_date=receipt.market_session_date,
+            run_status=receipt.status,
+            portfolio_status=receipt.portfolio_status,
+            watchlist_status=receipt.watchlist_status,
+            attempt_count=receipt.attempt_count,
+            warning_codes=receipt.warning_codes,
+            error_codes=receipt.error_codes,
+        )
+
+    async def catch_up_latest_due(self) -> PostMarketSyncResultDTO:
+        session = self._latest_due_session(self._clock.now())
+        if session is None:
+            return PostMarketSyncResultDTO(
+                disposition=PostMarketSyncDisposition.SKIPPED_NON_TRADING_DAY
+            )
+        scheduled_for = session.close_at + self._delay
+        existing = self._repository.get_for_session(session.session_date)
+        if existing is not None and existing.status is PostMarketSyncRunStatus.SUCCEEDED:
+            return self._dto(
+                existing,
+                disposition=PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED,
+            )
+        return await self._execute(session, scheduled_for, existing)
+
+    def _latest_due_session(self, now: datetime) -> MarketSession | None:
+        candidate = self._calendar.session_on_or_before(now)
+        if candidate is None:
+            return None
+        if candidate.close_at + self._delay <= now:
+            return candidate
+        return self._calendar.previous_session(candidate.session_date)
+
+    async def _execute(
+        self,
+        session: MarketSession,
+        scheduled_for: datetime,
+        existing: PostMarketSyncRun | None,
+    ) -> PostMarketSyncResultDTO:
         started_at = self._clock.now()
         portfolio = await self._portfolio.get_account_snapshot(AccountGetSnapshotInput())
         watchlist = await self._watchlist.sync_all()

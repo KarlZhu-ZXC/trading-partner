@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Isolated wheel smoke (Phase 1D v1.30).
+"""Isolated wheel smoke for the installed application and public MCP surface.
 
 Build a wheel, install it into a temp venv *outside* the repo, set required
 process environment keys, call ``AppSettings.load()`` (installed
-layout — no implicit cwd ``.env``), assert packaged vendor-chain resolution,
-``build_application``, then exercise both routed mock snapshots.
+layout — no implicit cwd ``.env``), assert packaged resource resolution,
+``build_application``, health diagnostics, and the exact public tool inventory.
 
 Import-only or constructor-only checks are insufficient — the real console/MCP
 startup path uses ``AppSettings.load()`` under an installed layout.
@@ -26,11 +26,10 @@ PROBE_SCRIPT = r"""
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
-from decimal import Decimal
+from importlib.util import find_spec
 
 from bootstrap import build_application
-from domain.common.enums import AppEnvironment, LogLevel, Market
+from domain.common.enums import AppEnvironment, LogLevel
 from infrastructure.config.settings import (
     PACKAGED_A_SHARE_TRADING_CALENDAR_PATH,
     PACKAGED_CNINFO_ORG_MAP_PATH,
@@ -38,8 +37,11 @@ from infrastructure.config.settings import (
     AppSettings,
 )
 from infrastructure.providers.a_share.cninfo_org_map import load_cninfo_org_map
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
-as_of = datetime(2026, 7, 16, 16, 0, tzinfo=UTC)
+# A core wheel must stay usable without heavyweight capability extras.
+for optional_module in ("matplotlib", "moomoo", "pypdf", "schwab"):
+    assert find_spec(optional_module) is None, optional_module
 
 # Installed layout: packaged YAML must be present next to infrastructure.config.
 assert PACKAGED_VENDOR_CHAIN_PATH.is_file(), (
@@ -87,28 +89,14 @@ assert ctor.vendor_chain_path == PACKAGED_VENDOR_CHAIN_PATH.resolve()
 
 container = build_application(settings)
 try:
-    async def _run() -> None:
-        us = await container.mock_market_snapshot_coordinator.get_snapshot(
-            Market.US, "NVDA", as_of
-        )
-        assert us.ok is True, us
-        assert us.degraded is True
-        assert us.warnings[0].code == "MOCK_DATA"
-        assert us.data is not None
-        assert us.data.latest_market_row.close == Decimal("173.00")
-        assert us.data.instrument.instrument_id == "equity:US:NVDA"
+    health = container.health_service.check()
+    assert health.ok is True, health
+    assert health.data is not None
 
-        a = await container.mock_market_snapshot_coordinator.get_snapshot(
-            Market.A_SHARE, "600519.SH", as_of
-        )
-        assert a.ok is True, a
-        assert a.degraded is True
-        assert a.warnings[0].code == "MOCK_DATA"
-        assert a.data is not None
-        assert a.data.latest_market_row.close == Decimal("1505.00")
-        assert a.data.instrument.instrument_id == "equity:A_SHARE:600519.SH"
-
-    asyncio.run(_run())
+    server = create_mcp_server(container)
+    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    assert names == set(PUBLIC_TOOL_NAMES), (len(names), sorted(names))
+    assert len(names) == len(PUBLIC_TOOL_NAMES) == 28
 finally:
     container.close()
 

@@ -14,7 +14,7 @@ from alembic.config import Config
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from interfaces.mcp.server import PHASE1D_TOOL_NAMES, PUBLIC_TOOL_NAMES
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
 
 def _alembic_config(project_root: Path) -> Config:
@@ -84,8 +84,6 @@ async def test_stdio_instrument_resolve_behavioral_samples(
         names = {tool.name for tool in tools.tools}
         assert "instrument_resolve" in names
         assert names == set(PUBLIC_TOOL_NAMES)
-        assert names.issubset(set(PUBLIC_TOOL_NAMES))
-        assert set(PUBLIC_TOOL_NAMES) >= PHASE1D_TOOL_NAMES
 
         a_share = _parse_envelope(
             await session.call_tool(

@@ -154,3 +154,29 @@ def test_health_db_error_dominates_search_degraded() -> None:
         HealthState.DEGRADED,
         "degraded",
     }
+
+
+def test_health_component_capability_probes_are_source_separated() -> None:
+    service = HealthService(
+        database=_OkDb(),
+        settings=_Settings(),
+        clock=FixedClock(),
+        id_generator=SequentialIdGenerator(),
+        secret_redactor=DefaultSecretRedactor(),
+        component_probes={
+            "cross_asset.cme_reference": lambda: True,
+            "cross_asset.dukascopy_spot": lambda: False,
+        },
+    )
+    env = service.check()
+    assert env.data is not None
+    assert env.data.components["cross_asset.cme_reference"] in {HealthState.OK, "ok"}
+    assert env.data.components["cross_asset.dukascopy_spot"] in {
+        HealthState.DEGRADED,
+        "degraded",
+    }
+    assert any(
+        item.code == "COMPONENT_UNAVAILABLE"
+        and item.details["component"] == "cross_asset.dukascopy_spot"
+        for item in env.warnings
+    )

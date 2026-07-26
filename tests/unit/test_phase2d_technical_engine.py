@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from application.dto.technical import TechnicalAnalysisDTO
 from domain.common.enums import Market
+from domain.common.errors import ProviderNotConfigured
 from domain.market.models import MarketBar
 from domain.technical.models import TechnicalAnalysis
 from infrastructure.technical import MatplotlibChartRenderer, TALibIndicatorEngine
@@ -64,3 +68,31 @@ def test_ta_lib_engine_and_png_renderer() -> None:
     assert dto.bar_as_of == analysis.bar_as_of
     assert dto.indicators.rsi_14 == metrics["rsi_14"]
     assert dto.indicators.vwma == metrics["vwma_20"]
+
+
+def test_png_renderer_reports_missing_optional_chart_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def without_matplotlib(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "matplotlib" or name.startswith("matplotlib."):
+            raise ImportError("optional chart extra is absent")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", without_matplotlib)
+    bars = _bars()
+    analysis = TALibIndicatorEngine().analyze(bars, interval="1d")
+
+    with pytest.raises(ProviderNotConfigured, match=r"trading-partner\[chart\]"):
+        MatplotlibChartRenderer().render(
+            instrument_id="equity:US:TEST",
+            bars=bars,
+            analysis=analysis,
+        )
