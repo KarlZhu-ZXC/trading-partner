@@ -5,17 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from application.dto.a_share import AShareGetSnapshotInput
+from application.dto.cross_asset import SpotObservationDTO
 from application.dto.monitoring import MonitorEvaluateInput
 from application.dto.risk import RiskCheckInput
-from application.dto.us_market import MarketGetSnapshotInput
+from application.dto.us_market import MarketGetSnapshotInput, USQuoteDTO
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
+from application.services.market_tool_coordinator import MarketToolCoordinator
+from application.services.monitor_fact_resolver import MonitorFactResolver
 from application.services.risk_tool_coordinator import RiskToolCoordinator
-from application.services.us_tool_coordinator import USToolCoordinator
 from domain.common.enums import Market
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
@@ -35,6 +38,7 @@ from domain.monitoring.models import (
     MonitorRun,
 )
 from domain.risk.enums import RiskOverallStatus
+from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +47,7 @@ class _Fact:
     as_of: datetime | None
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
+    closed_session_last_known: bool = False
 
 
 _RISK_RANK = {
@@ -57,17 +62,19 @@ class MonitorEvaluationService:
         self,
         repository: MonitorRepository,
         a_share: AShareToolCoordinator,
-        us: USToolCoordinator,
+        market: MarketToolCoordinator,
         risk: RiskToolCoordinator,
         clock: Clock,
         id_generator: IdGenerator,
+        fact_resolver: MonitorFactResolver | None = None,
     ) -> None:
         self._repository = repository
         self._a_share = a_share
-        self._us = us
+        self._market = market
         self._risk = risk
         self._clock = clock
         self._ids = id_generator
+        self._fact_resolver = fact_resolver
 
     async def evaluate(self, request: MonitorEvaluateInput) -> MonitorRun:
         started_at = self._clock.now()
@@ -77,6 +84,7 @@ class MonitorEvaluationService:
         monitors, selection_warnings = self._select(request, as_of=as_of)
         price_cache: dict[str, _Fact] = {}
         risk_fact: _Fact | None = None
+        generic_cache: dict[tuple[object, ...], _Fact] = {}
         states: list[MonitorRuleState] = []
         events: list[MonitorEvent] = []
         warnings = list(selection_warnings)
@@ -99,10 +107,46 @@ class MonitorEvaluationService:
                     if fact is None:
                         fact = await self._price_fact(rule.instrument_id, as_of)
                         price_cache[rule.instrument_id] = fact
-                else:
+                elif rule.rule_type is MonitorRuleType.RISK_OVERALL_AT_LEAST:
                     if risk_fact is None:
                         risk_fact = await self._risk_fact(as_of)
                     fact = risk_fact
+                elif rule.fact_type is TradePlanFactType.PRICE:
+                    assert rule.instrument_id is not None
+                    fact = price_cache.get(rule.instrument_id)
+                    if fact is None:
+                        fact = await self._price_fact(rule.instrument_id, as_of)
+                        price_cache[rule.instrument_id] = fact
+                elif rule.fact_type is TradePlanFactType.PORTFOLIO_RISK:
+                    if risk_fact is None:
+                        risk_fact = await self._risk_fact(as_of)
+                    fact = risk_fact
+                else:
+                    cache_key = (
+                        rule.fact_type,
+                        rule.instrument_id,
+                        rule.metric_key,
+                        rule.event_after,
+                    )
+                    fact = generic_cache.get(cache_key)
+                    if fact is None:
+                        if self._fact_resolver is None:
+                            fact = _Fact(
+                                None,
+                                None,
+                                (),
+                                ("MONITOR_FACT_RESOLVER_NOT_CONFIGURED",),
+                            )
+                        else:
+                            resolved = await self._fact_resolver.resolve(rule, as_of)
+                            fact = _Fact(
+                                resolved.value,
+                                resolved.as_of,
+                                resolved.warning_codes,
+                                resolved.error_codes,
+                                resolved.closed_session_last_known,
+                            )
+                        generic_cache[cache_key] = fact
                 warnings.extend(fact.warning_codes)
                 errors.extend(fact.error_codes)
                 state = self._evaluate_rule(monitor, rule, fact, as_of)
@@ -177,25 +221,7 @@ class MonitorEvaluationService:
 
     async def _price_fact(self, instrument_id: str, as_of: datetime) -> _Fact:
         _asset, market, _symbol = parse_instrument_id(instrument_id)
-        if market is Market.US:
-            us_envelope = await self._us.get_market_snapshot(
-                MarketGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
-            )
-            if us_envelope.ok and us_envelope.data is not None:
-                return _Fact(
-                    value=us_envelope.data.last,
-                    as_of=us_envelope.data.quote_at,
-                    warning_codes=tuple(item.code for item in us_envelope.warnings),
-                    error_codes=(),
-                )
-            return _Fact(
-                None,
-                None,
-                tuple(item.code for item in us_envelope.warnings),
-                tuple(item.code for item in us_envelope.errors)
-                or ("MONITOR_PRICE_UNAVAILABLE",),
-            )
-        elif market is Market.A_SHARE:
+        if market is Market.A_SHARE:
             a_share_envelope = await self._a_share.get_snapshot(
                 AShareGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
             )
@@ -209,6 +235,10 @@ class MonitorEvaluationService:
                     as_of=a_share_envelope.data.quote.quote_at,
                     warning_codes=tuple(item.code for item in a_share_envelope.warnings),
                     error_codes=(),
+                    closed_session_last_known=(
+                        "CLOSED_SESSION_LAST_KNOWN"
+                        in {item.code for item in a_share_envelope.warnings}
+                    ),
                 )
             return _Fact(
                 None,
@@ -217,8 +247,41 @@ class MonitorEvaluationService:
                 tuple(item.code for item in a_share_envelope.errors)
                 or ("MONITOR_PRICE_UNAVAILABLE",),
             )
-        else:
-            return _Fact(None, None, (), ("MONITOR_UNSUPPORTED_MARKET",))
+        if market is Market.DCE:
+            # No Phase 3A quote/OHLCV path; never invent settlement for evaluation.
+            return _Fact(
+                None,
+                None,
+                (),
+                ("DCE_QUOTE_BARS_UNAVAILABLE", "MONITOR_PRICE_UNAVAILABLE"),
+            )
+        if market in {Market.US, Market.CME, Market.OTC}:
+            market_envelope = await self._market.get_market_snapshot(
+                MarketGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
+            )
+            if market_envelope.ok and market_envelope.data is not None:
+                value, fact_as_of = _extract_price_fact(market_envelope.data)
+                if value is not None and fact_as_of is not None:
+                    return _Fact(
+                        value=value,
+                        as_of=fact_as_of,
+                        warning_codes=tuple(
+                            item.code for item in market_envelope.warnings
+                        ),
+                        error_codes=(),
+                        closed_session_last_known=(
+                            "CLOSED_SESSION_LAST_KNOWN"
+                            in {item.code for item in market_envelope.warnings}
+                        ),
+                    )
+            return _Fact(
+                None,
+                None,
+                tuple(item.code for item in market_envelope.warnings),
+                tuple(item.code for item in market_envelope.errors)
+                or ("MONITOR_PRICE_UNAVAILABLE",),
+            )
+        return _Fact(None, None, (), ("MONITOR_UNSUPPORTED_MARKET",))
 
     async def _risk_fact(self, as_of: datetime) -> _Fact:
         envelope = await self._risk.check(RiskCheckInput(as_of=as_of))
@@ -254,7 +317,9 @@ class MonitorEvaluationService:
                 updated_at=as_of,
             )
         age = (as_of - fact.as_of).total_seconds()
-        if age < 0 or age > rule.max_fact_age_seconds:
+        if age < 0 or (
+            age > rule.max_fact_age_seconds and not fact.closed_session_last_known
+        ):
             return MonitorRuleState(
                 monitor_id=monitor.monitor_id,
                 monitor_version=monitor.version,
@@ -271,9 +336,18 @@ class MonitorEvaluationService:
         elif rule.rule_type is MonitorRuleType.PRICE_BELOW:
             assert rule.price_threshold is not None
             triggered = fact.value <= rule.price_threshold
-        else:
+        elif rule.rule_type is MonitorRuleType.RISK_OVERALL_AT_LEAST:
             assert rule.risk_status_threshold is not None
             triggered = fact.value >= Decimal(_RISK_RANK[rule.risk_status_threshold])
+        else:
+            assert rule.comparator is not None
+            if rule.comparator is TradePlanComparator.OCCURRED:
+                triggered = fact.value >= 1
+            else:
+                assert rule.numeric_threshold is not None
+                triggered = _compare(
+                    fact.value, rule.numeric_threshold, rule.comparator
+                )
         return MonitorRuleState(
             monitor_id=monitor.monitor_id,
             monitor_version=monitor.version,
@@ -318,6 +392,8 @@ class MonitorEvaluationService:
         threshold = rule.price_threshold
         if threshold is None and rule.risk_status_threshold is not None:
             threshold = Decimal(_RISK_RANK[rule.risk_status_threshold])
+        if threshold is None:
+            threshold = rule.numeric_threshold
         return MonitorEvent(
             event_id=self._ids.new(EntityIdPrefix.MONITOR_EVENT),
             monitor_id=monitor.monitor_id,
@@ -331,3 +407,42 @@ class MonitorEvaluationService:
             message=current.message,
             created_at=created_at,
         )
+
+
+def _extract_price_fact(data: Any) -> tuple[Decimal | None, datetime | None]:
+    """Session-aware price + observation time from market snapshot payloads.
+
+    Uses the provider-returned ``quote_at`` (never wall-clock) so closed-session
+    last-known values retain their real observation time for freshness checks.
+    """
+    if isinstance(data, USQuoteDTO):
+        return data.last, data.quote_at
+    if isinstance(data, SpotObservationDTO):
+        price: Decimal | None = data.mid if data.mid is not None else data.last
+        if price is None and data.bid is not None and data.ask is not None:
+            price = (data.bid + data.ask) / Decimal("2")
+        return price, data.quote_at
+    # Duck-typed fallback for test doubles / alternate DTOs.
+    last = getattr(data, "last", None)
+    mid = getattr(data, "mid", None)
+    quote_at = getattr(data, "quote_at", None)
+    value = last if last is not None else mid
+    if value is not None and quote_at is not None:
+        return value, quote_at
+    return None, None
+
+
+def _compare(
+    observed: Decimal, threshold: Decimal, comparator: TradePlanComparator
+) -> bool:
+    if comparator is TradePlanComparator.GT:
+        return observed > threshold
+    if comparator is TradePlanComparator.GTE:
+        return observed >= threshold
+    if comparator is TradePlanComparator.LT:
+        return observed < threshold
+    if comparator is TradePlanComparator.LTE:
+        return observed <= threshold
+    if comparator is TradePlanComparator.EQ:
+        return observed == threshold
+    raise DataContractError("OCCURRED comparator must use event evaluation")

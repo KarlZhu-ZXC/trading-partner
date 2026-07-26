@@ -39,27 +39,32 @@ from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.challenge_review_service import ChallengeReviewService
+from application.services.commodity_spot_service import CommoditySpotService
+from application.services.continuous_series_service import ContinuousSeriesService
 from application.services.criticality_policy import CriticalityPolicy
 from application.services.decision_record_service import DecisionRecordService
 from application.services.evidence_service import EvidenceService
+from application.services.futures_contract_service import FuturesContractService
+from application.services.futures_curve_service import FuturesCurveService
+from application.services.futures_instrument_directory import FuturesInstrumentDirectory
 from application.services.health_service import HealthService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.investment_case_service import InvestmentCaseService
 from application.services.journal_service import JournalService
-from application.services.mock_instrument_resolver import MockInstrumentResolver
-from application.services.mock_market_snapshot_coordinator import (
-    MockMarketSnapshotCoordinator,
-)
+from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_evaluation_service import MonitorEvaluationService
+from application.services.monitor_fact_resolver import MonitorFactResolver
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.open_question_service import OpenQuestionService
+from application.services.peer_comparison_service import PeerComparisonService
 from application.services.portfolio_enrichment_calculator import PortfolioEnrichmentCalculator
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_risk_calculator import PortfolioRiskCalculator
 from application.services.portfolio_service import PortfolioService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
+from application.services.position_sizing_service import PositionSizingService
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.provider_router import ProviderRouter
 from application.services.research_archive_service import ResearchArchiveService
@@ -74,9 +79,7 @@ from application.services.research_workflow_orchestrator import ResearchWorkflow
 from application.services.risk_engine_service import RiskEngineService
 from application.services.risk_policy_service import RiskPolicyService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
-from application.services.routed_market_snapshot_service import (
-    RoutedMarketSnapshotService,
-)
+from application.services.routed_futures_provider import RoutedFuturesProvider
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.us_community_heat_service import USCommunityHeatService
@@ -99,6 +102,7 @@ from application.services.us_tool_coordinator import USToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
 from application.services.watchlist_service import WatchlistService
 from domain.common.enums import DataCategory, Market, VendorId
+from domain.company_comparison.calculator import PeerComparisonCalculator
 from domain.watchlist.enums import WatchlistSource
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.config.settings import AppSettings
@@ -133,6 +137,9 @@ from infrastructure.persistence.reddit_state_store import build_reddit_state_sto
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.persistence.risk_policy_repository import (
     SqlAlchemyRiskPolicyRepository,
+)
+from infrastructure.persistence.sqlalchemy_futures_definition_repository import (
+    SqlAlchemyFuturesDefinitionRepository,
 )
 from infrastructure.persistence.watchlist_hub_unit_of_work import (
     SqlAlchemyWatchlistHubUnitOfWork,
@@ -181,9 +188,6 @@ from infrastructure.providers.a_share.exchanges import (
 )
 from infrastructure.providers.a_share.hkex import HkexNorthboundAdapter
 from infrastructure.providers.a_share.iwencai import IwencaiAShareAdapter
-from infrastructure.providers.a_share.mock_market import (
-    MockAShareMarketSnapshotProvider,
-)
 from infrastructure.providers.a_share.nahs import NahsHogCycleAdapter
 from infrastructure.providers.a_share.sina import SinaAShareAdapter
 from infrastructure.providers.a_share.tencent import TencentAShareAdapter
@@ -196,14 +200,11 @@ from infrastructure.providers.account.moomoo import MoomooAccountAdapter
 from infrastructure.providers.account.schwab import SchwabAccountAdapter
 from infrastructure.providers.common.circuit_breaker import CircuitBreaker
 from infrastructure.providers.common.httpx_transport import HttpxTransport
-from infrastructure.providers.common.market_snapshot_category_adapter import (
-    MarketSnapshotCategoryAdapter,
-)
 from infrastructure.providers.common.null_category_provider import NullCategoryProvider
 from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
-from infrastructure.providers.common.verified_snapshot_cache_codec import (
-    VerifiedMarketSnapshotCacheCodec,
-)
+from infrastructure.providers.cross_asset.cme_public_client import CmePublicAdapter
+from infrastructure.providers.cross_asset.dce_official_client import DceOfficialAdapter
+from infrastructure.providers.cross_asset.dukascopy_client import DukascopySpotAdapter
 from infrastructure.providers.instrument_directory import (
     AlphaVantageInstrumentDirectoryAdapter,
     TencentInstrumentDirectoryAdapter,
@@ -224,7 +225,6 @@ from infrastructure.providers.us.context_codecs import (
 )
 from infrastructure.providers.us.eastmoney_futures import EastmoneyMetalFuturesAdapter
 from infrastructure.providers.us.fred import FredMacroAdapter
-from infrastructure.providers.us.mock_market import MockUSMarketSnapshotProvider
 from infrastructure.providers.us.moomoo_community import MoomooCommunityHeatAdapter
 from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
 from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
@@ -238,7 +238,6 @@ from infrastructure.providers.us.research_codecs import (
 )
 from infrastructure.providers.us.sec_research import SECResearchAdapter
 from infrastructure.providers.us.sina_futures import SinaMetalFuturesAdapter
-from infrastructure.providers.us.stocktwits import StockTwitsSentimentAdapter
 from infrastructure.providers.us.yahoo_finance_research import YahooFinanceResearchAdapter
 from infrastructure.providers.watchlist.manual_csv import ManualCsvWatchlistAdapter
 from infrastructure.providers.watchlist.moomoo import MoomooWatchlistAdapter
@@ -266,21 +265,88 @@ class BootstrapOverrides:
     watchlist_provider: WatchlistSourceProvider | None = None
 
 
+@dataclass(slots=True)
+class RuntimeResources:
+    """Own infrastructure resources and their deterministic shutdown order."""
+
+    database: SqlAlchemyDatabase
+    a_share_transport: HttpTransport | None = None
+    cross_asset_transport: HttpTransport | None = None
+    polymarket_transport: HttpTransport | None = None
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            closed: set[int] = set()
+            for transport in (
+                self.a_share_transport,
+                self.cross_asset_transport,
+                self.polymarket_transport,
+            ):
+                if transport is None or id(transport) in closed:
+                    continue
+                closed.add(id(transport))
+                aclose = getattr(transport, "aclose", None)
+                if callable(aclose):
+                    await aclose()
+        finally:
+            self.database.close()
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderBundle:
+    """Stable provider/router surface for capability composition."""
+
+    router: ProviderRouter
+    registry: VendorRegistry
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationServices:
+    """Tool-facing application graph grouped independently from infrastructure."""
+
+    health: HealthService
+    investment_cases: InvestmentCaseService
+    thesis_revisions: ThesisRevisionService
+    research_state: ResearchStateQueryService
+    research_archive: ResearchArchiveService
+    research_search: ResearchSearchService
+    research_timeline: ResearchTimelineService
+    journal: JournalService
+    decisions: DecisionRecordService
+    instruments: InstrumentResolveService
+    a_share: AShareToolCoordinator
+    us_market: USToolCoordinator
+    market: MarketToolCoordinator
+    technical: TechnicalToolCoordinator
+    us_research: USResearchToolCoordinator
+    us_context: USContextToolCoordinator
+    portfolio: PortfolioToolCoordinator
+    risk: RiskToolCoordinator
+    monitoring: MonitorToolCoordinator
+    research_context: ResearchContextBuilder
+    challenge: ChallengeReviewService
+    account_transactions: AccountTransactionCoordinator
+    workflows: ResearchWorkflowOrchestrator
+    watchlist: WatchlistHubService
+
+
 @dataclass
 class ApplicationContainer:
     """Internal composition-root structure (not part of MCP/domain public contracts)."""
 
     settings: AppSettings
+    resources: RuntimeResources
     clock: Clock
-    database: SqlAlchemyDatabase
     id_generator: IdGenerator
     secret_redactor: SecretRedactor
     health_service: HealthService
-    mock_market_snapshot_coordinator: MockMarketSnapshotCoordinator
-    # Phase 1D D8b router surface
+    # Shared provider-router surface
     provider_router: ProviderRouter
     vendor_registry: VendorRegistry
-    routed_market_snapshot_service: RoutedMarketSnapshotService
     # Phase 1B research
     investment_case_service: InvestmentCaseService
     thesis_revision_service: ThesisRevisionService
@@ -317,6 +383,12 @@ class ApplicationContainer:
     us_market_context_service: USMarketContextService
     us_technical_service: USTechnicalService
     us_tool_coordinator: USToolCoordinator
+    # Phase 3A cross-asset market facade + futures/spot services
+    market_tool_coordinator: MarketToolCoordinator
+    commodity_spot_service: CommoditySpotService
+    futures_contract_service: FuturesContractService
+    futures_curve_service: FuturesCurveService
+    continuous_series_service: ContinuousSeriesService
     technical_tool_coordinator: TechnicalToolCoordinator
     # Phase 1G US research services + tool coordinator
     us_fundamental_service: USFundamentalService
@@ -336,11 +408,13 @@ class ApplicationContainer:
     portfolio_tool_coordinator: PortfolioToolCoordinator
     risk_policy_repository: RiskPolicyRepository
     risk_policy_service: RiskPolicyService
+    position_sizing_service: PositionSizingService
     risk_engine_service: RiskEngineService
     risk_tool_coordinator: RiskToolCoordinator
     monitor_repository: MonitorRepository
     monitor_service: MonitorService
     monitor_evaluation_service: MonitorEvaluationService
+    monitor_fact_resolver: MonitorFactResolver
     monitor_tool_coordinator: MonitorToolCoordinator
     monitor_run_lock: ProcessFileLock
     post_market_sync_service: PostMarketSyncService
@@ -353,9 +427,73 @@ class ApplicationContainer:
     workflow_run_repository: WorkflowRunRepository
     portfolio_review_fact_service: PortfolioReviewFactService
     research_workflow_orchestrator: ResearchWorkflowOrchestrator
-    _owned_a_share_transport: HttpTransport | None = field(default=None, repr=False)
-    _owned_polymarket_transport: HttpTransport | None = field(default=None, repr=False)
-    _closed: bool = field(default=False, init=False, repr=False)
+    providers: ProviderBundle = field(init=False)
+    services: ApplicationServices = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.providers = ProviderBundle(
+            router=self.provider_router,
+            registry=self.vendor_registry,
+        )
+        self.services = ApplicationServices(
+            health=self.health_service,
+            investment_cases=self.investment_case_service,
+            thesis_revisions=self.thesis_revision_service,
+            research_state=self.research_state_query_service,
+            research_archive=self.research_archive_service,
+            research_search=self.research_search_service,
+            research_timeline=self.research_timeline_service,
+            journal=self.journal_service,
+            decisions=self.decision_record_service,
+            instruments=self.instrument_resolve_service,
+            a_share=self.a_share_tool_coordinator,
+            us_market=self.us_tool_coordinator,
+            market=self.market_tool_coordinator,
+            technical=self.technical_tool_coordinator,
+            us_research=self.us_research_tool_coordinator,
+            us_context=self.us_context_tool_coordinator,
+            portfolio=self.portfolio_tool_coordinator,
+            risk=self.risk_tool_coordinator,
+            monitoring=self.monitor_tool_coordinator,
+            research_context=self.research_context_builder,
+            challenge=self.challenge_review_service,
+            account_transactions=self.account_transaction_coordinator,
+            workflows=self.research_workflow_orchestrator,
+            watchlist=self.watchlist_hub_service,
+        )
+
+    @property
+    def database(self) -> SqlAlchemyDatabase:
+        """Compatibility view while callers migrate to ``resources.database``."""
+        return self.resources.database
+
+    @database.setter
+    def database(self, value: SqlAlchemyDatabase) -> None:
+        self.resources.database = value
+
+    @property
+    def _owned_a_share_transport(self) -> HttpTransport | None:
+        return self.resources.a_share_transport
+
+    @_owned_a_share_transport.setter
+    def _owned_a_share_transport(self, value: HttpTransport | None) -> None:
+        self.resources.a_share_transport = value
+
+    @property
+    def _owned_polymarket_transport(self) -> HttpTransport | None:
+        return self.resources.polymarket_transport
+
+    @_owned_polymarket_transport.setter
+    def _owned_polymarket_transport(self, value: HttpTransport | None) -> None:
+        self.resources.polymarket_transport = value
+
+    @property
+    def _owned_cross_asset_transport(self) -> HttpTransport | None:
+        return self.resources.cross_asset_transport
+
+    @_owned_cross_asset_transport.setter
+    def _owned_cross_asset_transport(self, value: HttpTransport | None) -> None:
+        self.resources.cross_asset_transport = value
 
     def close(self) -> None:
         try:
@@ -366,20 +504,7 @@ class ApplicationContainer:
         raise RuntimeError("running event loop: await container.aclose()")
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            if self._owned_a_share_transport is not None:
-                aclose = getattr(self._owned_a_share_transport, "aclose", None)
-                if callable(aclose):
-                    await aclose()
-            if self._owned_polymarket_transport is not None:
-                aclose = getattr(self._owned_polymarket_transport, "aclose", None)
-                if callable(aclose):
-                    await aclose()
-        finally:
-            self.database.close()
+        await self.resources.aclose()
 
 
 def build_application(
@@ -395,6 +520,7 @@ def build_application(
     id_generator: IdGenerator = Uuid7IdGenerator()
     secret_redactor: SecretRedactor = DefaultSecretRedactor()
     owned_a_share_transport: HttpTransport | None = None
+    owned_cross_asset_transport: HttpTransport | None = None
     owned_polymarket_transport: HttpTransport | None = None
     if overrides.a_share_transport is None:
         owned_a_share_transport = HttpxTransport(
@@ -446,15 +572,34 @@ def build_application(
         id_generator=id_generator,
         secret_redactor=secret_redactor,
         search_backend_probe=search_backend_probe,
+        component_probes={
+            "cross_asset.cme_reference_configured": lambda: True,
+            "cross_asset.dce_eod_configured": lambda: True,
+            "cross_asset.dukascopy_spot_configured": lambda: settings.dukascopy_enabled,
+        },
     )
 
-    # --- Phase 1D D8b: Vendor Chain + Registry + Router + Routed Snapshot ---
+    # --- Shared Vendor Chain + Registry + Router ---
     chain_config = YamlVendorChainConfig.load(settings.vendor_chain_path)
 
     a_share_transport = overrides.a_share_transport or owned_a_share_transport
     assert a_share_transport is not None
-    polymarket_transport = a_share_transport
-    if settings.polymarket_proxy_url is not None and overrides.a_share_transport is None:
+    cross_asset_transport = a_share_transport
+    effective_provider_proxy_url = settings.effective_provider_proxy_url
+    if effective_provider_proxy_url is not None and overrides.a_share_transport is None:
+        owned_cross_asset_transport = HttpxTransport(
+            max_response_bytes=settings.http_max_response_bytes,
+            timeout_seconds=settings.provider_timeout_market_seconds,
+            proxy_url=effective_provider_proxy_url,
+        )
+        cross_asset_transport = owned_cross_asset_transport
+
+    polymarket_transport = cross_asset_transport
+    if (
+        settings.polymarket_proxy_url is not None
+        and settings.polymarket_proxy_url != effective_provider_proxy_url
+        and overrides.a_share_transport is None
+    ):
         owned_polymarket_transport = HttpxTransport(
             max_response_bytes=settings.http_max_response_bytes,
             timeout_seconds=settings.provider_timeout_default_seconds,
@@ -471,24 +616,7 @@ def build_application(
             jitter_seconds=settings.eastmoney_jitter_seconds,
         )
     )
-    a_share_provider = MockAShareMarketSnapshotProvider()
-    us_provider = MockUSMarketSnapshotProvider()
-
     vendor_registry = VendorRegistry()
-    vendor_registry.register(
-        VendorId.MOCK_A_SHARE,
-        MarketSnapshotCategoryAdapter(
-            vendor_id=VendorId.MOCK_A_SHARE,
-            provider=a_share_provider,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.MOCK_US,
-        MarketSnapshotCategoryAdapter(
-            vendor_id=VendorId.MOCK_US,
-            provider=us_provider,
-        ),
-    )
     # Explicit null placeholder so YAML ``null`` chains are not accidental misses.
     vendor_registry.register(VendorId.NULL, NullCategoryProvider())
     # Real adapters remain registered even when disabled; Router reports an
@@ -638,6 +766,30 @@ def build_application(
             timeout_seconds=market_timeout,
         ),
     )
+    # Phase 3A free cross-asset adapters (shared httpx transport lifecycle).
+    cme_public_adapter = CmePublicAdapter(
+        cross_asset_transport,
+        clock=clock,
+        enabled=True,
+        timeout_seconds=market_timeout,
+    )
+    dce_official_adapter = DceOfficialAdapter(
+        cross_asset_transport,
+        clock=clock,
+        enabled=True,
+        timeout_seconds=market_timeout,
+    )
+    dukascopy_adapter = DukascopySpotAdapter(
+        cross_asset_transport,
+        clock=clock,
+        enabled=settings.dukascopy_enabled,
+        api_key=settings.dukascopy_api_key,
+        timeout_seconds=market_timeout,
+        proxy_configured=effective_provider_proxy_url is not None,
+    )
+    vendor_registry.register(VendorId.CME_PUBLIC, cme_public_adapter)
+    vendor_registry.register(VendorId.DCE_OFFICIAL, dce_official_adapter)
+    vendor_registry.register(VendorId.DUKASCOPY, dukascopy_adapter)
     vendor_registry.register(
         VendorId.ALPHA_VANTAGE,
         AlphaVantageResearchAdapter(
@@ -667,15 +819,6 @@ def build_application(
             api_key=settings.fred_api_key,
             clock=clock,
             enabled=settings.fred_enabled,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.STOCKTWITS,
-        StockTwitsSentimentAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.stocktwits_enabled,
             timeout_seconds=settings.provider_timeout_default_seconds,
         ),
     )
@@ -808,24 +951,6 @@ def build_application(
         criticality_policy=CriticalityPolicy(),
     )
 
-    cache_codec = VerifiedMarketSnapshotCacheCodec()
-    routed_market_snapshot_service = RoutedMarketSnapshotService(
-        router=provider_router,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        cache_codec=cache_codec,
-    )
-
-    resolver = MockInstrumentResolver()
-    coordinator = MockMarketSnapshotCoordinator(
-        resolver=resolver,
-        routed_service=routed_market_snapshot_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-    )
-
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
         return SqlAlchemyInstrumentUnitOfWork(engine, clock)
 
@@ -872,6 +997,35 @@ def build_application(
     instrument_master_service = InstrumentMasterService(
         instrument_unit_of_work_factory,
     )
+    # Phase 3A: futures definition services must exist before CME/DCE directories.
+    futures_definition_repository = SqlAlchemyFuturesDefinitionRepository(engine)
+    routed_futures_provider = RoutedFuturesProvider(
+        {
+            Market.CME: cme_public_adapter,
+            Market.DCE: dce_official_adapter,
+        }
+    )
+    futures_contract_service = FuturesContractService(
+        reference_provider=routed_futures_provider,
+        statistics_provider=routed_futures_provider,
+        repository=futures_definition_repository,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    futures_curve_service = FuturesCurveService(
+        contract_service=futures_contract_service,
+        clock=clock,
+    )
+    continuous_series_service = ContinuousSeriesService(
+        reference_provider=routed_futures_provider,
+        contract_service=futures_contract_service,
+        repository=futures_definition_repository,
+        clock=clock,
+    )
+    commodity_spot_service = CommoditySpotService(
+        provider=dukascopy_adapter,
+        clock=clock,
+    )
     instrument_resolve_service = InstrumentResolveService(
         master=instrument_master_service,
         clock=clock,
@@ -899,6 +1053,22 @@ def build_application(
                     clock=clock,
                     enabled=settings.alpha_vantage_enabled,
                     timeout_seconds=market_timeout,
+                ),
+            ),
+            Market.CME: (
+                FuturesInstrumentDirectory(
+                    market=Market.CME,
+                    vendor_id=VendorId.CME_PUBLIC,
+                    contract_service=futures_contract_service,
+                    clock=clock,
+                ),
+            ),
+            Market.DCE: (
+                FuturesInstrumentDirectory(
+                    market=Market.DCE,
+                    vendor_id=VendorId.DCE_OFFICIAL,
+                    contract_service=futures_contract_service,
+                    clock=clock,
                 ),
             ),
         },
@@ -1098,6 +1268,18 @@ def build_application(
         context_service=us_market_context_service,
         technical_service=us_technical_service,
     )
+    # Phase 3A: market MCP facade (futures services wired earlier for directories).
+    market_tool_coordinator = MarketToolCoordinator(
+        instrument_master=instrument_master_service,
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
+        us_tool_coordinator=us_tool_coordinator,
+        data_service=us_market_data_service,
+        commodity_spot_service=commodity_spot_service,
+        futures_curve_service=futures_curve_service,
+        instrument_resolve_service=instrument_resolve_service,
+    )
     technical_tool_coordinator = TechnicalToolCoordinator(
         instrument_master=instrument_master_service,
         clock=clock,
@@ -1107,6 +1289,7 @@ def build_application(
         a_share_data_service=a_share_market_structure_service,
         indicator_engine=TALibIndicatorEngine(),
         chart_renderer=MatplotlibChartRenderer(),
+        commodity_spot_service=commodity_spot_service,
     )
 
     # Phase 1G: one codec instance per research category and thin composition.
@@ -1183,7 +1366,10 @@ def build_application(
     )
     risk_policy_repository: RiskPolicyRepository = SqlAlchemyRiskPolicyRepository(engine)
     risk_policy_service = RiskPolicyService(risk_policy_repository, clock, id_generator)
-    risk_engine_service = RiskEngineService(account_service, risk_policy_service)
+    position_sizing_service = PositionSizingService(research_unit_of_work_factory)
+    risk_engine_service = RiskEngineService(
+        account_service, risk_policy_service, position_sizing_service
+    )
     risk_tool_coordinator = RiskToolCoordinator(
         risk_engine_service,
         risk_policy_service,
@@ -1198,13 +1384,21 @@ def build_application(
         clock,
         id_generator,
     )
+    monitor_fact_resolver = MonitorFactResolver(
+        technical=technical_tool_coordinator,
+        a_share=a_share_tool_coordinator,
+        us_research=us_research_tool_coordinator,
+        us_context=us_context_tool_coordinator,
+        research_uow_factory=research_unit_of_work_factory,
+    )
     monitor_evaluation_service = MonitorEvaluationService(
         monitor_repository,
         a_share_tool_coordinator,
-        us_tool_coordinator,
+        market_tool_coordinator,
         risk_tool_coordinator,
         clock,
         id_generator,
+        monitor_fact_resolver,
     )
     monitor_tool_coordinator = MonitorToolCoordinator(
         monitor_service,
@@ -1266,6 +1460,14 @@ def build_application(
         id_generator,
         secret_redactor,
     )
+    peer_comparison_service = PeerComparisonService(
+        a_share=a_share_tool_coordinator,
+        us_research=us_research_tool_coordinator,
+        calculator=PeerComparisonCalculator(),
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
+    )
     research_workflow_orchestrator = ResearchWorkflowOrchestrator(
         workflow_run_repository,
         investment_case_service,
@@ -1278,6 +1480,7 @@ def build_application(
         portfolio_tool_coordinator,
         account_transaction_coordinator,
         portfolio_review_fact_service,
+        peer_comparison_service,
         clock,
         id_generator,
         secret_redactor,
@@ -1285,15 +1488,18 @@ def build_application(
 
     return ApplicationContainer(
         settings=settings,
+        resources=RuntimeResources(
+            database=database,
+            a_share_transport=owned_a_share_transport,
+            cross_asset_transport=owned_cross_asset_transport,
+            polymarket_transport=owned_polymarket_transport,
+        ),
         clock=clock,
-        database=database,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
         health_service=health_service,
-        mock_market_snapshot_coordinator=coordinator,
         provider_router=provider_router,
         vendor_registry=vendor_registry,
-        routed_market_snapshot_service=routed_market_snapshot_service,
         investment_case_service=investment_case_service,
         thesis_revision_service=thesis_revision_service,
         watchlist_service=watchlist_service,
@@ -1325,6 +1531,11 @@ def build_application(
         us_market_context_service=us_market_context_service,
         us_technical_service=us_technical_service,
         us_tool_coordinator=us_tool_coordinator,
+        market_tool_coordinator=market_tool_coordinator,
+        commodity_spot_service=commodity_spot_service,
+        futures_contract_service=futures_contract_service,
+        futures_curve_service=futures_curve_service,
+        continuous_series_service=continuous_series_service,
         technical_tool_coordinator=technical_tool_coordinator,
         us_fundamental_service=us_fundamental_service,
         us_filing_service=us_filing_service,
@@ -1341,11 +1552,13 @@ def build_application(
         portfolio_tool_coordinator=portfolio_tool_coordinator,
         risk_policy_repository=risk_policy_repository,
         risk_policy_service=risk_policy_service,
+        position_sizing_service=position_sizing_service,
         risk_engine_service=risk_engine_service,
         risk_tool_coordinator=risk_tool_coordinator,
         monitor_repository=monitor_repository,
         monitor_service=monitor_service,
         monitor_evaluation_service=monitor_evaluation_service,
+        monitor_fact_resolver=monitor_fact_resolver,
         monitor_tool_coordinator=monitor_tool_coordinator,
         monitor_run_lock=monitor_run_lock,
         post_market_sync_service=post_market_sync_service,
@@ -1358,8 +1571,6 @@ def build_application(
         workflow_run_repository=workflow_run_repository,
         portfolio_review_fact_service=portfolio_review_fact_service,
         research_workflow_orchestrator=research_workflow_orchestrator,
-        _owned_a_share_transport=owned_a_share_transport,
-        _owned_polymarket_transport=owned_polymarket_transport,
     )
 
 

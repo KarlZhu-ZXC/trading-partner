@@ -225,6 +225,8 @@ class ThesisRevisionConfirmInput(BaseModel):
     candidate_id: str = Field(pattern=RUN_ID_FLEX_PATTERN)
     action: Literal["confirm", "reject", "withdraw"] = "confirm"
     reviewed_by: Literal["user", "external_agent", "codex"]
+    submitted_via: Literal["direct", "codex_chat"] = "direct"
+    authorization_note: str | None = Field(default=None, min_length=1, max_length=4000)
     review_note: str | None = Field(default=None, max_length=4000)
     rejection_reason: str | None = Field(default=None, min_length=1, max_length=4000)
 
@@ -240,6 +242,13 @@ class ThesisRevisionConfirmInput(BaseModel):
             raise ValueError("action=withdraw requires non-empty review_note")
         if self.reviewed_by == "codex" and self.action in {"confirm", "reject"}:
             raise ValueError("reviewed_by=codex only allows action=withdraw")
+        if self.submitted_via == "codex_chat":
+            if self.reviewed_by != "user":
+                raise ValueError("submitted_via=codex_chat requires reviewed_by=user")
+            if self.authorization_note is None or not self.authorization_note.strip():
+                raise ValueError("submitted_via=codex_chat requires authorization_note")
+        elif self.authorization_note is not None:
+            raise ValueError("authorization_note requires submitted_via=codex_chat")
         return self
 
 

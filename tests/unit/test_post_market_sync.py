@@ -12,7 +12,9 @@ import pytest
 
 from application.dto.post_market_sync import (
     PostMarketSyncDisposition,
+    PostMarketSyncHealth,
     PostMarketSyncResultDTO,
+    PostMarketSyncStatusDTO,
 )
 from application.ports.market_session_calendar import MarketSession
 from application.services.post_market_sync_service import PostMarketSyncService
@@ -38,12 +40,21 @@ class _Calendar:
     def session_at(self, moment: datetime) -> MarketSession | None:
         return self.session
 
+    def session_on_or_before(self, moment: datetime) -> MarketSession | None:
+        return self.session
+
+    def previous_session(self, session_date: date) -> MarketSession | None:
+        return self.session
+
 
 class _Repository:
     def __init__(self, existing: PostMarketSyncRun | None = None) -> None:
         self.value = existing
 
     def get_for_session(self, session_date: date) -> PostMarketSyncRun | None:
+        return self.value
+
+    def get_latest(self) -> PostMarketSyncRun | None:
         return self.value
 
     def save(self, run: PostMarketSyncRun) -> PostMarketSyncRun:
@@ -99,6 +110,19 @@ class _ResultService:
     async def run_if_due(self) -> Any:
         self.calls += 1
         return self.result
+
+    async def catch_up_latest_due(self) -> Any:
+        self.calls += 1
+        return self.result
+
+    def status(self) -> PostMarketSyncStatusDTO:
+        self.calls += 1
+        return PostMarketSyncStatusDTO(
+            health=PostMarketSyncHealth.HEALTHY,
+            expected_session_date=date(2026, 7, 17),
+            receipt_session_date=date(2026, 7, 17),
+            run_status=PostMarketSyncRunStatus.SUCCEEDED,
+        )
 
 
 class _CliContainer:
@@ -245,6 +269,42 @@ def test_xnys_calendar_handles_normal_close_early_close_and_holiday() -> None:
     assert early is not None and early.close_at.hour == 18
     assert holiday is None
 
+    latest = calendar.session_on_or_before(datetime(2026, 7, 26, 12, tzinfo=UTC))
+    assert latest is not None and latest.session_date == date(2026, 7, 24)
+    previous = calendar.previous_session(date(2026, 7, 24))
+    assert previous is not None and previous.session_date == date(2026, 7, 23)
+
+
+async def test_status_detects_missing_latest_due_receipt() -> None:
+    close_at = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
+    service, _, calls = _service(
+        now=datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+        close_at=close_at,
+    )
+
+    result = service.status()
+
+    assert result.health is PostMarketSyncHealth.RECEIPT_MISSING
+    assert result.expected_session_date == date(2026, 7, 17)
+    assert result.error_codes == ("POST_MARKET_SYNC_RECEIPT_MISSING",)
+    assert calls == []
+
+
+async def test_catch_up_runs_latest_due_session_once() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    service, repository, calls = _service(
+        now=datetime(2026, 7, 19, 12, 0, tzinfo=UTC),
+        close_at=close_at,
+    )
+
+    first = await service.catch_up_latest_due()
+    second = await service.catch_up_latest_due()
+
+    assert first.disposition is PostMarketSyncDisposition.EXECUTED
+    assert second.disposition is PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED
+    assert calls == ["portfolio", "watchlist"]
+    assert repository.value is not None
+
 
 def test_process_file_lock_rejects_overlapping_job(tmp_path: Path) -> None:
     first = ProcessFileLock(tmp_path / "sync.lock")
@@ -333,3 +393,54 @@ async def test_cli_reports_lock_contention_as_json_error(
 
     assert code == 1
     assert payload == {"ok": False, "error_codes": ["SYNC_ALREADY_RUNNING"]}
+
+
+async def test_cli_status_is_read_only_and_reports_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    container = _CliContainer(tmp_path / "post_market_sync.lock", _run_result())
+    monkeypatch.setattr(post_market_sync_cli, "build_default_application", lambda: container)
+
+    code = await post_market_sync_cli._run("status")
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["health"] == PostMarketSyncHealth.HEALTHY.value
+    assert container.post_market_sync_service.calls == 1
+    assert container.aclose_calls == 1
+
+
+async def test_cli_catch_up_uses_bounded_service_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    container = _CliContainer(tmp_path / "post_market_sync.lock", _run_result())
+    monkeypatch.setattr(post_market_sync_cli, "build_default_application", lambda: container)
+
+    code = await post_market_sync_cli._run("catch-up")
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert code == 0
+    assert payload["disposition"] == PostMarketSyncDisposition.EXECUTED.value
+    assert container.post_market_sync_service.calls == 1
+
+
+def test_cli_help_does_not_build_application(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        post_market_sync_cli,
+        "build_default_application",
+        lambda: pytest.fail("--help must not build the application"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        post_market_sync_cli.main(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "catch-up" in capsys.readouterr().out

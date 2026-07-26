@@ -8,7 +8,10 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
-from application.dto.provider_routing import ProviderResultMeta, RouterExecutionResult
+from application.dto.provider_routing import (
+    ProviderResultMeta,
+    RouterExecutionResult,
+)
 from application.dto.technical import (
     TechnicalAnalysisDTO,
     TechnicalAnalysisInput,
@@ -21,13 +24,22 @@ from application.ports.secret_redactor import SecretRedactor
 from application.ports.technical_chart_renderer import TechnicalChartRenderer
 from application.ports.technical_indicator_engine import TechnicalIndicatorEngine
 from application.services.a_share_market_structure_service import AShareMarketStructureService
+from application.services.commodity_spot_service import CommoditySpotService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.us_market_data_service import USMarketDataService
 from domain.a_share.enums import BarInterval
 from domain.a_share.models import AShareBar
-from domain.common.enums import AdjustmentMethod, AssetType, Freshness, Market, SourceRole
-from domain.common.errors import DataContractError, TradingPartnerError
+from domain.common.enums import (
+    AdjustmentMethod,
+    AssetType,
+    DataCriticality,
+    Freshness,
+    Market,
+    SourceRole,
+)
+from domain.common.errors import DataContractError, NoMarketData, TradingPartnerError
 from domain.common.ids import EntityIdPrefix
+from domain.cross_asset.enums import OfferSide
 from domain.instruments.models import Instrument
 from domain.market.models import MarketBar
 from domain.technical.models import TechnicalAnalysis, TechnicalTimeframe
@@ -135,6 +147,7 @@ class TechnicalToolCoordinator:
         a_share_data_service: AShareMarketStructureService,
         indicator_engine: TechnicalIndicatorEngine,
         chart_renderer: TechnicalChartRenderer,
+        commodity_spot_service: CommoditySpotService | None = None,
     ) -> None:
         self._instrument_master = instrument_master
         self._clock = clock
@@ -144,6 +157,7 @@ class TechnicalToolCoordinator:
         self._a_share_data_service = a_share_data_service
         self._indicator_engine = indicator_engine
         self._chart_renderer = chart_renderer
+        self._commodity_spot = commodity_spot_service
 
     async def get_snapshot(
         self, request: TechnicalAnalysisInput
@@ -235,7 +249,29 @@ class TechnicalToolCoordinator:
     async def _load_daily_bars(
         self, instrument: Instrument, *, as_of: datetime, lookback: int
     ) -> tuple[RouterExecutionResult[object], tuple[MarketBar, ...], str]:
-        if instrument.market is Market.US:
+        if instrument.market is Market.DCE:
+            error = NoMarketData(
+                "DCE futures have no OHLCV path in Phase 3A; "
+                "technical analysis is unavailable",
+                details={
+                    "code": "DCE_OHLCV_UNAVAILABLE",
+                    "instrument_id": instrument.instrument_id,
+                },
+            )
+            return (
+                RouterExecutionResult(
+                    value=None,
+                    ok=False,
+                    criticality=DataCriticality.CORE,
+                    meta=None,
+                    attempts=(),
+                    warnings=(),
+                    error=error,
+                ),
+                (),
+                "unavailable",
+            )
+        if instrument.market in {Market.US, Market.CME}:
             day = as_of.astimezone(_NEW_YORK).date()
             is_future = instrument.asset_type is AssetType.FUTURE
             adjustment = (
@@ -243,11 +279,12 @@ class TechnicalToolCoordinator:
                 if is_future
                 else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
             )
-            basis = (
-                "unadjusted_front_month_continuous_futures_close"
-                if is_future
-                else "split_and_dividend_adjusted_daily_close"
-            )
+            if instrument.market is Market.CME:
+                basis = "unadjusted_specific_futures_close"
+            elif is_future:
+                basis = "unadjusted_front_month_continuous_futures_close"
+            else:
+                basis = "split_and_dividend_adjusted_daily_close"
             us_result = await self._us_data_service.get_bars(
                 instrument,
                 start=day - timedelta(days=lookback * 2),
@@ -262,6 +299,13 @@ class TechnicalToolCoordinator:
                 us_result,
                 tuple(us_result.value.bars[-lookback:]),
                 basis,
+            )
+        if instrument.market is Market.OTC and instrument.asset_type in {
+            AssetType.COMMODITY_SPOT,
+            AssetType.CFD,
+        }:
+            return await self._load_otc_daily_bars(
+                instrument, as_of=as_of, lookback=lookback
             )
         if instrument.market is Market.A_SHARE:
             day = as_of.astimezone(_SHANGHAI).date()
@@ -289,7 +333,106 @@ class TechnicalToolCoordinator:
                 if isinstance(bar, AShareBar)
             )
             return a_result, bars, "forward_adjusted_daily_close"
-        raise DataContractError("technical analysis supports A_SHARE and US markets")
+        raise DataContractError(
+            "technical analysis supports A_SHARE, US, CME, and OTC markets",
+            details={
+                "market": instrument.market.value,
+                "asset_type": instrument.asset_type.value,
+            },
+        )
+
+    async def _load_otc_daily_bars(
+        self, instrument: Instrument, *, as_of: datetime, lookback: int
+    ) -> tuple[RouterExecutionResult[object], tuple[MarketBar, ...], str]:
+        basis = "unadjusted_otc_broker_daily_close"
+        if self._commodity_spot is None:
+            error = NoMarketData(
+                "commodity spot service is not configured",
+                details={"code": "PROVIDER_NOT_CONFIGURED"},
+            )
+            return (
+                RouterExecutionResult(
+                    value=None,
+                    ok=False,
+                    criticality=DataCriticality.CORE,
+                    meta=None,
+                    attempts=(),
+                    warnings=(),
+                    error=error,
+                ),
+                (),
+                basis,
+            )
+        day = as_of.astimezone(_NEW_YORK).date()
+        result = await self._commodity_spot.get_bars(
+            instrument,
+            start=day - timedelta(days=lookback * 2),
+            end=day,
+            interval=USBarInterval.ONE_DAY,
+            as_of=as_of,
+            offer_side=OfferSide.BID,
+            adjustment=AdjustmentMethod.NONE,
+        )
+        if not result.ok or result.data is None:
+            return (
+                RouterExecutionResult(
+                    value=None,
+                    ok=False,
+                    criticality=DataCriticality.CORE,
+                    meta=None,
+                    attempts=(),
+                    warnings=result.warnings,
+                    error=result.error
+                    or NoMarketData(
+                        "commodity spot bars unavailable",
+                        details={"code": "NO_MARKET_DATA"},
+                    ),
+                ),
+                (),
+                basis,
+            )
+        bars = tuple(
+            MarketBar(
+                timestamp=bar.timestamp,
+                open=Decimal(str(bar.open)),
+                high=Decimal(str(bar.high)),
+                low=Decimal(str(bar.low)),
+                close=Decimal(str(bar.close)),
+                volume=Decimal(str(bar.volume)),
+            )
+            for bar in result.data.bars[-lookback:]
+        )
+        meta = result.meta
+        if meta is None:
+            return (
+                RouterExecutionResult(
+                    value=None,
+                    ok=False,
+                    criticality=DataCriticality.CORE,
+                    meta=None,
+                    attempts=(),
+                    warnings=result.warnings,
+                    error=DataContractError(
+                        "commodity spot provider omitted result metadata",
+                        details={"code": "DATA_CONTRACT_ERROR"},
+                    ),
+                ),
+                (),
+                basis,
+            )
+        return (
+            RouterExecutionResult(
+                value=result.data,
+                ok=True,
+                criticality=DataCriticality.CORE,
+                meta=meta,
+                attempts=(),
+                warnings=result.warnings,
+                error=None,
+            ),
+            bars,
+            basis,
+        )
 
     def _provider_failure(
         self,

@@ -1445,21 +1445,17 @@ wheels = [
 
 [[package]]
 name = "trading-partner"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "exchange-calendars" },
     { name = "httpx" },
-    { name = "matplotlib" },
     { name = "mcp" },
-    { name = "moomoo-api" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "schwab-py" },
     { name = "sqlalchemy" },
     { name = "ta-lib" },
     { name = "uuid6" },
@@ -1467,22 +1463,36 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "types-pyyaml" },
+accounts-moomoo = [
+    { name = "moomoo-api" },
+]
+accounts-schwab = [
+    { name = "schwab-py" },
+]
+all = [
+    { name = "matplotlib" },
+    { name = "moomoo-api" },
+    { name = "pypdf" },
+    { name = "schwab-py" },
+]
+chart = [
+    { name = "matplotlib" },
+]
+company-pdf = [
+    { name = "pypdf" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "matplotlib" },
+    { name = "moomoo-api" },
     { name = "mypy" },
+    { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "schwab-py" },
     { name = "types-pyyaml" },
 ]
 
@@ -1491,35 +1501,37 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "exchange-calendars", specifier = ">=4.5,<5" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "matplotlib", specifier = ">=3.10,<4" },
+    { name = "matplotlib", marker = "extra == 'all'", specifier = ">=3.10,<4" },
+    { name = "matplotlib", marker = "extra == 'chart'", specifier = ">=3.10,<4" },
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "moomoo-api", specifier = ">=10.8,<11" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
+    { name = "moomoo-api", marker = "extra == 'accounts-moomoo'", specifier = ">=10.8,<11" },
+    { name = "moomoo-api", marker = "extra == 'all'", specifier = ">=10.8,<11" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
-    { name = "pypdf", specifier = ">=5.0,<7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=5.0,<7" },
+    { name = "pypdf", marker = "extra == 'company-pdf'", specifier = ">=5.0,<7" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "schwab-py", specifier = ">=1.5,<2" },
+    { name = "schwab-py", marker = "extra == 'accounts-schwab'", specifier = ">=1.5,<2" },
+    { name = "schwab-py", marker = "extra == 'all'", specifier = ">=1.5,<2" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "ta-lib", specifier = ">=0.6.8,<0.7" },
-    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "uuid6", specifier = ">=2024.7.10" },
     { name = "yfinance", specifier = ">=1.4.1,<2" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["accounts-moomoo", "accounts-schwab", "chart", "company-pdf", "all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "matplotlib", specifier = ">=3.10,<4" },
+    { name = "moomoo-api", specifier = ">=10.8,<11" },
     { name = "mypy", specifier = ">=1.13" },
+    { name = "pypdf", specifier = ">=5.0,<7" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.8" },
+    { name = "schwab-py", specifier = ">=1.5,<2" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]
 

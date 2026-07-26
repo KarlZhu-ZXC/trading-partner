@@ -222,6 +222,12 @@ class RiskPolicy:
     confirmed_by: RiskConfirmer
     created_at: datetime
     idempotency_key: str
+    risk_budget_max_percent: Decimal = Decimal("2")
+    theme_exposure_max_percent: Decimal = Decimal("40")
+    drawdown_max_percent: Decimal = Decimal("20")
+    liquidity_participation_max_percent: Decimal = Decimal("10")
+    correlation_max_absolute: Decimal = Decimal("0.85")
+    event_blackout_days: int = 3
     schema_version: int = RISK_POLICY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -273,6 +279,29 @@ class RiskPolicy:
             )
         require_aware_datetime(self.created_at, field_name="created_at")
         _require_text(self.idempotency_key, field="idempotency_key", maximum=256)
+        for field, value, maximum in (
+            ("risk_budget_max_percent", self.risk_budget_max_percent, Decimal("100")),
+            (
+                "theme_exposure_max_percent",
+                self.theme_exposure_max_percent,
+                Decimal("100"),
+            ),
+            ("drawdown_max_percent", self.drawdown_max_percent, Decimal("100")),
+            (
+                "liquidity_participation_max_percent",
+                self.liquidity_participation_max_percent,
+                Decimal("100"),
+            ),
+            ("correlation_max_absolute", self.correlation_max_absolute, Decimal("1")),
+        ):
+            _require_decimal(
+                value,
+                field=field,
+                minimum=Decimal("0"),
+                maximum=maximum,
+                allow_zero=True,
+            )
+        _require_int(value=self.event_blackout_days, field="event_blackout_days", minimum=0)
         _require_schema_version(self.schema_version)
 
 
@@ -325,6 +354,80 @@ class RiskHypotheticalAddition:
 
 
 @dataclass(frozen=True, slots=True)
+class PositionSizingConstraint:
+    constraint_code: str
+    status: RiskCheckStatus
+    max_quantity: Decimal | None
+    limiting_value: Decimal | None
+    unit: str
+    message: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.constraint_code, field="constraint_code", maximum=128)
+        if not isinstance(self.status, RiskCheckStatus):
+            raise DataContractError("position sizing constraint status is invalid")
+        if self.status is RiskCheckStatus.NOT_EVALUATED and self.max_quantity is not None:
+            raise DataContractError("NOT_EVALUATED sizing constraint cannot set max_quantity")
+        if self.max_quantity is not None:
+            _require_amount(self.max_quantity, field="max_quantity")
+        if self.limiting_value is not None:
+            _require_amount(self.limiting_value, field="limiting_value")
+        _require_text(self.unit, field="unit", maximum=64)
+        _require_text(self.message, field="message", maximum=2000)
+
+
+@dataclass(frozen=True, slots=True)
+class PositionSizingResult:
+    plan_id: str
+    plan_version: int
+    instrument_id: str
+    currency: str
+    reference_price: Decimal
+    reference_price_at: datetime
+    current_quantity: Decimal
+    lot_size: Decimal
+    target_total_quantity: Decimal | None
+    max_total_quantity: Decimal | None
+    recommended_min_additional_quantity: Decimal | None
+    recommended_max_additional_quantity: Decimal | None
+    estimated_max_loss: Decimal | None
+    constraints: tuple[PositionSizingConstraint, ...]
+    data_quality_codes: tuple[str, ...]
+    historically_validated: bool = False
+    execution_effect: bool = False
+
+    def __post_init__(self) -> None:
+        _require_text(self.plan_id, field="plan_id", maximum=128)
+        _require_int(value=self.plan_version, field="plan_version")
+        parse_instrument_id(self.instrument_id)
+        _require_text(self.currency, field="currency", maximum=16)
+        _require_positive_decimal(self.reference_price, field="reference_price")
+        require_aware_datetime(self.reference_price_at, field_name="reference_price_at")
+        _require_amount(self.current_quantity, field="current_quantity")
+        _require_positive_decimal(self.lot_size, field="lot_size")
+        for field, value in (
+            ("target_total_quantity", self.target_total_quantity),
+            ("max_total_quantity", self.max_total_quantity),
+            (
+                "recommended_min_additional_quantity",
+                self.recommended_min_additional_quantity,
+            ),
+            (
+                "recommended_max_additional_quantity",
+                self.recommended_max_additional_quantity,
+            ),
+            ("estimated_max_loss", self.estimated_max_loss),
+        ):
+            if value is not None:
+                _require_amount(value, field=field)
+        if not isinstance(self.constraints, tuple):
+            raise DataContractError("position sizing constraints must be a tuple")
+        _ensure_codes(self.data_quality_codes, field="data_quality_codes", unique=True)
+        if self.historically_validated or self.execution_effect:
+            raise DataContractError("position sizing cannot claim validation or execution")
+
+
+@dataclass(frozen=True, slots=True)
 class RiskCheckResult:
     policy: RiskPolicy
     account_snapshot_ids: tuple[str, ...]
@@ -333,6 +436,7 @@ class RiskCheckResult:
     data_quality_codes: tuple[str, ...]
     hypothetical: RiskHypotheticalAddition | None
     overall_status: RiskOverallStatus
+    position_sizing: PositionSizingResult | None = None
     execution_effect: bool = False
 
     def __post_init__(self) -> None:
@@ -349,6 +453,10 @@ class RiskCheckResult:
         _ensure_codes(self.data_quality_codes, field="data_quality_codes", unique=True)
         if type(self.overall_status) is not RiskOverallStatus:
             raise DataContractError("overall_status must be RiskOverallStatus")
+        if self.position_sizing is not None and not isinstance(
+            self.position_sizing, PositionSizingResult
+        ):
+            raise DataContractError("position_sizing must be PositionSizingResult")
         _require_bool(self.execution_effect, field="execution_effect")
         if self.execution_effect:
             raise DataContractError(

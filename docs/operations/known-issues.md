@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-07-20  
+> Updated: 2026-07-26
 > Purpose: one cross-phase queue for verified defects and operational gaps  
 > Rule: resolve one item at a time; move an item to `resolved` only with focused evidence
 
@@ -15,16 +15,80 @@
 
 | Order | ID | Status | Area | Summary |
 |---:|---|---|---|---|
-| 1 | `MOOMOO-WL-001` | resolved | Watchlist sync | The roughly 63-second exact synchronization time is an accepted upstream constraint; exact refresh runs out of band and latency-sensitive reads use durable state |
-| 2 | `MOOMOO-WL-007` | resolved | Watchlist sync | Full watchlist sync runs as an externally scheduled, account-first precision replay |
-| 3 | `MOOMOO-WL-002` | open | Watchlist sync | CLI emits no progress while it waits for OpenD quota windows |
-| 4 | `MOOMOO-WL-003` | resolved | OpenD coordination | CLI and MCP share one cross-process sliding-window rate limiter for Moomoo Watchlist and account calls |
-| 5 | `MOOMOO-WL-004` | resolved | Instrument normalization | Moomoo `IDX` is normalized to Trading Partner `INDEX` while preserving the provider type |
-| 6 | `MOOMOO-WL-006` | resolved | Instrument normalization | A versioned Moomoo correction registry converts the erroneous SPG identity while retaining raw provider provenance |
-| 7 | `REDDIT-001` | resolved | US sentiment | A bounded Apify account fallback supplies Reddit threads when anonymous RSS returns 429 |
-| 8 | `REDDIT-002` | resolved | US sentiment | Reddit honors provider cooldown signals and falls back to batched Apify reads |
-| 9 | `PERSIST-001` | resolved | Account persistence | Integrity failures now expose a sanitized conflict type and reason-specific retryability instead of one generic uniqueness message |
-| 10 | `PERSIST-002` | resolved | Account persistence | SQLite foreign-key enforcement and account parent/position insertion are deterministic across pooled connections |
+| 1 | `AUTOMATION-001` | resolved | Post-market sync | `status` detected the missing 2026-07-24 receipt; bounded `catch-up` completed it and a repeat skipped idempotently |
+| 2 | `MOOMOO-WL-001` | resolved | Watchlist sync | The roughly 63-second exact synchronization time is an accepted upstream constraint; exact refresh runs out of band and latency-sensitive reads use durable state |
+| 3 | `MOOMOO-WL-007` | resolved | Watchlist sync | Full watchlist sync runs as an externally scheduled, account-first precision replay |
+| 4 | `MOOMOO-WL-002` | resolved | Watchlist sync | CLI emits a redacted 15-second stderr heartbeat while preserving one terminal stdout JSON |
+| 5 | `MOOMOO-WL-003` | resolved | OpenD coordination | CLI and MCP share one cross-process sliding-window rate limiter for Moomoo Watchlist and account calls |
+| 6 | `MOOMOO-WL-004` | resolved | Instrument normalization | Moomoo `IDX` is normalized to Trading Partner `INDEX` while preserving the provider type |
+| 7 | `MOOMOO-WL-006` | resolved | Instrument normalization | A versioned Moomoo correction registry converts the erroneous SPG identity while retaining raw provider provenance |
+| 8 | `REDDIT-001` | resolved | US sentiment | A bounded Apify account fallback supplies Reddit threads when anonymous RSS returns 429 |
+| 9 | `REDDIT-002` | resolved | US sentiment | Reddit honors provider cooldown signals and falls back to batched Apify reads |
+| 10 | `PERSIST-001` | resolved | Account persistence | Integrity failures now expose a sanitized conflict type and reason-specific retryability instead of one generic uniqueness message |
+| 11 | `PERSIST-002` | resolved | Account persistence | SQLite foreign-key enforcement and account parent/position insertion are deterministic across pooled connections |
+| 12 | `FLOW-001` | resolved | Workflow replay | Five workflows claim a request before Provider access and persist bounded, hashed fact artifacts for exact terminal replay |
+| 13 | `CHALLENGE-001` | resolved | Challenge Review | Strict-review start and resolution use payload-hashed idempotency keys and replay the original result |
+| 14 | `AUTH-001` | deferred | Confirmation identity | MCP confirmation fields are caller assertions; authenticated principal binding belongs to the host/transport boundary |
+| 15 | `ARCH-001` | resolved | MCP façade | Lifecycle, validation, and compact routing are separated behind the sole 28-tool public surface |
+| 16 | `ARCH-002` | resolved | Composition | Runtime resources, providers, and tool-facing services have explicit bundles and deterministic close ownership |
+| 17 | `ARCH-003` | resolved | Providers/codecs | Eastmoney, Sina, and typed codecs are physically capability-split behind stable import façades |
+
+## Post-market Automation
+
+### `AUTOMATION-001` — resolved: session diagnosis and bounded catch-up
+
+- **Resolution (2026-07-26):** `status` identified `2026-07-24` as the missing due
+  session. `catch-up` refreshed three account snapshots / 14 holdings, synchronized 24
+  groups / 145 relations, and wrote a successful terminal receipt. A repeated catch-up
+  returned `SKIPPED_ALREADY_COMPLETED` without another Provider refresh.
+- **CLI contract:** `run`, read-only `status`, bounded `catch-up`, and ordinary `--help`
+  share the same calendar due-session definition. There is no arbitrary historical
+  replay entry point. Quota waits expose only a redacted stderr heartbeat.
+
+## Cross-cutting workflow boundaries
+
+### `FLOW-001` — resolved: workflow execution is request-idempotent
+
+- **Resolution:** each workflow requires a normalized idempotency key, persists
+  `STARTED` before Provider calls, transitions through `RUNNING`, and stores every
+  normalized terminal fact artifact with a SHA-256 digest and size cap. Terminal retries
+  replay durable facts; concurrent retries return `WORKFLOW_RUN_IN_PROGRESS`; an expired
+  lease can be reclaimed after interruption. All paths remain non-executing.
+
+### `CHALLENGE-001` — resolved: Challenge Review retries are idempotent
+
+- **Resolution:** material starts and resolutions persist a normalized idempotency key
+  and canonical request hash. Exact retries return the original Review; a reused key with
+  changed content returns `IDEMPOTENCY_CONFLICT`. Discussion mode stays non-persisting.
+
+### `AUTH-001` — confirmation identity is transport trust, not authentication
+
+- **Observed:** fields such as `confirmed_by="user"` are validated as closed values but
+  are supplied by the MCP caller. The application has no authenticated-principal port.
+- **Boundary:** local MCP validation prevents accidental values, not impersonation by a
+  malicious client. Binding confirmer identity to a principal must be implemented by the
+  MCP host/transport and passed as trusted context; application services should not
+  invent an identity.
+- **Prepared boundary:** `ActorContext` distinguishes `CALLER_ASSERTED` from
+  `AUTHENTICATED` assurance and rejects trusted-principal / `confirmed_by` mismatches as
+  `CONFIRMER_MISMATCH`. stdio stays caller-asserted, so this remains deferred until an
+  authenticated host supplies a principal.
+
+## Cross-cutting architecture
+
+### `ARCH-001` / `ARCH-002` / `ARCH-003` — resolved: bounded change surfaces
+
+- MCP process lifecycle is isolated from compact tool adapters; one inventory owns the exact
+  28-tool public/forbidden/retired sets, and capability modules prevent unrelated edits from
+  colliding in one server module.
+- `RuntimeResources` owns idempotent, deduplicated shutdown; `ProviderBundle` and
+  `ApplicationServices` expose stable composition seams. Flat container fields remain only as
+  a compatibility migration surface.
+- Eastmoney and Sina retain their public adapter classes but delegate fact capabilities to
+  separate endpoint modules with isolated HTTP clients. The legacy `typed` codec path is a
+  façade over physically separate implementations, preserving canonical cache serialization.
+- Architecture tests cap the lifecycle/core façades and require the provider/codec modules,
+  preventing the previous monoliths from silently regrowing.
 
 ## Moomoo Watchlist
 

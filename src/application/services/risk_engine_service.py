@@ -9,9 +9,11 @@ from decimal import Decimal
 
 from application.dto.risk import RiskCheckInput
 from application.services.account_service import AccountService
+from application.services.position_sizing_service import PositionSizingService
 from application.services.risk_policy_service import RiskPolicyService
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
+from domain.common.values import parse_instrument_id
 from domain.portfolio.models import AccountSnapshot
 from domain.risk.enums import (
     RiskCheckStatus,
@@ -19,6 +21,7 @@ from domain.risk.enums import (
     RiskSeverity,
 )
 from domain.risk.models import (
+    PositionSizingResult,
     RiskCheck,
     RiskCheckResult,
     RiskHypotheticalAddition,
@@ -33,9 +36,11 @@ class RiskEngineService:
         self,
         accounts: AccountService,
         policies: RiskPolicyService,
+        sizing: PositionSizingService | None = None,
     ) -> None:
         self._accounts = accounts
         self._policies = policies
+        self._sizing = sizing
 
     async def check(
         self, request: RiskCheckInput, *, effective_as_of: datetime
@@ -49,17 +54,42 @@ class RiskEngineService:
             snapshots = refreshed.snapshots
         else:
             snapshots = self._accounts.get_snapshots(request.account_snapshot_ids)
-        hypothetical = self._hypothetical(request)
+        policy = self._policies.get_current()
+        sizing: PositionSizingResult | None = None
+        duplicate_intent_count: int | None = None
+        if request.trade_plan_id is not None:
+            if self._sizing is None:
+                raise DataContractError("Position Sizing service is not configured")
+            plan = self._sizing.get_plan(request.trade_plan_id)
+            duplicate_intent_count = self._sizing.count_duplicate_intents(plan)
+            sizing = self._sizing.calculate(
+                plan, policy, snapshots, request, as_of=effective_as_of
+            )
+        hypothetical = self._hypothetical(request, sizing)
         result = self._evaluate(
-            policy=self._policies.get_current(),
+            policy=policy,
             snapshots=snapshots,
             hypothetical=hypothetical,
+            sizing=sizing,
+            duplicate_intent_count=duplicate_intent_count,
             as_of=effective_as_of,
         )
         return result, snapshots
 
     @staticmethod
-    def _hypothetical(request: RiskCheckInput) -> RiskHypotheticalAddition | None:
+    def _hypothetical(
+        request: RiskCheckInput, sizing: PositionSizingResult | None
+    ) -> RiskHypotheticalAddition | None:
+        if sizing is not None:
+            quantity = sizing.recommended_max_additional_quantity
+            if quantity is None or quantity <= 0:
+                return None
+            return RiskHypotheticalAddition(
+                instrument_id=sizing.instrument_id,
+                quantity=quantity,
+                assumed_price=sizing.reference_price,
+                currency=sizing.currency,
+            )
         if request.hypothetical_instrument_id is None:
             return None
         assert request.hypothetical_quantity is not None
@@ -78,6 +108,8 @@ class RiskEngineService:
         policy: RiskPolicy,
         snapshots: tuple[AccountSnapshot, ...],
         hypothetical: RiskHypotheticalAddition | None,
+        sizing: PositionSizingResult | None,
+        duplicate_intent_count: int | None,
         as_of: datetime,
     ) -> RiskCheckResult:
         if not snapshots:
@@ -144,6 +176,52 @@ class RiskEngineService:
                     )
                 )
 
+        if sizing is not None:
+            risk_constraint = next(
+                (
+                    item
+                    for item in sizing.constraints
+                    if item.constraint_code == "PLAN_RISK_BUDGET"
+                ),
+                None,
+            )
+            limit = risk_constraint.limiting_value if risk_constraint is not None else None
+            checks.append(
+                RiskCheck(
+                    rule_code="TRADE_PLAN_RISK_BUDGET",
+                    status=(
+                        RiskCheckStatus.NOT_EVALUATED
+                        if sizing.estimated_max_loss is None or limit is None
+                        else (
+                            RiskCheckStatus.BREACH
+                            if sizing.estimated_max_loss > limit
+                            else RiskCheckStatus.PASS
+                        )
+                    ),
+                    severity=(
+                        RiskSeverity.HIGH
+                        if sizing.estimated_max_loss is not None
+                        and limit is not None
+                        and sizing.estimated_max_loss > limit
+                        else RiskSeverity.INFO
+                    ),
+                    actual=sizing.estimated_max_loss,
+                    limit=limit,
+                    unit=sizing.currency,
+                    scope=sizing.plan_id,
+                    message="Trade Plan maximum loss was checked against its risk budget.",
+                )
+            )
+            for code in sizing.data_quality_codes:
+                add_quality(code)
+            self._phase3d_plan_checks(
+                policy=policy,
+                snapshots=snapshots,
+                sizing=sizing,
+                duplicate_intent_count=duplicate_intent_count,
+                checks=checks,
+            )
+
         if policy.is_system_default:
             add_quality("RISK_POLICY_DEFAULT_UNCONFIRMED")
         overall = self._overall(checks, quality, policy)
@@ -155,8 +233,206 @@ class RiskEngineService:
             data_quality_codes=tuple(quality),
             hypothetical=hypothetical,
             overall_status=overall,
+            position_sizing=sizing,
             execution_effect=False,
         )
+
+    @staticmethod
+    def _phase3d_plan_checks(
+        *,
+        policy: RiskPolicy,
+        snapshots: tuple[AccountSnapshot, ...],
+        sizing: PositionSizingResult,
+        duplicate_intent_count: int | None,
+        checks: list[RiskCheck],
+    ) -> None:
+        constraints = {item.constraint_code: item for item in sizing.constraints}
+        for rule_code, constraint_code in (
+            ("TRADE_PLAN_REFERENCE_PRICE_AGE", "REFERENCE_PRICE_FRESHNESS"),
+            ("LIQUIDITY_PARTICIPATION", "LIQUIDITY_PARTICIPATION"),
+        ):
+            constraint = constraints.get(constraint_code)
+            if constraint is None or constraint.status is RiskCheckStatus.NOT_EVALUATED:
+                checks.append(
+                    RiskCheck(
+                        rule_code=rule_code,
+                        status=RiskCheckStatus.NOT_EVALUATED,
+                        severity=RiskSeverity.HIGH,
+                        actual=None,
+                        limit=None,
+                        unit="unknown",
+                        scope=sizing.plan_id,
+                        message=f"{rule_code} lacked a required verified fact.",
+                    )
+                )
+            else:
+                checks.append(
+                    RiskCheck(
+                        rule_code=rule_code,
+                        status=RiskCheckStatus.PASS,
+                        severity=RiskSeverity.INFO,
+                        actual=constraint.limiting_value,
+                        limit=(
+                            policy.liquidity_participation_max_percent
+                            if rule_code == "LIQUIDITY_PARTICIPATION"
+                            else policy.max_price_age_seconds
+                        ),
+                        unit=constraint.unit,
+                        scope=sizing.plan_id,
+                        message=f"{rule_code} was evaluated from verified inputs.",
+                    )
+                )
+
+        matching_positions = tuple(
+            position
+            for snapshot in snapshots
+            for position in snapshot.positions
+            if position.instrument_id == sizing.instrument_id
+        )
+        eligible_drawdowns = tuple(
+            ((position.average_cost - position.market_price) / position.average_cost)
+            * _HUNDRED
+            for position in matching_positions
+            if position.average_cost is not None
+            and position.average_cost > 0
+            and position.market_price is not None
+        )
+        checks.append(
+            RiskEngineService._maximum_check(
+                "DRAWDOWN_FROM_REPORTED_COST",
+                max(eligible_drawdowns, default=Decimal(0))
+                if eligible_drawdowns
+                else None,
+                policy.drawdown_max_percent,
+                "percent_from_reported_cost",
+                sizing.instrument_id,
+                "Loss from reported average cost is within policy.",
+                "Loss from reported average cost exceeds policy.",
+            )
+        )
+
+        duplicate_actual = duplicate_intent_count or 0
+        duplicate_status = (
+            RiskCheckStatus.WARN if duplicate_actual else RiskCheckStatus.PASS
+        )
+        checks.append(
+            RiskCheck(
+                rule_code="DUPLICATE_DURABLE_INTENT",
+                status=duplicate_status,
+                severity=(
+                    RiskSeverity.MEDIUM
+                    if duplicate_status is RiskCheckStatus.WARN
+                    else RiskSeverity.INFO
+                ),
+                actual=duplicate_actual,
+                limit=0,
+                unit="durable_research_intents",
+                scope=sizing.instrument_id,
+                message=(
+                    "An unsuperseded initiate/add Decision intent already exists."
+                    if duplicate_status is RiskCheckStatus.WARN
+                    else "No duplicate durable initiate/add Decision intent exists."
+                ),
+            )
+        )
+
+        _asset, market, _symbol = parse_instrument_id(sizing.instrument_id)
+        if market.value == "A_SHARE":
+            lot_ok = (
+                sizing.recommended_max_additional_quantity is not None
+                and sizing.recommended_max_additional_quantity % Decimal("100") == 0
+            )
+            checks.append(
+                RiskCheck(
+                    rule_code="A_SHARE_BOARD_LOT",
+                    status=(
+                        RiskCheckStatus.PASS
+                        if lot_ok
+                        else RiskCheckStatus.NOT_EVALUATED
+                    ),
+                    severity=RiskSeverity.INFO if lot_ok else RiskSeverity.HIGH,
+                    actual=sizing.recommended_max_additional_quantity,
+                    limit=100,
+                    unit="shares_per_lot",
+                    scope=sizing.instrument_id,
+                    message="A-share planned addition was rounded to board lots.",
+                )
+            )
+            restricted = tuple(
+                position
+                for position in matching_positions
+                if position.sellable_quantity is not None
+                and position.sellable_quantity < position.quantity
+            )
+            checks.append(
+                RiskCheck(
+                    rule_code="A_SHARE_T1_SELLABILITY",
+                    status=(RiskCheckStatus.WARN if restricted else RiskCheckStatus.PASS),
+                    severity=(RiskSeverity.MEDIUM if restricted else RiskSeverity.INFO),
+                    actual=len(restricted),
+                    limit=0,
+                    unit="positions",
+                    scope=sizing.instrument_id,
+                    message=(
+                        "Some current shares are not sellable; T+1 or provider constraints apply."
+                        if restricted
+                        else "No current sellability restriction was reported."
+                    ),
+                )
+            )
+            checks.append(
+                RiskCheck(
+                    rule_code="A_SHARE_LIMIT_SUSPENSION_STATE",
+                    status=RiskCheckStatus.NOT_EVALUATED,
+                    severity=RiskSeverity.HIGH,
+                    actual=None,
+                    limit=None,
+                    unit="state",
+                    scope=sizing.instrument_id,
+                    message="Limit-lock and suspension facts were not supplied to this risk run.",
+                )
+            )
+
+        for code, message in (
+            (
+                "THEME_CONCENTRATION",
+                "Verified theme classification exposure is unavailable to this risk run.",
+            ),
+            (
+                "PAIRWISE_CORRELATION",
+                "Aligned return correlation facts are unavailable to this risk run.",
+            ),
+            (
+                "EVENT_BLACKOUT_WINDOW",
+                "A verified upcoming event calendar was not supplied to this risk run.",
+            ),
+        ):
+            checks.append(
+                RiskCheck(
+                    rule_code=code,
+                    status=RiskCheckStatus.NOT_EVALUATED,
+                    severity=RiskSeverity.HIGH,
+                    actual=None,
+                    limit=(
+                        policy.theme_exposure_max_percent
+                        if code == "THEME_CONCENTRATION"
+                        else (
+                            policy.correlation_max_absolute
+                            if code == "PAIRWISE_CORRELATION"
+                            else policy.event_blackout_days
+                        )
+                    ),
+                    unit=(
+                        "percent"
+                        if code == "THEME_CONCENTRATION"
+                        else "absolute_correlation"
+                        if code == "PAIRWISE_CORRELATION"
+                        else "days"
+                    ),
+                    scope=sizing.instrument_id,
+                    message=message,
+                )
+            )
 
     def _account_checks(
         self,

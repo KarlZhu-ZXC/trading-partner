@@ -11,6 +11,7 @@ from application.dto.research import (
     OpenQuestionCandidatePayload,
     ThesisHistoryDTO,
     ThesisRevisionCandidatePayload,
+    TradePlanCandidatePayload,
     WatchlistCandidatePayload,
     kind_from_payload,
     parse_candidate_payload,
@@ -24,6 +25,7 @@ from application.services._research_support import (
     CODEX_ACTOR,
     CONFIRM_REVIEWERS,
     UowFactory,
+    actor_audit_fields,
     build_research_state,
     candidate_to_dto,
     envelope_failure,
@@ -31,6 +33,7 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from domain.common.actor import ActorContext
 from domain.common.enums import (
     AssumptionStatus,
     CandidateKind,
@@ -62,6 +65,14 @@ from domain.research.models import (
     ThesisRevision,
     WatchlistItem,
 )
+from domain.trade_plan.enums import (
+    TradePlanComparator,
+    TradePlanConditionMode,
+    TradePlanConditionPhase,
+    TradePlanFactType,
+    TradePlanStatus,
+)
+from domain.trade_plan.models import TradePlan, TradePlanCondition
 
 
 class ThesisRevisionService:
@@ -321,6 +332,7 @@ class ThesisRevisionService:
             | OpenQuestionCandidatePayload
             | WatchlistCandidatePayload
             | CaseUpdateCandidatePayload
+            | TradePlanCandidatePayload
         ),
         confirmation_mode: ConfirmationMode = ConfirmationMode.STRICT_REVIEW,
         proposed_by: str,
@@ -367,6 +379,38 @@ class ThesisRevisionService:
                         )
                 elif isinstance(payload, ThesisRevisionCandidatePayload):
                     target_revision_no = payload.replaces_revision_no
+                elif isinstance(payload, TradePlanCandidatePayload):
+                    if case_id is None:
+                        raise InputValidationError("trade_plan candidate requires case_id")
+                    thesis = uow.theses.get(payload.thesis_id)
+                    if thesis.case_id != case_id:
+                        raise InputValidationError(
+                            "Trade Plan thesis_id does not belong to case_id"
+                        )
+                    case = uow.cases.get(case_id)
+                    if (
+                        case.primary_instrument_id is not None
+                        and case.primary_instrument_id != payload.instrument_id
+                    ):
+                        raise InputValidationError(
+                            "Trade Plan instrument must match the Case primary Instrument"
+                        )
+                    current = uow.trade_plans.get_current_by_case(case_id)
+                    if payload.plan_id is None:
+                        if current is not None:
+                            raise InputValidationError(
+                                "Case already has a Trade Plan; append a version instead"
+                            )
+                    elif (
+                        current is None
+                        or current.plan_id != payload.plan_id
+                        or current.version != payload.expected_version
+                    ):
+                        raise InputValidationError(
+                            "Trade Plan expected_version does not match current version"
+                        )
+                    resolved_thesis = payload.thesis_id
+                    target_revision_no = payload.expected_version
 
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
@@ -418,10 +462,15 @@ class ThesisRevisionService:
         *,
         reviewed_by: str,
         review_note: str | None = None,
+        actor_context: ActorContext | None = None,
     ) -> ToolEnvelope[ConfirmedStateUpdateDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            require_confirm_reviewer(reviewed_by, action="confirm_candidate")
+            context = require_confirm_reviewer(
+                reviewed_by,
+                action="confirm_candidate",
+                actor_context=actor_context,
+            )
             with self._uow_factory() as uow:
                 candidate = uow.candidates.get(candidate_id)
                 if candidate.status != CandidateStatus.PROPOSED:
@@ -464,15 +513,17 @@ class ThesisRevisionService:
                     rejection_reason=None,
                 )
                 confirmed = uow.candidates.get(candidate_id)
+                audit_payload = {
+                    "candidate_id": candidate_id,
+                    "kind": candidate.kind.value,
+                    "reviewed_by": reviewed_by.strip(),
+                    "affected_entity_type": affected_type,
+                    "affected_entity_id": affected_id,
+                }
+                audit_payload.update(actor_audit_fields(context))
                 uow.audit.append(
                     "phase1b.candidate.confirmed",
-                    {
-                        "candidate_id": candidate_id,
-                        "kind": candidate.kind.value,
-                        "reviewed_by": reviewed_by.strip(),
-                        "affected_entity_type": affected_type,
-                        "affected_entity_id": affected_id,
-                    },
+                    audit_payload,
                     request_id=request_id,
                 )
 
@@ -506,10 +557,15 @@ class ThesisRevisionService:
         *,
         reviewed_by: str,
         rejection_reason: str,
+        actor_context: ActorContext | None = None,
     ) -> ToolEnvelope[CandidateRevisionDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            require_confirm_reviewer(reviewed_by, action="reject_candidate")
+            context = require_confirm_reviewer(
+                reviewed_by,
+                action="reject_candidate",
+                actor_context=actor_context,
+            )
             reason = rejection_reason.strip()
             if not reason:
                 raise InputValidationError("rejection_reason must be non-empty")
@@ -530,13 +586,15 @@ class ThesisRevisionService:
                     rejection_reason=reason,
                 )
                 rejected = uow.candidates.get(candidate_id)
+                audit_payload = {
+                    "candidate_id": candidate_id,
+                    "reviewed_by": reviewed_by.strip(),
+                    "rejection_reason": reason,
+                }
+                audit_payload.update(actor_audit_fields(context))
                 uow.audit.append(
                     "phase1b.candidate.rejected",
-                    {
-                        "candidate_id": candidate_id,
-                        "reviewed_by": reviewed_by.strip(),
-                        "rejection_reason": reason,
-                    },
+                    audit_payload,
                     request_id=request_id,
                 )
                 uow.commit()
@@ -559,6 +617,7 @@ class ThesisRevisionService:
         *,
         reviewed_by: str,
         review_note: str,
+        actor_context: ActorContext | None = None,
     ) -> ToolEnvelope[CandidateRevisionDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
@@ -594,7 +653,11 @@ class ThesisRevisionService:
                         details={"reviewed_by": actor, "proposed_by": candidate.proposed_by},
                     )
                 elif actor in CONFIRM_REVIEWERS:
-                    pass
+                    require_confirm_reviewer(
+                        actor,
+                        action="withdraw_candidate",
+                        actor_context=actor_context,
+                    )
                 elif actor != candidate.proposed_by:
                     raise UnauthorizedReviewer(
                         "only original proposer may withdraw",
@@ -611,13 +674,16 @@ class ThesisRevisionService:
                     rejection_reason=None,
                 )
                 withdrawn = uow.candidates.get(candidate_id)
+                audit_payload = {
+                    "candidate_id": candidate_id,
+                    "reviewed_by": actor,
+                    "review_note": note,
+                }
+                if actor_context is not None:
+                    audit_payload.update(actor_audit_fields(actor_context))
                 uow.audit.append(
                     "phase1b.candidate.withdrawn",
-                    {
-                        "candidate_id": candidate_id,
-                        "reviewed_by": actor,
-                        "review_note": note,
-                    },
+                    audit_payload,
                     request_id=request_id,
                 )
                 uow.commit()
@@ -737,7 +803,113 @@ class ThesisRevisionService:
         if kind is CandidateKind.CASE_STATUS_CHANGE:
             assert isinstance(payload, CaseUpdateCandidatePayload)
             return self._apply_case_update(uow, candidate, payload, now=now)
+        if kind is CandidateKind.TRADE_PLAN:
+            assert isinstance(payload, TradePlanCandidatePayload)
+            return self._apply_trade_plan(
+                uow, candidate, payload, reviewed_by=reviewed_by, now=now
+            )
         raise DataContractError(f"unsupported candidate kind: {kind}")
+
+    def _apply_trade_plan(
+        self,
+        uow: ResearchUnitOfWork,
+        candidate: object,
+        payload: TradePlanCandidatePayload,
+        *,
+        reviewed_by: str,
+        now: object,
+    ) -> tuple[str, str | None]:
+        from datetime import datetime
+
+        from domain.research.models import CandidateThesisRevision
+
+        assert isinstance(candidate, CandidateThesisRevision)
+        assert isinstance(now, datetime)
+        case_id = candidate.case_id
+        if case_id is None:
+            raise DataContractError("trade_plan candidate requires case_id")
+        case = uow.cases.get(case_id)
+        thesis = uow.theses.get(payload.thesis_id)
+        if thesis.case_id != case_id:
+            raise DataContractError("Trade Plan thesis does not belong to Case")
+        status = TradePlanStatus(payload.status)
+        if status is TradePlanStatus.ACTIVE and thesis.status in {
+            ThesisStatus.INVALIDATED,
+            ThesisStatus.ARCHIVED,
+        }:
+            raise DataContractError(
+                "ACTIVE Trade Plan cannot reference an invalidated or archived Thesis"
+            )
+        if (
+            case.primary_instrument_id is not None
+            and case.primary_instrument_id != payload.instrument_id
+        ):
+            raise DataContractError("Trade Plan instrument cannot diverge from Case")
+
+        current = uow.trade_plans.get_current_by_case(case_id)
+        if payload.plan_id is None:
+            if current is not None:
+                raise DataContractError("Case already has a Trade Plan")
+            plan_id = self._id_generator.new(EntityIdPrefix.TRADE_PLAN)
+            version = 1
+        else:
+            if current is None or current.plan_id != payload.plan_id:
+                raise DataContractError("Trade Plan identity is not current for Case")
+            if payload.expected_version != current.version:
+                from domain.common.errors import TradePlanVersionConflict
+
+                raise TradePlanVersionConflict(
+                    "Trade Plan expected_version does not match current version",
+                    details={"current_version": current.version},
+                )
+            plan_id = current.plan_id
+            version = current.version + 1
+
+        conditions = tuple(
+            TradePlanCondition(
+                condition_code=item.condition_code,
+                phase=TradePlanConditionPhase(item.phase),
+                mode=TradePlanConditionMode(item.mode),
+                description=item.description,
+                severity=item.severity,
+                fact_type=(TradePlanFactType(item.fact_type) if item.fact_type else None),
+                metric_key=item.metric_key,
+                comparator=(
+                    TradePlanComparator(item.comparator) if item.comparator else None
+                ),
+                threshold=item.threshold,
+                unit=item.unit,
+                instrument_id=item.instrument_id,
+                max_fact_age_seconds=item.max_fact_age_seconds,
+                event_after=item.event_after,
+            )
+            for item in payload.conditions
+        )
+        plan = TradePlan(
+            plan_id=plan_id,
+            version=version,
+            case_id=case_id,
+            thesis_id=payload.thesis_id,
+            instrument_id=payload.instrument_id,
+            status=status,
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            currency=payload.currency,
+            reference_price=payload.reference_price,
+            reference_price_at=payload.reference_price_at,
+            target_position_percent=payload.target_position_percent,
+            max_position_percent=payload.max_position_percent,
+            risk_budget_percent=payload.risk_budget_percent,
+            stop_price=payload.stop_price,
+            conditions=conditions,
+            notes=payload.notes,
+            confirmed_by=reviewed_by,
+            created_at=now,
+            idempotency_key=candidate.idempotency_key,
+        )
+        uow.trade_plans.append(plan)
+        self._touch_case(uow, case_id, now)
+        return "trade_plan", plan.plan_id
 
     def _touch_case(self, uow: ResearchUnitOfWork, case_id: str, now: object) -> None:
         from datetime import datetime

@@ -40,12 +40,14 @@ OP_BARS = "us.bars.v1"
 _QUOTE_ASSET_TYPES = frozenset(
     {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
 )
+_QUOTE_MARKETS = frozenset({Market.US, Market.CME})
 
 # Alpha Vantage's equity/ETF/index endpoints cannot serve continuous futures.
 # Metal futures use dedicated, asset-aware fallbacks: Sina supplies timestamped
 # GC/SI/HG quotes; Eastmoney supplies daily-derived bars for the seeded metals.
-_FUTURES_QUOTE_POLICY = ToolDataPolicy(
-    tool_name="us_get_market",
+# Legacy future:US:* continuous proxies only — never rewrite CME specifics.
+_LEGACY_US_FUTURES_QUOTE_POLICY = ToolDataPolicy(
+    tool_name="market_get_snapshot",
     required_categories=(DataCategory.MARKET_QUOTE,),
     optional_categories=(),
     category_chain_overrides={
@@ -55,7 +57,7 @@ _FUTURES_QUOTE_POLICY = ToolDataPolicy(
         )
     },
 )
-_FUTURES_BARS_POLICY = ToolDataPolicy(
+_LEGACY_US_FUTURES_BARS_POLICY = ToolDataPolicy(
     tool_name="market_get_bars",
     required_categories=(DataCategory.MARKET_OHLCV,),
     optional_categories=(),
@@ -64,6 +66,24 @@ _FUTURES_BARS_POLICY = ToolDataPolicy(
             VendorId.YFINANCE,
             VendorId.EASTMONEY_FUTURES,
         )
+    },
+)
+# CME specific contracts: Yahoo active-contract symbols only (no GC=F rewrite,
+# no Sina/Eastmoney continuous-proxy fallback).
+_CME_SPECIFIC_QUOTE_POLICY = ToolDataPolicy(
+    tool_name="market_get_snapshot",
+    required_categories=(DataCategory.MARKET_QUOTE,),
+    optional_categories=(),
+    category_chain_overrides={
+        DataCategory.MARKET_QUOTE: (VendorId.YFINANCE,)
+    },
+)
+_CME_SPECIFIC_BARS_POLICY = ToolDataPolicy(
+    tool_name="market_get_bars",
+    required_categories=(DataCategory.MARKET_OHLCV,),
+    optional_categories=(),
+    category_chain_overrides={
+        DataCategory.MARKET_OHLCV: (VendorId.YFINANCE,)
     },
 )
 
@@ -135,15 +155,15 @@ class USMarketDataService:
         self._quote_codec = quote_codec
         self._bars_codec = bars_codec
 
-    def _require_us_tradable(self, instrument: Instrument) -> None:
+    def _require_exchange_tradable(self, instrument: Instrument) -> None:
         if not isinstance(instrument, Instrument):
             raise DataContractError(
                 "instrument must be Instrument",
                 details={"field": "instrument", "rule": "type"},
             )
-        if instrument.market is not Market.US:
+        if instrument.market not in _QUOTE_MARKETS:
             raise DataContractError(
-                "instrument market must be US",
+                "instrument market must be US or CME",
                 details={"field": "instrument", "rule": "market"},
             )
         if instrument.asset_type not in _QUOTE_ASSET_TYPES:
@@ -155,6 +175,26 @@ class USMarketDataService:
                     "asset_type": instrument.asset_type.value,
                 },
             )
+        if instrument.market is Market.CME and instrument.asset_type is not AssetType.FUTURE:
+            raise DataContractError(
+                "CME instruments must be futures",
+                details={"field": "instrument", "rule": "cme_future_only"},
+            )
+
+    def _quote_bars_policy(
+        self, instrument: Instrument, *, bars: bool
+    ) -> ToolDataPolicy | None:
+        if instrument.asset_type is not AssetType.FUTURE:
+            return None
+        if instrument.market is Market.CME:
+            return _CME_SPECIFIC_BARS_POLICY if bars else _CME_SPECIFIC_QUOTE_POLICY
+        if instrument.market is Market.US:
+            return (
+                _LEGACY_US_FUTURES_BARS_POLICY
+                if bars
+                else _LEGACY_US_FUTURES_QUOTE_POLICY
+            )
+        return None
 
     def _require_as_of_not_future(self, as_of: datetime, *, operation: str) -> None:
         require_aware_datetime(as_of, field_name="as_of")
@@ -292,7 +332,7 @@ class USMarketDataService:
     async def get_quote(
         self, instrument: Instrument, as_of: datetime
     ) -> RouterExecutionResult[USQuote]:
-        self._require_us_tradable(instrument)
+        self._require_exchange_tradable(instrument)
         self._require_as_of_not_future(as_of, operation=OP_QUOTE)
         fingerprint = build_us_fingerprint(
             OP_QUOTE, instrument.instrument_id, {}, as_of
@@ -313,18 +353,14 @@ class USMarketDataService:
             self._validate_quote(success, instrument=instrument, as_of=as_of)
 
         return await self._router.execute(
-            market=Market.US,
+            market=instrument.market,
             category=DataCategory.MARKET_QUOTE,
             call=_call,
             operation_name=OP_QUOTE,
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=(
-                _FUTURES_QUOTE_POLICY
-                if instrument.asset_type is AssetType.FUTURE
-                else None
-            ),
+            tool_policy=self._quote_bars_policy(instrument, bars=False),
             bypass_cache=False,
             cache_codec=self._quote_codec,
             result_validator=_validator,
@@ -340,7 +376,7 @@ class USMarketDataService:
         adjustment: AdjustmentMethod,
         as_of: datetime,
     ) -> RouterExecutionResult[USBarSeries]:
-        self._require_us_tradable(instrument)
+        self._require_exchange_tradable(instrument)
         self._require_as_of_not_future(as_of, operation=OP_BARS)
         start = _require_exact_date(start, field="start")
         end = _require_exact_date(end, field="end")
@@ -408,18 +444,14 @@ class USMarketDataService:
             )
 
         return await self._router.execute(
-            market=Market.US,
+            market=instrument.market,
             category=DataCategory.MARKET_OHLCV,
             call=_call,
             operation_name=OP_BARS,
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=(
-                _FUTURES_BARS_POLICY
-                if instrument.asset_type is AssetType.FUTURE
-                else None
-            ),
+            tool_policy=self._quote_bars_policy(instrument, bars=True),
             bypass_cache=False,
             cache_codec=self._bars_codec,
             result_validator=_validator,

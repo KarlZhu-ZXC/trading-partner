@@ -29,6 +29,14 @@ class RiskPolicyUpdateInput(_DTO):
     expected_version: int = Field(ge=1)
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
+    risk_budget_max_percent: Decimal = Field(default=Decimal("2"), ge=0, le=100)
+    theme_exposure_max_percent: Decimal = Field(default=Decimal("40"), ge=0, le=100)
+    drawdown_max_percent: Decimal = Field(default=Decimal("20"), ge=0, le=100)
+    liquidity_participation_max_percent: Decimal = Field(
+        default=Decimal("10"), ge=0, le=100
+    )
+    correlation_max_absolute: Decimal = Field(default=Decimal("0.85"), ge=0, le=1)
+    event_blackout_days: int = Field(default=3, ge=0, le=365)
 
     @field_validator("idempotency_key", mode="before")
     @classmethod
@@ -48,6 +56,14 @@ class RiskCheckInput(_DTO):
     hypothetical_quantity: Decimal | None = Field(default=None, gt=0)
     hypothetical_assumed_price: Decimal | None = Field(default=None, gt=0)
     hypothetical_currency: str | None = Field(default=None, min_length=1, max_length=16)
+    trade_plan_id: str | None = Field(default=None, min_length=1, max_length=128)
+    average_daily_value: Decimal | None = Field(default=None, gt=0)
+    max_liquidity_participation_percent: Decimal | None = Field(
+        default=None, gt=0, le=100
+    )
+    atr: Decimal | None = Field(default=None, gt=0)
+    target_volatility_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    annualized_volatility_percent: Decimal | None = Field(default=None, gt=0)
     as_of: datetime | None = None
 
     @model_validator(mode="after")
@@ -68,6 +84,22 @@ class RiskCheckInput(_DTO):
             raise ValueError("hypothetical fields must be provided together")
         if self.hypothetical_instrument_id is not None:
             parse_instrument_id(self.hypothetical_instrument_id)
+        if self.trade_plan_id is not None and any(value is not None for value in hypothetical):
+            raise ValueError("trade_plan_id cannot be combined with manual hypothetical fields")
+        if (self.average_daily_value is None) != (
+            self.max_liquidity_participation_percent is None
+        ):
+            raise ValueError(
+                "average_daily_value and max_liquidity_participation_percent are required together"
+            )
+        volatility = (
+            self.target_volatility_percent,
+            self.annualized_volatility_percent,
+        )
+        if any(value is not None for value in volatility) and not all(
+            value is not None for value in volatility
+        ):
+            raise ValueError("target and annualized volatility must be provided together")
         if self.as_of is not None:
             require_aware_datetime(self.as_of, field_name="as_of")
         return self
@@ -86,6 +118,12 @@ class RiskPolicyDTO(_DTO):
     confirmed_by: str
     created_at: datetime
     idempotency_key: str
+    risk_budget_max_percent: DecimalWire
+    theme_exposure_max_percent: DecimalWire
+    drawdown_max_percent: DecimalWire
+    liquidity_participation_max_percent: DecimalWire
+    correlation_max_absolute: DecimalWire
+    event_blackout_days: int
     schema_version: int
 
     @classmethod
@@ -111,6 +149,35 @@ class RiskCheckDTO(_DTO):
     message: str
 
 
+class PositionSizingConstraintDTO(_DTO):
+    constraint_code: str
+    status: str
+    max_quantity: DecimalWire | None
+    limiting_value: DecimalWire | int | None
+    unit: str
+    message: str
+
+
+class PositionSizingResultDTO(_DTO):
+    plan_id: str
+    plan_version: int
+    instrument_id: str
+    currency: str
+    reference_price: DecimalWire
+    reference_price_at: datetime
+    current_quantity: DecimalWire
+    lot_size: DecimalWire
+    target_total_quantity: DecimalWire | None
+    max_total_quantity: DecimalWire | None
+    recommended_min_additional_quantity: DecimalWire | None
+    recommended_max_additional_quantity: DecimalWire | None
+    estimated_max_loss: DecimalWire | None
+    constraints: tuple[PositionSizingConstraintDTO, ...]
+    data_quality_codes: tuple[str, ...]
+    historically_validated: bool
+    execution_effect: bool
+
+
 class RiskCheckResultDTO(_DTO):
     policy: RiskPolicyDTO
     account_snapshot_ids: tuple[str, ...]
@@ -119,6 +186,7 @@ class RiskCheckResultDTO(_DTO):
     data_quality_codes: tuple[str, ...]
     hypothetical: RiskHypotheticalAdditionDTO | None
     overall_status: str
+    position_sizing: PositionSizingResultDTO | None
     execution_effect: bool
 
     @classmethod

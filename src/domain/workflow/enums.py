@@ -9,9 +9,12 @@ class WorkflowType(StrEnum):
     A_SHARE_MARKET_REVIEW = "a_share_market_review"
     US_MARKET_REVIEW = "us_market_review"
     PORTFOLIO_REVIEW = "portfolio_review"
+    PEER_COMPARISON = "peer_comparison"
 
 
 class WorkflowRunStatus(StrEnum):
-    COMPLETE = "complete"
+    STARTED = "started"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
     PARTIAL = "partial"
     FAILED = "failed"

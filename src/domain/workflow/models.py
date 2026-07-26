@@ -66,7 +66,7 @@ class WorkflowRun:
     instrument_id: str | None
     requested_as_of: datetime
     started_at: datetime
-    completed_at: datetime
+    completed_at: datetime | None
     status: WorkflowRunStatus
     steps: tuple[WorkflowStepReceipt, ...]
     report_id: str | None = None
@@ -84,13 +84,29 @@ class WorkflowRun:
             parse_instrument_id(self.instrument_id)
         require_aware_datetime(self.requested_as_of, field_name="requested_as_of")
         require_aware_datetime(self.started_at, field_name="started_at")
-        require_aware_datetime(self.completed_at, field_name="completed_at")
-        if self.completed_at < self.started_at:
-            raise DataContractError("completed_at must be >= started_at")
-        if not self.steps or {item.ordinal for item in self.steps} != set(
+        terminal = self.status in {
+            WorkflowRunStatus.SUCCEEDED,
+            WorkflowRunStatus.PARTIAL,
+            WorkflowRunStatus.FAILED,
+        }
+        if terminal != (self.completed_at is not None):
+            raise DataContractError("workflow terminal status and completed_at must agree")
+        if self.completed_at is not None:
+            require_aware_datetime(self.completed_at, field_name="completed_at")
+            if self.completed_at < self.started_at:
+                raise DataContractError("completed_at must be >= started_at")
+        if self.steps and {item.ordinal for item in self.steps} != set(
             range(1, len(self.steps) + 1)
         ):
-            raise DataContractError("workflow steps must be nonempty and contiguous")
+            raise DataContractError("workflow steps must be contiguous")
+        if not terminal and self.steps:
+            raise DataContractError("in-progress workflow runs must not have terminal steps")
+        if terminal and not self.steps and self.status is not WorkflowRunStatus.FAILED:
+            raise DataContractError("successful workflow run requires step receipts")
+        if not self.steps:
+            if self.execution_effect is not False:
+                raise DataContractError("workflow run must not execute")
+            return
         required_failed = any(item.required and not item.ok for item in self.steps)
         imperfect = any(not item.ok or item.degraded for item in self.steps)
         expected = (
@@ -98,7 +114,7 @@ class WorkflowRun:
             if required_failed
             else WorkflowRunStatus.PARTIAL
             if imperfect
-            else WorkflowRunStatus.COMPLETE
+            else WorkflowRunStatus.SUCCEEDED
         )
         if self.status is not expected:
             raise DataContractError("workflow status does not match step outcomes")

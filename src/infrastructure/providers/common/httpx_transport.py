@@ -156,6 +156,43 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
     _AllowEntry("www.hkex.com.hk", "/chi/csm/dailystat/", _MatchMode.PREFIX),
     # iwencai base
     _AllowEntry("openapi.iwencai.com", "/", _MatchMode.PREFIX),
+    # Phase 3A CME Group free public reference endpoints (definitions, EOD
+    # settlement/VOI, delayed quotes). No API key; research reference only.
+    _AllowEntry(
+        "www.cmegroup.com",
+        "/CmeWS/mvc/",
+        _MatchMode.PREFIX,
+        frozenset({"GET"}),
+    ),
+    # Phase 3A Dukascopy Jetta JSON bucket API used by current dukascopy-node.
+    # Exact instrument mappings and bucket paths are owned by the adapter.
+    _AllowEntry(
+        "jetta.dukascopy.com",
+        "/v1/",
+        _MatchMode.PREFIX,
+        frozenset({"GET"}),
+    ),
+    # Optional legacy Trading Tools key-backed compatibility fallback.
+    _AllowEntry(
+        "freeserv.dukascopy.com",
+        "/2.0/",
+        _MatchMode.EXACT,
+        frozenset({"GET"}),
+    ),
+    # Phase 3A DCE official free publicweb EOD (contractInfo + dayQuotes).
+    # HTTP only; anti-bot 412 remains a typed non-retryable access error.
+    _AllowEntry(
+        "www.dce.com.cn",
+        "/dcereport/publicweb/tradepara/contractInfo",
+        _MatchMode.EXACT,
+        frozenset({"POST"}),
+    ),
+    _AllowEntry(
+        "www.dce.com.cn",
+        "/dcereport/publicweb/dailystat/dayQuotes",
+        _MatchMode.EXACT,
+        frozenset({"POST"}),
+    ),
     # Phase 1F US market providers (fixed official endpoint families).
     _AllowEntry(
         "query1.finance.yahoo.com",
@@ -179,12 +216,6 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
         "api.stlouisfed.org",
         "/fred/series",
         _MatchMode.EXACT,
-        frozenset({"GET"}),
-    ),
-    _AllowEntry(
-        "api.stocktwits.com",
-        "/api/2/streams/symbol/",
-        _MatchMode.PREFIX,
         frozenset({"GET"}),
     ),
     _AllowEntry(

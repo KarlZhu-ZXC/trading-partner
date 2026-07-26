@@ -128,6 +128,11 @@ class IdempotencyConflict(TradingPartnerError):
     default_retryable = False
 
 
+class ConfirmerMismatch(TradingPartnerError):
+    default_code = "CONFIRMER_MISMATCH"
+    default_retryable = False
+
+
 class MonitorNotFound(TradingPartnerError):
     default_code = "MONITOR_NOT_FOUND"
     default_retryable = False
@@ -140,6 +145,16 @@ class MonitorVersionConflict(TradingPartnerError):
 
 class MonitorEventNotFound(TradingPartnerError):
     default_code = "MONITOR_EVENT_NOT_FOUND"
+    default_retryable = False
+
+
+class TradePlanNotFound(TradingPartnerError):
+    default_code = "TRADE_PLAN_NOT_FOUND"
+    default_retryable = False
+
+
+class TradePlanVersionConflict(TradingPartnerError):
+    default_code = "TRADE_PLAN_VERSION_CONFLICT"
     default_retryable = False
 
 
@@ -156,6 +171,11 @@ class ChallengeReviewAlreadyResolved(TradingPartnerError):
 class WorkflowRunNotFound(TradingPartnerError):
     default_code = "WORKFLOW_RUN_NOT_FOUND"
     default_retryable = False
+
+
+class WorkflowRunInProgress(TradingPartnerError):
+    default_code = "WORKFLOW_RUN_IN_PROGRESS"
+    default_retryable = True
 
 
 # --- Phase 1B research-state errors (default_retryable=False; no silent retry) ---

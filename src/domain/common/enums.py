@@ -10,6 +10,12 @@ from enum import StrEnum
 class Market(StrEnum):
     A_SHARE = "A_SHARE"
     US = "US"
+    # Phase 3A append-only: futures/spot identity namespaces. CME is a
+    # Provider/identity market namespace; exchange venue remains on Instrument.
+    CME = "CME"
+    DCE = "DCE"
+    OTC = "OTC"
+    LME = "LME"
 
 
 class AssetType(StrEnum):
@@ -20,6 +26,10 @@ class AssetType(StrEnum):
     # Phase 3 append-only: exchange-traded futures and continuous futures
     # proxies. A future must never be relabelled as an OTC spot instrument.
     FUTURE = "future"
+    # Phase 3A append-only cross-asset identities. Wire values are frozen.
+    COMMODITY_SPOT = "commodity_spot"
+    CFD = "cfd"
+    BENCHMARK = "benchmark"
 
 
 class Freshness(StrEnum):
@@ -152,6 +162,7 @@ class CandidateKind(StrEnum):
     OPEN_QUESTION = "open_question"
     WATCHLIST_ITEM = "watchlist_item"
     CASE_STATUS_CHANGE = "case_status_change"
+    TRADE_PLAN = "trade_plan"
 
 
 class CandidateStatus(StrEnum):
@@ -221,6 +232,9 @@ class DataCategory(StrEnum):
     INDUSTRY_CYCLE = "industry_cycle"
     # Phase 3B company-level operating metrics parsed from official disclosures.
     COMPANY_OPERATING_METRICS = "company_operating_metrics"
+    # Phase 3A formal futures definition/lifecycle and EOD settlement-volume-OI.
+    FUTURES_REFERENCE = "futures_reference"
+    FUTURES_STATISTICS = "futures_statistics"
 
 
 class DataCriticality(StrEnum):
@@ -263,6 +277,12 @@ class VendorId(StrEnum):
     # timestamps, and supported categories are different.
     SINA_FUTURES = "sina_futures"
     EASTMONEY_FUTURES = "eastmoney_futures"
+    # Phase 3A CME Group free public reference/EOD endpoints (no API key).
+    CME_PUBLIC = "cme_public"
+    # Phase 3A DCE official free publicweb EOD (contractInfo + dayQuotes; no API key).
+    DCE_OFFICIAL = "dce_official"
+    # Phase 3A Dukascopy Jetta (OTC metals / rolling CFDs); old key API is fallback-only.
+    DUKASCOPY = "dukascopy"
     ALPHA_VANTAGE = "alpha_vantage"
     SEC_EDGAR = "sec_edgar"
     FRED = "fred"

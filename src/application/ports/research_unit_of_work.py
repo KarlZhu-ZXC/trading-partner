@@ -27,6 +27,7 @@ from application.ports.research_report_repository import ResearchReportRepositor
 from application.ports.research_search_index import ResearchSearchIndex
 from application.ports.thesis_repository import ThesisRepository
 from application.ports.thesis_revision_repository import ThesisRevisionRepository
+from application.ports.trade_plan_repository import TradePlanRepository
 from application.ports.watchlist_repository import WatchlistRepository
 
 
@@ -87,6 +88,9 @@ class ResearchUnitOfWork(Protocol):
 
     @property
     def search_index(self) -> ResearchSearchIndex: ...
+
+    @property
+    def trade_plans(self) -> TradePlanRepository: ...
 
     @property
     def audit(self) -> AuditLogWriter:

@@ -31,6 +31,15 @@ class SqlAlchemyPostMarketSyncRunRepository:
             )
             return None if row is None else self._domain(row)
 
+    def get_latest(self) -> PostMarketSyncRun | None:
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(PostMarketSyncRunRow)
+                .order_by(PostMarketSyncRunRow.market_session_date.desc())
+                .limit(1)
+            )
+            return None if row is None else self._domain(row)
+
     def save(self, run: PostMarketSyncRun) -> PostMarketSyncRun:
         with Session(self._engine) as session, session.begin():
             row = session.scalar(

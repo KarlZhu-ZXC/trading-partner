@@ -19,7 +19,7 @@ from domain.common.enums import (
 )
 from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
 from infrastructure.system.redactor import DefaultSecretRedactor
-from interfaces.mcp.server import PHASE1J_CONTEXT_TOOL_NAMES, PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 CASE_ID = "case_00000000-0000-7000-8000-000000000001"
@@ -102,6 +102,7 @@ def _uow(case: InvestmentCase) -> MagicMock:
         observed_at=NOW,
     )
     uow.case_evidence_links.list_evidence.return_value = (support, contrary)
+    uow.trade_plans.get_current_by_case.return_value = None
 
     def assessments(evidence_id: str, **_kwargs: object) -> tuple[SimpleNamespace, ...]:
         stance = (
@@ -145,6 +146,12 @@ def test_context_is_contrary_first_and_budget_trims_journal_not_evidence() -> No
     ]
     assert result.data.budget.truncated is True
     assert "journals" in result.data.budget.truncated_collections
+    assert result.data.live_fact_tools_required == (
+        "market_get_snapshot",
+        "a_share_get_facts",
+        "us_get_fundamentals",
+        "us_get_company_research",
+    )
 
 
 def test_instrument_selection_requires_explicit_case_disambiguation() -> None:
@@ -160,7 +167,7 @@ def test_instrument_selection_requires_explicit_case_disambiguation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_mcp_is_one_thin_handler_in_exact_inventory() -> None:
+async def test_context_mcp_is_compact_read_operation() -> None:
     container = MagicMock()
     container.settings.mcp_server_name = "phase1j-test"
     envelope = ToolEnvelope.failure(
@@ -178,10 +185,11 @@ async def test_context_mcp_is_one_thin_handler_in_exact_inventory() -> None:
     manager = create_mcp_server(container)._tool_manager
     listed = {tool.name: tool for tool in manager.list_tools()}
 
-    assert {"research_context_build"} == PHASE1J_CONTEXT_TOOL_NAMES
     assert set(listed) == set(PUBLIC_TOOL_NAMES)
-    assert len(listed) == 52
-    result = await manager.call_tool("research_context_build", {"case_id": CASE_ID})
+    result = await manager.call_tool(
+        "investment_case_read",
+        {"request": {"operation": "context", "case_id": CASE_ID}},
+    )
     assert result["request_id"] == "req_context"
     request = container.research_context_builder.build.call_args.args[0]
     assert isinstance(request, ResearchContextBuildInput)

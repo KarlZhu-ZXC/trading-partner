@@ -6,7 +6,7 @@ values (prices, secrets, raw bars).
 
 Infrastructure keeps a compatibility re-export at
 ``infrastructure.providers.common.contract_validation``; callers that must
-stay domain-facing (e.g. RoutedMarketSnapshotService) import from here.
+stay domain-facing and import from here.
 """
 
 from __future__ import annotations

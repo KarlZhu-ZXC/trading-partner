@@ -1,7 +1,7 @@
 # Trading Partner Phase 1
 
 > Status: completed on 2026-07-18  
-> Product surface: 54 public MCP tools  
+> Current product surface: 28 compact public MCP tools
 > Migration head at closeout: `0008_phase1l_workflows`  
 > Markets: A-share and US  
 > Interaction surface: Codex conversation
@@ -23,7 +23,7 @@ The product can:
 - preserve reports, events, decisions, journals, and challenge reviews;
 - run deep-dive, catalyst, market, and portfolio research workflows.
 
-Phase 1 cannot backtest, paper trade, submit/cancel orders, or run autonomous
+Phase 1 cannot backtest, submit/cancel orders, or run autonomous
 monitoring. Those capabilities belong to later phases.
 
 ## 2. Phase map
@@ -37,7 +37,7 @@ monitoring. Those capabilities belong to later phases.
 | 1E | A-share quote, structure, capital, limit-up, sentiment, reports, ETF options |
 | 1F | US quote, bars, context, deterministic technical indicators |
 | 1G | US fundamentals, statements, SEC filings, insiders, corporate events |
-| 1H | News, FRED/ALFRED macro, Reddit/Moomoo sentiment, dormant StockTwits compatibility, Polymarket context |
+| 1H | News, FRED/ALFRED macro, Reddit/Moomoo sentiment, Polymarket context |
 | 1I | Read-only Moomoo/manual-CSV accounts and deterministic portfolio exposure |
 | 1J | Durable cross-task research Context Builder |
 | 1K | Persistent ten-dimension Challenge Review and explicit user resolution |
@@ -50,51 +50,30 @@ closeout without changing the tool count or introducing order methods.
 ## 3. Public MCP boundary
 
 The authoritative Phase 1 runtime inventory is exposed through the consolidated
-public façade documented in `AGENTS.md`; the full Phase 1–2 surface is 52 tools.
-
-### System and research state
+public façade documented in `AGENTS.md`; the default Phase 1–3D surface is 28 tools.
 
 ```text
-system_health
-investment_case_create
-investment_case_query
-investment_case_archive
-research_state_get
-research_state_update
-thesis_revision_propose
-thesis_revision_confirm
-thesis_history_get
-instrument_resolve
-research_search
-research_report_get
-research_timeline_get
-journal_append
-decision_record_append
+system_health                 instrument_resolve
+investment_case_read          investment_case_manage
+research_judgment_get         research_judgment_propose
+research_judgment_confirm     research_memory_get
+research_memory_append        a_share_get_facts
+market_data_get               technical_get_snapshot
+technical_render_chart        us_company_get
+us_context_get                account_get
+external_state_sync           portfolio_analyze
+challenge_review_get          challenge_review_manage
+research_workflow_run         watchlist_get
+watchlist_manage              portfolio_risk_get
+risk_policy_update            monitor_read
+monitor_manage                monitor_evaluate
 ```
 
-### A-share facts
+Grouped tools take a required `request` object with a closed `operation` union.
+`compact_28` is the sole runtime surface. The legacy 52 public names and their
+compatibility profile have been removed and are not valid MCP calls.
 
-```text
-a_share_get_facts
-research_search_reports
-```
-
-### US facts and context
-
-```text
-us_get_market
-market_get_bars
-market_get_context
-technical_get_snapshot
-us_get_fundamentals
-us_get_company_research
-market_get_live_news
-us_get_macro_context
-us_get_sentiment_snapshot
-us_get_prediction_market_context
-```
-
-`market_get_context` 在原有 SPY/QQQ/IWM 代理基础上，使用 yfinance Screener 的聚合
+`market_data_get(request={"operation":"us_market",...})` 在原有 SPY/QQQ/IWM 代理基础上，使用 yfinance Screener 的聚合
 `total` 提供上涨、下跌和平盘家数，并使用 Yahoo 的 11 个美国板块指数生成 1/5/20 个交易日
 收益及相对 SPY 的 20 日表现。它不会拉取或保存全市场日线。该口径是 Yahoo 美国上市证券池，
 可能包含 ETF 与 ADR，不等同交易所官方普通股 breadth；请求按 15 分钟桶进入持久化 Provider
@@ -106,31 +85,14 @@ us_get_prediction_market_context
 限流器并按 15 分钟桶缓存；OpenD 低于 10.9 时返回
 `MOOMOO_OPEND_VERSION_UNSUPPORTED`，其余市场上下文仍可用。
 
-### Accounts, portfolio, durable context, and challenge
-
-```text
-account_get
-portfolio_analyze
-portfolio_simulate_addition
-research_context_build
-challenge_review_start
-challenge_review_get
-challenge_review_resolve
-```
-
-### Transactions and workflows
-
-```text
-research_run_deep_dive
-research_run_catalyst_review
-a_share_run_market_review
-us_run_market_review
-portfolio_run_review
-```
-
 Detailed input/output and degradation semantics live in the
 [MCP capability guide](../guide/mcp-capability-boundary.md). Agent-facing hard
 constraints live in [AGENTS.md](../../AGENTS.md).
+
+All five `research_workflow_run` operations require a request-level
+`idempotency_key`. The durable run
+state is `STARTED` → `RUNNING` → `SUCCEEDED` / `PARTIAL` / `FAILED`, and terminal
+retries replay bounded, hashed fact artifacts without another Provider call.
 
 ## 4. Research model
 
@@ -158,16 +120,19 @@ the judgment can change while the Instrument identity and research history remai
 stable. One open file is reused by default for an instrument; an archived file does
 not delete or archive the Instrument.
 
-Research changes use Candidate Propose → Confirm/Reject/Withdraw. Codex may
-propose changes but cannot impersonate the user to confirm or reject them.
+Research changes use Candidate Propose → Confirm/Reject/Withdraw. Codex may propose
+changes but cannot autonomously choose the outcome. An explicit decision from the
+user in the current Codex chat is relayed as `reviewed_by="user"` with
+`submitted_via="codex_chat"` and the original bounded `authorization_note`; this
+records the user's authority without claiming authenticated transport identity.
 Journal and decision appends require an explicit `user` or authorized
 `external_agent` confirmer. Decisions express research or position intent only;
 they never create orders, fills, or holdings.
 
-An instrument-only Deep Dive creates or reuses a Draft instrument research file by
-default. Draft means the research has a durable home, not automatic long-term
-monitoring and not a confirmed investment judgment. `create_case=false` preserves
-ad-hoc research.
+An instrument-only Deep Dive reuses a unique Draft instrument research file by
+default. Creating a new Draft requires an explicit confirmer and idempotency key.
+Draft means the research has a durable home, not automatic long-term monitoring or
+a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
 
 ## 5. Provider model
 
@@ -299,8 +264,9 @@ without rebuilding the full Phase 1 test matrix.
 - Closed-session US quotes may be stale but represent the last known session.
 - Reddit anonymous RSS is rate-limited and not a reliable production identity;
   approved OAuth remains the proper future solution.
-- StockTwits formal access has left the active roadmap; its compatibility adapter
-  remains default-disabled and must not trigger scraping, retries, or credential requests.
+- StockTwits formal access has left the active roadmap. Its runtime adapter, setting,
+  and network entry were removed; historical source values remain readable only for
+  compatibility.
 - Moomoo sentiment uses the current public feed with exact-symbol filtering,
   HTML cleanup, deduplication, low-quality filtering, and versioned deterministic
   bilingual rules. It does not call a Skill or an LLM; engagement may be unknown,
@@ -308,15 +274,16 @@ without rebuilding the full Phase 1 test matrix.
 - Polymarket can require a separately configured proxy.
 - Broker position market-price timestamps may be unavailable.
 - Phase 1 has no scheduler, automatic evidence ingestion, runtime LLM synthesis,
-  backtest, paper broker, or order-write code.
+  backtest, or order-write code.
 
 ## 12. Successor phases
 
 Phase 2 is the Watchlist Hub: one active upstream source (Moomoo or strict Manual
 CSV), database-persisted groups/memberships/history, research metadata, and
-conversation-authorized add/remove. Phase 3 contains historical data, backtests,
-experiments, automatic monitoring, Trade Plans, deterministic trade risk, and
-Paper Trading. The [global roadmap](../roadmap/global-roadmap-cn-us.md) is the
+conversation-authorized add/remove. Phase 3A–3D now add cross-asset facts, company
+operating facts, automatic Monitoring v2, versioned Trade Plans, Position Sizing,
+and deterministic Risk v2. Historical validation/backtests remain pending; order
+execution remains outside this MCP. The [global roadmap](../roadmap/global-roadmap-cn-us.md) is the
 authority for later-phase sequencing.
 
 ## 13. Public documentation policy

@@ -8,9 +8,6 @@ from datetime import UTC, datetime
 import pytest
 
 from application.ports.category_provider import CategoryProvider
-from application.ports.market_snapshot_category_provider import (
-    MarketSnapshotCategoryProvider,
-)
 from domain.common.enums import (
     AdjustmentMethod,
     AssetType,
@@ -30,7 +27,6 @@ AS_OF = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 SECRET = "test-secret-malicious-value"
 
 _DATA_METHODS = (
-    "get_snapshot",
     "get_quote",
     "get_ohlcv",
     "get_fundamentals",
@@ -78,7 +74,6 @@ def _assert_provider_not_configured(
 def test_null_identity_and_category_provider_surface() -> None:
     provider = NullCategoryProvider()
     assert isinstance(provider, CategoryProvider)
-    assert isinstance(provider, MarketSnapshotCategoryProvider)
     assert provider.vendor_id is VendorId.NULL
     assert provider.provider_name == VendorId.NULL.value == "null"
     assert provider.is_configured() is True
@@ -99,11 +94,6 @@ def test_null_data_methods_are_async() -> None:
 async def test_null_all_data_methods_raise_provider_not_configured() -> None:
     provider = NullCategoryProvider()
     instrument = _instrument()
-
-    with pytest.raises(ProviderNotConfigured) as snap_info:
-        await provider.get_snapshot(instrument, AS_OF)
-    _assert_provider_not_configured(snap_info.value, expected_vendor="null")
-    assert "chain placeholder" in snap_info.value.message
 
     with pytest.raises(ProviderNotConfigured) as q_info:
         await provider.get_quote(instrument, AS_OF)
@@ -163,7 +153,6 @@ def test_null_registers_under_vendor_id_null() -> None:
 def test_unimplemented_identity_and_category_provider_surface() -> None:
     adapter = UnimplementedVendorAdapter(VendorId.EASTMONEY)
     assert isinstance(adapter, CategoryProvider)
-    assert isinstance(adapter, MarketSnapshotCategoryProvider)
     assert adapter.vendor_id is VendorId.EASTMONEY
     assert adapter.provider_name == VendorId.EASTMONEY.value
     assert adapter.is_configured() is True
@@ -195,12 +184,6 @@ def test_unimplemented_data_methods_are_async() -> None:
 async def test_unimplemented_all_data_methods_raise_provider_not_configured() -> None:
     adapter = UnimplementedVendorAdapter(VendorId.YFINANCE)
     instrument = _instrument()
-
-    with pytest.raises(ProviderNotConfigured) as snap_info:
-        await adapter.get_snapshot(instrument, AS_OF)
-    _assert_provider_not_configured(snap_info.value, expected_vendor="yfinance")
-    assert "not implemented in Phase 1D" in snap_info.value.message
-    assert snap_info.value.details.get("phase") == "1D"
 
     with pytest.raises(ProviderNotConfigured) as q_info:
         await adapter.get_quote(instrument, AS_OF)

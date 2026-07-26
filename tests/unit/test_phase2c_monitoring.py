@@ -33,11 +33,7 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import MonitorDefinition
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
-from interfaces.mcp.server import (
-    PHASE2C_MONITORING_TOOL_NAMES,
-    PUBLIC_TOOL_NAMES,
-    create_mcp_server,
-)
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
@@ -107,12 +103,12 @@ async def test_price_monitor_emits_only_state_transitions(
     repository = _repository(tmp_path)
     repository.create(_monitor(rule))
     fixed_clock.set(NOW)
-    us = MagicMock()
-    us.get_market_snapshot = AsyncMock(return_value=_quote("10"))
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(return_value=_quote("10"))
     evaluator = MonitorEvaluationService(
         repository,
         MagicMock(),
-        us,
+        market,
         MagicMock(),
         fixed_clock,
         id_generator,
@@ -120,7 +116,7 @@ async def test_price_monitor_emits_only_state_transitions(
 
     first = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
     second = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
-    us.get_market_snapshot.return_value = _quote("13")
+    market.get_market_snapshot.return_value = _quote("13")
     third = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
 
     assert first.events_created == 1
@@ -131,9 +127,7 @@ async def test_price_monitor_emits_only_state_transitions(
         MonitorEventType.TRIGGERED,
         MonitorEventType.RECOVERED,
     }
-    final_state = repository.get_rule_states(
-        "monitor_00000000-0000-7000-8000-000000000001"
-    )[0]
+    final_state = repository.get_rule_states("monitor_00000000-0000-7000-8000-000000000001")[0]
     assert final_state.state is MonitorRuleStateValue.QUIET
 
 
@@ -186,27 +180,25 @@ async def test_expired_monitor_is_skipped_without_fetch_or_event(
         )
     )
     fixed_clock.set(NOW)
-    us = MagicMock()
-    us.get_market_snapshot = AsyncMock()
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock()
     evaluator = MonitorEvaluationService(
         repository,
         MagicMock(),
-        us,
+        market,
         MagicMock(),
         fixed_clock,
         id_generator,
     )
 
-    result = await evaluator.evaluate(
-        MonitorEvaluateInput(cadence="US_POST_MARKET", as_of=NOW)
-    )
+    result = await evaluator.evaluate(MonitorEvaluateInput(cadence="US_POST_MARKET", as_of=NOW))
 
     assert result.monitors_evaluated == 0
     assert result.rules_evaluated == 0
     assert result.events_created == 0
     assert result.warning_codes == ("MONITOR_EXPIRED",)
     assert repository.list_events(None, 10) == ()
-    us.get_market_snapshot.assert_not_awaited()
+    market.get_market_snapshot.assert_not_awaited()
 
 
 def test_monitor_inputs_normalize_conversational_enum_casing() -> None:
@@ -254,7 +246,7 @@ def test_monitor_inputs_normalize_conversational_enum_casing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_six_monitoring_mcp_handlers_are_registered() -> None:
+async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None:
     failure = ToolEnvelope.failure(
         request_id="req_monitor",
         market=None,
@@ -274,18 +266,6 @@ async def test_six_monitoring_mcp_handlers_are_registered() -> None:
 
     tools = manager.list_tools()
     assert {tool.name for tool in tools} == set(PUBLIC_TOOL_NAMES)
-    assert len(PUBLIC_TOOL_NAMES) == 52
-    assert len(PHASE2C_MONITORING_TOOL_NAMES) == 6
-    query_schema = next(tool for tool in tools if tool.name == "monitor_query").parameters
-    assert query_schema["$defs"]["MonitorStatus"]["enum"] == [
-        "ACTIVE",
-        "PAUSED",
-        "ARCHIVED",
-    ]
-    create_schema = next(tool for tool in tools if tool.name == "monitor_create").parameters
-    update_schema = next(tool for tool in tools if tool.name == "monitor_update").parameters
-    assert "valid_until" in create_schema["properties"]
-    assert "valid_until" in update_schema["properties"]
     rule = {
         "rule_code": "price_floor",
         "rule_type": "PRICE_BELOW",
@@ -295,39 +275,54 @@ async def test_six_monitoring_mcp_handlers_are_registered() -> None:
         "max_fact_age_seconds": 3600,
     }
     await manager.call_tool(
-        "monitor_create",
+        "monitor_manage",
         {
-            "name": "NVDA floor",
-            "rules": [rule],
-            "confirmed_by": "user",
-            "idempotency_key": "monitor-create",
+            "request": {
+                "operation": "create",
+                "name": "NVDA floor",
+                "rules": [rule],
+                "confirmed_by": "user",
+                "idempotency_key": "monitor-create",
+            }
         },
     )
-    await manager.call_tool("monitor_query", {"monitor_id": "monitor_example"})
-    await manager.call_tool("monitor_query", {})
-    await manager.call_tool("monitor_query", {"status": "active"})
     await manager.call_tool(
-        "monitor_update",
+        "monitor_read",
+        {"request": {"operation": "definitions", "monitor_id": "monitor_example"}},
+    )
+    await manager.call_tool("monitor_read", {"request": {"operation": "definitions"}})
+    await manager.call_tool(
+        "monitor_read",
+        {"request": {"operation": "definitions", "status": "active"}},
+    )
+    await manager.call_tool(
+        "monitor_manage",
         {
-            "monitor_id": "monitor_example",
-            "expected_version": 1,
-            "name": "NVDA floor",
-            "cadence": "ON_DEMAND",
-            "status": "PAUSED",
-            "rules": [rule],
-            "confirmed_by": "user",
-            "idempotency_key": "monitor-update",
+            "request": {
+                "operation": "update",
+                "monitor_id": "monitor_example",
+                "expected_version": 1,
+                "name": "NVDA floor",
+                "cadence": "ON_DEMAND",
+                "status": "PAUSED",
+                "rules": [rule],
+                "confirmed_by": "user",
+                "idempotency_key": "monitor-update",
+            }
         },
     )
-    await manager.call_tool("monitor_event_list", {})
+    await manager.call_tool("monitor_read", {"request": {"operation": "events"}})
     await manager.call_tool(
-        "monitor_event_resolve",
+        "monitor_manage",
         {
-            "event_id": "monitor_event_example",
-            "action": "ACKNOWLEDGE",
-            "note": "reviewed",
-            "confirmed_by": "user",
-            "idempotency_key": "event-resolution",
+            "request": {
+                "operation": "resolve_event",
+                "event_id": "monitor_event_example",
+                "action": "ACKNOWLEDGE",
+                "note": "reviewed",
+                "confirmed_by": "user",
+                "idempotency_key": "event-resolution",
+            }
         },
     )
     await manager.call_tool("monitor_evaluate", {})

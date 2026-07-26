@@ -194,7 +194,6 @@ def test_no_forbidden_phase_modules() -> None:
     forbidden_names = {
         "strategies",
         "backtest",
-        "paper",
         "execution",
         "orders",
         "fills",
@@ -207,33 +206,60 @@ def test_no_forbidden_phase_modules() -> None:
 
 
 def test_interfaces_mcp_imports_application_not_domain_models_for_response() -> None:
-    """MCP server returns DTOs through application services, not domain dumps."""
+    """MCP adapters return DTOs through application services, not domain dumps."""
     server = LAYER_ROOTS["interfaces"] / "mcp" / "server.py"
-    text = server.read_text(encoding="utf-8")
-    assert "bootstrap" in text or "ApplicationContainer" in text
-    assert "model_dump" in text
-
-
-def test_d6b1_codec_has_no_unsafe_serialization() -> None:
-    """Codec source must not use pickle/marshal/default=str/reflection serialization."""
-    path = (
-        LAYER_ROOTS["infrastructure"] / "providers" / "common" / "verified_snapshot_cache_codec.py"
+    tool_root = LAYER_ROOTS["interfaces"] / "mcp" / "tools"
+    server_text = server.read_text(encoding="utf-8")
+    adapter_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(tool_root.glob("*.py"))
     )
-    text = path.read_text(encoding="utf-8")
-    for forbidden in (
-        "import pickle",
-        "import marshal",
-        "from pickle",
-        "from marshal",
-        "pickle.",
-        "marshal.",
-        "default=str",
-        "importlib.import_module",
-        "__import__",
-        "globals()",
-        "getattr(__builtins__",
-    ):
-        assert forbidden not in text, f"unsafe serialization primitive present: {forbidden}"
+    assert "bootstrap" in server_text or "ApplicationContainer" in server_text
+    assert "model_dump" in adapter_text
+
+
+def test_mcp_lifecycle_and_public_inventory_stay_thin() -> None:
+    """Tool growth belongs in compact adapters, not lifecycle or inventory façades."""
+    mcp_root = LAYER_ROOTS["interfaces"] / "mcp"
+    server = mcp_root / "server.py"
+    inventory = mcp_root / "tool_inventory.py"
+    tool_root = mcp_root / "tools"
+    adapter_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(tool_root.glob("*.py"))
+    )
+    assert len(server.read_text(encoding="utf-8").splitlines()) <= 100
+    assert len(inventory.read_text(encoding="utf-8").splitlines()) <= 100
+    assert "application.dto" not in server.read_text(encoding="utf-8")
+    assert "@server.tool" not in server.read_text(encoding="utf-8")
+    assert not (tool_root / "handler_registry.py").exists()
+    assert not (tool_root / "types.py").exists()
+    assert "HandlerRegistry" not in adapter_text
+    assert "ToolRegistrar" not in adapter_text
+    assert "@server.tool" not in adapter_text
+
+
+def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
+    """Provider and codec implementations stay physically capability-split."""
+    provider_root = LAYER_ROOTS["infrastructure"] / "providers" / "a_share"
+    eastmoney = provider_root / "eastmoney"
+    sina = provider_root / "sina"
+    codecs = provider_root / "codecs"
+
+    assert (eastmoney / "client.py").is_file()
+    assert (eastmoney / "quote_bars.py").is_file()
+    assert (eastmoney / "fundamentals.py").is_file()
+    assert (eastmoney / "capital.py").is_file()
+    assert (eastmoney / "sentiment.py").is_file()
+    assert (sina / "client.py").is_file()
+    assert (sina / "daily_flow.py").is_file()
+    assert (sina / "financials.py").is_file()
+    assert (sina / "options.py").is_file()
+    typed_text = (codecs / "typed.py").read_text(encoding="utf-8")
+    assert len(typed_text.splitlines()) <= 160
+    assert "def " not in typed_text
+    for capability in ("market", "research", "capital", "sentiment", "options"):
+        text = (codecs / f"{capability}.py").read_text(encoding="utf-8")
+        assert "def " in text
+        assert "codecs.typed import" not in text
 
 
 def test_d6b1_ports_stay_in_application_without_infrastructure() -> None:
@@ -288,20 +314,6 @@ def test_d6b2_engine_does_not_import_application_services() -> None:
         "AppSettings",
     ):
         assert forbidden not in text, f"forbidden in engine: {forbidden}"
-
-
-def test_d6b1_codec_does_not_import_application_services() -> None:
-    """VerifiedMarketSnapshotCacheCodec may use ports/dto + domain, not services."""
-    path = (
-        LAYER_ROOTS["infrastructure"] / "providers" / "common" / "verified_snapshot_cache_codec.py"
-    )
-    imports = _imports(path)
-    service_imports = [i for i in imports if _is_module(i, "application.services")]
-    assert not service_imports, service_imports
-    assert any(_is_module(i, "application.dto") for i in imports)
-    assert any(_is_module(i, "domain") for i in imports)
-    assert "pickle" not in imports
-    assert "marshal" not in imports
 
 
 def test_d7_domain_modules_stay_framework_free() -> None:
@@ -430,58 +442,6 @@ def test_criticality_policy_stays_in_application() -> None:
         assert not _is_module(imp, "interfaces"), imp
 
 
-def test_d8a_routed_service_does_not_import_infrastructure() -> None:
-    """RoutedMarketSnapshotService is application-only (codec via Protocol)."""
-    path = LAYER_ROOTS["application"] / "services" / "routed_market_snapshot_service.py"
-    imports = _imports(path)
-    for imp in imports:
-        assert not _is_module(imp, "infrastructure"), (path, imp)
-        assert not _is_module(imp, "interfaces"), (path, imp)
-        assert not _is_module(imp, "bootstrap"), (path, imp)
-    # Full contract validator must come from domain, not infrastructure.
-    assert any(_is_module(i, "domain.market.validation") for i in imports), (
-        "routed service must import domain.market.validation"
-    )
-    text = path.read_text(encoding="utf-8")
-    # No reflection-based get_snapshot dispatch.
-    assert "getattr(" not in text
-    assert "hasattr(" not in text
-    assert "validate_verified_market_snapshot" in text
-
-
-def test_d8a_category_provider_port_stays_in_application() -> None:
-    """MarketSnapshotCategoryProvider Protocol must not depend on infrastructure."""
-    path = LAYER_ROOTS["application"] / "ports" / "market_snapshot_category_provider.py"
-    for imp in _imports(path):
-        assert not _is_module(imp, "infrastructure"), (path, imp)
-        assert not _is_module(imp, "interfaces"), (path, imp)
-        assert not _is_module(imp, "bootstrap"), (path, imp)
-    text = path.read_text(encoding="utf-8")
-    assert "@runtime_checkable" in text
-    assert "MarketSnapshotCategoryProvider" in text
-
-
-def test_d8a_adapter_does_not_import_application_services() -> None:
-    """MarketSnapshotCategoryAdapter may use ports/domain only, not services."""
-    path = (
-        LAYER_ROOTS["infrastructure"]
-        / "providers"
-        / "common"
-        / "market_snapshot_category_adapter.py"
-    )
-    imports = _imports(path)
-    service_imports = [i for i in imports if _is_module(i, "application.services")]
-    assert not service_imports, service_imports
-    assert any(_is_module(i, "application.ports") for i in imports)
-    assert any(_is_module(i, "domain") for i in imports)
-    for imp in imports:
-        assert not _is_module(imp, "bootstrap"), imp
-        assert not _is_module(imp, "interfaces"), imp
-    text = path.read_text(encoding="utf-8")
-    assert "pickle" not in text
-    assert "marshal" not in text
-
-
 def test_d8b_provider_state_backend_does_not_import_application_services() -> None:
     """Backend selection stays in infrastructure; no application.services."""
     for rel in (
@@ -497,32 +457,15 @@ def test_d8b_provider_state_backend_does_not_import_application_services() -> No
             assert not _is_module(imp, "interfaces"), (path, imp)
 
 
-def test_d8b_coordinator_uses_single_routed_service() -> None:
-    """Coordinator must accept one routed_service, not dual MarketSnapshotService."""
-    path = LAYER_ROOTS["application"] / "services" / "mock_market_snapshot_coordinator.py"
-    text = path.read_text(encoding="utf-8")
-    assert "routed_service" in text
-    assert "a_share_service" not in text
-    assert "us_service" not in text
-    assert "RoutedMarketSnapshotService" in text
-    for imp in _imports(path):
-        assert not _is_module(imp, "infrastructure"), (path, imp)
-        assert not _is_module(imp, "interfaces"), (path, imp)
-        assert not _is_module(imp, "bootstrap"), (path, imp)
-
-
 def test_d8b_bootstrap_wires_router_fields() -> None:
-    """Composition root exposes provider_router / vendor_registry / routed service."""
+    """Composition root exposes the shared provider router and registry."""
     path = SRC / "bootstrap.py"
     text = path.read_text(encoding="utf-8")
     assert "provider_router" in text
     assert "vendor_registry" in text
-    assert "routed_market_snapshot_service" in text
     assert "build_provider_state_backend" in text
     assert "YamlVendorChainConfig" in text
-    assert "MarketSnapshotCategoryAdapter" in text
     assert "ProviderRouterEngine" in text
-    assert "VerifiedMarketSnapshotCacheCodec" in text
     # Must not run migrations or seed in build_application (imports / call sites).
     assert "command.upgrade" not in text
     imports = _imports(path)
@@ -546,74 +489,23 @@ _C2A_BUSINESS_ROW_NAMES = (
 )
 
 
-def test_public_tool_surface_is_exactly_fifty_two() -> None:
-    """The consolidated public façade stays exact and excludes internal writes."""
+def test_public_tool_surface_respects_architecture_boundary() -> None:
+    """The default façade excludes internal and retired write surfaces."""
     from interfaces.mcp.server import (
         FORBIDDEN_PUBLIC_TOOL_NAMES,
-        LEGACY_PUBLIC_TOOL_NAMES,
-        PHASE1A_TOOL_NAMES,
-        PHASE1B_RESEARCH_TOOL_NAMES,
-        PHASE1C_RESEARCH_TOOL_NAMES,
-        PHASE1D_TOOL_NAMES,
-        PHASE1E_A_SHARE_TOOL_NAMES,
-        PHASE1F_US_MARKET_TOOL_NAMES,
-        PHASE1G_US_RESEARCH_TOOL_NAMES,
-        PHASE1H_US_CONTEXT_TOOL_NAMES,
-        PHASE1I_PORTFOLIO_TOOL_NAMES,
-        PHASE1J_CONTEXT_TOOL_NAMES,
-        PHASE1K_CHALLENGE_TOOL_NAMES,
-        PHASE1L_WORKFLOW_TOOL_NAMES,
-        PHASE2_WATCHLIST_TOOL_NAMES,
-        PHASE2B_RISK_TOOL_NAMES,
-        PHASE2C_MONITORING_TOOL_NAMES,
-        PHASE2D_TECHNICAL_TOOL_NAMES,
         PUBLIC_TOOL_NAMES,
         RETIRED_PUBLIC_TOOL_NAMES,
     )
 
-    assert len(LEGACY_PUBLIC_TOOL_NAMES) == 15
-    assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
-    assert len(PHASE1F_US_MARKET_TOOL_NAMES) == 4
-    assert len(PUBLIC_TOOL_NAMES) == 52
-    assert len(PHASE1H_US_CONTEXT_TOOL_NAMES) == 4
-    assert len(PHASE1I_PORTFOLIO_TOOL_NAMES) == 3
-    assert len(PHASE1J_CONTEXT_TOOL_NAMES) == 1
-    assert len(PHASE1K_CHALLENGE_TOOL_NAMES) == 3
-    assert len(PHASE2_WATCHLIST_TOOL_NAMES) == 3
-    assert len(PHASE2B_RISK_TOOL_NAMES) == 3
-    assert len(PHASE2C_MONITORING_TOOL_NAMES) == 6
-    assert len(PHASE2D_TECHNICAL_TOOL_NAMES) == 1
-    assert len(PHASE1L_WORKFLOW_TOOL_NAMES) == 5
-    assert len(PHASE1C_RESEARCH_TOOL_NAMES) == 5
-    prior = PHASE1A_TOOL_NAMES | PHASE1B_RESEARCH_TOOL_NAMES | PHASE1D_TOOL_NAMES
-    assert len(prior) == 10
-    assert prior <= PUBLIC_TOOL_NAMES
-    assert prior | PHASE1C_RESEARCH_TOOL_NAMES == LEGACY_PUBLIC_TOOL_NAMES
-    assert (
-        LEGACY_PUBLIC_TOOL_NAMES
-        | PHASE1E_A_SHARE_TOOL_NAMES
-        | PHASE1F_US_MARKET_TOOL_NAMES
-        | PHASE1G_US_RESEARCH_TOOL_NAMES
-        | PHASE1H_US_CONTEXT_TOOL_NAMES
-        | PHASE1I_PORTFOLIO_TOOL_NAMES
-        | PHASE1J_CONTEXT_TOOL_NAMES
-        | PHASE1K_CHALLENGE_TOOL_NAMES
-        | PHASE2_WATCHLIST_TOOL_NAMES
-        | PHASE2B_RISK_TOOL_NAMES
-            | PHASE2C_MONITORING_TOOL_NAMES
-            | PHASE2D_TECHNICAL_TOOL_NAMES
-            | PHASE1L_WORKFLOW_TOOL_NAMES
-        == PUBLIC_TOOL_NAMES
-    )
+    assert len(PUBLIC_TOOL_NAMES) == 28
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
-    server_text = (LAYER_ROOTS["interfaces"] / "mcp" / "server.py").read_text(encoding="utf-8")
-    for name in (
-        PHASE1C_RESEARCH_TOOL_NAMES | PHASE1E_A_SHARE_TOOL_NAMES | PHASE1F_US_MARKET_TOOL_NAMES
-    ):
-        assert f'name="{name}"' in server_text
+    tool_root = LAYER_ROOTS["interfaces"] / "mcp" / "tools"
+    adapter_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(tool_root.glob("*.py"))
+    )
     for forbidden in FORBIDDEN_PUBLIC_TOOL_NAMES | RETIRED_PUBLIC_TOOL_NAMES:
-        assert f'name="{forbidden}"' not in server_text
+        assert f'name="{forbidden}"' not in adapter_text
     bootstrap = (PROJECT_ROOT / "src" / "bootstrap.py").read_text(encoding="utf-8")
     for field in (
         "evidence_service",

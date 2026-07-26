@@ -66,19 +66,6 @@ def _result(
 
 @pytest.mark.asyncio
 async def test_sentiment_service_keeps_sources_separate_and_shows_disagreement() -> None:
-    stock = USSentimentSample(
-        IID,
-        USSentimentSource.STOCKTWITS,
-        AS_OF,
-        "Bullish label",
-        USSentimentDirection.BULLISH,
-        USSentimentLabelOrigin.USER_LABEL,
-        Decimal(1),
-        2,
-        None,
-        None,
-        None,
-    )
     reddit = USSentimentSample(
         IID,
         USSentimentSource.REDDIT,
@@ -108,7 +95,6 @@ async def test_sentiment_service_keeps_sources_separate_and_shows_disagreement()
     router = MagicMock()
     router.execute = AsyncMock(
         side_effect=[
-            _result(VendorId.STOCKTWITS, (stock,)),
             _result(VendorId.REDDIT, (reddit,)),
             _result(VendorId.MOOMOO_FEED, (moomoo,)),
         ]
@@ -120,11 +106,10 @@ async def test_sentiment_service_keeps_sources_separate_and_shows_disagreement()
     )
 
     assert [item.source for item in result.snapshot.summaries] == [
-        USSentimentSource.STOCKTWITS,
         USSentimentSource.REDDIT,
         USSentimentSource.MOOMOO,
     ]
-    assert result.snapshot.disagreement == Decimal(2)
+    assert result.snapshot.disagreement == Decimal(1)
     assert not result.snapshot.degraded
 
 

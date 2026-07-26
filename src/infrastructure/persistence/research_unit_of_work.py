@@ -31,6 +31,7 @@ from infrastructure.persistence.repositories import (
     SqlAlchemyWatchlistRepository,
     register_append_only_listeners,
 )
+from infrastructure.persistence.trade_plan_repository import SqlAlchemyTradePlanRepository
 
 
 class SqlAlchemyResearchUnitOfWork:
@@ -67,6 +68,7 @@ class SqlAlchemyResearchUnitOfWork:
         self._journal: SqlAlchemyJournalRepository | None = None
         self._search_index: SqlAlchemyResearchSearchIndex | None = None
         self._audit: SqlAlchemySessionAuditLogWriter | None = None
+        self._trade_plans: SqlAlchemyTradePlanRepository | None = None
         register_append_only_listeners()
 
     def __enter__(self) -> SqlAlchemyResearchUnitOfWork:
@@ -101,6 +103,7 @@ class SqlAlchemyResearchUnitOfWork:
             self._id_generator,
             self._secret_redactor,
         )
+        self._trade_plans = SqlAlchemyTradePlanRepository(session)
         return self
 
     def __exit__(
@@ -133,6 +136,7 @@ class SqlAlchemyResearchUnitOfWork:
             self._journal = None
             self._search_index = None
             self._audit = None
+            self._trade_plans = None
 
     def _require_session(self) -> Session:
         if self._session is None:
@@ -234,6 +238,12 @@ class SqlAlchemyResearchUnitOfWork:
         self._require_session()
         assert self._search_index is not None
         return self._search_index
+
+    @property
+    def trade_plans(self) -> SqlAlchemyTradePlanRepository:
+        self._require_session()
+        assert self._trade_plans is not None
+        return self._trade_plans
 
     @property
     def audit(self) -> SqlAlchemySessionAuditLogWriter:

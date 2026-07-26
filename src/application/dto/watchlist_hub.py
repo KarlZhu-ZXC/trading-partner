@@ -35,13 +35,13 @@ def _strip_required(value: object, *, field: str) -> object:
 
 
 class WatchlistGetGroupsInput(_FrozenDTO):
-    refresh: bool = True
+    refresh: bool = False
     include_inactive: bool = False
 
 
 class WatchlistGetItemsInput(_FrozenDTO):
     group_name: str | None = None
-    refresh: bool = True
+    refresh: bool = False
     include_inactive: bool = False
     limit: int = Field(default=200, ge=1, le=500)
     offset: int = Field(default=0, ge=0)

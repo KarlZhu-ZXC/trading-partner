@@ -1,14 +1,9 @@
-# Phase 1E default Vendor Chains (§9 / §15.2).
-# Names and order only — no secrets. No real network wiring in E1.
-# market_snapshot retains mock for Phase 1A/1D regression; real tools never
-# insert mock into production capability chains.
+# Default production Vendor Chains. Names and order only; no secrets.
 version: 1
 markets:
   A_SHARE:
     instrument_master:
       vendors: [local_master, seed_fixture]
-    market_snapshot:
-      vendors: [mock_a_share]
     market_quote:
       vendors: [tencent, eastmoney]
     market_ohlcv:
@@ -44,8 +39,6 @@ markets:
   US:
     instrument_master:
       vendors: [local_master, seed_fixture]
-    market_snapshot:
-      vendors: [mock_us]
     market_quote:
       vendors: [yfinance, alpha_vantage]
     market_ohlcv:
@@ -75,8 +68,30 @@ markets:
     macro:
       vendors: [fred]
     sentiment:
-      vendors: [moomoo_feed, stocktwits, reddit]
+      vendors: [moomoo_feed, reddit]
     prediction_market:
       vendors: [polymarket]
     account:
       vendors: [schwab, moomoo, manual_csv]
+  # Phase 3A CME specific-contract quote/bars (Yahoo) + public definitions/EOD.
+  CME:
+    market_quote:
+      vendors: [yfinance]
+    market_ohlcv:
+      vendors: [yfinance]
+    futures_reference:
+      vendors: [cme_public]
+    futures_statistics:
+      vendors: [cme_public]
+  # Phase 3A OTC metals / rolling CFD observation chain (Dukascopy free API).
+  OTC:
+    market_quote:
+      vendors: [dukascopy]
+    market_ohlcv:
+      vendors: [dukascopy]
+  # Phase 3A DCE live-hog official EOD (contractInfo + dayQuotes; free only).
+  DCE:
+    futures_reference:
+      vendors: [dce_official]
+    futures_statistics:
+      vendors: [dce_official]

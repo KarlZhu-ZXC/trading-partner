@@ -712,7 +712,6 @@ def test_no_trading_or_order_imports() -> None:
         "execution",
         "fill",
         "fills",
-        "paper",
     }
     imported: set[str] = set()
     for node in ast.walk(tree):

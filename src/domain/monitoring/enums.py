@@ -19,6 +19,7 @@ class MonitorRuleType(StrEnum):
     PRICE_ABOVE = "PRICE_ABOVE"
     PRICE_BELOW = "PRICE_BELOW"
     RISK_OVERALL_AT_LEAST = "RISK_OVERALL_AT_LEAST"
+    FACT_COMPARISON = "FACT_COMPARISON"
 
 
 class MonitorSeverity(StrEnum):

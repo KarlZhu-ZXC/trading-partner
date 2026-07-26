@@ -14,7 +14,7 @@ from application.dto.provider_routing import ProviderSuccess
 from domain.common.enums import AdjustmentMethod, DataCategory, Market, VendorId
 from domain.common.errors import ConfigurationError, ProviderNotConfigured
 from domain.instruments.models import Instrument
-from domain.market.models import MarketBar, VerifiedMarketSnapshot
+from domain.market.models import MarketBar
 
 
 class UnimplementedVendorAdapter:
@@ -66,14 +66,6 @@ class UnimplementedVendorAdapter:
             f"Vendor {self._vendor_id.value} not implemented in Phase 1D",
             details={"phase": "1D", "vendor": self._vendor_id.value},
         )
-
-    async def get_snapshot(
-        self,
-        instrument: Instrument,
-        as_of: datetime,
-    ) -> VerifiedMarketSnapshot:
-        del instrument, as_of
-        raise self._not_configured()
 
     async def get_quote(
         self,

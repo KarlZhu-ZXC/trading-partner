@@ -34,9 +34,10 @@ from domain.common.ids import EntityIdPrefix
 from domain.research.models import InvestmentCase
 
 _LIVE_TOOLS = (
-    "market_get_snapshot_or_a_share_get_snapshot",
-    "fundamental_get_snapshot_or_a_share_get_snapshot",
-    "events_search_or_research_get_company_updates",
+    "market_get_snapshot",
+    "a_share_get_facts",
+    "us_get_fundamentals",
+    "us_get_company_research",
 )
 
 

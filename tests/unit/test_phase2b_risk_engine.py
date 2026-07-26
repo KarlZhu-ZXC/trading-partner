@@ -17,7 +17,7 @@ from domain.portfolio.enums import AccountEnvironment, AccountPositionSide
 from domain.portfolio.models import AccountPosition, AccountSnapshot
 from domain.risk.enums import RiskCheckStatus, RiskConfirmer, RiskOverallStatus
 from domain.risk.models import RiskPolicy
-from interfaces.mcp.server import PHASE2B_RISK_TOOL_NAMES, PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
@@ -170,7 +170,7 @@ def test_policy_update_is_versioned_and_idempotent(fixed_clock, id_generator) ->
 
 
 @pytest.mark.asyncio
-async def test_three_risk_mcp_handlers_validate_and_delegate() -> None:
+async def test_compact_risk_handlers_validate_and_delegate() -> None:
     envelope = ToolEnvelope.failure(
         request_id="req_risk",
         market=None,
@@ -191,12 +191,7 @@ async def test_three_risk_mcp_handlers_validate_and_delegate() -> None:
     manager = create_mcp_server(container)._tool_manager
 
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
-    assert {
-        "risk_policy_get",
-        "risk_policy_update",
-        "risk_check",
-    } == PHASE2B_RISK_TOOL_NAMES
-    await manager.call_tool("risk_policy_get", {})
+    await manager.call_tool("portfolio_risk_get", {"request": {"operation": "policy"}})
     await manager.call_tool(
         "risk_policy_update",
         {
@@ -211,7 +206,10 @@ async def test_three_risk_mcp_handlers_validate_and_delegate() -> None:
             "idempotency_key": "risk-v2",
         },
     )
-    await manager.call_tool("risk_check", {"refresh_accounts": False})
+    await manager.call_tool(
+        "portfolio_risk_get",
+        {"request": {"operation": "check", "refresh_accounts": False}},
+    )
 
     assert isinstance(coordinator.update_policy.call_args.args[0], RiskPolicyUpdateInput)
     assert isinstance(coordinator.check.await_args.args[0], RiskCheckInput)

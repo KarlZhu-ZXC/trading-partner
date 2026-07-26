@@ -608,7 +608,7 @@ class CandidateThesisRevisionRow(Base):
         CheckConstraint(
             "kind IN ("
             "'thesis_revision','assumption','invalidation_condition',"
-            "'open_question','watchlist_item','case_status_change'"
+            "'open_question','watchlist_item','case_status_change','trade_plan'"
             ")",
             name="ck_candidate_kind",
         ),
@@ -687,9 +687,14 @@ class InstrumentRow(Base):
             "symbol",
             name="uq_instruments_asset_type_market_symbol",
         ),
-        CheckConstraint("market IN ('A_SHARE','US')", name="ck_instruments_market"),
         CheckConstraint(
-            "asset_type IN ('equity','etf','index','option')",
+            "market IN ('A_SHARE','US','CME','DCE','OTC','LME')",
+            name="ck_instruments_market",
+        ),
+        CheckConstraint(
+            "asset_type IN ("
+            "'equity','etf','index','option','future',"
+            "'commodity_spot','cfd','benchmark')",
             name="ck_instruments_asset_type",
         ),
         CheckConstraint("is_active IN (0, 1)", name="ck_instruments_is_active"),
@@ -739,7 +744,7 @@ class InstrumentAliasRow(Base):
             name="ck_instrument_aliases_is_primary",
         ),
         CheckConstraint(
-            "market IN ('A_SHARE','US')",
+            "market IN ('A_SHARE','US','CME','DCE','OTC','LME')",
             name="ck_instrument_aliases_market",
         ),
         Index("ix_instrument_aliases_value", "market", "alias_value"),
@@ -1413,7 +1418,121 @@ class RiskPolicyRow(Base):
     confirmed_by: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_budget_max_percent: Mapped[str] = mapped_column(Text, nullable=False, default="2")
+    theme_exposure_max_percent: Mapped[str] = mapped_column(
+        Text, nullable=False, default="40"
+    )
+    drawdown_max_percent: Mapped[str] = mapped_column(Text, nullable=False, default="20")
+    liquidity_participation_max_percent: Mapped[str] = mapped_column(
+        Text, nullable=False, default="10"
+    )
+    correlation_max_absolute: Mapped[str] = mapped_column(
+        Text, nullable=False, default="0.85"
+    )
+    event_blackout_days: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+# --- Phase 3D versioned Trade Plans ---
+
+
+class TradePlanIdentityRow(Base):
+    __tablename__ = "trade_plan_identities"
+    __table_args__ = (
+        UniqueConstraint("case_id", name="uq_trade_plan_identities_case_id"),
+    )
+
+    plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    case_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class TradePlanVersionRow(Base):
+    __tablename__ = "trade_plan_versions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_trade_plan_versions_idempotency_key"),
+        CheckConstraint("version >= 1", name="ck_trade_plan_versions_version"),
+        CheckConstraint(
+            "status IN ('DRAFT','ACTIVE','PAUSED','ARCHIVED')",
+            name="ck_trade_plan_versions_status",
+        ),
+        CheckConstraint(
+            "confirmed_by IN ('user','external_agent')",
+            name="ck_trade_plan_versions_confirmed_by",
+        ),
+        CheckConstraint("schema_version = 1", name="ck_trade_plan_versions_schema"),
+        Index("ix_trade_plan_versions_plan_version", "plan_id", "version"),
+    )
+
+    plan_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("trade_plan_identities.plan_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thesis_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("theses.thesis_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    instrument_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_until: Mapped[str | None] = mapped_column(Text)
+    currency: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_price: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_price_at: Mapped[str] = mapped_column(Text, nullable=False)
+    target_position_percent: Mapped[str] = mapped_column(Text, nullable=False)
+    max_position_percent: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_budget_percent: Mapped[str] = mapped_column(Text, nullable=False)
+    stop_price: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class TradePlanConditionRow(Base):
+    __tablename__ = "trade_plan_conditions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["plan_id", "version"],
+            ["trade_plan_versions.plan_id", "trade_plan_versions.version"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("position >= 0", name="ck_trade_plan_conditions_position"),
+        CheckConstraint(
+            "phase IN ('ENTRY','SCALE','EXIT','INVALIDATION','REVIEW')",
+            name="ck_trade_plan_conditions_phase",
+        ),
+        CheckConstraint(
+            "mode IN ('MANUAL','MONITORABLE')",
+            name="ck_trade_plan_conditions_mode",
+        ),
+    )
+
+    plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    condition_code: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    fact_type: Mapped[str | None] = mapped_column(Text)
+    metric_key: Mapped[str | None] = mapped_column(Text)
+    comparator: Mapped[str | None] = mapped_column(Text)
+    threshold: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(Text)
+    instrument_id: Mapped[str | None] = mapped_column(Text)
+    max_fact_age_seconds: Mapped[int | None] = mapped_column(Integer)
+    event_after: Mapped[str | None] = mapped_column(Text)
+
 
 
 # --- Phase 2C Monitoring ---
@@ -1429,6 +1548,11 @@ class MonitorIdentityRow(Base):
 class MonitorVersionRow(Base):
     __tablename__ = "monitor_versions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["trade_plan_id", "trade_plan_version"],
+            ["trade_plan_versions.plan_id", "trade_plan_versions.version"],
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("idempotency_key", name="uq_monitor_versions_idempotency_key"),
         CheckConstraint("version >= 1", name="ck_monitor_versions_version"),
         CheckConstraint(
@@ -1458,6 +1582,8 @@ class MonitorVersionRow(Base):
         Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT")
     )
     primary_instrument_id: Mapped[str | None] = mapped_column(Text)
+    trade_plan_id: Mapped[str | None] = mapped_column(Text)
+    trade_plan_version: Mapped[int | None] = mapped_column(Integer)
     cadence: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     rules_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1582,6 +1708,18 @@ class MonitorRunRow(Base):
 
 class ChallengeReviewRow(Base):
     __tablename__ = "challenge_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "start_idempotency_key",
+            name="uq_challenge_reviews_start_idempotency_key",
+        ),
+        CheckConstraint(
+            "(start_idempotency_key IS NULL AND start_payload_sha256 IS NULL) OR "
+            "(start_idempotency_key IS NOT NULL AND "
+            f"{_HEX64_CHECK.format(col='start_payload_sha256')})",
+            name="ck_challenge_reviews_start_idempotency",
+        ),
+    )
 
     review_id: Mapped[str] = mapped_column(Text, primary_key=True)
     case_id: Mapped[str] = mapped_column(
@@ -1600,6 +1738,44 @@ class ChallengeReviewRow(Base):
     resolution_rationale: Mapped[str | None] = mapped_column(Text)
     resolved_at: Mapped[str | None] = mapped_column(Text)
     confirmed_by: Mapped[str | None] = mapped_column(Text)
+    start_idempotency_key: Mapped[str | None] = mapped_column(Text)
+    start_payload_sha256: Mapped[str | None] = mapped_column(Text)
+
+
+class ChallengeReviewResolutionRow(Base):
+    __tablename__ = "challenge_review_resolutions"
+    __table_args__ = (
+        UniqueConstraint("review_id", name="uq_challenge_review_resolutions_review"),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_challenge_review_resolutions_idempotency_key",
+        ),
+        CheckConstraint(
+            "resolution IN ('accept','revise','reject','defer')",
+            name="ck_challenge_review_resolutions_resolution",
+        ),
+        CheckConstraint(
+            "confirmed_by IN ('user','external_agent')",
+            name="ck_challenge_review_resolutions_confirmed_by",
+        ),
+        CheckConstraint(
+            _HEX64_CHECK.format(col="payload_sha256"),
+            name="ck_challenge_review_resolutions_payload_sha256",
+        ),
+    )
+
+    resolution_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    review_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("challenge_reviews.review_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    resolution: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class ChallengeQuestionRow(Base):
@@ -1633,6 +1809,22 @@ class ChallengeFindingRow(Base):
 
 class WorkflowRunRow(Base):
     __tablename__ = "research_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_research_runs_idempotency_key"),
+        CheckConstraint(
+            "status IN ('started','running','succeeded','partial','failed')",
+            name="ck_research_runs_status",
+        ),
+        CheckConstraint(
+            "(status IN ('started','running') AND completed_at IS NULL) OR "
+            "(status IN ('succeeded','partial','failed') AND completed_at IS NOT NULL)",
+            name="ck_research_runs_terminal_time",
+        ),
+        CheckConstraint(
+            _HEX64_CHECK.format(col="request_payload_sha256"),
+            name="ck_research_runs_request_payload_sha256",
+        ),
+    )
 
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
     workflow_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1642,9 +1834,16 @@ class WorkflowRunRow(Base):
     instrument_id: Mapped[str | None] = mapped_column(Text)
     requested_as_of: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[str] = mapped_column(Text, nullable=False)
-    completed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     report_id: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    heartbeat_at: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    missing_capabilities: Mapped[tuple[str, ...]] = mapped_column(
+        JsonStringTuple(), nullable=False
+    )
 
 
 class WorkflowRunStepRow(Base):
@@ -1666,6 +1865,28 @@ class WorkflowRunStepRow(Base):
     error_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
 
 
+class WorkflowRunFactArtifactRow(Base):
+    __tablename__ = "research_run_fact_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            _HEX64_CHECK.format(col="payload_sha256"),
+            name="ck_research_run_fact_artifacts_payload_sha256",
+        ),
+        CheckConstraint(
+            "size_bytes >= 0 AND size_bytes <= 1048576",
+            name="ck_research_run_fact_artifacts_size",
+        ),
+    )
+
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("research_runs.run_id", ondelete="RESTRICT"), primary_key=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class AccountTransactionRow(Base):
     __tablename__ = "account_transactions"
 
@@ -1683,6 +1904,221 @@ class AccountTransactionRow(Base):
 
 
 # --- Phase 3B durable industry-cycle observations ---
+
+
+# --- Phase 3A formal futures definitions ---
+
+
+class FuturesProductRow(Base):
+    __tablename__ = "futures_products"
+    __table_args__ = (
+        UniqueConstraint("product_key", name="uq_futures_products_product_key"),
+        CheckConstraint(
+            "market IN ('CME','DCE','US','LME')",
+            name="ck_futures_products_market",
+        ),
+        Index("ix_futures_products_market_root", "market", "root"),
+    )
+
+    product_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    product_key: Mapped[str] = mapped_column(Text, nullable=False)
+    market: Mapped[str] = mapped_column(Text, nullable=False)
+    root: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FuturesProductVersionRow(Base):
+    __tablename__ = "futures_product_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "version",
+            name="uq_futures_product_versions_product_version",
+        ),
+        CheckConstraint("version >= 1", name="ck_futures_product_versions_version"),
+        CheckConstraint(
+            "settlement_method IN ('physical','cash','unknown')",
+            name="ck_futures_product_versions_settlement_method",
+        ),
+        Index(
+            "ix_futures_product_versions_product_valid",
+            "product_id",
+            "valid_from",
+        ),
+    )
+
+    version_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    product_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_products.product_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    exchange: Mapped[str] = mapped_column(Text, nullable=False)
+    commodity: Mapped[str] = mapped_column(Text, nullable=False)
+    currency: Mapped[str] = mapped_column(Text, nullable=False)
+    price_unit: Mapped[str] = mapped_column(Text, nullable=False)
+    multiplier: Mapped[str] = mapped_column(Text, nullable=False)
+    tick_size: Mapped[str] = mapped_column(Text, nullable=False)
+    settlement_method: Mapped[str] = mapped_column(Text, nullable=False)
+    session_calendar_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_to: Mapped[str | None] = mapped_column(Text)
+    definition_as_of: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FuturesContractRow(Base):
+    __tablename__ = "futures_contracts"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "contract_month",
+            name="uq_futures_contracts_product_month",
+        ),
+        Index("ix_futures_contracts_product", "product_id", "contract_month"),
+    )
+
+    instrument_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    product_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_products.product_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    contract_month: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FuturesContractVersionRow(Base):
+    __tablename__ = "futures_contract_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id",
+            "version",
+            name="uq_futures_contract_versions_instrument_version",
+        ),
+        CheckConstraint("version >= 1", name="ck_futures_contract_versions_version"),
+        CheckConstraint(
+            "status IN ('listed','active','expired','delisted','unknown')",
+            name="ck_futures_contract_versions_status",
+        ),
+        Index(
+            "ix_futures_contract_versions_instrument_asof",
+            "instrument_id",
+            "definition_as_of",
+        ),
+    )
+
+    version_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_contracts.instrument_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    listed_at: Mapped[str | None] = mapped_column(Text)
+    first_trade_at: Mapped[str | None] = mapped_column(Text)
+    last_trade_at: Mapped[str | None] = mapped_column(Text)
+    expiration_at: Mapped[str | None] = mapped_column(Text)
+    first_notice_at: Mapped[str | None] = mapped_column(Text)
+    delivery_start: Mapped[str | None] = mapped_column(Text)
+    delivery_end: Mapped[str | None] = mapped_column(Text)
+    settlement_at: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    definition_as_of: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FuturesContractStatisticsRow(Base):
+    __tablename__ = "futures_contract_statistics"
+    __table_args__ = (
+        CheckConstraint(
+            "settlement_status IN ('preliminary','final','unknown')",
+            name="ck_futures_contract_statistics_status",
+        ),
+        Index(
+            "ix_futures_contract_statistics_trade_date",
+            "trade_date",
+            "instrument_id",
+        ),
+    )
+
+    instrument_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_contracts.instrument_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    trade_date: Mapped[str] = mapped_column(Text, primary_key=True)
+    published_at: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    settlement: Mapped[str | None] = mapped_column(Text)
+    settlement_status: Mapped[str] = mapped_column(Text, nullable=False)
+    session_volume: Mapped[str | None] = mapped_column(Text)
+    open_interest: Mapped[str | None] = mapped_column(Text)
+    recorded_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ContinuousSeriesDefinitionRow(Base):
+    __tablename__ = "continuous_series_definitions"
+    __table_args__ = (
+        CheckConstraint("rank >= 0", name="ck_continuous_series_rank"),
+        CheckConstraint(
+            "roll_rule IN ('calendar','volume','open_interest')",
+            name="ck_continuous_series_roll_rule",
+        ),
+        CheckConstraint("adjustment = 'none'", name="ck_continuous_series_adjustment"),
+        Index(
+            "ix_continuous_series_product",
+            "product_id",
+            "roll_rule",
+            "rank",
+        ),
+    )
+
+    instrument_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    product_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_products.product_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    roll_rule: Mapped[str] = mapped_column(Text, nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    adjustment: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_methodology_version: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_to: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ContinuousContractMappingRow(Base):
+    __tablename__ = "continuous_contract_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "continuous_instrument_id",
+            "effective_from",
+            name="uq_continuous_mapping_effective_from",
+        ),
+        Index(
+            "ix_continuous_contract_mappings_series",
+            "continuous_instrument_id",
+            "effective_from",
+        ),
+    )
+
+    mapping_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    continuous_instrument_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("continuous_series_definitions.instrument_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    contract_instrument_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("futures_contracts.instrument_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    effective_from: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_to: Mapped[str | None] = mapped_column(Text)
+    mapping_source: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class IndustryMetricObservationRow(Base):

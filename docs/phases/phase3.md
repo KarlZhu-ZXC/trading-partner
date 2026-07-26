@@ -1,27 +1,32 @@
-# Phase 3 — Cross-Asset Facts, Historical Validation, and Simulation
+# Phase 3 — Cross-Asset Facts and Historical Validation
 
 Phase 3 grows Trading Partner beyond A-share/US equity research while preserving
-the same provenance, read-only, and no-fabrication rules. Backtests, paper trading,
-and order execution remain unimplemented unless explicitly marked otherwise below.
+the same provenance, read-only, and no-fabrication rules. Backtests and order
+execution remain unimplemented unless explicitly marked otherwise below.
 
-To keep ownership and dependencies clear, Phase 3 is consolidated into five tracks:
+To keep ownership and dependencies clear, Phase 3 is consolidated into four tracks:
 
 | Track | Capability domain | Status |
 |---|---|---|
-| Phase 3A | Formal futures and cross-asset market facts | Continuous metal-futures foundation implemented; formal contracts and spot benchmarks pending |
-| Phase 3B | Company financial/operating facts and optional industry datasets | Cross-market financial facts, hog-cycle facts, and generic A-share operating disclosures implemented |
+| Phase 3A | Formal futures and cross-asset market facts | Free CME/DCE/Dukascopy integration implemented; LME discovery deferred |
+| Phase 3B | Company financial/operating facts and optional industry datasets | Implemented, including caller-specified peer comparison |
 | Phase 3C | Historical validation platform | Pending |
-| Phase 3D | Judgment-to-plan controls | Phase 2 Risk/Monitoring foundations implemented; Phase 3 extensions pending |
-| Phase 3E | Paper simulation and continuous evaluation | Pending |
+| Phase 3D | Judgment-to-plan controls | Implemented: versioned Trade Plans, Position Sizing, Risk v2, and Monitoring v2 |
 
 ## Phase 3A — Formal futures and cross-asset market facts
 
-> Foundation status: continuous metal-futures proxies implemented on 2026-07-21;
-> free quote/daily-bar fallbacks added on 2026-07-23. Formal exchange-contract
-> integration remains pending.
+> Status: free continuous proxies, formal CME metal contracts, DCE live-hog EOD
+> facts, Dukascopy OTC gold/silver and rolling copper CFD implemented on 2026-07-25.
+> LME remains a non-blocking licensing/discovery item.
+>
+> The proposed provider selection, domain model, MCP migration, implementation
+> slices, and review decisions are documented in
+> [the Phase 3A review plan](../plans/phase3a-formal-futures-cross-asset-plan.md).
+> The plan now serves as the implementation and acceptance record.
 
 The existing public tools support six continuous metal-futures proxies without
-changing the 52-tool public MCP inventory. Yahoo remains primary. Timestamped
+adding another public tool. The current compact
+inventory is 28. Yahoo remains primary. Timestamped
 Sina quotes and Eastmoney daily-derived bars provide narrowly scoped fallbacks.
 
 | Instrument ID | Yahoo symbol | Basis |
@@ -36,8 +41,9 @@ Sina quotes and Eastmoney daily-derived bars provide narrowly scoped fallbacks.
 Supported paths:
 
 - `instrument_resolve` recognizes `asset_type="future"` and Yahoo `ROOT=F` symbols;
-- `us_get_market(operation="quote")` returns a futures quote;
-- `market_get_bars` supports `1m`, `5m`, `15m`, `30m`, `60m`, `1d`, `1wk`, and
+- `market_data_get(request={"operation":"quote",...})` returns a futures quote;
+- `market_data_get(request={"operation":"bars",...})` supports `1m`, `5m`, `15m`,
+  `30m`, `60m`, `1d`, `1wk`, and
   `1mo`; an omitted adjustment becomes `none` for futures;
 - `technical_get_snapshot` and `technical_render_chart` use unadjusted daily
   futures bars and disclose the continuous-futures basis.
@@ -79,30 +85,42 @@ SLA. Intraday history remains limited by Yahoo/yfinance to approximately the lat
 changes or artificial discontinuities; Phase 3A does not splice providers into a
 back-adjusted research-grade continuous series.
 
-### Formal integration still pending
+### Formal free integration
 
-- One shared formal-futures contract model covering exchange, contract month,
-  expiry/last-trade dates, multiplier, tick size, session calendar, settlement,
-  volume, open interest, and roll policy.
-- Contract-specific metal futures and DCE live-hog futures. DCE live hog is a
-  futures instrument and term-structure use case under Phase 3A—not a special
-  child capability of the hog industry dataset in Phase 3B.
-- Controlled continuous-series construction and disclosure of raw-contract versus
-  continuous basis; the current Yahoo symbols remain best-effort proxies.
-- Provider-backed XAUUSD/XAGUSD and copper spot quotes/bars with explicit bid,
-  ask, mid, unit, session, timestamp, and venue/aggregate basis.
-- Simultaneous spot/future observations, durable basis series, and LME Cash/LME
-  3-month copper as distinct licensed instruments.
-- Generic FX and crypto research support may reuse the cross-asset contracts later,
-  but is not a Phase 3 exit gate until a concrete product use case is approved.
+- CME GC/MGC/SI/HG/PL/PA share versioned product, contract, settlement/OI,
+  curve, and continuous-mapping models. CME public facts are reference-only;
+  Yahoo specific-contract quotes/bars never fall back to a continuous proxy.
+- DCE LH uses the same model but exposes official EOD facts only. Intraday DCE
+  bars and quotes remain unavailable rather than inferred from third-party main contracts.
+- Dukascopy supplies XAUUSD/XAGUSD bid/ask broker-feed quotes and bars. Its copper
+  instrument is separately identified as a rolling CFD and never called spot/LME.
+- `market_data_get` now supports `futures_curve` and gated `spot_future_basis`;
+  non-comparable units/times/delivery bases stay explicit.
+- Monitor and Technical Engine accept CME and OTC instruments. DCE rules remain
+  `NOT_EVALUATED` until a valid EOD settlement evaluation path exists.
+- `trading-partner-futures-sync` explicitly refreshes definitions and persists
+  append-only EOD statistics vintages; repeated identical syncs are idempotent.
 
-These pending items must not be inferred from the availability of Yahoo futures.
+Still out: LBMA benchmark licensing, LME Cash/3M until a zero-fee use licence is
+verified, DCE minute data, expired-CME complete history, and back-adjusted datasets.
+
+### Phase 3A closeout decision
+
+There is no active Phase 3A closeout backlog. Futures facts remain request-driven:
+ordinary queries contact the configured Provider and return typed degradation when
+it is unavailable. The product does not require continuous futures ingestion,
+durable settlement read-through, or DCE live-hog monitoring.
+
+LME/LBMA licensing, DCE intraday data, expired-contract history, and back-adjusted
+continuous series are accepted boundaries. Expired-contract datasets and
+continuous-series construction may be reconsidered only inside Phase 3C.
 
 ## Phase 3B — Company financial/operating facts and optional industry datasets
 
 > Status: cross-market normalized financial statements and quality metrics,
 > generic A-share operating disclosures, the optional hog dataset, and durable hog
-> history ingestion are implemented. Long industry history remains best effort.
+> history ingestion are implemented. Peer-comparison planning is under review;
+> further hog-cycle expansion is not currently prioritized.
 
 Company fundamentals are the reusable core of this track; industry-cycle datasets
 are optional extensions for sectors where a cycle model is genuinely useful.
@@ -111,7 +129,7 @@ are optional extensions for sectors where a cycle model is genuinely useful.
 
 No new public tool was added. A-share equities use
 `a_share_get_facts(operation="financials")`; US equities use
-`us_get_fundamentals(operation="statements")`.
+`us_company_get(request={"operation":"fundamental_statements",...})`.
 
 | Market | Primary | Fallbacks | Point-in-time boundary |
 |---|---|---|---|
@@ -135,7 +153,7 @@ practical current-only fallback.
 ### Optional hog-cycle dataset
 
 The existing `a_share_get_facts` tool adds the closed operation
-`industry_cycle`; the public MCP inventory remains exactly 52 tools.
+`industry_cycle`; these capabilities now route through the 28-tool compact surface.
 
 ```json
 {
@@ -196,18 +214,22 @@ integration in Phase 3A.
 - A 股中文全名可通过腾讯名称目录发现候选，并须再经腾讯报价接口校验后才写入
   Instrument Master；本地 Master 仍是缓存/注册表，不是允许名单。
 - `create_case=false` 的 ad-hoc Deep Dive 不再调用仅适用于 Investment Case 的
-  `research_context_build`，因此不会制造预期内的 `INPUT_VALIDATION_ERROR` 或把
+  `investment_case_read` 的 `context` operation，因此不会制造预期内的
+  `INPUT_VALIDATION_ERROR` 或把
   成功研究错误标成 Partial。
 - A 股 Case 工作流按步骤串行进入 Provider Router，避免同一研究流程把多个
   Eastmoney 家族请求同时压入共享队列；Provider 内部的缓存、限流、熔断和
   fallback 语义保持不变。
 
 本轮没有把牧原股份特例写进公共 MCP。公告解析、公司经营序列、显式 Deep Dive
-组合及 `industry_cycle` 有界输出已经完成。剩余工作只有：
+组合及 `industry_cycle` 有界输出已经完成。通用同行比较尾项也已完成：
 
-- 更完整的同行比较与周期估值；
-- 全国能繁母猪等官方历史继续按 best effort 补源，真实缺口始终可见；
-- DCE 生猪期限结构统一进入 Phase 3A 正式期货接入，不在行业数据集内重复建设。
+- **3B-T02 — 调用方指定同行的可比事实包（已完成）。** 复用现有财报、行情和可选 A 股经营指标，
+  对明确给出的同行标的生成同口径比较事实；MCP 不自动选择同行、排名或给出估值结论。
+  详细契约与验收记录见 [3B-T02 实施规划](../plans/phase3b-peer-comparison-plan.md)。
+
+猪周期 Deep Dive 组合 DCE 期限结构、DCE 生猪监控和官方猪周期长期补源均不在当前优先
+队列。既有猪周期查询能力保留，但暂不扩展。
 
 用于后续验收的公司官方披露样本包括
 [2026 年 6 月销售简报](https://static.cninfo.com.cn/finalpage/2026-07-07/1225411958.PDF)、
@@ -232,7 +254,7 @@ integration in Phase 3A.
 |---|---|---|---|
 | `HOG-P0-001` | 公告路径只有元数据，无法稳定得到正文事实 | **已解决** | 2026-07-25：巨潮公告按 `as_of` 和请求时间窗有界检索；仅下载官方 finalpage PDF；销售简报、业绩预告和定期报告均保留解析回执、公告时间、原文/PDF 链接与解析版本 |
 | `HOG-P0-002` | 缺少上市公司经营指标时间序列 | **已解决** | 2026-07-25：通用 schema 返回明确披露的销量、售价、销售收入、出栏/屠宰量、能繁母猪与完全成本，区分月度/累计及公司口径；不重复财报 statements |
-| `HOG-P0-003` | Deep Dive 未显式组合行业周期事实 | **已解决** | 2026-07-25：仅当 `research_run_deep_dive(industry_cycle="hog")` 被显式选择时，才组合公司经营披露与全国猪周期 compact 包；不按公司名称推断行业 |
+| `HOG-P0-003` | Deep Dive 未显式组合行业周期事实 | **已解决** | 2026-07-25：仅当 `research_workflow_run` 的 `deep_dive` operation 显式选择 `industry_cycle="hog"` 时，才组合公司经营披露与全国猪周期 compact 包；不按公司名称推断行业 |
 | `HOG-P0-004` | 长周期 `industry_cycle` 事实包过大 | **已解决** | 2026-07-25：支持 `view=compact|series`（默认 compact）、`metric_codes` 过滤及 `offset`/`limit<=200` 有界分页，并返回 coverage / `has_more` |
 | `HOG-P0-005` | 官方月度核心序列的长期覆盖有限 | **持续改进（不阻塞）** | 不再要求固定 20 年或连续覆盖；尽可能同步最长的可验证官方历史，持续显式披露真实覆盖与缺口，不插值、不伪造连续序列 |
 
@@ -257,8 +279,7 @@ Promotion of a result never confirms a Thesis or authorizes live execution.
 
 ## Phase 3D — Judgment-to-plan controls
 
-> Status: partially founded by Phase 2 Risk Engine v1 and Monitoring v1; Phase 3
-> extensions are pending.
+> Status: implemented on 2026-07-26 and retained in the 28-tool compact public surface.
 
 Monitoring extensions, Trade Plan, Position Sizing, and Risk Engine extensions are
 one dependency chain and are therefore planned together:
@@ -279,29 +300,27 @@ A-share T+1/limit/suspension, stale-data, and duplicate-order checks.
 All outputs remain proposals or calculations. They do not create positions, orders,
 fills, or confirmation authority.
 
-## Phase 3E — Paper simulation and continuous evaluation
+The implementation reuses existing public tools: Trade Plans use the research-state
+Candidate lifecycle, sizing is returned by
+`portfolio_risk_get(request={"operation":"check","trade_plan_id":...})`, and plan
+conditions compile only through explicit `monitor_manage` `create` / `update` calls.
+Trade Plan identities and versions are append-only and linked Monitors preserve the exact
+plan version. A plan update never silently rewrites an existing Monitor.
 
-> Status: pending. Existing operational CLIs and Codex Automations are external
-> schedulers, not a Paper Trading engine or Scheduler State.
+A-share sizing rounds down to 100-share lots; US equity/ETF sizing supports four-decimal
+fractional quantities. Plan, policy, cash, stop-distance, freshness, optional liquidity,
+ATR, and volatility limits are disclosed separately. Missing required facts suppress the
+recommended range rather than producing a zero-sized recommendation or implicit pass.
 
-This track combines capabilities that require the same simulated ledger and clock:
-
-- simulated accounts, order lifecycle, partial fills, fees, slippage, NAV, and
-  Shadow Portfolio;
-- performance attribution across selection, timing, sizing, beta, sector/theme,
-  FX, cost, discretionary overrides, and plan adherence;
-- durable scheduler state and idempotent daily-position, weekly-portfolio, and
-  post-trade review runs;
-- comparison between strategy, agent recommendation, paper result, and separately
-  observed real-account outcome without reconciling them as one account.
-
-Paper execution remains clearly separated from real brokers. Real order writes stay
-outside Trading Partner and outside Phase 3.
+Monitoring v2 resolves price, volume, technical, fundamental, company event, macro,
+sentiment, Thesis-state, and portfolio-risk facts deterministically. Provider failures,
+unsupported fields, and stale observations transition to `NOT_EVALUATED`; repeated
+unchanged states remain event-free. A linked Monitor cannot outlive a finite Trade Plan.
 
 ## Phase 3 public-surface rule
 
 The roadmap names capabilities, not a promise to register one MCP tool per noun.
 Phase 3 must preserve a compact public surface by consolidating related operations
 behind closed enums and existing domain coordinators. Existing `monitor_*` and
-`risk_check` tools are extended rather than duplicated; overlapping weekly review
+`portfolio_risk_get` (`check`) tools are extended rather than duplicated; overlapping weekly review
 capabilities should build on `portfolio_run_review` instead of adding aliases.

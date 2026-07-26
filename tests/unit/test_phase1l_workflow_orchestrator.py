@@ -12,6 +12,7 @@ from application.dto.a_share import (
     AShareGetCapitalSnapshotInput,
     AShareGetFinancialStatementsInput,
 )
+from application.dto.peer_comparison import PeerComparisonRunInput
 from application.dto.tool_envelope import ErrorInfo, ToolEnvelope
 from application.dto.workflow import (
     AShareRunMarketReviewInput,
@@ -20,12 +21,14 @@ from application.dto.workflow import (
     ResearchRunDeepDiveInput,
     USRunMarketReviewInput,
 )
+from application.ports.workflow_run_repository import WorkflowRunClaim, WorkflowRunRecord
 from application.services.portfolio_enrichment_calculator import PortfolioEnrichmentCalculator
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_risk_calculator import PortfolioRiskCalculator
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
 from domain.a_share.enums import CapitalMetricType
 from domain.common.enums import Freshness, Market, VendorId
+from domain.common.errors import IdempotencyConflict
 from domain.portfolio.enums import AccountEnvironment, AccountPositionSide
 from domain.portfolio.models import AccountPosition, AccountSnapshot
 from domain.workflow.enums import WorkflowRunStatus, WorkflowType
@@ -69,13 +72,66 @@ class _Ids:
 class _Repository:
     def __init__(self) -> None:
         self.runs: list[object] = []
+        self.records: dict[str, WorkflowRunRecord] = {}
+        self.keys: dict[str, str] = {}
 
-    def append(self, run: object) -> object:
+    def claim(
+        self,
+        run: object,
+        *,
+        idempotency_key: str,
+        request_payload_sha256: str,
+        heartbeat_at: datetime,
+        lease_expires_at: datetime,
+    ) -> WorkflowRunClaim:
+        existing_id = self.keys.get(idempotency_key)
+        if existing_id is not None:
+            existing = self.records[existing_id]
+            if existing.request_payload_sha256 != request_payload_sha256:
+                raise IdempotencyConflict("Workflow idempotency key was reused")
+            return WorkflowRunClaim(existing, False)
+        record = WorkflowRunRecord(
+            run=run,
+            request_payload_sha256=request_payload_sha256,
+            heartbeat_at=heartbeat_at,
+            lease_expires_at=lease_expires_at,
+        )
+        self.records[run.run_id] = record
+        self.keys[idempotency_key] = run.run_id
+        return WorkflowRunClaim(record, True)
+
+    def mark_running(self, run_id: str, **_: object) -> None:
+        assert run_id in self.records
+
+    def complete(
+        self,
+        run: object,
+        *,
+        fact_data: tuple[object, ...],
+        missing_capabilities: tuple[str, ...],
+    ) -> WorkflowRunRecord:
         self.runs.append(run)
-        return run
+        previous = self.records[run.run_id]
+        record = WorkflowRunRecord(
+            run=run,
+            request_payload_sha256=previous.request_payload_sha256,
+            heartbeat_at=NOW,
+            lease_expires_at=NOW,
+            fact_data=fact_data,
+            missing_capabilities=missing_capabilities,
+        )
+        self.records[run.run_id] = record
+        return record
 
     def get(self, run_id: str) -> object:
-        raise NotImplementedError(run_id)
+        return self.records[run_id].run
+
+    def get_record(self, run_id: str) -> WorkflowRunRecord:
+        return self.records[run_id]
+
+    def get_by_idempotency_key(self, idempotency_key: str) -> WorkflowRunRecord | None:
+        run_id = self.keys.get(idempotency_key)
+        return self.records.get(run_id) if run_id is not None else None
 
 
 def _success(request_id: str = "req_fact") -> ToolEnvelope[dict[str, int]]:
@@ -115,6 +171,7 @@ def _orchestrator(
         portfolio=MagicMock(),
         transactions=MagicMock(),
         derived=MagicMock(),
+        peer_comparison=MagicMock(),
     )
     dependencies.context.build.return_value = ToolEnvelope.success(
         request_id="req_context",
@@ -184,6 +241,12 @@ def _orchestrator(
     dependencies.portfolio.get_account_positions.return_value = _success("req_positions")
     dependencies.portfolio.analyze_portfolio.return_value = _success("req_portfolio")
     dependencies.derived.build = AsyncMock(return_value=_success("req_derived"))
+    dependencies.peer_comparison.compare = AsyncMock(
+        return_value=_success("req_peer_comparison")
+    )
+    dependencies.transactions.list_durable_transactions.return_value = _success(
+        "req_durable_transactions"
+    )
     service = ResearchWorkflowOrchestrator(
         dependencies.repository,
         dependencies.cases,
@@ -196,11 +259,35 @@ def _orchestrator(
         dependencies.portfolio,
         dependencies.transactions,
         dependencies.derived,
+        dependencies.peer_comparison,
         _Clock(),
         _Ids(),
         DefaultSecretRedactor(),
     )
     return service, dependencies
+
+
+@pytest.mark.asyncio
+async def test_peer_comparison_is_one_replay_safe_workflow_step() -> None:
+    service, dependencies = _orchestrator()
+    request = PeerComparisonRunInput(
+        idempotency_key="peer-comparison-1",
+        primary_instrument_id="equity:US:NVDA",
+        peer_instrument_ids=("equity:US:AMD",),
+        as_of=NOW,
+    )
+
+    first = await service.run_peer_comparison(request)
+    replay = await service.run_peer_comparison(request)
+
+    assert first.ok and replay.ok
+    assert first.data is not None
+    assert first.data.workflow_type is WorkflowType.PEER_COMPARISON
+    assert tuple(fact.receipt.step_name for fact in first.data.facts) == (
+        "peer_comparison_facts",
+    )
+    assert replay.data == first.data
+    dependencies.peer_comparison.compare.assert_awaited_once_with(request)
 
 
 @pytest.mark.asyncio
@@ -211,31 +298,39 @@ def _orchestrator(
             WorkflowType.DEEP_DIVE,
             "equity:US:NVDA",
             "run_deep_dive",
-            ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW),
+            ResearchRunDeepDiveInput(
+                idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+            ),
         ),
         (
             WorkflowType.CATALYST_REVIEW,
             "equity:A_SHARE:600519.SH",
             "run_catalyst_review",
-            ResearchRunCatalystReviewInput(case_id="case_1", as_of=NOW),
+            ResearchRunCatalystReviewInput(
+                idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+            ),
         ),
         (
             WorkflowType.A_SHARE_MARKET_REVIEW,
             "equity:US:NVDA",
             "run_a_share_market_review",
-            AShareRunMarketReviewInput(as_of=NOW),
+            AShareRunMarketReviewInput(idempotency_key="workflow-1", as_of=NOW),
         ),
         (
             WorkflowType.US_MARKET_REVIEW,
             "equity:US:NVDA",
             "run_us_market_review",
-            USRunMarketReviewInput(as_of=NOW, prediction_topic="Fed"),
+            USRunMarketReviewInput(
+                idempotency_key="workflow-1", as_of=NOW, prediction_topic="Fed"
+            ),
         ),
         (
             WorkflowType.PORTFOLIO_REVIEW,
             "equity:US:NVDA",
             "run_portfolio_review",
-            PortfolioRunReviewInput(refresh_accounts=True, as_of=NOW),
+            PortfolioRunReviewInput(
+                idempotency_key="workflow-1", refresh_accounts=True, as_of=NOW
+            ),
         ),
     ),
 )
@@ -251,7 +346,7 @@ async def test_five_recipes_share_one_terminal_fact_package(
 
     assert result.ok is True and result.data is not None
     assert result.data.workflow_type is workflow_type
-    assert result.data.status is WorkflowRunStatus.COMPLETE
+    assert result.data.status is WorkflowRunStatus.SUCCEEDED
     assert result.data.execution_effect is False
     assert dependencies.repository.runs
     if workflow_type in {WorkflowType.DEEP_DIVE, WorkflowType.CATALYST_REVIEW}:
@@ -263,7 +358,9 @@ async def test_optional_fact_failure_returns_persisted_partial_run() -> None:
     service, dependencies = _orchestrator()
     dependencies.us_context.get_macro_context.return_value = _failure()
 
-    result = await service.run_us_market_review(USRunMarketReviewInput(as_of=NOW))
+    result = await service.run_us_market_review(
+        USRunMarketReviewInput(idempotency_key="workflow-1", as_of=NOW)
+    )
 
     assert result.ok is True and result.data is not None
     assert result.data.status is WorkflowRunStatus.PARTIAL
@@ -273,14 +370,38 @@ async def test_optional_fact_failure_returns_persisted_partial_run() -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_workflow_replay_skips_all_provider_calls() -> None:
+    service, dependencies = _orchestrator()
+    request = USRunMarketReviewInput(idempotency_key="workflow-replay", as_of=NOW)
+
+    first = await service.run_us_market_review(request)
+    replay = await service.run_us_market_review(request)
+    conflict = await service.run_us_market_review(
+        request.model_copy(update={"prediction_topic": "Fed"})
+    )
+
+    assert first.ok and replay.ok
+    assert first.data == replay.data
+    assert not conflict.ok
+    assert conflict.errors[0].code == "IDEMPOTENCY_CONFLICT"
+    dependencies.us_market.get_market_context.assert_awaited_once()
+    dependencies.us_context.get_macro_context.assert_awaited_once()
+    dependencies.us_context.get_live_news.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_portfolio_review_defaults_to_durable_accounts() -> None:
     service, dependencies = _orchestrator()
 
-    result = await service.run_portfolio_review(PortfolioRunReviewInput(as_of=NOW))
+    result = await service.run_portfolio_review(
+        PortfolioRunReviewInput(idempotency_key="workflow-1", as_of=NOW)
+    )
 
     assert result.ok is True
     dependencies.portfolio.get_account_snapshot.assert_not_awaited()
     dependencies.portfolio.get_account_positions.assert_called_once()
+    dependencies.transactions.get_transactions.assert_not_awaited()
+    dependencies.transactions.list_durable_transactions.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -288,11 +409,16 @@ async def test_deep_dive_can_run_ad_hoc_when_instrument_has_no_case() -> None:
     service, dependencies = _orchestrator()
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(instrument_id="equity:US:NVDA", as_of=NOW, create_case=False)
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1",
+            instrument_id="equity:US:NVDA",
+            as_of=NOW,
+            create_case=False,
+        )
     )
 
     assert result.ok is True and result.data is not None
-    assert result.data.status is WorkflowRunStatus.COMPLETE
+    assert result.data.status is WorkflowRunStatus.SUCCEEDED
     assert result.data.case_id is None
     assert result.data.instrument_id == "equity:US:NVDA"
     assert result.data.report_id is None
@@ -329,9 +455,12 @@ async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() ->
 
     result = await service.run_deep_dive(
         ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1",
             instrument_id="equity:US:NVDA",
             as_of=NOW,
             case_title="NVDA 深度研究",
+            case_creation_confirmed_by="user",
+            case_creation_idempotency_key="deep-dive-nvda-case",
         )
     )
 
@@ -339,6 +468,48 @@ async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() ->
     assert result.data.case_id == "case_created"
     assert result.data.missing_capabilities == ()
     dependencies.cases.create_case.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_deep_dive_never_infers_user_confirmation_for_case_creation() -> None:
+    service, dependencies = _orchestrator()
+
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1",
+            instrument_id="equity:US:NVDA",
+            as_of=NOW,
+        )
+    )
+
+    assert result.ok is False
+    assert result.errors[0].code == "INPUT_VALIDATION_ERROR"
+    dependencies.cases.create_case.assert_not_called()
+
+
+def test_deep_dive_case_confirmation_fields_are_atomic() -> None:
+    with pytest.raises(ValueError, match="must be provided together"):
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1",
+            instrument_id="equity:US:NVDA",
+            case_creation_confirmed_by="user",
+        )
+
+
+@pytest.mark.asyncio
+async def test_workflow_receipts_only_name_public_tools() -> None:
+    service, _dependencies = _orchestrator()
+
+    result = await service.run_portfolio_review(
+        PortfolioRunReviewInput(idempotency_key="workflow-1", as_of=NOW)
+    )
+
+    assert result.ok is True and result.data is not None
+    assert {fact.receipt.tool_name for fact in result.data.facts} == {
+        "account_get",
+        "portfolio_analyze",
+        "portfolio_run_review",
+    }
 
 
 @pytest.mark.asyncio
@@ -468,10 +639,14 @@ async def test_a_share_case_capital_metrics_follow_asset_type(
 ) -> None:
     service, dependencies = _orchestrator(instrument_id)
 
-    result = await service.run_deep_dive(ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW))
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+        )
+    )
 
     assert result.ok is True and result.data is not None
-    assert result.data.status is WorkflowRunStatus.COMPLETE
+    assert result.data.status is WorkflowRunStatus.SUCCEEDED
     request = dependencies.a_share.get_capital_snapshot.call_args.args[0]
     assert isinstance(request, AShareGetCapitalSnapshotInput)
     assert request.metrics == expected_metrics
@@ -482,7 +657,9 @@ async def test_a_share_equity_deep_dive_includes_structured_financial_statements
     service, dependencies = _orchestrator("equity:A_SHARE:600519.SH")
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW)
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+        )
     )
 
     assert result.ok is True and result.data is not None
@@ -500,6 +677,7 @@ async def test_a_share_deep_dive_explicit_hog_cycle_adds_company_and_cycle_facts
 
     result = await service.run_deep_dive(
         ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1",
             case_id="case_1",
             as_of=NOW,
             industry_cycle="hog",
@@ -527,7 +705,11 @@ async def test_a_share_deep_dive_explicit_hog_cycle_adds_company_and_cycle_facts
 async def test_a_share_deep_dive_does_not_infer_hog_cycle_from_instrument() -> None:
     service, dependencies = _orchestrator("equity:A_SHARE:002714.SZ")
 
-    result = await service.run_deep_dive(ResearchRunDeepDiveInput(case_id="case_1", as_of=NOW))
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+        )
+    )
 
     assert result.ok is True
     dependencies.a_share.get_company_operating_metrics.assert_not_awaited()

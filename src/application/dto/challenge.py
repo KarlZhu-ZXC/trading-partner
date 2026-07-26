@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from domain.challenge.enums import (
     ChallengeDimension,
@@ -29,6 +29,18 @@ class ChallengeReviewStartInput(_DTO):
     related_candidate_id: str | None = Field(default=None, max_length=128)
     related_evidence_ids: tuple[str, ...] = ()
     position_context_snapshot_id: str | None = Field(default=None, max_length=128)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_key(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip().lower()
+
+    @model_validator(mode="after")
+    def material_review_requires_idempotency(self) -> Self:
+        if self.trigger is not ChallengeTrigger.DISCUSSION and self.idempotency_key is None:
+            raise ValueError("material Challenge Review requires idempotency_key")
+        return self
 
 
 class ChallengeReviewGetInput(_DTO):
@@ -40,6 +52,12 @@ class ChallengeReviewResolveInput(_DTO):
     resolution: ChallengeResolution
     rationale: str = Field(min_length=1, max_length=4_000)
     confirmed_by: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class ChallengeQuestionDTO(_DTO):

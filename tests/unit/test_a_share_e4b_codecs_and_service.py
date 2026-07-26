@@ -1685,18 +1685,3 @@ async def test_sentiment_empty_wrong_meta_optional_partials() -> None:
     assert result2.data.interactive_qa == ()
     assert result2.data.market_news == ()
     assert any(w.code == "PARTIAL_A_SHARE_SNAPSHOT" for w in result2.warnings)
-
-
-def test_public_mcp_surface_includes_phase1e_after_e5c() -> None:
-    """Phase 1E tools remain in the expanded public surface."""
-    from interfaces.mcp.server import (
-        LEGACY_PUBLIC_TOOL_NAMES,
-        PHASE1E_A_SHARE_TOOL_NAMES,
-        PUBLIC_TOOL_NAMES,
-    )
-
-    assert len(LEGACY_PUBLIC_TOOL_NAMES) == 15
-    assert len(PHASE1E_A_SHARE_TOOL_NAMES) == 2
-    assert PHASE1E_A_SHARE_TOOL_NAMES.isdisjoint(LEGACY_PUBLIC_TOOL_NAMES)
-    assert PHASE1E_A_SHARE_TOOL_NAMES <= PUBLIC_TOOL_NAMES
-    assert len(PUBLIC_TOOL_NAMES) == 52

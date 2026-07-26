@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from importlib.util import find_spec
 from urllib.parse import urlencode, urlsplit
 
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
@@ -743,6 +744,10 @@ class CninfoAShareAdapter:
         typed partial warning when another document yields data.
         """
         self._require_configured()
+        if find_spec("pypdf") is None:
+            raise ProviderNotConfigured(
+                "CNINFO PDF extraction is unavailable; install trading-partner[company-pdf]"
+            )
         self._require_as_of(as_of)
         if (
             not isinstance(lookback_months, int)

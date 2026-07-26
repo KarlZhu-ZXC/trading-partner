@@ -1,0 +1,250 @@
+"""Compact research-memory operation adapters."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+from typing import Any
+
+from pydantic import ValidationError
+
+from application.dto.research_memory import ResearchSearchQuery
+from bootstrap import ApplicationContainer
+from interfaces.mcp.schemas import (
+    DecisionRecordAppendInput,
+    JournalAppendInput,
+    ResearchReportGetInput,
+    ResearchSearchInput,
+    ResearchTimelineGetInput,
+)
+from interfaces.mcp.validation import unexpected_failure as _unexpected_failure
+
+
+def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNamespace:
+    """Build compact research-memory operation adapters."""
+
+    # ---------------------------------------------------------- Phase 1C research memory
+    def research_search(
+        text: str | None = None,
+        case_id: str | None = None,
+        thesis_id: str | None = None,
+        instrument_id: str | None = None,
+        entity_types: list[str] | None = None,
+        evidence_types: list[str] | None = None,
+        journal_entry_types: list[str] | None = None,
+        stances: list[str] | None = None,
+        topic_tags: list[str] | None = None,
+        visible_from: datetime | None = None,
+        visible_to: datetime | None = None,
+        as_of: datetime | None = None,
+        include_superseded: bool = False,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Full-text + structured research-memory search (no Evidence create)."""
+        try:
+            inp = ResearchSearchInput.model_validate(
+                {
+                    "text": text,
+                    "case_id": case_id,
+                    "thesis_id": thesis_id,
+                    "instrument_id": instrument_id,
+                    "entity_types": tuple(entity_types or ()),
+                    "evidence_types": tuple(evidence_types or ()),
+                    "journal_entry_types": tuple(journal_entry_types or ()),
+                    "stances": tuple(stances or ()),
+                    "topic_tags": tuple(topic_tags or ()),
+                    "visible_from": visible_from,
+                    "visible_to": visible_to,
+                    "as_of": as_of,
+                    "include_superseded": include_superseded,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            query = ResearchSearchQuery(
+                text=inp.text,
+                case_id=inp.case_id,
+                thesis_id=inp.thesis_id,
+                instrument_id=inp.instrument_id,
+                entity_types=inp.entity_types,
+                evidence_types=inp.evidence_types,
+                journal_entry_types=inp.journal_entry_types,
+                stances=inp.stances,
+                topic_tags=inp.topic_tags,
+                visible_from=inp.visible_from,
+                visible_to=inp.visible_to,
+                as_of=inp.as_of,
+                include_superseded=inp.include_superseded,
+                limit=inp.limit,
+                offset=inp.offset,
+            )
+            envelope = container.research_search_service.search(query)
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def research_report_get(report_id: str) -> dict[str, Any]:
+        """Fetch one immutable ResearchReport by id."""
+        try:
+            inp = ResearchReportGetInput.model_validate({"report_id": report_id})
+            envelope = container.research_archive_service.get_report(inp.report_id)
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def research_timeline_get(
+        case_id: str,
+        entity_types: list[str] | None = None,
+        occurred_from: datetime | None = None,
+        occurred_to: datetime | None = None,
+        as_of: datetime | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Unified case research timeline projection."""
+        try:
+            inp = ResearchTimelineGetInput.model_validate(
+                {
+                    "case_id": case_id,
+                    "entity_types": tuple(entity_types or ()),
+                    "occurred_from": occurred_from,
+                    "occurred_to": occurred_to,
+                    "as_of": as_of,
+                    "limit": limit,
+                }
+            )
+            envelope = container.research_timeline_service.get_timeline(
+                case_id=inp.case_id,
+                entity_types=inp.entity_types,
+                occurred_from=inp.occurred_from,
+                occurred_to=inp.occurred_to,
+                as_of=inp.as_of,
+                limit=inp.limit,
+            )
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def journal_append(
+        entry_type: str,
+        title: str,
+        body_markdown: str,
+        authored_by: str,
+        confirmed_by: str,
+        idempotency_key: str,
+        case_id: str | None = None,
+        instrument_ids: list[str] | None = None,
+        topic_tags: list[str] | None = None,
+        related_entity_type: str | None = None,
+        related_entity_id: str | None = None,
+        supersedes_journal_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a user-confirmed journal entry (never auto-writes chat)."""
+        try:
+            inp = JournalAppendInput.model_validate(
+                {
+                    "case_id": case_id,
+                    "entry_type": entry_type,
+                    "title": title,
+                    "body_markdown": body_markdown,
+                    "authored_by": authored_by,
+                    "confirmed_by": confirmed_by,
+                    "instrument_ids": tuple(instrument_ids or ()),
+                    "topic_tags": tuple(topic_tags or ()),
+                    "related_entity_type": related_entity_type,
+                    "related_entity_id": related_entity_id,
+                    "supersedes_journal_id": supersedes_journal_id,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            envelope = container.journal_service.append(
+                case_id=inp.case_id,
+                entry_type=inp.entry_type,
+                title=inp.title,
+                body_markdown=inp.body_markdown,
+                authored_by=inp.authored_by,
+                confirmed_by=inp.confirmed_by,
+                instrument_ids=inp.instrument_ids,
+                topic_tags=inp.topic_tags,
+                related_entity_type=inp.related_entity_type,
+                related_entity_id=inp.related_entity_id,
+                supersedes_journal_id=inp.supersedes_journal_id,
+                idempotency_key=inp.idempotency_key,
+            )
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def decision_record_append(
+        case_id: str,
+        decision_type: str,
+        title: str,
+        rationale: str,
+        decided_at: datetime,
+        decided_by: str,
+        idempotency_key: str,
+        confirmation_mode: str = "strict_review",
+        primary_instrument_id: str | None = None,
+        thesis_revision_ids: list[str] | None = None,
+        evidence_ids: list[str] | None = None,
+        report_ids: list[str] | None = None,
+        supersedes_decision_id: str | None = None,
+        position_context_snapshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a research/position intent DecisionRecord (no order/fill writes)."""
+        try:
+            inp = DecisionRecordAppendInput.model_validate(
+                {
+                    "case_id": case_id,
+                    "decision_type": decision_type,
+                    "title": title,
+                    "rationale": rationale,
+                    "decided_at": decided_at,
+                    "decided_by": decided_by,
+                    "confirmation_mode": confirmation_mode,
+                    "primary_instrument_id": primary_instrument_id,
+                    "thesis_revision_ids": tuple(thesis_revision_ids or ()),
+                    "evidence_ids": tuple(evidence_ids or ()),
+                    "report_ids": tuple(report_ids or ()),
+                    "supersedes_decision_id": supersedes_decision_id,
+                    "position_context_snapshot_id": position_context_snapshot_id,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            envelope = container.decision_record_service.append(
+                case_id=inp.case_id,
+                decision_type=inp.decision_type,
+                title=inp.title,
+                rationale=inp.rationale,
+                decided_at=inp.decided_at,
+                decided_by=inp.decided_by,
+                confirmation_mode=inp.confirmation_mode,
+                primary_instrument_id=inp.primary_instrument_id,
+                thesis_revision_ids=inp.thesis_revision_ids,
+                evidence_ids=inp.evidence_ids,
+                report_ids=inp.report_ids,
+                supersedes_decision_id=inp.supersedes_decision_id,
+                position_context_snapshot_id=inp.position_context_snapshot_id,
+                idempotency_key=inp.idempotency_key,
+            )
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    return SimpleNamespace(
+        research_search=research_search,
+        research_report_get=research_report_get,
+        research_timeline_get=research_timeline_get,
+        journal_append=journal_append,
+        decision_record_append=decision_record_append,
+    )

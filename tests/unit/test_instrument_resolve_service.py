@@ -10,10 +10,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
 from application.dto.instrument import InstrumentDTO, InstrumentResolveResultDTO
-from application.dto.market import VerifiedMarketSnapshotDTO
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
-from application.services.market_snapshot_service import MarketSnapshotService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
     AssetType,
@@ -31,7 +29,6 @@ from infrastructure.persistence.instrument_unit_of_work import (
 )
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.seeds import default_instruments_seed_path
-from infrastructure.providers.us.mock_market import MockUSMarketSnapshotProvider
 from infrastructure.system.redactor import DefaultSecretRedactor
 
 NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=UTC)
@@ -231,40 +228,3 @@ def test_instrument_dto_optional_fields_and_phase1a_snapshot_shape() -> None:
     assert wire["is_active"] is True
     assert wire["listing_status"] == "active"
     assert wire["underlying_instrument_id"] is None
-
-    # Market snapshot path reuses the same InstrumentDTO class.
-    service = MarketSnapshotService(
-        provider=MockUSMarketSnapshotProvider(),
-        clock=FixedClock(NOW),
-        id_generator=SequentialIdGenerator(),
-        secret_redactor=DefaultSecretRedactor(),
-    )
-    import asyncio
-
-    env = asyncio.run(
-        service.get_snapshot(
-            Instrument(
-                instrument_id="equity:US:NVDA",
-                symbol="NVDA",
-                name="NVIDIA Corporation",
-                market=Market.US,
-                exchange="NASDAQ",
-                currency="USD",
-                timezone="America/New_York",
-                asset_type=AssetType.EQUITY,
-            ),
-            datetime(2026, 7, 16, 16, 0, tzinfo=UTC),
-        )
-    )
-    assert env.ok is True
-    assert env.data is not None
-    assert isinstance(env.data, VerifiedMarketSnapshotDTO)
-    payload = env.model_dump(mode="json")
-    inst = payload["data"]["instrument"]
-    assert inst["instrument_id"] == "equity:US:NVDA"
-    assert inst["symbol"] == "NVDA"
-    assert inst["market"] == "US"
-    assert inst["asset_type"] == "equity"
-    # Additive 1D fields present with defaults; core 1A keys unchanged.
-    assert inst["is_active"] is True
-    assert inst["listing_status"] == "active"

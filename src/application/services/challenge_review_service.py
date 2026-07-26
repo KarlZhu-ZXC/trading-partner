@@ -14,7 +14,12 @@ from application.ports.challenge_review_repository import ChallengeReviewReposit
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
-from application.services._research_support import envelope_failure, envelope_success
+from application.services._research_support import (
+    envelope_failure,
+    envelope_success,
+    require_confirm_reviewer,
+)
+from application.services.idempotency import canonical_payload_sha256
 from application.services.research_context_builder import ResearchContextBuilder
 from domain.challenge.enums import (
     ChallengeDimension,
@@ -23,8 +28,9 @@ from domain.challenge.enums import (
     ChallengeTrigger,
 )
 from domain.challenge.models import ChallengeFinding, ChallengeQuestion, ChallengeReview
+from domain.common.actor import ActorContext
 from domain.common.enums import ConfirmationMode, EvidenceStance
-from domain.common.errors import InputValidationError
+from domain.common.errors import IdempotencyConflict, InputValidationError
 from domain.common.ids import EntityIdPrefix
 
 _QUESTIONS: tuple[tuple[ChallengeDimension, str], ...] = (
@@ -74,6 +80,28 @@ class ChallengeReviewService:
                         review=None,
                     ),
                 )
+            assert request.idempotency_key is not None
+            payload_sha256 = canonical_payload_sha256(
+                request.model_dump(mode="json", exclude={"idempotency_key"})
+            )
+            existing = self._repository.get_by_start_idempotency_key(
+                request.idempotency_key
+            )
+            if existing is not None:
+                review, existing_sha256 = existing
+                if existing_sha256 != payload_sha256:
+                    raise IdempotencyConflict(
+                        "Challenge Review start idempotency key was reused"
+                    )
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=ChallengeReviewStartDTO(
+                        mode=ConfirmationMode.STRICT_REVIEW,
+                        persisted=True,
+                        review=ChallengeReviewDTO.from_domain(review),
+                    ),
+                )
             context_envelope = self._context.build(
                 ResearchContextBuildInput(case_id=request.case_id, token_budget=4_000)
             )
@@ -109,7 +137,9 @@ class ChallengeReviewService:
                     findings=findings,
                     created_at=now,
                     execution_effect=False,
-                )
+                ),
+                idempotency_key=request.idempotency_key,
+                payload_sha256=payload_sha256,
             )
             return envelope_success(
                 request_id=request_id,
@@ -145,13 +175,38 @@ class ChallengeReviewService:
             )
 
     def resolve(
-        self, request: ChallengeReviewResolveInput
+        self,
+        request: ChallengeReviewResolveInput,
+        *,
+        actor_context: ActorContext | None = None,
     ) -> ToolEnvelope[ChallengeReviewDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         try:
-            if request.confirmed_by not in {"user", "external_agent"}:
-                raise InputValidationError(
-                    "confirmed_by must be user or an explicitly authorized external_agent"
+            require_confirm_reviewer(
+                request.confirmed_by,
+                action="challenge_review_resolve",
+                actor_context=actor_context
+                or ActorContext.caller_asserted(
+                    request.confirmed_by,
+                    request_id=request_id,
+                ),
+            )
+            payload_sha256 = canonical_payload_sha256(
+                request.model_dump(mode="json", exclude={"idempotency_key"})
+            )
+            existing = self._repository.get_by_resolution_idempotency_key(
+                request.idempotency_key
+            )
+            if existing is not None:
+                review, existing_sha256 = existing
+                if existing_sha256 != payload_sha256:
+                    raise IdempotencyConflict(
+                        "Challenge Review resolution idempotency key was reused"
+                    )
+                return envelope_success(
+                    request_id=request_id,
+                    clock=self._clock,
+                    data=ChallengeReviewDTO.from_domain(review),
                 )
             review = self._repository.resolve(
                 request.review_id,
@@ -159,6 +214,9 @@ class ChallengeReviewService:
                 rationale=request.rationale.strip(),
                 confirmed_by=request.confirmed_by,
                 resolved_at=self._clock.now(),
+                resolution_id=self._ids.new(EntityIdPrefix.REV),
+                idempotency_key=request.idempotency_key,
+                payload_sha256=payload_sha256,
             )
             return envelope_success(
                 request_id=request_id,

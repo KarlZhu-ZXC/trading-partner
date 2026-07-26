@@ -46,10 +46,7 @@ from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
-from interfaces.mcp.server import (
-    PUBLIC_TOOL_NAMES,
-    create_mcp_server,
-)
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
 NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 EARLIER = NOW - timedelta(hours=2)

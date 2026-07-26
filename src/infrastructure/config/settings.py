@@ -33,15 +33,15 @@ _SECRET_FIELD_NAMES = frozenset(
     {
         "alpha_vantage_api_keys",
         "fred_api_key",
-        "broker_api_key",
-        "broker_api_secret",
         "iwencai_api_key",
         "schwab_client_id",
         "schwab_client_secret",
         "schwab_account_hashes",
         "schwab_token_path",
+        "provider_proxy_url",
         "polymarket_proxy_url",
         "apify_api_token",
+        "dukascopy_api_key",
     }
 )
 
@@ -184,6 +184,11 @@ class AppSettings(BaseSettings):
     us_max_fresh_seconds: int = Field(default=30, ge=0)
     us_max_delayed_seconds: int = Field(default=900, ge=0)
 
+    # Phase 3A Dukascopy Jetta data (OTC metals / rolling CFDs). The current
+    # dukascopy-node strategy is keyless; the old Trading Tools key is optional.
+    dukascopy_enabled: bool = True
+    dukascopy_api_key: str | None = None
+
     # Phase 1G US research / SEC (safe defaults; no live wiring in G1).
     # sec_user_agent is secret-free identification; blank normalizes to None.
     sec_edgar_enabled: bool = True
@@ -192,7 +197,6 @@ class AppSettings(BaseSettings):
 
     # Phase 1H optional context providers.
     fred_enabled: bool = True
-    stocktwits_enabled: bool = False
     moomoo_sentiment_enabled: bool = True
     moomoo_community_heat_enabled: bool = False
     moomoo_community_heat_limit: int = Field(default=20, ge=1, le=200)
@@ -215,6 +219,9 @@ class AppSettings(BaseSettings):
     reddit_cache_ttl_seconds: int = Field(default=3600, gt=0)
     reddit_cooldown_default_seconds: int = Field(default=900, gt=0)
     reddit_cooldown_max_seconds: int = Field(default=3600, gt=0)
+    # General outbound proxy for CME/DCE/Dukascopy and Polymarket. The old
+    # Polymarket-specific field remains as a compatibility fallback.
+    provider_proxy_url: str | None = None
     polymarket_proxy_url: str | None = None
 
     # Phase 1I read-only account providers. Sources are additive; no unlock/order
@@ -243,10 +250,6 @@ class AppSettings(BaseSettings):
     # Environment value is a comma-separated string. Order defines failover priority.
     alpha_vantage_api_keys: Annotated[tuple[str, ...], NoDecode] = Field(default=(), max_length=8)
     fred_api_key: str | None = None
-    # Reserved legacy placeholders. No runtime provider consumes these fields;
-    # broker integrations must define explicit provider-scoped settings.
-    broker_api_key: str | None = None
-    broker_api_secret: str | None = None
 
     @field_validator(
         "app_name",
@@ -276,14 +279,14 @@ class AppSettings(BaseSettings):
 
     @field_validator(
         "fred_api_key",
-        "broker_api_key",
-        "broker_api_secret",
         "iwencai_api_key",
         "sec_user_agent",
         "schwab_client_id",
         "schwab_client_secret",
+        "provider_proxy_url",
         "polymarket_proxy_url",
         "apify_api_token",
+        "dukascopy_api_key",
         mode="before",
     )
     @classmethod
@@ -314,15 +317,20 @@ class AppSettings(BaseSettings):
                 normalized.append(key)
         return tuple(normalized)
 
-    @field_validator("polymarket_proxy_url")
+    @field_validator("provider_proxy_url", "polymarket_proxy_url")
     @classmethod
-    def _validate_polymarket_proxy_url(cls, value: str | None) -> str | None:
+    def _validate_proxy_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("polymarket_proxy_url must be an HTTP(S) proxy URL")
+            raise ValueError("proxy URL must be an HTTP(S) proxy URL")
         return value
+
+    @property
+    def effective_provider_proxy_url(self) -> str | None:
+        """Return the general proxy, falling back to the legacy setting."""
+        return self.provider_proxy_url or self.polymarket_proxy_url
 
     @field_validator(
         "manual_holdings_csv_path",

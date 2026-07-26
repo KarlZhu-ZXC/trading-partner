@@ -102,3 +102,42 @@ class AccountTransactionCoordinator:
                 fetched_at=self._clock.now(),
                 errors=(error,),
             )
+
+    def list_durable_transactions(
+        self, request: AccountGetTransactionsInput
+    ) -> ToolEnvelope[AccountTransactionsDTO]:
+        """Read normalized durable transactions without contacting a broker."""
+        request_id = self._ids.new(EntityIdPrefix.REQ)
+        as_of = request.end or self._clock.now()
+        try:
+            values = self._repository.list(
+                providers=request.providers,
+                start=request.start,
+                end=request.end,
+                limit=request.limit,
+            )
+            return ToolEnvelope.success(
+                request_id=request_id,
+                market=None,
+                as_of=as_of,
+                fetched_at=self._clock.now(),
+                freshness=Freshness.UNKNOWN,
+                sources=(),
+                data=AccountTransactionsDTO(
+                    transactions=tuple(AccountTransactionDTO.from_domain(item) for item in values),
+                    unavailable_providers=(),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                to_error_info(exc, self._redactor)
+                if isinstance(exc, TradingPartnerError)
+                else to_error_info_from_exception(exc, self._redactor)
+            )
+            return ToolEnvelope.failure(
+                request_id=request_id,
+                market=None,
+                as_of=as_of,
+                fetched_at=self._clock.now(),
+                errors=(error,),
+            )

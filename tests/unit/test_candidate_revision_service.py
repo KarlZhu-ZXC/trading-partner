@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from application.dto.research import (
     AssumptionPayload,
@@ -16,6 +18,7 @@ from application.dto.research import (
 from application.services.investment_case_service import InvestmentCaseService
 from application.services.thesis_revision_service import ThesisRevisionService
 from conftest import FixedClock, SequentialIdGenerator
+from domain.common.actor import ActorContext
 from domain.common.enums import (
     CandidateStatus,
     ConfidenceBand,
@@ -55,7 +58,7 @@ def harness(tmp_path):  # type: ignore[no-untyped-def]
 
     cases = InvestmentCaseService(factory, clock, ids, redactor)
     thesis = ThesisRevisionService(factory, clock, ids, redactor)
-    yield cases, thesis, factory, clock, ids
+    yield cases, thesis, factory, clock, ids, eng
     eng.dispose()
 
 
@@ -224,6 +227,49 @@ def test_confirm_writes_revision_assumptions_invalidations(harness) -> None:  # 
         revs = uow.revisions.list_by_thesis(theses[0].thesis_id)
         assert len(revs) == 1
         assert theses[0].current_revision_no == revs[0].revision_no
+
+
+def test_chat_authorized_confirm_persists_user_decision_and_relay_provenance(
+    harness,
+) -> None:  # type: ignore[no-untyped-def]
+    cases, thesis, *_, eng = harness
+    case_id = _create_case(cases, key="case-chat-auth")
+    proposed = thesis.propose_revision(
+        case_id=case_id,
+        thesis_id=None,
+        payload=_revision_payload(),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="p",
+        idempotency_key="chat-auth-confirm",
+    )
+    assert proposed.data is not None
+    authorization = "我确认采用这个候选"
+
+    confirmed = thesis.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+        review_note="explicit chat authorization",
+        actor_context=ActorContext.codex_chat_authorized(
+            request_id="req_chat_confirm",
+            authorization_note=authorization,
+        ),
+    )
+
+    assert confirmed.ok is True
+    with Session(eng) as session:
+        payload_json = session.execute(
+            text(
+                "SELECT payload_json FROM system_audit_log "
+                "WHERE event_type = 'phase1b.candidate.confirmed'"
+            )
+        ).scalar_one()
+    payload = json.loads(payload_json)
+    assert payload["reviewed_by"] == "user"
+    assert payload["actor_type"] == "user"
+    assert payload["actor_assurance"] == "caller_asserted"
+    assert payload["submitted_via"] == "codex_chat"
+    assert payload["user_instruction"] == authorization
 
 
 def test_confirm_advances_revision_no(harness) -> None:  # type: ignore[no-untyped-def]

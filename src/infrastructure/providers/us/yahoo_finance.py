@@ -30,6 +30,7 @@ from domain.common.enums import (
 )
 from domain.common.errors import (
     DataContractError,
+    InvalidInstrument,
     NoMarketData,
     ProviderNotConfigured,
     ProviderRateLimitError,
@@ -37,6 +38,11 @@ from domain.common.errors import (
     StaleMarketData,
 )
 from domain.common.time import require_aware_datetime
+from domain.cross_asset.cme_identity import (
+    is_legacy_us_continuous_proxy,
+    parse_cme_contract_code,
+    yahoo_symbol_for_cme_instrument,
+)
 from domain.instruments.models import Instrument
 from domain.market.freshness import classify_freshness
 from domain.market.models import MarketBar
@@ -51,9 +57,13 @@ _CHART_PATH_PREFIX = "/v8/finance/chart/"
 _ALLOWED_ASSETS = frozenset(
     {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
 )
-_FUTURES_WARNING_CODES = (
+_CONTINUOUS_FUTURES_WARNING_CODES = (
     "FUTURES_CONTRACT_NOT_SPOT",
     "CONTINUOUS_FUTURES_ROLL_RISK",
+)
+_SPECIFIC_FUTURES_WARNING_CODES = (
+    "FUTURES_CONTRACT_NOT_SPOT",
+    "YAHOO_ACTIVE_CONTRACT_NO_EXPIRED_HISTORY",
 )
 _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 # Latest daily bar more than this many natural days behind expected end/as_of → stale.
@@ -280,7 +290,10 @@ class YahooFinanceAdapter:
         return VendorId.YFINANCE.value
 
     def supports(self, market: Market, category: DataCategory) -> bool:
-        return market is Market.US and category in _SUPPORTED_CATEGORIES
+        if category not in _SUPPORTED_CATEGORIES:
+            return False
+        # US equities/ETFs/indices/continuous futures, plus CME specific contracts.
+        return market in {Market.US, Market.CME}
 
     def is_configured(self) -> bool:
         return self._enabled
@@ -303,16 +316,17 @@ class YahooFinanceAdapter:
             )
         return now
 
-    def _require_us_instrument(self, instrument: Instrument) -> str:
+    def _require_chart_instrument(self, instrument: Instrument) -> str:
+        """Return the Yahoo chart symbol for a supported instrument.
+
+        - ``future:US:GC=F`` continuous proxies use the instrument symbol as-is.
+        - ``future:CME:GCZ26`` specific contracts map to ``GCZ26.CMX`` and never
+          fall back to ``GC=F``.
+        """
         if not isinstance(instrument, Instrument):
             raise DataContractError(
                 "instrument must be Instrument",
                 details={"field": "instrument", "rule": "type"},
-            )
-        if instrument.market is not Market.US:
-            raise DataContractError(
-                "instrument market must be US",
-                details={"field": "instrument", "rule": "market"},
             )
         if instrument.asset_type not in _ALLOWED_ASSETS:
             raise DataContractError(
@@ -323,13 +337,57 @@ class YahooFinanceAdapter:
                     "asset_type": instrument.asset_type.value,
                 },
             )
-        symbol = instrument.symbol.strip()
-        if not symbol:
-            raise DataContractError(
-                "instrument symbol must be non-blank",
-                details={"field": "symbol", "rule": "non_blank"},
-            )
-        return symbol
+        if instrument.market is Market.US:
+            symbol = instrument.symbol.strip()
+            if not symbol:
+                raise DataContractError(
+                    "instrument symbol must be non-blank",
+                    details={"field": "symbol", "rule": "non_blank"},
+                )
+            return symbol
+        if instrument.market is Market.CME and instrument.asset_type is AssetType.FUTURE:
+            # Specific contracts only — never rewrite or fall back to GC=F.
+            if is_legacy_us_continuous_proxy(instrument.instrument_id):
+                raise DataContractError(
+                    "legacy future:US:* proxy must not be treated as CME specific",
+                    details={
+                        "instrument_id": instrument.instrument_id,
+                        "rule": "no_us_proxy_rewrite",
+                    },
+                )
+            try:
+                # Validate grammar (roots + month/year) before mapping.
+                parse_cme_contract_code(instrument.symbol)
+                return yahoo_symbol_for_cme_instrument(instrument.instrument_id)
+            except InvalidInstrument as exc:
+                raise DataContractError(
+                    "Yahoo active-contract mapping requires validated CME contract code",
+                    details={
+                        "instrument_id": instrument.instrument_id,
+                        "rule": "cme_contract_grammar",
+                        "code": "INVALID_INSTRUMENT",
+                    },
+                ) from exc
+        raise DataContractError(
+            "Yahoo Finance instrument market must be US or CME futures",
+            details={
+                "field": "instrument",
+                "rule": "market",
+                "market": instrument.market.value,
+            },
+        )
+
+    # Backward-compatible alias used by existing call sites/tests.
+    def _require_us_instrument(self, instrument: Instrument) -> str:
+        return self._require_chart_instrument(instrument)
+
+    @staticmethod
+    def _futures_warning_codes(instrument: Instrument) -> tuple[str, ...]:
+        if instrument.asset_type is not AssetType.FUTURE:
+            return ()
+        if instrument.market is Market.CME:
+            return _SPECIFIC_FUTURES_WARNING_CODES
+        return _CONTINUOUS_FUTURES_WARNING_CODES
 
     def _chart_url(self, symbol: str) -> str:
         # URL-encode the path segment; keep host/path fixed.
@@ -495,6 +553,7 @@ class YahooFinanceAdapter:
         data_timestamp: datetime | None,
         adjustment: AdjustmentMethod | None,
         additional_warnings: tuple[str, ...] = (),
+        instrument_market: Market = Market.US,
     ) -> ProviderResultMeta:
         if data_timestamp is not None:
             data_delay = max(0, int((fetched_at - data_timestamp).total_seconds()))
@@ -513,14 +572,19 @@ class YahooFinanceAdapter:
         else:
             data_delay = None
             freshness = Freshness.UNKNOWN
+        futures_codes: tuple[str, ...]
+        if instrument_asset_type is AssetType.FUTURE:
+            futures_codes = (
+                _SPECIFIC_FUTURES_WARNING_CODES
+                if instrument_market is Market.CME
+                else _CONTINUOUS_FUTURES_WARNING_CODES
+            )
+        else:
+            futures_codes = ()
         warnings = tuple(
             dict.fromkeys(
                 (
-                    *(
-                        _FUTURES_WARNING_CODES
-                        if instrument_asset_type is AssetType.FUTURE
-                        else ()
-                    ),
+                    *futures_codes,
                     *additional_warnings,
                 )
             )
@@ -978,6 +1042,7 @@ class YahooFinanceAdapter:
                 data_timestamp=quote_at,
                 adjustment=None,
                 additional_warnings=tuple(additional_warnings),
+                instrument_market=instrument.market,
             ),
         )
 
@@ -1104,5 +1169,6 @@ class YahooFinanceAdapter:
                 session=session,
                 data_timestamp=bars[-1].timestamp,
                 adjustment=adjustment,
+                instrument_market=instrument.market,
             ),
         )

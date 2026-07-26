@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -15,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from application.dto.trade_plan import TradePlanDTO
 from domain.common.enums import (
     AssumptionStatus,
     CandidateKind,
@@ -32,7 +34,9 @@ from domain.common.enums import (
     ThesisStatus,
     WatchlistItemStatus,
 )
+from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
+from domain.common.values import parse_instrument_id
 from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
@@ -43,6 +47,14 @@ from domain.research.models import (
     ThesisRevision,
     WatchlistItem,
 )
+from domain.trade_plan.enums import (
+    TradePlanComparator,
+    TradePlanConditionMode,
+    TradePlanConditionPhase,
+    TradePlanFactType,
+    TradePlanStatus,
+)
+from domain.trade_plan.models import TradePlanCondition
 
 
 class _BaseResearchDTO(BaseModel):
@@ -265,13 +277,124 @@ class CaseUpdateCandidatePayload(BaseModel):
         return self
 
 
+class TradePlanConditionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    condition_code: str = Field(min_length=1, max_length=64)
+    phase: TradePlanConditionPhase
+    mode: TradePlanConditionMode
+    description: str = Field(min_length=1, max_length=2000)
+    severity: Literal["INFO", "MEDIUM", "HIGH"] = "MEDIUM"
+    fact_type: TradePlanFactType | None = None
+    metric_key: str | None = Field(default=None, min_length=1, max_length=128)
+    comparator: TradePlanComparator | None = None
+    threshold: Decimal | None = None
+    unit: str | None = Field(default=None, min_length=1, max_length=64)
+    instrument_id: str | None = None
+    max_fact_age_seconds: int | None = Field(default=None, gt=0)
+    event_after: datetime | None = None
+
+    @field_validator("event_after")
+    @classmethod
+    def _aware_event_after(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value, field_name="event_after")
+        return value
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _instrument(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_instrument_id(value)
+        return value
+
+    @model_validator(mode="after")
+    def _condition_contract(self) -> Self:
+        # Reuse the domain invariant at the public proposal boundary so an
+        # invalid condition cannot linger as a confirm-time-only failure.
+        try:
+            TradePlanCondition(
+                condition_code=self.condition_code,
+                phase=TradePlanConditionPhase(self.phase),
+                mode=TradePlanConditionMode(self.mode),
+                description=self.description,
+                severity=self.severity,
+                fact_type=(
+                    TradePlanFactType(self.fact_type) if self.fact_type else None
+                ),
+                metric_key=self.metric_key,
+                comparator=(
+                    TradePlanComparator(self.comparator) if self.comparator else None
+                ),
+                threshold=self.threshold,
+                unit=self.unit,
+                instrument_id=self.instrument_id,
+                max_fact_age_seconds=self.max_fact_age_seconds,
+                event_after=self.event_after,
+            )
+        except DataContractError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+
+class TradePlanCandidatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    kind: Literal["trade_plan"] = "trade_plan"
+    plan_id: str | None = None
+    expected_version: int | None = Field(default=None, ge=1)
+    thesis_id: str = Field(min_length=1, max_length=128)
+    instrument_id: str = Field(min_length=1, max_length=160)
+    status: TradePlanStatus
+    valid_from: datetime
+    valid_until: datetime | None = None
+    currency: str = Field(min_length=1, max_length=16)
+    reference_price: Decimal = Field(gt=0)
+    reference_price_at: datetime
+    target_position_percent: Decimal = Field(ge=0, le=100)
+    max_position_percent: Decimal = Field(ge=0, le=100)
+    risk_budget_percent: Decimal = Field(ge=0, le=100)
+    stop_price: Decimal | None = Field(default=None, gt=0)
+    conditions: tuple[TradePlanConditionPayload, ...] = Field(default=(), max_length=100)
+    notes: str = Field(min_length=1, max_length=8000)
+
+    @field_validator("valid_from", "valid_until", "reference_price_at")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value)
+        return value
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _plan_instrument(cls, value: str) -> str:
+        parse_instrument_id(value)
+        return value
+
+    @model_validator(mode="after")
+    def _plan_rules(self) -> Self:
+        if (self.plan_id is None) != (self.expected_version is None):
+            raise ValueError("plan_id and expected_version must be provided together")
+        if self.valid_until is not None and self.valid_until <= self.valid_from:
+            raise ValueError("valid_until must follow valid_from")
+        if self.target_position_percent > self.max_position_percent:
+            raise ValueError("target_position_percent must not exceed max_position_percent")
+        if self.status == TradePlanStatus.ACTIVE and not self.conditions:
+            raise ValueError("ACTIVE trade plan requires conditions")
+        codes = [item.condition_code for item in self.conditions]
+        if len(codes) != len(set(codes)):
+            raise ValueError("condition_code values must be unique")
+        return self
+
+
 CandidateRevisionPayload = Annotated[
     ThesisRevisionCandidatePayload
     | AssumptionCandidatePayload
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
-    | CaseUpdateCandidatePayload,
+    | CaseUpdateCandidatePayload
+    | TradePlanCandidatePayload,
     Field(discriminator="kind"),
 ]
 
@@ -282,6 +405,7 @@ _CANDIDATE_PAYLOAD_ADAPTER: TypeAdapter[
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
     | CaseUpdateCandidatePayload
+    | TradePlanCandidatePayload
 ] = TypeAdapter(CandidateRevisionPayload)
 
 
@@ -292,6 +416,7 @@ def parse_candidate_payload(payload_json: str) -> (
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
     | CaseUpdateCandidatePayload
+    | TradePlanCandidatePayload
 ):
     """Parse and validate closed candidate payload JSON."""
     return _CANDIDATE_PAYLOAD_ADAPTER.validate_json(payload_json)
@@ -305,6 +430,7 @@ def candidate_payload_to_json(
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
         | CaseUpdateCandidatePayload
+        | TradePlanCandidatePayload
     ),
 ) -> str:
     """Canonical JSON serialization for payload storage and idempotency compare."""
@@ -319,6 +445,7 @@ def candidate_payload_canonical_dict(
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
         | CaseUpdateCandidatePayload
+        | TradePlanCandidatePayload
     ),
 ) -> dict[str, Any]:
     return payload.model_dump(mode="json")
@@ -722,6 +849,7 @@ class CandidateRevisionDTO(_BaseResearchDTO):
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
         | CaseUpdateCandidatePayload
+        | TradePlanCandidatePayload
     )
 
     @field_validator("proposed_at", "expires_at", "reviewed_at")
@@ -790,6 +918,8 @@ class ResearchStateDTO(_BaseResearchDTO):
     open_questions: tuple[OpenQuestionDTO, ...]
     watchlist_items: tuple[WatchlistItemDTO, ...]
     pending_candidates: tuple[CandidateRevisionDTO, ...]
+    current_trade_plan: TradePlanDTO | None = None
+    trade_plan_versions: tuple[TradePlanDTO, ...] = ()
 
 
 class ConfirmedRevisionDTO(_BaseResearchDTO):
@@ -815,6 +945,7 @@ def kind_from_payload(
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
         | CaseUpdateCandidatePayload
+        | TradePlanCandidatePayload
     ),
 ) -> CandidateKind:
     return CandidateKind(payload.kind)

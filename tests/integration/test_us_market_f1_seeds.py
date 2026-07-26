@@ -10,7 +10,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-_HEADS = frozenset({"0016_monitor_valid_until"})
+_HEADS = frozenset({"0022_workflow_execution_replay"})
 _PREV = "0004_phase1c_research_memory"
 
 
