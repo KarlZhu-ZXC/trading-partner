@@ -100,6 +100,31 @@ def test_post_market_sync_lock_path_rejects_outside_data_and_blank() -> None:
         _base_settings(post_market_sync_lock_path="data/../README.md")
 
 
+def test_telegram_monitor_notifications_are_optional_but_complete_when_enabled() -> None:
+    disabled = _base_settings()
+    assert disabled.monitor_notifications_enabled is False
+    assert disabled.telegram_bot_token is None
+    assert disabled.telegram_chat_id is None
+
+    enabled = _base_settings(
+        monitor_notifications_enabled=True,
+        telegram_bot_token="123456:example_bot_token",
+        telegram_chat_id="-1001234567890",
+        telegram_message_thread_id=42,
+    )
+    assert enabled.telegram_chat_id == "-1001234567890"
+    assert enabled.telegram_message_thread_id == 42
+
+    with pytest.raises(ValidationError, match="token and chat id"):
+        _base_settings(monitor_notifications_enabled=True)
+    with pytest.raises(ValidationError, match="numeric id"):
+        _base_settings(
+            monitor_notifications_enabled=True,
+            telegram_bot_token="123456:example_bot_token",
+            telegram_chat_id="not a chat",
+        )
+
+
 def test_env_example_contains_required_keys() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / ".env.example").read_text(encoding="utf-8")
@@ -129,6 +154,13 @@ def test_env_example_contains_required_keys() -> None:
         "A_SHARE_MAX_FRESH_SECONDS=30",
         "A_SHARE_MAX_DELAYED_SECONDS=900",
         "PROVIDER_PROXY_URL=",
+        "MONITOR_NOTIFICATIONS_ENABLED=false",
+        "TELEGRAM_BOT_TOKEN=",
+        "TELEGRAM_CHAT_ID=",
+        "TELEGRAM_MESSAGE_THREAD_ID=",
+        "MONITOR_NOTIFICATION_MAX_ATTEMPTS=5",
+        "MONITOR_NOTIFICATION_EVENT_TTL_HOURS=24",
+        "MONITOR_NOTIFICATION_BATCH_SIZE=20",
     ):
         assert line in text, f"missing .env.example key line: {line}"
 
@@ -161,7 +193,8 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
         alpha_vantage_api_keys=("REAL_SECRET_KEY", "SECOND_REAL_SECRET_KEY"),
         schwab_client_secret="REAL_SCHWAB_SECRET",
         provider_proxy_url="http://general-user:general-secret@127.0.0.1:7891",
-        polymarket_proxy_url="http://proxy-user:proxy-secret@127.0.0.1:7890",
+        telegram_bot_token="REAL_TELEGRAM_TOKEN",
+        telegram_chat_id="123456789",
     )
     redacted = settings.redacted_dict()
     assert redacted["alpha_vantage_api_keys"] == "***REDACTED***"
@@ -171,9 +204,10 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert "SECOND_REAL_SECRET_KEY" not in repr(settings)
     assert "REAL_SCHWAB_SECRET" not in str(settings)
     assert redacted["provider_proxy_url"] == "***REDACTED***"
-    assert redacted["polymarket_proxy_url"] == "***REDACTED***"
+    assert redacted["telegram_bot_token"] == "***REDACTED***"
+    assert redacted["telegram_chat_id"] == "***REDACTED***"
     assert "general-secret" not in repr(settings)
-    assert "proxy-secret" not in repr(settings)
+    assert "REAL_TELEGRAM_TOKEN" not in repr(settings)
     assert redacted["provider_timeout_default_seconds"] == 30.0
     assert redacted["provider_timeout_market_seconds"] == 15.0
     assert redacted["provider_retry_max_attempts"] == 2
@@ -197,15 +231,12 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert redacted["vendor_chain_path"] != "***REDACTED***"
 
 
-def test_general_proxy_precedence_and_legacy_fallback() -> None:
-    legacy = _base_settings(polymarket_proxy_url="http://127.0.0.1:7890")
-    assert legacy.effective_provider_proxy_url == "http://127.0.0.1:7890"
-
-    general = _base_settings(
-        provider_proxy_url="http://127.0.0.1:7891",
-        polymarket_proxy_url="http://127.0.0.1:7890",
-    )
-    assert general.effective_provider_proxy_url == "http://127.0.0.1:7891"
+def test_general_proxy_is_validated_and_redacted() -> None:
+    settings = _base_settings(provider_proxy_url="http://127.0.0.1:7891")
+    assert settings.provider_proxy_url == "http://127.0.0.1:7891"
+    assert settings.redacted_dict()["provider_proxy_url"] == "***REDACTED***"
+    with pytest.raises(ValidationError):
+        _base_settings(provider_proxy_url="socks5://127.0.0.1:7891")
 
 
 def test_alpha_vantage_key_pool_loads_comma_separated_env(

@@ -18,6 +18,7 @@ from domain.common.enums import (
     AssetType,
     DataCategory,
     Market,
+    TradingSession,
     VendorId,
 )
 from domain.common.errors import (
@@ -72,7 +73,7 @@ def _chart_payload(
     opens: list[float],
     highs: list[float],
     lows: list[float],
-    closes: list[float],
+    closes: list[float | None],
     volumes: list[int],
     adjcloses: list[float] | None = None,
     regular_market_time: datetime | None = None,
@@ -81,6 +82,7 @@ def _chart_payload(
     trading_period_at: datetime | None = None,
     chart_previous_close: float = 119.0,
     previous_close: float | None = 119.0,
+    regular_market_previous_close: float | None = None,
 ) -> dict[str, Any]:
     timestamps = [_unix(datetime(d.year, d.month, d.day, 0, 0, tzinfo=NY)) for d in days]
     rmt = regular_market_time or datetime(
@@ -119,6 +121,7 @@ def _chart_payload(
                         "regularMarketVolume": volumes[-1],
                         "chartPreviousClose": chart_previous_close,
                         "previousClose": previous_close,
+                        "regularMarketPreviousClose": regular_market_previous_close,
                         "regularMarketOpen": opens[-1],
                         "regularMarketDayHigh": highs[-1],
                         "regularMarketDayLow": lows[-1],
@@ -409,6 +412,48 @@ async def test_quote_selects_latest_premarket_minute_bar() -> None:
     assert result.value.session.value == "pre_market"
     assert result.value.previous_close == Decimal("230.25")
     assert "EXTENDED_HOURS_PRICE" in result.meta.warnings
+
+
+@pytest.mark.asyncio
+async def test_premarket_previous_close_recovers_latest_completed_regular_session() -> None:
+    """TSLA regression: never expose regularMarketPreviousClose as 前收."""
+    as_of = datetime(2026, 7, 27, 8, 0, tzinfo=NY)
+    daily = _chart_payload(
+        days=[date(2026, 7, 23), date(2026, 7, 24)],
+        opens=[320.0, 320.88],
+        highs=[323.0, 322.96],
+        lows=[316.0, 306.51],
+        closes=[319.69, None],
+        volumes=[70_000_000, 62_648_724],
+        regular_market_time=datetime(2026, 7, 24, 16, 0, 1, tzinfo=NY),
+        regular_market_price=313.03,
+        trading_period_at=as_of,
+        chart_previous_close=319.69,
+        previous_close=319.69,
+        regular_market_previous_close=319.69,
+    )
+    intraday = _intraday_body(
+        timestamps=[datetime(2026, 7, 27, 7, 59, tzinfo=NY)],
+        closes=[317.1],
+        regular_market_time=datetime(2026, 7, 24, 16, 0, 1, tzinfo=NY),
+        regular_market_price=313.03,
+        trading_period_at=as_of,
+    )
+    transport = SequenceTransport([json.dumps(daily).encode("utf-8"), intraday])
+    adapter = YahooFinanceAdapter(
+        transport,
+        clock=FixedClock(as_of),
+        max_fresh_seconds=60,
+        max_delayed_seconds=3600,
+    )
+
+    result = await adapter.get_quote(_instrument(), as_of)
+
+    assert result.value.session is TradingSession.PRE_MARKET
+    assert result.value.last == Decimal("317.1")
+    assert result.value.previous_close == Decimal("313.03")
+    assert result.value.previous_close != Decimal("319.69")
+    assert "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY" in result.meta.warnings
 
 
 @pytest.mark.asyncio

@@ -181,7 +181,7 @@ async def test_context_mcp_is_compact_read_operation() -> None:
         degraded=True,
         data=None,
     )
-    container.research_context_builder.build.return_value = envelope
+    container.services.research_context.build.return_value = envelope
     manager = create_mcp_server(container)._tool_manager
     listed = {tool.name: tool for tool in manager.list_tools()}
 
@@ -191,5 +191,5 @@ async def test_context_mcp_is_compact_read_operation() -> None:
         {"request": {"operation": "context", "case_id": CASE_ID}},
     )
     assert result["request_id"] == "req_context"
-    request = container.research_context_builder.build.call_args.args[0]
+    request = container.services.research_context.build.call_args.args[0]
     assert isinstance(request, ResearchContextBuildInput)

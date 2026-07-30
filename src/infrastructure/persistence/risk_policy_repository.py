@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from domain.common.errors import PersistenceError
 from domain.risk.enums import RiskConfirmer
 from domain.risk.models import RiskPolicy
-from infrastructure.persistence.models import RiskPolicyRow
+from infrastructure.persistence.orm import RiskPolicyRow
 from infrastructure.persistence.repositories._mapping import (
     bool_from_db,
     bool_to_db,

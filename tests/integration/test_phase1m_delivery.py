@@ -6,12 +6,12 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 
 from domain.common.errors import DataContractError
-from infrastructure.evaluation.delivery_audit import Phase1DeliveryAuditor
+from evaluation_support import audit_delivery
 from infrastructure.persistence.sqlite_backup import SQLiteBackupService
 from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_HEAD_REVISIONS = frozenset({"0022_workflow_execution_replay"})
+_HEAD_REVISIONS = frozenset({"0024_monitor_notification_outbox"})
 
 
 def _migrate(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -63,8 +63,8 @@ def test_sqlite_online_backup_restore_preserves_data_and_schema_identity(
 
 
 def test_compact_phase1_delivery_audit_passes() -> None:
-    receipt = Phase1DeliveryAuditor().audit(PROJECT_ROOT, PUBLIC_TOOL_NAMES)
+    receipt = audit_delivery(PROJECT_ROOT, PUBLIC_TOOL_NAMES)
 
     assert receipt.public_tool_count == 28
-    assert receipt.migration_head == "0022_workflow_execution_replay"
+    assert receipt.migration_head == "0024_monitor_notification_outbox"
     assert receipt.dialogue_count == 89

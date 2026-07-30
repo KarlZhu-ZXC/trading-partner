@@ -7,22 +7,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from application.ports.a_share_trading_calendar import AShareTradingCalendar
-from application.ports.account_provider import AccountProvider
-from application.ports.account_snapshot_repository import AccountSnapshotRepository
-from application.ports.account_transaction_repository import AccountTransactionRepository
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpTransport
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
+from application.ports.monitor_notification_sender import MonitorNotificationSender
 from application.ports.monitor_repository import MonitorRepository
-from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
 from application.ports.watchlist_source_provider import WatchlistSourceProvider
-from application.ports.workflow_run_repository import WorkflowRunRepository
 from application.services.a_share_capital_service import AShareCapitalService
 from application.services.a_share_company_operating_metrics_service import (
     AShareCompanyOperatingMetricsService,
@@ -40,24 +36,25 @@ from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.challenge_review_service import ChallengeReviewService
 from application.services.commodity_spot_service import CommoditySpotService
-from application.services.continuous_series_service import ContinuousSeriesService
 from application.services.criticality_policy import CriticalityPolicy
 from application.services.decision_record_service import DecisionRecordService
-from application.services.evidence_service import EvidenceService
 from application.services.futures_contract_service import FuturesContractService
 from application.services.futures_curve_service import FuturesCurveService
 from application.services.futures_instrument_directory import FuturesInstrumentDirectory
 from application.services.health_service import HealthService
+from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.investment_case_service import InvestmentCaseService
 from application.services.journal_service import JournalService
 from application.services.market_tool_coordinator import MarketToolCoordinator
+from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_fact_resolver import MonitorFactResolver
+from application.services.monitor_notification_service import MonitorNotificationService
+from application.services.monitor_schedule_service import MonitorScheduleService
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
-from application.services.open_question_service import OpenQuestionService
 from application.services.peer_comparison_service import PeerComparisonService
 from application.services.portfolio_enrichment_calculator import PortfolioEnrichmentCalculator
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
@@ -100,55 +97,34 @@ from application.services.us_research_tool_coordinator import USResearchToolCoor
 from application.services.us_technical_service import USTechnicalService
 from application.services.us_tool_coordinator import USToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
-from application.services.watchlist_service import WatchlistService
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
-from domain.watchlist.enums import WatchlistSource
+from infrastructure.calendars.a_share_market_session_calendar import (
+    AShareMarketSessionCalendarAdapter,
+)
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
+from infrastructure.composition import (
+    ProviderCompositionOverrides,
+    build_persistence_infrastructure,
+    build_provider_infrastructure,
+)
 from infrastructure.config.settings import AppSettings
-from infrastructure.config.vendor_chain import YamlVendorChainConfig
-from infrastructure.persistence.account_snapshot_repository import (
-    SqlAlchemyAccountSnapshotRepository,
-)
-from infrastructure.persistence.account_transaction_repository import (
-    SqlAlchemyAccountTransactionRepository,
-)
 from infrastructure.persistence.challenge_review_repository import (
     SqlAlchemyChallengeReviewRepository,
 )
 from infrastructure.persistence.database import (
     SqlAlchemyDatabase,
-    create_engine_from_url,
-)
-from infrastructure.persistence.industry_metric_repository import (
-    SqlAlchemyIndustryMetricRepository,
 )
 from infrastructure.persistence.instrument_unit_of_work import (
     SqlAlchemyInstrumentUnitOfWork,
 )
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
-from infrastructure.persistence.post_market_sync_run_repository import (
-    SqlAlchemyPostMarketSyncRunRepository,
-)
-from infrastructure.persistence.provider_state_backend import (
-    build_provider_state_backend,
-)
-from infrastructure.persistence.reddit_state_store import build_reddit_state_store
-from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.persistence.risk_policy_repository import (
     SqlAlchemyRiskPolicyRepository,
 )
 from infrastructure.persistence.sqlalchemy_futures_definition_repository import (
     SqlAlchemyFuturesDefinitionRepository,
 )
-from infrastructure.persistence.watchlist_hub_unit_of_work import (
-    SqlAlchemyWatchlistHubUnitOfWork,
-)
-from infrastructure.persistence.workflow_run_repository import (
-    SqlAlchemyWorkflowRunRepository,
-)
-from infrastructure.providers.a_share.cls import CLSAShareAdapter
-from infrastructure.providers.a_share.cninfo import CninfoAShareAdapter
 from infrastructure.providers.a_share.codecs import (
     announcements_codec,
     bars_codec,
@@ -177,43 +153,22 @@ from infrastructure.providers.a_share.codecs import (
     statements_codec,
     ticks_codec,
 )
-from infrastructure.providers.a_share.eastmoney import EastmoneyAShareAdapter
 from infrastructure.providers.a_share.eastmoney_gate import (
     EastmoneyRequestGate,
-    get_production_eastmoney_request_gate,
 )
-from infrastructure.providers.a_share.exchanges import (
-    SseAShareDisclosureAdapter,
-    SzseAShareDisclosureAdapter,
+from infrastructure.providers.account.schwab_oauth import (
+    SchwabOAuthFlowManager,
+    SchwabOAuthTokenInspector,
 )
-from infrastructure.providers.a_share.hkex import HkexNorthboundAdapter
-from infrastructure.providers.a_share.iwencai import IwencaiAShareAdapter
-from infrastructure.providers.a_share.nahs import NahsHogCycleAdapter
-from infrastructure.providers.a_share.sina import SinaAShareAdapter
-from infrastructure.providers.a_share.tencent import TencentAShareAdapter
-from infrastructure.providers.a_share.ths import ThsAShareAdapter
-from infrastructure.providers.a_share.trading_calendar import (
-    load_default_a_share_trading_calendar,
-)
-from infrastructure.providers.account.manual_csv import ManualCsvAccountAdapter
-from infrastructure.providers.account.moomoo import MoomooAccountAdapter
-from infrastructure.providers.account.schwab import SchwabAccountAdapter
-from infrastructure.providers.common.circuit_breaker import CircuitBreaker
-from infrastructure.providers.common.httpx_transport import HttpxTransport
-from infrastructure.providers.common.null_category_provider import NullCategoryProvider
-from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
-from infrastructure.providers.cross_asset.cme_public_client import CmePublicAdapter
-from infrastructure.providers.cross_asset.dce_official_client import DceOfficialAdapter
-from infrastructure.providers.cross_asset.dukascopy_client import DukascopySpotAdapter
 from infrastructure.providers.instrument_directory import (
     AlphaVantageInstrumentDirectoryAdapter,
     TencentInstrumentDirectoryAdapter,
     YahooInstrumentDirectoryAdapter,
 )
-from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDRateLimiter
+from infrastructure.providers.notifications.telegram import (
+    TelegramMonitorNotificationAdapter,
+)
 from infrastructure.providers.registry import VendorRegistry
-from infrastructure.providers.router_engine import ProviderRouterEngine
-from infrastructure.providers.us.alpha_vantage_research import AlphaVantageResearchAdapter
 from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
 from infrastructure.providers.us.context_codecs import (
     us_community_heat_codec,
@@ -223,26 +178,12 @@ from infrastructure.providers.us.context_codecs import (
     us_prediction_market_context_codec,
     us_sentiment_samples_codec,
 )
-from infrastructure.providers.us.eastmoney_futures import EastmoneyMetalFuturesAdapter
-from infrastructure.providers.us.fred import FredMacroAdapter
-from infrastructure.providers.us.moomoo_community import MoomooCommunityHeatAdapter
-from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
-from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
-from infrastructure.providers.us.reddit import RedditSentimentAdapter
 from infrastructure.providers.us.research_codecs import (
     us_corporate_actions_codec,
     us_filings_codec,
     us_financial_statements_codec,
     us_fundamental_snapshot_codec,
     us_insider_activity_codec,
-)
-from infrastructure.providers.us.sec_research import SECResearchAdapter
-from infrastructure.providers.us.sina_futures import SinaMetalFuturesAdapter
-from infrastructure.providers.us.yahoo_finance_research import YahooFinanceResearchAdapter
-from infrastructure.providers.watchlist.manual_csv import ManualCsvWatchlistAdapter
-from infrastructure.providers.watchlist.moomoo import MoomooWatchlistAdapter
-from infrastructure.providers.watchlist.moomoo_security_corrections import (
-    MoomooSecurityCorrections,
 )
 from infrastructure.system.clock import SystemClock
 from infrastructure.system.id_generator import Uuid7IdGenerator
@@ -263,6 +204,7 @@ class BootstrapOverrides:
     eastmoney_gate: EastmoneyRequestGate | None = None
     a_share_calendar: AShareTradingCalendar | None = None
     watchlist_provider: WatchlistSourceProvider | None = None
+    monitor_notification_sender: MonitorNotificationSender | None = None
 
 
 @dataclass(slots=True)
@@ -270,9 +212,11 @@ class RuntimeResources:
     """Own infrastructure resources and their deterministic shutdown order."""
 
     database: SqlAlchemyDatabase
+    monitor_run_lock: ProcessFileLock
+    post_market_sync_lock: ProcessFileLock
     a_share_transport: HttpTransport | None = None
     cross_asset_transport: HttpTransport | None = None
-    polymarket_transport: HttpTransport | None = None
+    monitor_notification_sender: MonitorNotificationSender | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     async def aclose(self) -> None:
@@ -284,7 +228,7 @@ class RuntimeResources:
             for transport in (
                 self.a_share_transport,
                 self.cross_asset_transport,
-                self.polymarket_transport,
+                self.monitor_notification_sender,
             ):
                 if transport is None or id(transport) in closed:
                     continue
@@ -331,169 +275,41 @@ class ApplicationServices:
     challenge: ChallengeReviewService
     account_transactions: AccountTransactionCoordinator
     workflows: ResearchWorkflowOrchestrator
+    historical_validation: HistoricalValidationService
     watchlist: WatchlistHubService
 
 
-@dataclass
-class ApplicationContainer:
-    """Internal composition-root structure (not part of MCP/domain public contracts)."""
+@dataclass(frozen=True, slots=True)
+class RuntimeContext:
+    """Cross-cutting deterministic collaborators exposed to interface adapters."""
 
-    settings: AppSettings
-    resources: RuntimeResources
     clock: Clock
     id_generator: IdGenerator
     secret_redactor: SecretRedactor
-    health_service: HealthService
-    # Shared provider-router surface
-    provider_router: ProviderRouter
-    vendor_registry: VendorRegistry
-    # Phase 1B research
-    investment_case_service: InvestmentCaseService
-    thesis_revision_service: ThesisRevisionService
-    watchlist_service: WatchlistService
-    watchlist_hub_service: WatchlistHubService
-    research_state_query_service: ResearchStateQueryService
-    open_question_service: OpenQuestionService
-    research_unit_of_work_factory: UowFactory
-    # Phase 1D instrument master (D3b) — no seed/migrations here
-    instrument_master_service: InstrumentMasterService
-    instrument_resolve_service: InstrumentResolveService
-    instrument_unit_of_work_factory: InstrumentUowFactory
-    # Phase 1C research memory (C5 composition)
-    evidence_service: EvidenceService
-    research_archive_service: ResearchArchiveService
-    research_search_service: ResearchSearchService
-    research_timeline_service: ResearchTimelineService
-    journal_service: JournalService
-    decision_record_service: DecisionRecordService
-    # Phase 1E E5b/E5c A-share product services + tool coordinator (MCP still deferred)
-    a_share_trading_calendar: AShareTradingCalendar
-    a_share_snapshot_service: AShareSnapshotService
-    a_share_market_structure_service: AShareMarketStructureService
-    a_share_capital_service: AShareCapitalService
-    a_share_limit_up_service: AShareLimitUpService
-    a_share_sentiment_service: AShareSentimentService
-    a_share_etf_option_service: AShareEtfOptionService
-    industry_metric_repository: IndustryMetricRepository
-    research_report_search_service: ResearchReportSearchService
-    a_share_tool_coordinator: AShareToolCoordinator
-    # Phase 1F F3c US market product services + tool coordinator
-    us_market_data_service: USMarketDataService
-    us_market_breadth_service: USMarketBreadthService
-    us_market_context_service: USMarketContextService
-    us_technical_service: USTechnicalService
-    us_tool_coordinator: USToolCoordinator
-    # Phase 3A cross-asset market facade + futures/spot services
-    market_tool_coordinator: MarketToolCoordinator
-    commodity_spot_service: CommoditySpotService
-    futures_contract_service: FuturesContractService
-    futures_curve_service: FuturesCurveService
-    continuous_series_service: ContinuousSeriesService
-    technical_tool_coordinator: TechnicalToolCoordinator
-    # Phase 1G US research services + tool coordinator
-    us_fundamental_service: USFundamentalService
-    us_filing_service: USFilingService
-    us_company_update_service: USCompanyUpdateService
-    us_research_tool_coordinator: USResearchToolCoordinator
-    # Phase 1H US news, macro, sentiment, and prediction context.
-    us_news_service: USNewsService
-    us_macro_service: USMacroService
-    us_sentiment_service: USSentimentService
-    us_prediction_market_service: USPredictionMarketService
-    us_context_tool_coordinator: USContextToolCoordinator
-    # Phase 1I read-only account and deterministic portfolio services.
-    account_snapshot_repository: AccountSnapshotRepository
-    account_service: AccountService
-    portfolio_service: PortfolioService
-    portfolio_tool_coordinator: PortfolioToolCoordinator
-    risk_policy_repository: RiskPolicyRepository
-    risk_policy_service: RiskPolicyService
-    position_sizing_service: PositionSizingService
-    risk_engine_service: RiskEngineService
-    risk_tool_coordinator: RiskToolCoordinator
-    monitor_repository: MonitorRepository
-    monitor_service: MonitorService
-    monitor_evaluation_service: MonitorEvaluationService
-    monitor_fact_resolver: MonitorFactResolver
-    monitor_tool_coordinator: MonitorToolCoordinator
-    monitor_run_lock: ProcessFileLock
-    post_market_sync_service: PostMarketSyncService
-    post_market_sync_lock: ProcessFileLock
-    research_context_builder: ResearchContextBuilder
-    challenge_review_repository: ChallengeReviewRepository
-    challenge_review_service: ChallengeReviewService
-    account_transaction_repository: AccountTransactionRepository
-    account_transaction_coordinator: AccountTransactionCoordinator
-    workflow_run_repository: WorkflowRunRepository
-    portfolio_review_fact_service: PortfolioReviewFactService
-    research_workflow_orchestrator: ResearchWorkflowOrchestrator
-    providers: ProviderBundle = field(init=False)
-    services: ApplicationServices = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.providers = ProviderBundle(
-            router=self.provider_router,
-            registry=self.vendor_registry,
-        )
-        self.services = ApplicationServices(
-            health=self.health_service,
-            investment_cases=self.investment_case_service,
-            thesis_revisions=self.thesis_revision_service,
-            research_state=self.research_state_query_service,
-            research_archive=self.research_archive_service,
-            research_search=self.research_search_service,
-            research_timeline=self.research_timeline_service,
-            journal=self.journal_service,
-            decisions=self.decision_record_service,
-            instruments=self.instrument_resolve_service,
-            a_share=self.a_share_tool_coordinator,
-            us_market=self.us_tool_coordinator,
-            market=self.market_tool_coordinator,
-            technical=self.technical_tool_coordinator,
-            us_research=self.us_research_tool_coordinator,
-            us_context=self.us_context_tool_coordinator,
-            portfolio=self.portfolio_tool_coordinator,
-            risk=self.risk_tool_coordinator,
-            monitoring=self.monitor_tool_coordinator,
-            research_context=self.research_context_builder,
-            challenge=self.challenge_review_service,
-            account_transactions=self.account_transaction_coordinator,
-            workflows=self.research_workflow_orchestrator,
-            watchlist=self.watchlist_hub_service,
-        )
 
-    @property
-    def database(self) -> SqlAlchemyDatabase:
-        """Compatibility view while callers migrate to ``resources.database``."""
-        return self.resources.database
+@dataclass(frozen=True, slots=True)
+class OperationalServices:
+    """CLI-only application entry points that are intentionally not MCP tools."""
 
-    @database.setter
-    def database(self, value: SqlAlchemyDatabase) -> None:
-        self.resources.database = value
+    industry_metrics: IndustryMetricRepository
+    futures_contracts: FuturesContractService
+    monitor_evaluation: MonitorEvaluationService
+    monitor_notifications: MonitorNotificationService
+    monitor_dispatch: MonitorDispatchService
+    post_market_sync: PostMarketSyncService
 
-    @property
-    def _owned_a_share_transport(self) -> HttpTransport | None:
-        return self.resources.a_share_transport
 
-    @_owned_a_share_transport.setter
-    def _owned_a_share_transport(self, value: HttpTransport | None) -> None:
-        self.resources.a_share_transport = value
+@dataclass(slots=True)
+class ApplicationContainer:
+    """Small composition result; consumers enter through explicit capability bundles."""
 
-    @property
-    def _owned_polymarket_transport(self) -> HttpTransport | None:
-        return self.resources.polymarket_transport
-
-    @_owned_polymarket_transport.setter
-    def _owned_polymarket_transport(self, value: HttpTransport | None) -> None:
-        self.resources.polymarket_transport = value
-
-    @property
-    def _owned_cross_asset_transport(self) -> HttpTransport | None:
-        return self.resources.cross_asset_transport
-
-    @_owned_cross_asset_transport.setter
-    def _owned_cross_asset_transport(self, value: HttpTransport | None) -> None:
-        self.resources.cross_asset_transport = value
+    settings: AppSettings
+    context: RuntimeContext
+    resources: RuntimeResources
+    providers: ProviderBundle
+    services: ApplicationServices
+    operations: OperationalServices
 
     def close(self) -> None:
         try:
@@ -519,51 +335,40 @@ def build_application(
     clock: Clock = overrides.clock or SystemClock()
     id_generator: IdGenerator = Uuid7IdGenerator()
     secret_redactor: SecretRedactor = DefaultSecretRedactor()
-    owned_a_share_transport: HttpTransport | None = None
-    owned_cross_asset_transport: HttpTransport | None = None
-    owned_polymarket_transport: HttpTransport | None = None
-    if overrides.a_share_transport is None:
-        owned_a_share_transport = HttpxTransport(
-            max_response_bytes=settings.http_max_response_bytes,
-            timeout_seconds=settings.provider_timeout_market_seconds,
+    owned_monitor_notification_sender: MonitorNotificationSender | None = None
+    monitor_notification_sender = overrides.monitor_notification_sender
+    if monitor_notification_sender is None and settings.monitor_notifications_enabled:
+        assert settings.telegram_bot_token is not None
+        assert settings.telegram_chat_id is not None
+        owned_monitor_notification_sender = TelegramMonitorNotificationAdapter(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            message_thread_id=settings.telegram_message_thread_id,
+            timeout_seconds=settings.provider_timeout_default_seconds,
+            proxy_url=settings.provider_proxy_url,
         )
-
-    engine = create_engine_from_url(settings.database_url)
-    database = SqlAlchemyDatabase(engine)
-    account_snapshot_repository: AccountSnapshotRepository = SqlAlchemyAccountSnapshotRepository(
-        engine
+        monitor_notification_sender = owned_monitor_notification_sender
+    persistence = build_persistence_infrastructure(
+        settings,
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
     )
-    account_transaction_repository: AccountTransactionRepository = (
-        SqlAlchemyAccountTransactionRepository(engine)
+    engine = persistence.engine
+    database = persistence.database
+    account_snapshot_repository = persistence.account_snapshots
+    account_transaction_repository = persistence.account_transactions
+    workflow_run_repository = persistence.workflow_runs
+    industry_metric_repository = persistence.industry_metrics
+    post_market_sync_run_repository = persistence.post_market_sync_runs
+    research_unit_of_work_factory = persistence.research_uow_factory
+    watchlist_hub_unit_of_work_factory = persistence.watchlist_uow_factory
+    historical_validation_service = HistoricalValidationService(
+        persistence.historical_validation_artifacts,
+        clock,
+        id_generator,
+        secret_redactor,
     )
-    workflow_run_repository: WorkflowRunRepository = SqlAlchemyWorkflowRunRepository(engine)
-    industry_metric_repository: IndustryMetricRepository = (
-        SqlAlchemyIndustryMetricRepository(engine)
-    )
-    post_market_sync_run_repository: PostMarketSyncRunRepository = (
-        SqlAlchemyPostMarketSyncRunRepository(engine)
-    )
-
-    def research_unit_of_work_factory() -> ResearchUnitOfWork:
-        return SqlAlchemyResearchUnitOfWork(
-            engine,
-            clock,
-            id_generator,
-            secret_redactor,
-        )
-
-    def watchlist_hub_unit_of_work_factory() -> SqlAlchemyWatchlistHubUnitOfWork:
-        return SqlAlchemyWatchlistHubUnitOfWork(
-            engine,
-            clock,
-            id_generator,
-            secret_redactor,
-        )
-
-    def search_backend_probe() -> bool:
-        # Isolated UoW session; must not leak SQL/path/query into health warnings.
-        with research_unit_of_work_factory() as uow:
-            return uow.search_index.probe()
 
     health_service = HealthService(
         database=database,
@@ -571,7 +376,7 @@ def build_application(
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
-        search_backend_probe=search_backend_probe,
+        search_backend_probe=persistence.search_backend_probe,
         component_probes={
             "cross_asset.cme_reference_configured": lambda: True,
             "cross_asset.dce_eod_configured": lambda: True,
@@ -579,371 +384,32 @@ def build_application(
         },
     )
 
-    # --- Shared Vendor Chain + Registry + Router ---
-    chain_config = YamlVendorChainConfig.load(settings.vendor_chain_path)
-
-    a_share_transport = overrides.a_share_transport or owned_a_share_transport
-    assert a_share_transport is not None
-    cross_asset_transport = a_share_transport
-    effective_provider_proxy_url = settings.effective_provider_proxy_url
-    if effective_provider_proxy_url is not None and overrides.a_share_transport is None:
-        owned_cross_asset_transport = HttpxTransport(
-            max_response_bytes=settings.http_max_response_bytes,
-            timeout_seconds=settings.provider_timeout_market_seconds,
-            proxy_url=effective_provider_proxy_url,
-        )
-        cross_asset_transport = owned_cross_asset_transport
-
-    polymarket_transport = cross_asset_transport
-    if (
-        settings.polymarket_proxy_url is not None
-        and settings.polymarket_proxy_url != effective_provider_proxy_url
-        and overrides.a_share_transport is None
-    ):
-        owned_polymarket_transport = HttpxTransport(
-            max_response_bytes=settings.http_max_response_bytes,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-            proxy_url=settings.polymarket_proxy_url,
-        )
-        polymarket_transport = owned_polymarket_transport
-    a_share_calendar: AShareTradingCalendar = (
-        overrides.a_share_calendar or load_default_a_share_trading_calendar()
+    provider_infrastructure = build_provider_infrastructure(
+        settings,
+        engine=engine,
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
+        overrides=ProviderCompositionOverrides(
+            a_share_transport=overrides.a_share_transport,
+            eastmoney_gate=overrides.eastmoney_gate,
+            a_share_calendar=overrides.a_share_calendar,
+            watchlist_provider=overrides.watchlist_provider,
+        ),
     )
-    eastmoney_gate: EastmoneyRequestGate = (
-        overrides.eastmoney_gate
-        or get_production_eastmoney_request_gate(
-            min_interval_seconds=settings.eastmoney_min_interval_seconds,
-            jitter_seconds=settings.eastmoney_jitter_seconds,
-        )
-    )
-    vendor_registry = VendorRegistry()
-    # Explicit null placeholder so YAML ``null`` chains are not accidental misses.
-    vendor_registry.register(VendorId.NULL, NullCategoryProvider())
-    # Real adapters remain registered even when disabled; Router reports an
-    # explicit configured-skip rather than silently changing configured chains.
+    chain_config = provider_infrastructure.chain_config
+    vendor_registry = provider_infrastructure.registry
+    a_share_calendar = provider_infrastructure.a_share_calendar
+    a_share_transport = provider_infrastructure.a_share_transport
     market_timeout = settings.provider_timeout_market_seconds
-    vendor_registry.register(
-        VendorId.TENCENT,
-        TencentAShareAdapter(
-            a_share_transport,
-            calendar=a_share_calendar,
-            clock=clock,
-            enabled=settings.tencent_enabled,
-            timeout_seconds=market_timeout,
-            max_fresh_seconds=settings.a_share_max_fresh_seconds,
-            max_delayed_seconds=settings.a_share_max_delayed_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.EASTMONEY,
-        EastmoneyAShareAdapter(
-            a_share_transport,
-            eastmoney_gate,
-            calendar=a_share_calendar,
-            clock=clock,
-            enabled=settings.eastmoney_enabled,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-            max_fresh_seconds=settings.a_share_max_fresh_seconds,
-            max_delayed_seconds=settings.a_share_max_delayed_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.SINA,
-        SinaAShareAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.sina_enabled,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-            max_fresh_seconds=settings.a_share_max_fresh_seconds,
-            max_delayed_seconds=settings.a_share_max_delayed_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.CNINFO,
-        CninfoAShareAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.cninfo_enabled,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-        ),
-    )
-    nahs_hog_cycle_provider = NahsHogCycleAdapter(
-        a_share_transport,
-        clock=clock,
-        enabled=settings.nahs_enabled,
-        timeout_seconds=settings.provider_timeout_default_seconds,
-    )
-    vendor_registry.register(VendorId.NAHS, nahs_hog_cycle_provider)
-    vendor_registry.register(
-        VendorId.THS,
-        ThsAShareAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.ths_enabled,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.CLS,
-        CLSAShareAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.cls_enabled,
-            timeout_seconds=market_timeout,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.SSE,
-        SseAShareDisclosureAdapter(
-            a_share_transport,
-            clock=clock,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.SZSE,
-        SzseAShareDisclosureAdapter(
-            a_share_transport,
-            clock=clock,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.HKEX,
-        HkexNorthboundAdapter(
-            a_share_transport,
-            clock=clock,
-            timeout_seconds=market_timeout,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.IWENCAI,
-        IwencaiAShareAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.iwencai_enabled,
-            api_key=settings.iwencai_api_key,
-            base_url=settings.iwencai_base_url,
-            timeout_seconds=market_timeout,
-            current_window_seconds=settings.a_share_current_window_seconds,
-        ),
-    )
-    # Phase 1F: Yahoo + Alpha Vantage share the single owned/injected transport.
-    vendor_registry.register(
-        VendorId.YFINANCE,
-        YahooFinanceResearchAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.yfinance_enabled,
-            timeout_seconds=market_timeout,
-            breadth_timeout_seconds=settings.provider_timeout_us_breadth_seconds,
-            max_fresh_seconds=settings.us_max_fresh_seconds,
-            max_delayed_seconds=settings.us_max_delayed_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.SINA_FUTURES,
-        SinaMetalFuturesAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.sina_enabled,
-            timeout_seconds=market_timeout,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.EASTMONEY_FUTURES,
-        EastmoneyMetalFuturesAdapter(
-            a_share_transport,
-            eastmoney_gate,
-            clock=clock,
-            enabled=settings.eastmoney_enabled,
-            timeout_seconds=market_timeout,
-        ),
-    )
-    # Phase 3A free cross-asset adapters (shared httpx transport lifecycle).
-    cme_public_adapter = CmePublicAdapter(
-        cross_asset_transport,
-        clock=clock,
-        enabled=True,
-        timeout_seconds=market_timeout,
-    )
-    dce_official_adapter = DceOfficialAdapter(
-        cross_asset_transport,
-        clock=clock,
-        enabled=True,
-        timeout_seconds=market_timeout,
-    )
-    dukascopy_adapter = DukascopySpotAdapter(
-        cross_asset_transport,
-        clock=clock,
-        enabled=settings.dukascopy_enabled,
-        api_key=settings.dukascopy_api_key,
-        timeout_seconds=market_timeout,
-        proxy_configured=effective_provider_proxy_url is not None,
-    )
-    vendor_registry.register(VendorId.CME_PUBLIC, cme_public_adapter)
-    vendor_registry.register(VendorId.DCE_OFFICIAL, dce_official_adapter)
-    vendor_registry.register(VendorId.DUKASCOPY, dukascopy_adapter)
-    vendor_registry.register(
-        VendorId.ALPHA_VANTAGE,
-        AlphaVantageResearchAdapter(
-            a_share_transport,
-            api_keys=settings.alpha_vantage_api_keys,
-            clock=clock,
-            enabled=settings.alpha_vantage_enabled,
-            timeout_seconds=market_timeout,
-            max_fresh_seconds=settings.us_max_fresh_seconds,
-            max_delayed_seconds=settings.us_max_delayed_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.SEC_EDGAR,
-        SECResearchAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.sec_edgar_enabled,
-            sec_user_agent=settings.sec_user_agent,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.FRED,
-        FredMacroAdapter(
-            a_share_transport,
-            api_key=settings.fred_api_key,
-            clock=clock,
-            enabled=settings.fred_enabled,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.MOOMOO_FEED,
-        MoomooSentimentAdapter(
-            a_share_transport,
-            clock=clock,
-            enabled=settings.moomoo_sentiment_enabled,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-        ),
-    )
-    vendor_registry.register(
-        VendorId.REDDIT,
-        RedditSentimentAdapter(
-            a_share_transport,
-            user_agent=settings.reddit_user_agent,
-            subreddits=tuple(settings.reddit_subreddits.split(",")),
-            clock=clock,
-            enabled=settings.reddit_enabled,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-            min_interval_seconds=settings.reddit_min_interval_seconds,
-            cache_ttl_seconds=settings.reddit_cache_ttl_seconds,
-            cooldown_default_seconds=settings.reddit_cooldown_default_seconds,
-            cooldown_max_seconds=settings.reddit_cooldown_max_seconds,
-            apify_enabled=settings.reddit_apify_enabled,
-            apify_api_token=settings.apify_api_token,
-            apify_actor_id=settings.reddit_apify_actor_id,
-            apify_subreddits=tuple(settings.reddit_apify_subreddits.split(",")),
-            apify_lookback_days=settings.reddit_apify_lookback_map,
-            apify_max_charge_usd=settings.reddit_apify_max_charge_usd,
-            state_store=build_reddit_state_store(engine, clock, secret_redactor),
-        ),
-    )
-    vendor_registry.register(
-        VendorId.POLYMARKET,
-        PolymarketPredictionAdapter(
-            polymarket_transport,
-            clock=clock,
-            enabled=settings.polymarket_enabled,
-            timeout_seconds=settings.provider_timeout_default_seconds,
-        ),
-    )
-    moomoo_opend_rate_limiter = MoomooOpenDRateLimiter(
-        settings.post_market_sync_lock_path.parent / "moomoo_opend_rate_limit.log"
-    )
-    moomoo_community_heat_provider = MoomooCommunityHeatAdapter(
-        enabled=settings.moomoo_community_heat_enabled,
-        host=settings.moomoo_host,
-        port=settings.moomoo_port,
-        clock=clock,
-        opend_rate_limiter=moomoo_opend_rate_limiter,
-    )
-    vendor_registry.register(VendorId.MOOMOO, moomoo_community_heat_provider)
-    moomoo_account_provider = MoomooAccountAdapter(
-        id_generator,
-        enabled="MOOMOO" in settings.holdings_sources,
-        host=settings.moomoo_host,
-        port=settings.moomoo_port,
-        account_ids=tuple(
-            item.strip() for item in settings.moomoo_account_ids.split(",") if item.strip()
-        ),
-        clock=clock,
-        opend_rate_limiter=moomoo_opend_rate_limiter,
-    )
-    manual_account_provider = ManualCsvAccountAdapter(
-        (settings.manual_holdings_csv_path if "MANUAL_CSV" in settings.holdings_sources else None),
-        id_generator,
-        clock=clock,
-    )
-    schwab_account_provider = SchwabAccountAdapter(
-        id_generator,
-        enabled="SCHWAB" in settings.holdings_sources,
-        client_id=settings.schwab_client_id,
-        client_secret=settings.schwab_client_secret,
-        redirect_uri=settings.schwab_redirect_uri,
-        token_path=settings.schwab_token_path,
-        account_hashes=tuple(
-            item.strip() for item in settings.schwab_account_hashes.split(",") if item.strip()
-        ),
-        clock=clock,
-    )
-    vendor_registry.register(VendorId.SCHWAB, schwab_account_provider)
-    vendor_registry.register(VendorId.MANUAL_CSV, manual_account_provider)
-
-    watchlist_source_provider = overrides.watchlist_provider
-
-    state_backend = build_provider_state_backend(engine, clock, secret_redactor)
-
-    rate_limiter = ProviderRateLimiter(state_backend.rate_limit_store, clock)
-    if watchlist_source_provider is None:
-        if settings.watchlist_source == WatchlistSource.MOOMOO.value:
-            watchlist_source_provider = MoomooWatchlistAdapter(
-                enabled=True,
-                host=settings.moomoo_host,
-                port=settings.moomoo_port,
-                clock=clock,
-                opend_rate_limiter=moomoo_opend_rate_limiter,
-                security_corrections=MoomooSecurityCorrections.load_default(),
-            )
-        else:
-            watchlist_source_provider = ManualCsvWatchlistAdapter(
-                settings.manual_watchlist_csv_path,
-                default_group=settings.watchlist_default_group,
-                clock=clock,
-            )
-
-    circuit_breaker = CircuitBreaker(
-        clock,
-        failure_threshold=settings.circuit_failure_threshold,
-        recovery_timeout_seconds=settings.circuit_recovery_timeout_seconds,
-        half_open_max_calls=settings.circuit_half_open_max_calls,
-    )
-
-    router_engine = ProviderRouterEngine(
-        registry=vendor_registry,
-        cache_store=state_backend.cache_store,
-        health_store=state_backend.health_store,
-        rate_limiter=rate_limiter,
-        circuit_breaker=circuit_breaker,
-        clock=clock,
-        settings=settings,
-    )
+    cme_public_adapter = provider_infrastructure.cme_public
+    dce_official_adapter = provider_infrastructure.dce_official
+    dukascopy_adapter = provider_infrastructure.dukascopy
+    schwab_account_provider = provider_infrastructure.schwab_account
+    moomoo_account_provider = provider_infrastructure.moomoo_account
+    watchlist_source_provider = provider_infrastructure.watchlist_source
     provider_router = ProviderRouter(
-        engine=router_engine,
+        engine=provider_infrastructure.router_engine,
         chain_config=chain_config,
         clock=clock,
         id_generator=id_generator,
@@ -966,12 +432,6 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    watchlist_service = WatchlistService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     watchlist_hub_service = WatchlistHubService(
         provider=watchlist_source_provider,
         uow_factory=watchlist_hub_unit_of_work_factory,
@@ -987,13 +447,6 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    open_question_service = OpenQuestionService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-
     instrument_master_service = InstrumentMasterService(
         instrument_unit_of_work_factory,
     )
@@ -1014,12 +467,6 @@ def build_application(
     )
     futures_curve_service = FuturesCurveService(
         contract_service=futures_contract_service,
-        clock=clock,
-    )
-    continuous_series_service = ContinuousSeriesService(
-        reference_provider=routed_futures_provider,
-        contract_service=futures_contract_service,
-        repository=futures_definition_repository,
         clock=clock,
     )
     commodity_spot_service = CommoditySpotService(
@@ -1074,13 +521,7 @@ def build_application(
         },
     )
 
-    # Phase 1C C5: single research UoW factory shared across all six services.
-    evidence_service = EvidenceService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
+    # Phase 1C C5: shared research UoW factory for durable read/write entry points.
     research_archive_service = ResearchArchiveService(
         research_unit_of_work_factory,
         clock,
@@ -1340,13 +781,8 @@ def build_application(
     )
 
     # Phase 1I: direct read-only account ports; no order-capable service exists.
-    account_providers: dict[VendorId, AccountProvider] = {
-        VendorId.SCHWAB: schwab_account_provider,
-        VendorId.MOOMOO: moomoo_account_provider,
-        VendorId.MANUAL_CSV: manual_account_provider,
-    }
     account_service = AccountService(
-        account_providers,
+        provider_infrastructure.account_providers,
         account_snapshot_repository,
         clock,
         default_order=chain_config.chain_for(Market.US, DataCategory.ACCOUNT),
@@ -1378,11 +814,18 @@ def build_application(
         secret_redactor,
     )
     monitor_repository: MonitorRepository = SqlAlchemyMonitorRepository(engine)
+    us_market_calendar = XnysMarketSessionCalendar()
+    monitor_schedule_service = MonitorScheduleService(
+        us_calendar=us_market_calendar,
+        a_share_calendar=AShareMarketSessionCalendarAdapter(a_share_calendar),
+        post_market_delay_minutes=settings.post_market_sync_delay_minutes,
+    )
     monitor_service = MonitorService(
         monitor_repository,
         research_unit_of_work_factory,
         clock,
         id_generator,
+        monitor_schedule_service,
     )
     monitor_fact_resolver = MonitorFactResolver(
         technical=technical_tool_coordinator,
@@ -1400,6 +843,25 @@ def build_application(
         id_generator,
         monitor_fact_resolver,
     )
+    monitor_notification_service = MonitorNotificationService(
+        monitor_repository,
+        monitor_notification_sender,
+        clock,
+        enabled=settings.monitor_notifications_enabled,
+        configured=(
+            settings.telegram_bot_token is not None and settings.telegram_chat_id is not None
+        ),
+        max_attempts=settings.monitor_notification_max_attempts,
+        event_ttl_hours=settings.monitor_notification_event_ttl_hours,
+        batch_size=settings.monitor_notification_batch_size,
+    )
+    monitor_dispatch_service = MonitorDispatchService(
+        monitor_repository,
+        monitor_evaluation_service,
+        monitor_notification_service,
+        monitor_schedule_service,
+        clock,
+    )
     monitor_tool_coordinator = MonitorToolCoordinator(
         monitor_service,
         monitor_evaluation_service,
@@ -1411,13 +873,17 @@ def build_application(
         settings.post_market_sync_lock_path.parent / "monitoring.lock"
     )
     post_market_sync_service = PostMarketSyncService(
-        calendar=XnysMarketSessionCalendar(),
+        calendar=us_market_calendar,
         repository=post_market_sync_run_repository,
         portfolio=portfolio_tool_coordinator,
         watchlist=watchlist_hub_service,
         clock=clock,
         id_generator=id_generator,
         delay_minutes=settings.post_market_sync_delay_minutes,
+        schwab_oauth_health=SchwabOAuthTokenInspector(
+            token_path=settings.schwab_token_path,
+            enabled="SCHWAB" in settings.holdings_sources,
+        ),
     )
     post_market_sync_lock = ProcessFileLock(settings.post_market_sync_lock_path)
     research_context_builder = ResearchContextBuilder(
@@ -1488,89 +954,55 @@ def build_application(
 
     return ApplicationContainer(
         settings=settings,
+        context=RuntimeContext(
+            clock=clock,
+            id_generator=id_generator,
+            secret_redactor=secret_redactor,
+        ),
         resources=RuntimeResources(
             database=database,
-            a_share_transport=owned_a_share_transport,
-            cross_asset_transport=owned_cross_asset_transport,
-            polymarket_transport=owned_polymarket_transport,
+            monitor_run_lock=monitor_run_lock,
+            post_market_sync_lock=post_market_sync_lock,
+            a_share_transport=provider_infrastructure.owned_a_share_transport,
+            cross_asset_transport=provider_infrastructure.owned_cross_asset_transport,
+            monitor_notification_sender=owned_monitor_notification_sender,
         ),
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        health_service=health_service,
-        provider_router=provider_router,
-        vendor_registry=vendor_registry,
-        investment_case_service=investment_case_service,
-        thesis_revision_service=thesis_revision_service,
-        watchlist_service=watchlist_service,
-        watchlist_hub_service=watchlist_hub_service,
-        research_state_query_service=research_state_query_service,
-        open_question_service=open_question_service,
-        research_unit_of_work_factory=research_unit_of_work_factory,
-        instrument_master_service=instrument_master_service,
-        instrument_resolve_service=instrument_resolve_service,
-        instrument_unit_of_work_factory=instrument_unit_of_work_factory,
-        evidence_service=evidence_service,
-        research_archive_service=research_archive_service,
-        research_search_service=research_search_service,
-        research_timeline_service=research_timeline_service,
-        journal_service=journal_service,
-        decision_record_service=decision_record_service,
-        a_share_trading_calendar=a_share_calendar,
-        a_share_snapshot_service=a_share_snapshot_service,
-        a_share_market_structure_service=a_share_market_structure_service,
-        a_share_capital_service=a_share_capital_service,
-        a_share_limit_up_service=a_share_limit_up_service,
-        a_share_sentiment_service=a_share_sentiment_service,
-        a_share_etf_option_service=a_share_etf_option_service,
-        industry_metric_repository=industry_metric_repository,
-        research_report_search_service=research_report_search_service,
-        a_share_tool_coordinator=a_share_tool_coordinator,
-        us_market_data_service=us_market_data_service,
-        us_market_breadth_service=us_market_breadth_service,
-        us_market_context_service=us_market_context_service,
-        us_technical_service=us_technical_service,
-        us_tool_coordinator=us_tool_coordinator,
-        market_tool_coordinator=market_tool_coordinator,
-        commodity_spot_service=commodity_spot_service,
-        futures_contract_service=futures_contract_service,
-        futures_curve_service=futures_curve_service,
-        continuous_series_service=continuous_series_service,
-        technical_tool_coordinator=technical_tool_coordinator,
-        us_fundamental_service=us_fundamental_service,
-        us_filing_service=us_filing_service,
-        us_company_update_service=us_company_update_service,
-        us_research_tool_coordinator=us_research_tool_coordinator,
-        us_news_service=us_news_service,
-        us_macro_service=us_macro_service,
-        us_sentiment_service=us_sentiment_service,
-        us_prediction_market_service=us_prediction_market_service,
-        us_context_tool_coordinator=us_context_tool_coordinator,
-        account_snapshot_repository=account_snapshot_repository,
-        account_service=account_service,
-        portfolio_service=portfolio_service,
-        portfolio_tool_coordinator=portfolio_tool_coordinator,
-        risk_policy_repository=risk_policy_repository,
-        risk_policy_service=risk_policy_service,
-        position_sizing_service=position_sizing_service,
-        risk_engine_service=risk_engine_service,
-        risk_tool_coordinator=risk_tool_coordinator,
-        monitor_repository=monitor_repository,
-        monitor_service=monitor_service,
-        monitor_evaluation_service=monitor_evaluation_service,
-        monitor_fact_resolver=monitor_fact_resolver,
-        monitor_tool_coordinator=monitor_tool_coordinator,
-        monitor_run_lock=monitor_run_lock,
-        post_market_sync_service=post_market_sync_service,
-        post_market_sync_lock=post_market_sync_lock,
-        research_context_builder=research_context_builder,
-        challenge_review_repository=challenge_review_repository,
-        challenge_review_service=challenge_review_service,
-        account_transaction_repository=account_transaction_repository,
-        account_transaction_coordinator=account_transaction_coordinator,
-        workflow_run_repository=workflow_run_repository,
-        portfolio_review_fact_service=portfolio_review_fact_service,
-        research_workflow_orchestrator=research_workflow_orchestrator,
+        providers=ProviderBundle(router=provider_router, registry=vendor_registry),
+        services=ApplicationServices(
+            health=health_service,
+            investment_cases=investment_case_service,
+            thesis_revisions=thesis_revision_service,
+            research_state=research_state_query_service,
+            research_archive=research_archive_service,
+            research_search=research_search_service,
+            research_timeline=research_timeline_service,
+            journal=journal_service,
+            decisions=decision_record_service,
+            instruments=instrument_resolve_service,
+            a_share=a_share_tool_coordinator,
+            us_market=us_tool_coordinator,
+            market=market_tool_coordinator,
+            technical=technical_tool_coordinator,
+            us_research=us_research_tool_coordinator,
+            us_context=us_context_tool_coordinator,
+            portfolio=portfolio_tool_coordinator,
+            risk=risk_tool_coordinator,
+            monitoring=monitor_tool_coordinator,
+            research_context=research_context_builder,
+            challenge=challenge_review_service,
+            account_transactions=account_transaction_coordinator,
+            workflows=research_workflow_orchestrator,
+            historical_validation=historical_validation_service,
+            watchlist=watchlist_hub_service,
+        ),
+        operations=OperationalServices(
+            industry_metrics=industry_metric_repository,
+            futures_contracts=futures_contract_service,
+            monitor_evaluation=monitor_evaluation_service,
+            monitor_notifications=monitor_notification_service,
+            monitor_dispatch=monitor_dispatch_service,
+            post_market_sync=post_market_sync_service,
+        ),
     )
 
 
@@ -1582,3 +1014,17 @@ def load_settings() -> AppSettings:
 def build_default_application() -> ApplicationContainer:
     """Load settings and build the container (composition-root helper for main)."""
     return build_application(load_settings())
+
+
+def build_schwab_oauth_flow_manager() -> SchwabOAuthFlowManager:
+    """Build the foreground-only Schwab browser OAuth coordinator."""
+
+    settings = load_settings()
+    if not settings.schwab_client_id or not settings.schwab_client_secret:
+        raise ValueError("Schwab client credentials are not configured")
+    return SchwabOAuthFlowManager(
+        client_id=settings.schwab_client_id,
+        client_secret=settings.schwab_client_secret,
+        redirect_uri=settings.schwab_redirect_uri,
+        token_path=settings.schwab_token_path,
+    )

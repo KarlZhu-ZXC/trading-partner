@@ -11,7 +11,7 @@ from bootstrap import build_default_application
 async def _run() -> int:
     container = build_default_application()
     try:
-        envelope = await container.watchlist_hub_service.sync_all()
+        envelope = await container.services.watchlist.sync_all()
         if not envelope.ok or envelope.data is None:
             print(
                 json.dumps(

@@ -300,12 +300,11 @@ def test_c5_container_wires_six_services_and_health_component(
     )
     container = build_application(settings)
     try:
-        assert container.evidence_service is not None
-        assert container.research_archive_service is not None
-        assert container.research_search_service is not None
-        assert container.research_timeline_service is not None
-        assert container.journal_service is not None
-        assert container.decision_record_service is not None
+        assert container.services.research_archive is not None
+        assert container.services.research_search is not None
+        assert container.services.research_timeline is not None
+        assert container.services.journal is not None
+        assert container.services.decisions is not None
 
         server = create_mcp_server(container)
         tools = getattr(server, "_tool_manager", None)
@@ -315,7 +314,7 @@ def test_c5_container_wires_six_services_and_health_component(
         assert names == set(PUBLIC_TOOL_NAMES)
         assert "evidence_create" not in names
 
-        health = container.health_service.check()
+        health = container.services.health.check()
         assert health.ok is True
         assert health.data is not None
         assert "research_search" in health.data.components

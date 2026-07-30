@@ -3,15 +3,28 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine
 
+from application.dto.account_transactions import AccountGetTransactionsInput
+from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.dto.workflow import (
     WorkflowRunDTO,
     WorkflowSynthesisContractDTO,
 )
-from domain.common.enums import VendorId
+from application.services.account_transaction_coordinator import (
+    AccountTransactionCoordinator,
+)
+from domain.common.enums import (
+    CacheDisposition,
+    DataCategory,
+    Freshness,
+    SourceRole,
+    TradingSession,
+    VendorId,
+)
 from domain.common.errors import DataContractError
 from domain.portfolio.enums import AccountTransactionKind, AccountTransactionSide
 from domain.portfolio.models import AccountTransaction
@@ -143,4 +156,88 @@ def test_account_transaction_repository_is_idempotent_and_filtered() -> None:
     assert repository.list(providers=(VendorId.MOOMOO,), start=NOW, end=NOW, limit=10) == (
         transaction,
     )
+    engine.dispose()
+
+
+def test_account_transaction_repository_filters_by_instant_across_utc_offsets() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAccountTransactionRepository(engine)
+    transaction = AccountTransaction(
+        provider_transaction_id="txn_after_midnight_utc",
+        account_ref="account_hash_1",
+        provider=VendorId.SCHWAB,
+        instrument_id="equity:US:META",
+        kind=AccountTransactionKind.TRADE,
+        side=AccountTransactionSide.BUY,
+        quantity=Decimal("3"),
+        price=Decimal("542.89"),
+        fees=Decimal(0),
+        currency="USD",
+        occurred_at=datetime(2026, 7, 30, 2, 17, 37, tzinfo=UTC),
+    )
+    repository.append_many((transaction,))
+    et = ZoneInfo("America/New_York")
+
+    result = repository.list(
+        providers=(VendorId.SCHWAB,),
+        start=datetime(2026, 7, 29, 0, tzinfo=et),
+        end=datetime(2026, 7, 29, 23, 59, 59, tzinfo=et),
+        limit=10,
+    )
+
+    assert result == (transaction,)
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_account_transaction_coordinator_propagates_provider_warnings(
+    id_generator: object,
+    fixed_clock: object,
+    secret_redactor: object,
+) -> None:
+    class _WarningProvider:
+        def is_configured(self) -> bool:
+            return True
+
+        async def get_account_transactions(
+            self, **_kwargs: object
+        ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+            return ProviderSuccess(
+                (),
+                ProviderResultMeta(
+                    vendor=VendorId.SCHWAB,
+                    category=DataCategory.ACCOUNT,
+                    role=SourceRole.PRIMARY,
+                    as_of=NOW,
+                    fetched_at=NOW,
+                    freshness=Freshness.UNKNOWN,
+                    session=TradingSession.UNKNOWN,
+                    latency_ms=None,
+                    cache_disposition=CacheDisposition.MISS,
+                    adjustment=None,
+                    data_delay_seconds=None,
+                    warnings=("SCHWAB_TRANSACTION_ITEM_OMITTED",),
+                ),
+            )
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAccountTransactionRepository(engine)
+    coordinator = AccountTransactionCoordinator(
+        {VendorId.SCHWAB: _WarningProvider()},  # type: ignore[dict-item]
+        repository,
+        fixed_clock,  # type: ignore[arg-type]
+        id_generator,  # type: ignore[arg-type]
+        secret_redactor,  # type: ignore[arg-type]
+    )
+
+    result = await coordinator.get_transactions(
+        AccountGetTransactionsInput(providers=(VendorId.SCHWAB,), end=NOW)
+    )
+
+    assert result.ok and result.degraded
+    assert [warning.code for warning in result.warnings] == [
+        "SCHWAB_TRANSACTION_ITEM_OMITTED"
+    ]
     engine.dispose()

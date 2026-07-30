@@ -54,7 +54,7 @@ async def _run(argv: list[str] | None = None) -> int:
     )
     container = build_default_application()
     try:
-        result = await container.account_transaction_coordinator.get_transactions(
+        result = await container.services.account_transactions.get_transactions(
             AccountGetTransactionsInput(
                 providers=providers,
                 start=start,

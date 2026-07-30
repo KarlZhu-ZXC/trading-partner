@@ -41,7 +41,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
             inp = FundamentalGetSnapshotInput.model_validate(
                 {"instrument_id": instrument_id, "as_of": as_of}
             )
-            envelope = await container.us_research_tool_coordinator.get_fundamental_snapshot(inp)
+            envelope = await container.services.us_research.get_fundamental_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -66,7 +66,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
                     "view": view,
                 }
             )
-            envelope = await container.us_research_tool_coordinator.get_fundamental_statements(inp)
+            envelope = await container.services.us_research.get_fundamental_statements(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -114,7 +114,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
                     "limit": limit,
                 }
             )
-            envelope = await container.us_research_tool_coordinator.get_filings(inp)
+            envelope = await container.services.us_research.get_filings(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -139,7 +139,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
                     "limit": limit,
                 }
             )
-            envelope = await container.us_research_tool_coordinator.get_insider_activity(inp)
+            envelope = await container.services.us_research.get_insider_activity(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -162,7 +162,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
                     "limit": limit,
                 }
             )
-            envelope = await container.us_research_tool_coordinator.get_company_updates(inp)
+            envelope = await container.services.us_research.get_company_updates(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -189,7 +189,7 @@ def build_us_research_adapters(container: ApplicationContainer) -> SimpleNamespa
                     "limit": limit,
                 }
             )
-            envelope = await container.us_research_tool_coordinator.search_events(inp)
+            envelope = await container.services.us_research.search_events(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise

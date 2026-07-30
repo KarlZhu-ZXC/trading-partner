@@ -26,7 +26,7 @@ from domain.common.errors import (
     ChallengeReviewNotFound,
     IdempotencyConflict,
 )
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     ChallengeFindingRow,
     ChallengeQuestionRow,
     ChallengeReviewResolutionRow,

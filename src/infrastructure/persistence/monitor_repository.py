@@ -16,8 +16,11 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
+    MonitorNotificationChannel,
+    MonitorNotificationStatus,
     MonitorRuleStateValue,
     MonitorRuleType,
+    MonitorRunStatus,
     MonitorSeverity,
     MonitorStatus,
 )
@@ -25,17 +28,22 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
+    MonitorNotificationMessage,
+    MonitorNotificationOutboxEntry,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
+    MonitorRunObservation,
 )
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     MonitorEventResolutionRow,
     MonitorEventRow,
     MonitorIdentityRow,
+    MonitorNotificationOutboxRow,
     MonitorRuleStateRow,
+    MonitorRunObservationRow,
     MonitorRunRow,
     MonitorVersionRow,
 )
@@ -149,6 +157,7 @@ def _definition(row: MonitorVersionRow) -> MonitorDefinition:
         status=MonitorStatus(row.status),
         rules=_rules_from_json(row.rules_json),
         valid_until=_dt(row.valid_until),
+        interval_minutes=row.interval_minutes,
         confirmed_by=row.confirmed_by,
         idempotency_key=row.idempotency_key,
         created_at=datetime.fromisoformat(row.created_at),
@@ -166,6 +175,7 @@ def _version_row(value: MonitorDefinition) -> MonitorVersionRow:
         trade_plan_id=value.trade_plan_id,
         trade_plan_version=value.trade_plan_version,
         cadence=value.cadence.value,
+        interval_minutes=value.interval_minutes,
         status=value.status.value,
         rules_json=_rules_to_json(value.rules),
         valid_until=(value.valid_until.isoformat() if value.valid_until is not None else None),
@@ -202,6 +212,70 @@ def _event(row: MonitorEventRow) -> MonitorEvent:
         fact_as_of=_dt(row.fact_as_of),
         message=row.message,
         created_at=datetime.fromisoformat(row.created_at),
+    )
+
+
+def _observation(row: MonitorRunObservationRow) -> MonitorRunObservation:
+    return MonitorRunObservation(
+        run_id=row.run_id,
+        monitor_id=row.monitor_id,
+        monitor_version=row.monitor_version,
+        rule_code=row.rule_code,
+        instrument_id=row.instrument_id,
+        severity=MonitorSeverity(row.severity),
+        state=MonitorRuleStateValue(row.state),
+        observed_value=_dec(row.observed_value),
+        threshold_value=_dec(row.threshold_value),
+        distance_value=_dec(row.distance_value),
+        distance_percent=_dec(row.distance_percent),
+        fact_as_of=_dt(row.fact_as_of),
+        fact_age_seconds=row.fact_age_seconds,
+        warning_codes=row.warning_codes,
+        error_codes=row.error_codes,
+        message=row.message,
+    )
+
+
+def _notification_entry(
+    row: MonitorNotificationOutboxRow,
+) -> MonitorNotificationOutboxEntry:
+    return MonitorNotificationOutboxEntry(
+        source_event_id=row.source_event_id,
+        channel=MonitorNotificationChannel(row.channel),
+        title=row.title,
+        body=row.body,
+        status=MonitorNotificationStatus(row.status),
+        attempt_count=row.attempt_count,
+        next_attempt_at=datetime.fromisoformat(row.next_attempt_at),
+        created_at=datetime.fromisoformat(row.created_at),
+        last_attempt_at=_dt(row.last_attempt_at),
+        delivered_at=_dt(row.delivered_at),
+        provider_message_id=row.provider_message_id,
+        last_error_code=row.last_error_code,
+    )
+
+
+def _run(
+    row: MonitorRunRow,
+    observations: tuple[MonitorRunObservation, ...],
+) -> MonitorRun:
+    return MonitorRun(
+        run_id=row.run_id,
+        requested_monitor_ids=row.requested_monitor_ids,
+        selected_monitor_ids=row.selected_monitor_ids,
+        cadence=MonitorCadence(row.cadence) if row.cadence is not None else None,
+        as_of=datetime.fromisoformat(row.as_of),
+        started_at=datetime.fromisoformat(row.started_at),
+        completed_at=datetime.fromisoformat(row.completed_at),
+        status=MonitorRunStatus(row.status),
+        monitors_evaluated=row.monitors_evaluated,
+        rules_evaluated=row.rules_evaluated,
+        events_created=row.events_created,
+        warning_codes=row.warning_codes,
+        error_codes=row.error_codes,
+        observation_history_complete=row.observation_history_complete,
+        observations=observations,
+        execution_effect=False,
     )
 
 
@@ -304,12 +378,15 @@ class SqlAlchemyMonitorRepository:
         run: MonitorRun,
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
+        notifications: tuple[MonitorNotificationMessage, ...],
     ) -> MonitorRun:
         with Session(self._engine) as session, session.begin():
             session.add(
                 MonitorRunRow(
                     run_id=run.run_id,
                     requested_monitor_ids=run.requested_monitor_ids,
+                    selected_monitor_ids=run.selected_monitor_ids,
+                    cadence=run.cadence.value if run.cadence is not None else None,
                     as_of=run.as_of.isoformat(),
                     started_at=run.started_at.isoformat(),
                     completed_at=run.completed_at.isoformat(),
@@ -319,6 +396,7 @@ class SqlAlchemyMonitorRepository:
                     events_created=run.events_created,
                     warning_codes=run.warning_codes,
                     error_codes=run.error_codes,
+                    observation_history_complete=run.observation_history_complete,
                 )
             )
             for value in states:
@@ -358,6 +436,49 @@ class SqlAlchemyMonitorRepository:
                     row.updated_at = value.updated_at.isoformat()
             session.add_all(
                 [
+                    MonitorRunObservationRow(
+                        run_id=value.run_id,
+                        monitor_id=value.monitor_id,
+                        monitor_version=value.monitor_version,
+                        rule_code=value.rule_code,
+                        instrument_id=value.instrument_id,
+                        severity=value.severity.value,
+                        state=value.state.value,
+                        observed_value=(
+                            str(value.observed_value)
+                            if value.observed_value is not None
+                            else None
+                        ),
+                        threshold_value=(
+                            str(value.threshold_value)
+                            if value.threshold_value is not None
+                            else None
+                        ),
+                        distance_value=(
+                            str(value.distance_value)
+                            if value.distance_value is not None
+                            else None
+                        ),
+                        distance_percent=(
+                            str(value.distance_percent)
+                            if value.distance_percent is not None
+                            else None
+                        ),
+                        fact_as_of=(
+                            value.fact_as_of.isoformat()
+                            if value.fact_as_of is not None
+                            else None
+                        ),
+                        fact_age_seconds=value.fact_age_seconds,
+                        warning_codes=value.warning_codes,
+                        error_codes=value.error_codes,
+                        message=value.message,
+                    )
+                    for value in run.observations
+                ]
+            )
+            session.add_all(
+                [
                     MonitorEventRow(
                         event_id=value.event_id,
                         monitor_id=value.monitor_id,
@@ -386,7 +507,167 @@ class SqlAlchemyMonitorRepository:
                     for value in events
                 ]
             )
+            session.add_all(
+                [
+                    MonitorNotificationOutboxRow(
+                        source_event_id=value.source_event_id,
+                        channel=value.channel.value,
+                        title=value.title,
+                        body=value.body,
+                        status=MonitorNotificationStatus.PENDING.value,
+                        attempt_count=0,
+                        next_attempt_at=value.created_at.isoformat(),
+                        created_at=value.created_at.isoformat(),
+                    )
+                    for value in notifications
+                ]
+            )
         return run
+
+    def list_due_notifications(
+        self,
+        channel: MonitorNotificationChannel,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[MonitorNotificationOutboxEntry, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(MonitorNotificationOutboxRow)
+                .where(
+                    MonitorNotificationOutboxRow.channel == channel.value,
+                    MonitorNotificationOutboxRow.status
+                    == MonitorNotificationStatus.PENDING.value,
+                    MonitorNotificationOutboxRow.next_attempt_at
+                    <= as_of.isoformat(),
+                )
+                .order_by(
+                    MonitorNotificationOutboxRow.next_attempt_at,
+                    MonitorNotificationOutboxRow.created_at,
+                )
+                .limit(limit)
+            )
+            return tuple(_notification_entry(row) for row in rows)
+
+    def record_notification_attempt(
+        self,
+        source_event_id: str,
+        channel: MonitorNotificationChannel,
+        *,
+        status: MonitorNotificationStatus,
+        attempted_at: datetime,
+        next_attempt_at: datetime,
+        provider_message_id: str | None,
+        error_code: str | None,
+    ) -> MonitorNotificationOutboxEntry:
+        with Session(self._engine) as session, session.begin():
+            row = session.get(
+                MonitorNotificationOutboxRow,
+                (source_event_id, channel.value),
+            )
+            if row is None:
+                raise PersistenceError(
+                    "Monitor notification outbox entry was not found",
+                    retryable=False,
+                    details={"source_event_id": source_event_id},
+                )
+            row.status = status.value
+            row.attempt_count += 1
+            row.last_attempt_at = attempted_at.isoformat()
+            row.next_attempt_at = next_attempt_at.isoformat()
+            row.delivered_at = (
+                attempted_at.isoformat()
+                if status is MonitorNotificationStatus.DELIVERED
+                else None
+            )
+            row.provider_message_id = provider_message_id
+            row.last_error_code = error_code
+            session.flush()
+            result = _notification_entry(row)
+        return result
+
+    def notification_counts(
+        self, channel: MonitorNotificationChannel
+    ) -> dict[MonitorNotificationStatus, int]:
+        with Session(self._engine) as session:
+            rows = session.execute(
+                select(
+                    MonitorNotificationOutboxRow.status,
+                    func.count(),
+                )
+                .where(MonitorNotificationOutboxRow.channel == channel.value)
+                .group_by(MonitorNotificationOutboxRow.status)
+            )
+            return {
+                MonitorNotificationStatus(status): int(count)
+                for status, count in rows
+            }
+
+    def last_notification_delivery_at(
+        self, channel: MonitorNotificationChannel
+    ) -> datetime | None:
+        with Session(self._engine) as session:
+            value = session.scalar(
+                select(func.max(MonitorNotificationOutboxRow.delivered_at)).where(
+                    MonitorNotificationOutboxRow.channel == channel.value,
+                    MonitorNotificationOutboxRow.status
+                    == MonitorNotificationStatus.DELIVERED.value,
+                )
+            )
+            return _dt(value)
+
+    def get_run(self, run_id: str) -> MonitorRun | None:
+        with Session(self._engine) as session:
+            row = session.get(MonitorRunRow, run_id)
+            if row is None:
+                return None
+            observations = tuple(
+                _observation(item)
+                for item in session.scalars(
+                    select(MonitorRunObservationRow)
+                    .where(MonitorRunObservationRow.run_id == run_id)
+                    .order_by(
+                        MonitorRunObservationRow.monitor_id,
+                        MonitorRunObservationRow.rule_code,
+                    )
+                )
+            )
+            return _run(row, observations)
+
+    def list_runs(
+        self, monitor_id: str | None, limit: int
+    ) -> tuple[MonitorRun, ...]:
+        statement = select(MonitorRunRow)
+        if monitor_id is not None:
+            statement = (
+                statement.join(
+                    MonitorRunObservationRow,
+                    MonitorRunObservationRow.run_id == MonitorRunRow.run_id,
+                )
+                .where(MonitorRunObservationRow.monitor_id == monitor_id)
+                .distinct()
+            )
+        statement = statement.order_by(MonitorRunRow.completed_at.desc()).limit(limit)
+        with Session(self._engine) as session:
+            rows = tuple(session.scalars(statement))
+            values: list[MonitorRun] = []
+            for row in rows:
+                observations = tuple(
+                    _observation(item)
+                    for item in session.scalars(
+                        select(MonitorRunObservationRow)
+                        .where(MonitorRunObservationRow.run_id == row.run_id)
+                        .order_by(
+                            MonitorRunObservationRow.monitor_id,
+                            MonitorRunObservationRow.rule_code,
+                        )
+                    )
+                )
+                values.append(_run(row, observations))
+            return tuple(values)
+
+    def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None:
+        values = self.list_runs(monitor_id, 1)
+        return values[0] if values else None
 
     def get_event(self, event_id: str) -> MonitorEvent | None:
         with Session(self._engine) as session:

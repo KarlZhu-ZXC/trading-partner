@@ -1,5 +1,4 @@
-"""Phase 1D D9 contracts for NullCategoryProvider and UnimplementedVendorAdapter."""
-
+"""Contracts for the explicit null category provider."""
 from __future__ import annotations
 
 import inspect
@@ -15,12 +14,9 @@ from domain.common.enums import (
     Market,
     VendorId,
 )
-from domain.common.errors import ConfigurationError, ProviderNotConfigured
+from domain.common.errors import ProviderNotConfigured
 from domain.instruments.models import Instrument
 from infrastructure.providers.common.null_category_provider import NullCategoryProvider
-from infrastructure.providers.common.unimplemented_vendor_adapter import (
-    UnimplementedVendorAdapter,
-)
 from infrastructure.providers.registry import VendorRegistry
 
 AS_OF = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
@@ -145,93 +141,3 @@ def test_null_registers_under_vendor_id_null() -> None:
     assert got.vendor_id is VendorId.NULL
     assert got.provider_name == "null"
     assert registry.list_registered() == (VendorId.NULL,)
-
-
-# --- UnimplementedVendorAdapter ---------------------------------------------
-
-
-def test_unimplemented_identity_and_category_provider_surface() -> None:
-    adapter = UnimplementedVendorAdapter(VendorId.EASTMONEY)
-    assert isinstance(adapter, CategoryProvider)
-    assert adapter.vendor_id is VendorId.EASTMONEY
-    assert adapter.provider_name == VendorId.EASTMONEY.value
-    assert adapter.is_configured() is True
-    assert adapter.supports(Market.A_SHARE, DataCategory.MARKET_SNAPSHOT) is True
-    assert adapter.supports(Market.US, DataCategory.NEWS) is True
-
-
-def test_unimplemented_rejects_null_vendor() -> None:
-    with pytest.raises(ConfigurationError) as exc_info:
-        UnimplementedVendorAdapter(VendorId.NULL)
-    assert exc_info.value.details.get("rule") == "null_use_null_provider"
-    assert SECRET not in exc_info.value.message
-    assert SECRET not in str(exc_info.value.details)
-
-
-def test_unimplemented_rejects_non_vendor_id() -> None:
-    with pytest.raises(ConfigurationError) as exc_info:
-        UnimplementedVendorAdapter("eastmoney")  # type: ignore[arg-type]
-    assert exc_info.value.details.get("field") == "vendor_id"
-
-
-def test_unimplemented_data_methods_are_async() -> None:
-    adapter = UnimplementedVendorAdapter(VendorId.YFINANCE)
-    for name in _DATA_METHODS:
-        assert inspect.iscoroutinefunction(getattr(adapter, name)), name
-
-
-@pytest.mark.asyncio
-async def test_unimplemented_all_data_methods_raise_provider_not_configured() -> None:
-    adapter = UnimplementedVendorAdapter(VendorId.YFINANCE)
-    instrument = _instrument()
-
-    with pytest.raises(ProviderNotConfigured) as q_info:
-        await adapter.get_quote(instrument, AS_OF)
-    _assert_provider_not_configured(q_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as o_info:
-        await adapter.get_ohlcv(
-            instrument,
-            start=AS_OF,
-            end=AS_OF,
-            as_of=AS_OF,
-            adjustment=AdjustmentMethod.NONE,
-        )
-    _assert_provider_not_configured(o_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as f_info:
-        await adapter.get_fundamentals(instrument, AS_OF)
-    _assert_provider_not_configured(f_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as fil_info:
-        await adapter.list_filings(instrument, AS_OF)
-    _assert_provider_not_configured(fil_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as n_info:
-        await adapter.get_news(None, start=AS_OF, end=AS_OF, as_of=AS_OF)
-    _assert_provider_not_configured(n_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as m_info:
-        await adapter.get_macro_series("CPI", AS_OF)
-    _assert_provider_not_configured(m_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as s_info:
-        await adapter.get_sentiment(instrument, AS_OF)
-    _assert_provider_not_configured(s_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as a_info:
-        await adapter.get_account_snapshot(AS_OF)
-    _assert_provider_not_configured(a_info.value, expected_vendor="yfinance")
-
-    with pytest.raises(ProviderNotConfigured) as l_info:
-        await adapter.lookup(Market.US, "NVDA", AS_OF)
-    _assert_provider_not_configured(l_info.value, expected_vendor="yfinance")
-
-
-def test_unimplemented_registers_for_tests_only_not_bootstrap_default() -> None:
-    """Phase 1D may register Unimplemented only when tests assemble it."""
-    registry = VendorRegistry()
-    registry.register(VendorId.EASTMONEY, UnimplementedVendorAdapter(VendorId.EASTMONEY))
-    assert registry.get(VendorId.EASTMONEY).vendor_id is VendorId.EASTMONEY
-    # Real 1E/1F vendors must not be assumed present without explicit register.
-    assert registry.get_optional(VendorId.YFINANCE) is None

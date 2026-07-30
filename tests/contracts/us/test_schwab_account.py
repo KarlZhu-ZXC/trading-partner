@@ -94,9 +94,9 @@ class _Client:
                 "type": "TRADE",
                 "transferItems": [
                     {
-                        "amount": "1",
+                        "amount": "-1",
                         "price": "151",
-                        "instruction": "SELL",
+                        "positionEffect": "CLOSING",
                         "instrument": {"assetType": "EQUITY", "symbol": "NVDA"},
                     }
                 ],
@@ -240,9 +240,88 @@ async def test_schwab_transactions_use_instruction_and_clamp_vendor_window(
         AccountTransactionSide.BUY,
     ]
     assert result.value[1].fees == Decimal("1.25")
+    assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" in result.meta.warnings
     assert client.transaction_windows == [(datetime(2026, 5, 19, 12, tzinfo=UTC), _NOW)]
     assert "SCHWAB_TRANSACTION_WINDOW_CLAMPED" in result.meta.warnings
     assert "101" not in repr(result) and _ACCOUNT_HASH not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_schwab_cash_journal_items_are_not_reported_as_security_omissions(
+    id_generator: object, fixed_clock: object
+) -> None:
+    client = _Client()
+    client.transactions = lambda *_args: [  # type: ignore[method-assign]
+        {
+            "activityId": 103,
+            "time": "2026-07-10T15:00:00Z",
+            "type": "JOURNAL",
+            "transferItems": [
+                {
+                    "amount": "1770",
+                    "instrument": {
+                        "assetType": "CURRENCY",
+                        "symbol": "CURRENCY_USD",
+                    },
+                }
+            ],
+        }
+    ]
+
+    result = await _adapter(id_generator, fixed_clock, client).get_account_transactions(
+        start=datetime(2026, 7, 10, tzinfo=UTC),
+        end=datetime(2026, 7, 11, tzinfo=UTC),
+        limit=10,
+    )
+
+    assert result.value == ()
+    assert "SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED" in result.meta.warnings
+    assert "SCHWAB_TRANSACTION_ITEM_OMITTED" not in result.meta.warnings
+
+
+@pytest.mark.asyncio
+async def test_schwab_trade_cash_legs_are_non_blocking_and_security_leg_is_preserved(
+    id_generator: object, fixed_clock: object
+) -> None:
+    client = _Client()
+    client.transactions = lambda *_args: [  # type: ignore[method-assign]
+        {
+            "activityId": 104,
+            "time": "2026-07-10T15:00:00Z",
+            "type": "TRADE",
+            "transferItems": [
+                {
+                    "amount": "0.01",
+                    "instrument": {
+                        "assetType": "CURRENCY",
+                        "symbol": "CURRENCY_USD",
+                    },
+                },
+                {
+                    "amount": "-30",
+                    "price": "96.026",
+                    "instrument": {
+                        "assetType": "COLLECTIVE_INVESTMENT",
+                        "type": "EXCHANGE_TRADED_FUND",
+                        "symbol": "SOXL",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result = await _adapter(id_generator, fixed_clock, client).get_account_transactions(
+        start=datetime(2026, 7, 10, tzinfo=UTC),
+        end=datetime(2026, 7, 11, tzinfo=UTC),
+        limit=10,
+    )
+
+    assert len(result.value) == 1
+    assert result.value[0].instrument_id == "etf:US:SOXL"
+    assert result.value[0].side is AccountTransactionSide.SELL
+    assert "SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED" in result.meta.warnings
+    assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" in result.meta.warnings
+    assert "SCHWAB_TRANSACTION_ITEM_OMITTED" not in result.meta.warnings
 
 
 def test_schwab_settings_redact_credentials_hashes_and_token_path(
@@ -279,7 +358,7 @@ async def test_schwab_is_wired_through_existing_tools_without_inventory_growth(
 ) -> None:
     container = build_application(test_settings)
     try:
-        envelope = await container.portfolio_tool_coordinator.get_account_snapshot(
+        envelope = await container.services.portfolio.get_account_snapshot(
             AccountGetSnapshotInput(providers=(VendorId.SCHWAB,))
         )
     finally:

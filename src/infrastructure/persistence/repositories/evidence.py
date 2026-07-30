@@ -13,7 +13,7 @@ from domain.common.enums import (
 )
 from domain.common.errors import ResearchMemoryNotFound
 from domain.research.models import Evidence
-from infrastructure.persistence.models import ResearchEvidenceRow
+from infrastructure.persistence.orm import ResearchEvidenceRow
 from infrastructure.persistence.repositories import append_only as _append_only  # noqa: F401
 from infrastructure.persistence.repositories._mapping import (
     decimal_from_db,

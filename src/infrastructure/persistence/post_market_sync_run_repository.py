@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 from domain.operations.models import PostMarketSyncRun
-from infrastructure.persistence.models import PostMarketSyncRunRow
+from infrastructure.persistence.orm import PostMarketSyncRunRow
 from infrastructure.persistence.repositories._mapping import (
     date_to_db,
     dt_from_db,

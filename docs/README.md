@@ -1,9 +1,9 @@
 # Trading Partner — Documentation Index
 
 Root-level markdown is limited to `README.md` (product overview) and `AGENTS.md`
-(agent operating rules). Current phase specifications are consolidated. A small
-`plans/` area holds review-stage proposals only; accepted conclusions are folded
-back into the phase specification instead of accumulating permanent design notes.
+(agent operating rules). Current phase specifications are consolidated. The
+`plans/` area holds bounded design and acceptance records; current behavior is
+always folded back into the phase specifications and capability guide.
 
 ## Layout
 
@@ -12,7 +12,8 @@ docs/
 ├── README.md                 # this index
 ├── examples/
 │   ├── manual-holdings.v1.csv
-│   └── manual-watchlist.v1.csv
+│   ├── manual-watchlist.v1.csv
+│   └── quantconnect-free-hourly-template.py
 ├── guide/
 │   └── mcp-capability-boundary.md
 ├── phases/
@@ -55,9 +56,7 @@ docs/
 | Document | Purpose |
 |---|---|
 | [plans/phase3a-formal-futures-cross-asset-plan.md](plans/phase3a-formal-futures-cross-asset-plan.md) | Approved free-provider design and Phase 3A implementation/acceptance record |
-| [plans/phase3b-peer-comparison-plan.md](plans/phase3b-peer-comparison-plan.md) | Proposed caller-specified A-share/US peer-comparison fact-package design for review |
-| [plans/phase3d-judgment-plan-controls.md](plans/phase3d-judgment-plan-controls.md) | Phase 3D Trade Plan, sizing, Risk v2, and Monitoring v2 implementation/acceptance record |
-| [plans/cross-cutting-architecture-hardening-plan.md](plans/cross-cutting-architecture-hardening-plan.md) | Implemented Automation/idempotency hardening and MCP/bootstrap/provider modularization; authenticated host binding remains external |
+| [plans/phase3c-quantconnect-free-bridge.md](plans/phase3c-quantconnect-free-bridge.md) | Implemented zero-cost LEAN package/result-import bridge for user-operated QuantConnect Free backtests |
 | [plans/mcp-surface-reduction-plan.md](plans/mcp-surface-reduction-plan.md) | Implemented compact v2 reduction from 52 legacy tools to the sole 28-tool runtime surface, with discriminated schemas and permission separation; the compatibility profile was removed |
 
 ## Operations
@@ -82,7 +81,7 @@ src/
 ├── bootstrap.py          # composition root only
 ├── application/          # ports, DTOs, services
 ├── domain/               # pure domain
-├── infrastructure/       # config, persistence, providers, system
+├── infrastructure/       # composition, config, persistence/orm, providers, system
 └── interfaces/           # MCP adapters
 ```
 
@@ -90,8 +89,13 @@ Python imports are top-level (`application.*`, `domain.*`, `infrastructure.*`,
 `interfaces.*`, `bootstrap`). Console entries are `uv run trading-partner-mcp`
 for the MCP server, `uv run trading-partner-watchlist-sync` for an explicit
 Watchlist-only refresh, and `uv run trading-partner-post-market-sync` for the
-due-checked US post-market account plus Watchlist job. Active Monitoring rules
-are evaluated by an external scheduler through `uv run trading-partner-monitor-run`
-with an explicit market cadence; the command is not a resident scheduler.
+due-checked US post-market account plus Watchlist job. Explicit-cadence
+`trading-partner-monitor-run` remains available for diagnostics. Normal INTERVAL
+and A-share/US post-market Monitoring uses the unified `trading-partner-monitor-run
+due`; on macOS one token-free hourly launchd wake is managed by
+`trading-partner-monitor-scheduler`.
+Optional phone delivery uses a durable Telegram Outbox operated by
+`trading-partner-monitor-notifications`; it sends state transitions only and does
+not invoke Codex or an LLM.
 Formal futures definitions and EOD statistics are explicitly synchronized through
 `uv run trading-partner-futures-sync`; it is read-only with respect to broker state.

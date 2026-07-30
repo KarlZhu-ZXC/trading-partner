@@ -8,6 +8,8 @@ from datetime import datetime
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
 from application.dto.monitoring import (
     MonitorCreateInput,
+    MonitorDashboardDTO,
+    MonitorDashboardInput,
     MonitorDetailDTO,
     MonitorEvaluateInput,
     MonitorEventListDTO,
@@ -18,6 +20,8 @@ from application.dto.monitoring import (
     MonitorListDTO,
     MonitorListInput,
     MonitorRunDTO,
+    MonitorRunListDTO,
+    MonitorRunListInput,
     MonitorUpdateInput,
 )
 from application.dto.tool_envelope import SourceReference, ToolEnvelope, WarningInfo
@@ -57,6 +61,16 @@ class MonitorToolCoordinator:
 
     def list(self, request: MonitorListInput) -> ToolEnvelope[MonitorListDTO]:
         return self._database_call(lambda: self._service.list(request))
+
+    def dashboard(
+        self, request: MonitorDashboardInput
+    ) -> ToolEnvelope[MonitorDashboardDTO]:
+        return self._database_call(lambda: self._service.dashboard(request))
+
+    def list_runs(
+        self, request: MonitorRunListInput
+    ) -> ToolEnvelope[MonitorRunListDTO]:
+        return self._database_call(lambda: self._service.list_runs(request))
 
     def list_events(
         self, request: MonitorEventListInput

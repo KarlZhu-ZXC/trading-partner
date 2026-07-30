@@ -16,7 +16,7 @@ from domain.a_share.enums import (
     IndustryMetricFrequency,
 )
 from domain.a_share.models import IndustryMetricObservation
-from infrastructure.persistence.models import IndustryMetricObservationRow
+from infrastructure.persistence.orm import IndustryMetricObservationRow
 from infrastructure.persistence.repositories._mapping import dt_from_db, dt_to_db
 
 

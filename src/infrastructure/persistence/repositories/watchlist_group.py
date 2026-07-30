@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from domain.common.errors import WatchlistGroupNotFound
 from domain.watchlist.enums import WatchlistGroupType, WatchlistSource
 from domain.watchlist.models import WatchlistGroup
-from infrastructure.persistence.models import WatchlistGroupRow
+from infrastructure.persistence.orm import WatchlistGroupRow
 from infrastructure.persistence.repositories._mapping import (
     bool_from_db,
     bool_to_db,

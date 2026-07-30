@@ -79,7 +79,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                 limit=inp.limit,
                 offset=inp.offset,
             )
-            envelope = container.research_search_service.search(query)
+            envelope = container.services.research_search.search(query)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -90,7 +90,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         """Fetch one immutable ResearchReport by id."""
         try:
             inp = ResearchReportGetInput.model_validate({"report_id": report_id})
-            envelope = container.research_archive_service.get_report(inp.report_id)
+            envelope = container.services.research_archive.get_report(inp.report_id)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -117,7 +117,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                     "limit": limit,
                 }
             )
-            envelope = container.research_timeline_service.get_timeline(
+            envelope = container.services.research_timeline.get_timeline(
                 case_id=inp.case_id,
                 entity_types=inp.entity_types,
                 occurred_from=inp.occurred_from,
@@ -163,7 +163,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.journal_service.append(
+            envelope = container.services.journal.append(
                 case_id=inp.case_id,
                 entry_type=inp.entry_type,
                 title=inp.title,
@@ -219,7 +219,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.decision_record_service.append(
+            envelope = container.services.decisions.append(
                 case_id=inp.case_id,
                 decision_type=inp.decision_type,
                 title=inp.title,

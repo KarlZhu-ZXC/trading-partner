@@ -15,7 +15,7 @@ from application.dto.provider_state import ProviderRateLimitSnapshot
 from domain.common.enums import DataCategory, VendorId
 from domain.common.errors import DataContractError, PersistenceError
 from domain.common.time import require_aware_datetime
-from infrastructure.persistence.models import ProviderRateLimitRow
+from infrastructure.persistence.orm import ProviderRateLimitRow
 from infrastructure.persistence.repositories._mapping import dt_from_db, dt_to_db
 
 

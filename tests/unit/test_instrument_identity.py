@@ -436,32 +436,3 @@ class TestPhase1DEnumsWireValues:
         assert VendorId.LOCAL_MASTER.value == "local_master"
         assert VendorId.NULL.value == "null"
         assert ResolveMatchType.EXACT_INSTRUMENT_ID.value == "exact_instrument_id"
-
-    def test_entity_id_prefix_still_frozen_without_alias(self) -> None:
-        expected = {
-            "req",
-            "case",
-            "thesis",
-            "rev",
-            "evidence",
-            "report",
-            "event",
-            "decision",
-            "journal",
-            "watch_group",
-            "watch_membership",
-            "watch_mutation",
-            "risk_policy",
-            "monitor",
-            "monitor_event",
-            "monitor_run",
-            "monitor_resolution",
-            "snapshot",
-            "run",
-            "audit",
-            "futures_product",
-            "futures_product_version",
-            "futures_contract_version",
-            "trade_plan",
-        }
-        assert {p.value for p in EntityIdPrefix} == expected

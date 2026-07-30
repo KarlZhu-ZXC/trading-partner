@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
@@ -194,7 +194,7 @@ def _insert_evidence(
 
 def test_no_search_orm_rows_exist() -> None:
     """C2a freezes Search as migration-only; no ORM Row classes for search tables."""
-    import infrastructure.persistence.models as models_mod
+    import infrastructure.persistence.orm as models_mod
 
     names = [n for n in dir(models_mod) if n.endswith("Row")]
     searchish = [
@@ -859,7 +859,7 @@ def test_schema_not_created_via_metadata_create_all(
     """Migration is authoritative; create_all is not used as proof of schema."""
     # Ensure tests above use alembic upgrade; this guard asserts 0004 file exists
     # and that Base.metadata alone is insufficient for FTS virtual table.
-    import infrastructure.persistence.models  # noqa: F401 — register rows
+    import infrastructure.persistence.orm  # noqa: F401 — register rows
     from infrastructure.persistence.metadata import Base
 
     db_path = tmp_path / "create_all.db"

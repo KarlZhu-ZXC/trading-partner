@@ -27,7 +27,7 @@ from domain.portfolio.models import (
     PortfolioExposure,
     PortfolioSnapshot,
 )
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     AccountPositionRow,
     AccountSnapshotRow,
     PortfolioSnapshotRow,

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from domain.common.enums import ConfirmationMode, DecisionType
 from domain.common.errors import InvalidResearchLink, ResearchMemoryNotFound
 from domain.research.models import DecisionRecord
-from infrastructure.persistence.models import DecisionRecordRow
+from infrastructure.persistence.orm import DecisionRecordRow
 from infrastructure.persistence.repositories import append_only as _append_only  # noqa: F401
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,

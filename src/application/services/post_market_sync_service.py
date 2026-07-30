@@ -11,10 +11,12 @@ from application.dto.post_market_sync import (
     PostMarketSyncResultDTO,
     PostMarketSyncStatusDTO,
 )
+from application.dto.schwab_oauth import SchwabOAuthHealthDTO
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
+from application.ports.schwab_oauth_health_provider import SchwabOAuthHealthProvider
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
 from domain.common.ids import EntityIdPrefix
@@ -33,6 +35,7 @@ class PostMarketSyncService:
         clock: Clock,
         id_generator: IdGenerator,
         delay_minutes: int = 10,
+        schwab_oauth_health: SchwabOAuthHealthProvider | None = None,
     ) -> None:
         self._calendar = calendar
         self._repository = repository
@@ -41,13 +44,17 @@ class PostMarketSyncService:
         self._clock = clock
         self._ids = id_generator
         self._delay = timedelta(minutes=delay_minutes)
+        self._schwab_oauth_health = schwab_oauth_health
 
     async def run_if_due(self) -> PostMarketSyncResultDTO:
         now = self._clock.now()
+        schwab_oauth = self._inspect_schwab_oauth(now)
         session = self._calendar.session_at(now)
         if session is None:
             return PostMarketSyncResultDTO(
-                disposition=PostMarketSyncDisposition.SKIPPED_NON_TRADING_DAY
+                disposition=PostMarketSyncDisposition.SKIPPED_NON_TRADING_DAY,
+                schwab_oauth=schwab_oauth,
+                warning_codes=schwab_oauth.warning_codes if schwab_oauth else (),
             )
         scheduled_for = session.close_at + self._delay
         if now < scheduled_for:
@@ -55,18 +62,29 @@ class PostMarketSyncService:
                 disposition=PostMarketSyncDisposition.SKIPPED_NOT_DUE,
                 market_session_date=session.session_date,
                 scheduled_for=scheduled_for,
+                schwab_oauth=schwab_oauth,
+                warning_codes=schwab_oauth.warning_codes if schwab_oauth else (),
             )
         existing = self._repository.get_for_session(session.session_date)
         if existing is not None and existing.status is PostMarketSyncRunStatus.SUCCEEDED:
             return self._dto(
                 existing,
                 disposition=PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED,
+                schwab_oauth=schwab_oauth,
             )
 
-        return await self._execute(session, scheduled_for, existing)
+        return await self._execute(
+            session,
+            scheduled_for,
+            existing,
+            schwab_oauth=schwab_oauth,
+        )
 
     def status(self) -> PostMarketSyncStatusDTO:
-        expected = self._latest_due_session(self._clock.now())
+        now = self._clock.now()
+        schwab_oauth = self._inspect_schwab_oauth(now)
+        oauth_warnings = schwab_oauth.warning_codes if schwab_oauth else ()
+        expected = self._latest_due_session(now)
         latest = self._repository.get_latest()
         if expected is None:
             return PostMarketSyncStatusDTO(
@@ -76,7 +94,12 @@ class PostMarketSyncService:
                 portfolio_status=latest.portfolio_status if latest else None,
                 watchlist_status=latest.watchlist_status if latest else None,
                 attempt_count=latest.attempt_count if latest else None,
-                warning_codes=latest.warning_codes if latest else (),
+                schwab_oauth=schwab_oauth,
+                warning_codes=tuple(
+                    dict.fromkeys(
+                        (latest.warning_codes if latest else ()) + oauth_warnings
+                    )
+                ),
                 error_codes=latest.error_codes if latest else (),
             )
         receipt = self._repository.get_for_session(expected.session_date)
@@ -86,6 +109,8 @@ class PostMarketSyncService:
                 expected_session_date=expected.session_date,
                 expected_scheduled_for=expected.close_at + self._delay,
                 receipt_session_date=(latest.market_session_date if latest else None),
+                schwab_oauth=schwab_oauth,
+                warning_codes=oauth_warnings,
                 error_codes=("POST_MARKET_SYNC_RECEIPT_MISSING",),
             )
         health = (
@@ -102,15 +127,22 @@ class PostMarketSyncService:
             portfolio_status=receipt.portfolio_status,
             watchlist_status=receipt.watchlist_status,
             attempt_count=receipt.attempt_count,
-            warning_codes=receipt.warning_codes,
+            schwab_oauth=schwab_oauth,
+            warning_codes=tuple(
+                dict.fromkeys(receipt.warning_codes + oauth_warnings)
+            ),
             error_codes=receipt.error_codes,
         )
 
     async def catch_up_latest_due(self) -> PostMarketSyncResultDTO:
-        session = self._latest_due_session(self._clock.now())
+        now = self._clock.now()
+        schwab_oauth = self._inspect_schwab_oauth(now)
+        session = self._latest_due_session(now)
         if session is None:
             return PostMarketSyncResultDTO(
-                disposition=PostMarketSyncDisposition.SKIPPED_NON_TRADING_DAY
+                disposition=PostMarketSyncDisposition.SKIPPED_NON_TRADING_DAY,
+                schwab_oauth=schwab_oauth,
+                warning_codes=schwab_oauth.warning_codes if schwab_oauth else (),
             )
         scheduled_for = session.close_at + self._delay
         existing = self._repository.get_for_session(session.session_date)
@@ -118,8 +150,14 @@ class PostMarketSyncService:
             return self._dto(
                 existing,
                 disposition=PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED,
+                schwab_oauth=schwab_oauth,
             )
-        return await self._execute(session, scheduled_for, existing)
+        return await self._execute(
+            session,
+            scheduled_for,
+            existing,
+            schwab_oauth=schwab_oauth,
+        )
 
     def _latest_due_session(self, now: datetime) -> MarketSession | None:
         candidate = self._calendar.session_on_or_before(now)
@@ -134,6 +172,8 @@ class PostMarketSyncService:
         session: MarketSession,
         scheduled_for: datetime,
         existing: PostMarketSyncRun | None,
+        *,
+        schwab_oauth: SchwabOAuthHealthDTO | None,
     ) -> PostMarketSyncResultDTO:
         started_at = self._clock.now()
         portfolio = await self._portfolio.get_account_snapshot(AccountGetSnapshotInput())
@@ -162,6 +202,11 @@ class PostMarketSyncService:
             dict.fromkeys(
                 [item.code for item in portfolio.warnings]
                 + [item.code for item in watchlist.warnings]
+                + (
+                    list(schwab_oauth.warning_codes)
+                    if schwab_oauth is not None
+                    else []
+                )
             )
         )
         errors = tuple(
@@ -206,15 +251,25 @@ class PostMarketSyncService:
             if portfolio.ok and portfolio.data is not None
             else 0
         )
-        return self._dto(run, holding_count=holding_count)
+        return self._dto(
+            run,
+            holding_count=holding_count,
+            schwab_oauth=schwab_oauth,
+        )
 
-    @staticmethod
     def _dto(
+        self,
         run: PostMarketSyncRun,
         *,
         disposition: PostMarketSyncDisposition = PostMarketSyncDisposition.EXECUTED,
         holding_count: int = 0,
+        schwab_oauth: SchwabOAuthHealthDTO | None = None,
     ) -> PostMarketSyncResultDTO:
+        oauth_health = (
+            schwab_oauth
+            if schwab_oauth is not None
+            else self._inspect_schwab_oauth(self._clock.now())
+        )
         return PostMarketSyncResultDTO(
             disposition=disposition,
             market_session_date=run.market_session_date,
@@ -227,6 +282,21 @@ class PostMarketSyncService:
             holding_count=holding_count,
             watchlist_groups_synced=run.watchlist_groups_synced,
             watchlist_membership_relations_synced=run.watchlist_membership_relations_synced,
-            warning_codes=run.warning_codes,
+            schwab_oauth=oauth_health,
+            warning_codes=tuple(
+                dict.fromkeys(
+                    run.warning_codes
+                    + (
+                        oauth_health.warning_codes
+                        if oauth_health is not None
+                        else ()
+                    )
+                )
+            ),
             error_codes=run.error_codes,
         )
+
+    def _inspect_schwab_oauth(self, now: datetime) -> SchwabOAuthHealthDTO | None:
+        if self._schwab_oauth_health is None:
+            return None
+        return self._schwab_oauth_health.inspect(now=now)

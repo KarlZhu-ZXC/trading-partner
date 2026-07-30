@@ -34,6 +34,7 @@ from domain.monitoring.models import (
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
+    MonitorRunObservation,
 )
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
@@ -116,6 +117,7 @@ class MonitorCreateInput(_DTO):
     case_id: str | None = None
     primary_instrument_id: str | None = None
     cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND
+    interval_minutes: int | None = Field(default=None, ge=60, le=10080)
     rules: tuple[MonitorRuleInput, ...] = Field(default=(), max_length=50)
     trade_plan_id: str | None = None
     trade_plan_version: int | None = Field(default=None, ge=1)
@@ -133,6 +135,7 @@ class MonitorCreateInput(_DTO):
 
     @model_validator(mode="after")
     def validate_rules_or_plan(self) -> Self:
+        _validate_schedule(self.cadence, self.interval_minutes)
         if (self.trade_plan_id is None) != (self.trade_plan_version is None):
             raise ValueError("trade_plan_id and trade_plan_version are required together")
         if self.compile_trade_plan_conditions and self.trade_plan_id is None:
@@ -149,6 +152,7 @@ class MonitorUpdateInput(_DTO):
     case_id: str | None = None
     primary_instrument_id: str | None = None
     cadence: MonitorCadenceInput
+    interval_minutes: int | None = Field(default=None, ge=60, le=10080)
     status: MonitorStatusInput
     rules: tuple[MonitorRuleInput, ...] = Field(default=(), max_length=50)
     trade_plan_id: str | None = None
@@ -167,6 +171,7 @@ class MonitorUpdateInput(_DTO):
 
     @model_validator(mode="after")
     def validate_rules_or_plan(self) -> Self:
+        _validate_schedule(self.cadence, self.interval_minutes)
         if (self.trade_plan_id is None) != (self.trade_plan_version is None):
             raise ValueError("trade_plan_id and trade_plan_version are required together")
         if self.compile_trade_plan_conditions and self.trade_plan_id is None:
@@ -191,8 +196,6 @@ class MonitorEvaluateInput(_DTO):
 
     @model_validator(mode="after")
     def validate_request(self) -> Self:
-        if self.monitor_ids and self.cadence is not None:
-            raise ValueError("monitor_ids cannot be combined with cadence")
         if len(self.monitor_ids) != len(set(self.monitor_ids)):
             raise ValueError("monitor_ids must be unique")
         if self.as_of is not None:
@@ -203,6 +206,22 @@ class MonitorEvaluateInput(_DTO):
 class MonitorEventListInput(_DTO):
     monitor_id: str | None = None
     limit: int = Field(default=100, ge=1, le=500)
+
+
+class MonitorDashboardInput(_DTO):
+    status: MonitorStatusInput | None = MonitorStatus.ACTIVE
+
+
+class MonitorRunListInput(_DTO):
+    run_id: str | None = None
+    monitor_id: str | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> Self:
+        if self.run_id is not None and self.monitor_id is not None:
+            raise ValueError("run_id and monitor_id cannot be combined")
+        return self
 
 
 class MonitorEventResolveInput(_DTO):
@@ -235,6 +254,7 @@ class MonitorDefinitionDTO(_DTO):
     case_id: str | None
     primary_instrument_id: str | None
     cadence: MonitorCadence
+    interval_minutes: int | None
     status: MonitorStatus
     rules: tuple[MonitorRuleDTO, ...]
     trade_plan_id: str | None
@@ -326,9 +346,34 @@ class MonitorEventListDTO(_DTO):
     execution_effect: Literal[False] = False
 
 
+class MonitorRunObservationDTO(_DTO):
+    run_id: str
+    monitor_id: str
+    monitor_version: int
+    rule_code: str
+    instrument_id: str | None
+    severity: MonitorSeverity
+    state: MonitorRuleStateValue
+    observed_value: DecimalWire | None
+    threshold_value: DecimalWire | None
+    distance_value: DecimalWire | None
+    distance_percent: DecimalWire | None
+    fact_as_of: datetime | None
+    fact_age_seconds: int | None
+    warning_codes: tuple[str, ...]
+    error_codes: tuple[str, ...]
+    message: str
+
+    @classmethod
+    def from_domain(cls, value: MonitorRunObservation) -> MonitorRunObservationDTO:
+        return cls.model_validate(value)
+
+
 class MonitorRunDTO(_DTO):
     run_id: str
     requested_monitor_ids: tuple[str, ...]
+    selected_monitor_ids: tuple[str, ...]
+    cadence: MonitorCadence | None
     as_of: datetime
     started_at: datetime
     completed_at: datetime
@@ -338,8 +383,47 @@ class MonitorRunDTO(_DTO):
     events_created: int
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
+    observation_history_complete: bool
+    observations: tuple[MonitorRunObservationDTO, ...]
     execution_effect: bool
 
     @classmethod
     def from_domain(cls, value: MonitorRun) -> MonitorRunDTO:
         return cls.model_validate(value)
+
+
+class MonitorRunListDTO(_DTO):
+    runs: tuple[MonitorRunDTO, ...]
+    execution_effect: Literal[False] = False
+
+
+class MonitorDashboardItemDTO(_DTO):
+    monitor: MonitorDefinitionDTO
+    rule_states: tuple[MonitorRuleStateDTO, ...]
+    latest_run: MonitorRunDTO | None
+    last_run_at: datetime | None
+    next_due_at: datetime | None
+    due: bool
+    schedule_health: Literal[
+        "ON_DEMAND",
+        "MARKET_SCHEDULED",
+        "NEVER_RUN",
+        "ON_SCHEDULE",
+        "OVERDUE",
+    ]
+
+
+class MonitorDashboardDTO(_DTO):
+    generated_at: datetime
+    items: tuple[MonitorDashboardItemDTO, ...]
+    execution_effect: Literal[False] = False
+
+
+def _validate_schedule(
+    cadence: MonitorCadence, interval_minutes: int | None
+) -> None:
+    if cadence is MonitorCadence.INTERVAL:
+        if interval_minutes is None or interval_minutes % 60 != 0:
+            raise ValueError("INTERVAL cadence requires whole-hour interval_minutes")
+    elif interval_minutes is not None:
+        raise ValueError("interval_minutes is only valid for INTERVAL cadence")

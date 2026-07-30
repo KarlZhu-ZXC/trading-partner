@@ -1,5 +1,4 @@
 """Phase 1D D6a: validate_verified_market_snapshot contract checks."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -15,12 +14,7 @@ from domain.market.models import (
     TechnicalIndicators,
     VerifiedMarketSnapshot,
 )
-from domain.market.validation import (
-    validate_verified_market_snapshot as domain_validate_verified_market_snapshot,
-)
-from infrastructure.providers.common.contract_validation import (
-    validate_verified_market_snapshot,
-)
+from domain.market.validation import validate_verified_market_snapshot
 
 AS_OF = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 BAR_TS = datetime(2026, 7, 16, 14, 0, tzinfo=UTC)
@@ -264,16 +258,3 @@ def test_rejects_malicious_payload_fields_not_leaked() -> None:
     blob = str(exc_info.value) + repr(exc_info.value.details)
     assert "LEAK" not in blob
     assert poison_price not in blob
-
-
-def test_export_from_common_package() -> None:
-    from infrastructure.providers.common import (
-        validate_verified_market_snapshot as exported,
-    )
-
-    assert exported is validate_verified_market_snapshot
-
-
-def test_infrastructure_reexport_is_domain_function_object() -> None:
-    """Compatibility path must not be a wrapper or second implementation."""
-    assert validate_verified_market_snapshot is domain_validate_verified_market_snapshot

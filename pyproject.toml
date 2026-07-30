@@ -12,10 +12,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Trading Partner" }]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-    "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
@@ -42,8 +41,11 @@ all = [
 trading-partner-mcp = "interfaces.mcp.server:main"
 trading-partner-watchlist-sync = "interfaces.cli.watchlist_sync:main"
 trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
+trading-partner-schwab-auth = "interfaces.cli.schwab_oauth:main"
 trading-partner-account-transactions = "interfaces.cli.account_transactions:main"
 trading-partner-monitor-run = "interfaces.cli.monitor_run:main"
+trading-partner-monitor-scheduler = "interfaces.cli.monitor_scheduler:main"
+trading-partner-monitor-notifications = "interfaces.cli.monitor_notifications:main"
 trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
 trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
 

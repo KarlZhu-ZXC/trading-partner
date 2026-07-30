@@ -17,7 +17,7 @@ from domain.providers.cache_key import (
     parse_cache_key,
     require_cache_key_matches_fields,
 )
-from infrastructure.persistence.models import ProviderCacheRow
+from infrastructure.persistence.orm import ProviderCacheRow
 from infrastructure.persistence.repositories._mapping import dt_from_db, dt_to_db
 
 

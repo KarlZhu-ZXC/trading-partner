@@ -9,7 +9,7 @@ from application.ports.clock import Clock
 from domain.common.enums import InvestmentCaseStatus, InvestmentCaseType, ThesisRole, ThesisStatus
 from domain.common.errors import InvestmentCaseNotFound
 from domain.research.models import InvestmentCase
-from infrastructure.persistence.models import InvestmentCaseRow, ThesisRow
+from infrastructure.persistence.orm import InvestmentCaseRow, ThesisRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

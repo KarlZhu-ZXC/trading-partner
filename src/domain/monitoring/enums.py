@@ -11,6 +11,7 @@ class MonitorStatus(StrEnum):
 
 class MonitorCadence(StrEnum):
     ON_DEMAND = "ON_DEMAND"
+    INTERVAL = "INTERVAL"
     A_SHARE_POST_MARKET = "A_SHARE_POST_MARKET"
     US_POST_MARKET = "US_POST_MARKET"
 
@@ -49,3 +50,14 @@ class MonitorRunStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
+
+
+class MonitorNotificationChannel(StrEnum):
+    TELEGRAM = "TELEGRAM"
+
+
+class MonitorNotificationStatus(StrEnum):
+    PENDING = "PENDING"
+    DELIVERED = "DELIVERED"
+    DEAD_LETTER = "DEAD_LETTER"
+    EXPIRED = "EXPIRED"

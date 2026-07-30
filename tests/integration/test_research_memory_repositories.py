@@ -55,7 +55,7 @@ from domain.research.models import (
     compute_report_content_sha256,
 )
 from infrastructure.persistence.metadata import Base
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,

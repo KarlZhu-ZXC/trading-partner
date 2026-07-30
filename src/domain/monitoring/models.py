@@ -14,6 +14,8 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
+    MonitorNotificationChannel,
+    MonitorNotificationStatus,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -26,7 +28,7 @@ from domain.trade_plan.enums import (
     TradePlanFactType,
 )
 
-MONITORING_SCHEMA_VERSION = 1
+MONITORING_SCHEMA_VERSION = 2
 
 # Price rules may target A-share equities, US exchange instruments, CME/DCE
 # futures identities, and OTC spot/CFD seeds. Evaluation remains asset-aware:
@@ -190,6 +192,7 @@ class MonitorDefinition:
     trade_plan_id: str | None = None
     trade_plan_version: int | None = None
     valid_until: datetime | None = None
+    interval_minutes: int | None = None
     schema_version: int = MONITORING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -213,6 +216,17 @@ class MonitorDefinition:
             self.status, MonitorStatus
         ):
             raise DataContractError("monitor cadence/status is invalid")
+        if self.cadence is MonitorCadence.INTERVAL:
+            if (
+                type(self.interval_minutes) is not int
+                or self.interval_minutes < 60
+                or self.interval_minutes % 60 != 0
+            ):
+                raise DataContractError(
+                    "INTERVAL monitor requires whole-hour interval_minutes >= 60"
+                )
+        elif self.interval_minutes is not None:
+            raise DataContractError("interval_minutes is only valid for INTERVAL cadence")
         if not self.rules or len(self.rules) > 50:
             raise DataContractError("monitor requires 1..50 rules")
         keys = [item.rule_code for item in self.rules]
@@ -239,8 +253,10 @@ class MonitorDefinition:
             _aware(self.valid_until, "valid_until")
             if self.valid_until <= self.created_at:
                 raise DataContractError("monitor valid_until must follow created_at")
-        if self.schema_version != MONITORING_SCHEMA_VERSION:
-            raise DataContractError("monitoring schema_version must be 1")
+        if self.schema_version not in {1, MONITORING_SCHEMA_VERSION}:
+            raise DataContractError("monitoring schema_version must be 1 or 2")
+        if self.cadence is MonitorCadence.INTERVAL and self.schema_version < 2:
+            raise DataContractError("INTERVAL monitor requires monitoring schema_version 2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,9 +339,114 @@ class MonitorEventResolution:
 
 
 @dataclass(frozen=True, slots=True)
+class MonitorNotificationMessage:
+    source_event_id: str
+    channel: MonitorNotificationChannel
+    title: str
+    body: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _text(self.source_event_id, "source_event_id", 128)
+        if not isinstance(self.channel, MonitorNotificationChannel):
+            raise DataContractError("monitor notification channel is invalid")
+        _text(self.title, "title", 200)
+        _text(self.body, "body", 2000)
+        _aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorNotificationOutboxEntry:
+    source_event_id: str
+    channel: MonitorNotificationChannel
+    title: str
+    body: str
+    status: MonitorNotificationStatus
+    attempt_count: int
+    next_attempt_at: datetime
+    created_at: datetime
+    last_attempt_at: datetime | None = None
+    delivered_at: datetime | None = None
+    provider_message_id: str | None = None
+    last_error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.source_event_id, "source_event_id", 128)
+        if not isinstance(self.channel, MonitorNotificationChannel):
+            raise DataContractError("monitor notification channel is invalid")
+        if not isinstance(self.status, MonitorNotificationStatus):
+            raise DataContractError("monitor notification status is invalid")
+        _text(self.title, "title", 200)
+        _text(self.body, "body", 2000)
+        if type(self.attempt_count) is not int or self.attempt_count < 0:
+            raise DataContractError("notification attempt_count must be nonnegative")
+        _aware(self.next_attempt_at, "next_attempt_at")
+        _aware(self.created_at, "created_at")
+        if self.last_attempt_at is not None:
+            _aware(self.last_attempt_at, "last_attempt_at")
+        if self.delivered_at is not None:
+            _aware(self.delivered_at, "delivered_at")
+        if self.provider_message_id is not None:
+            _text(self.provider_message_id, "provider_message_id", 128)
+        if self.last_error_code is not None:
+            _text(self.last_error_code, "last_error_code", 128)
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorRunObservation:
+    run_id: str
+    monitor_id: str
+    monitor_version: int
+    rule_code: str
+    instrument_id: str | None
+    severity: MonitorSeverity
+    state: MonitorRuleStateValue
+    observed_value: Decimal | None
+    threshold_value: Decimal | None
+    distance_value: Decimal | None
+    distance_percent: Decimal | None
+    fact_as_of: datetime | None
+    fact_age_seconds: int | None
+    warning_codes: tuple[str, ...]
+    error_codes: tuple[str, ...]
+    message: str
+
+    def __post_init__(self) -> None:
+        _text(self.run_id, "run_id", 128)
+        _text(self.monitor_id, "monitor_id", 128)
+        if type(self.monitor_version) is not int or self.monitor_version <= 0:
+            raise DataContractError("monitor_version must be positive")
+        _text(self.rule_code, "rule_code", 64)
+        if self.instrument_id is not None:
+            parse_instrument_id(self.instrument_id)
+        if not isinstance(self.severity, MonitorSeverity):
+            raise DataContractError("monitor observation severity is invalid")
+        if not isinstance(self.state, MonitorRuleStateValue):
+            raise DataContractError("monitor observation state is invalid")
+        for field, value in (
+            ("observed_value", self.observed_value),
+            ("threshold_value", self.threshold_value),
+            ("distance_value", self.distance_value),
+            ("distance_percent", self.distance_percent),
+        ):
+            _decimal(value, field)
+        if self.fact_as_of is not None:
+            _aware(self.fact_as_of, "fact_as_of")
+        if self.fact_age_seconds is not None and (
+            type(self.fact_age_seconds) is not int or self.fact_age_seconds < 0
+        ):
+            raise DataContractError("fact_age_seconds must be a nonnegative int")
+        _codes(self.warning_codes, "warning_codes")
+        _codes(self.error_codes, "error_codes")
+        _text(self.message, "message", 1000)
+
+
+@dataclass(frozen=True, slots=True)
 class MonitorRun:
     run_id: str
     requested_monitor_ids: tuple[str, ...]
+    selected_monitor_ids: tuple[str, ...]
+    cadence: MonitorCadence | None
     as_of: datetime
     started_at: datetime
     completed_at: datetime
@@ -335,11 +456,16 @@ class MonitorRun:
     events_created: int
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
+    observation_history_complete: bool
+    observations: tuple[MonitorRunObservation, ...] = ()
     execution_effect: bool = False
 
     def __post_init__(self) -> None:
         _text(self.run_id, "run_id", 128)
         _codes(self.requested_monitor_ids, "requested_monitor_ids")
+        _codes(self.selected_monitor_ids, "selected_monitor_ids")
+        if self.cadence is not None and not isinstance(self.cadence, MonitorCadence):
+            raise DataContractError("monitor run cadence is invalid")
         _aware(self.as_of, "as_of")
         _aware(self.started_at, "started_at")
         _aware(self.completed_at, "completed_at")
@@ -352,5 +478,11 @@ class MonitorRun:
                 raise DataContractError("monitor run counts must be nonnegative ints")
         _codes(self.warning_codes, "warning_codes")
         _codes(self.error_codes, "error_codes")
+        if type(self.observation_history_complete) is not bool:
+            raise DataContractError("observation_history_complete must be bool")
+        if self.observation_history_complete and len(self.observations) != self.rules_evaluated:
+            raise DataContractError("monitor run observations must match rules_evaluated")
+        if any(item.run_id != self.run_id for item in self.observations):
+            raise DataContractError("monitor observation run_id mismatch")
         if self.execution_effect:
             raise DataContractError("monitor run must not execute")

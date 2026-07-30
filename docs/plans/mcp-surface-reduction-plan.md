@@ -58,12 +58,12 @@
 | 18 | `portfolio_analyze` | `exposure`, `simulate_addition` | `portfolio_analyze`, `portfolio_simulate_addition` |
 | 19 | `challenge_review_get` | — | `challenge_review_get` |
 | 20 | `challenge_review_manage` | `start`, `resolve` | `challenge_review_start`, `challenge_review_resolve` |
-| 21 | `research_workflow_run` | `deep_dive`, `catalyst_review`, `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison` | 六个 workflow operation |
+| 21 | `research_workflow_run` | `deep_dive`, `catalyst_review`, `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`, `historical_validation_prepare`, `historical_validation_import` | 六个 research workflow + 两个 Phase 3C manual bridge operation |
 | 22 | `watchlist_get` | `groups`, `items`（durable only） | `watchlist_get` 的 durable read |
 | 23 | `watchlist_manage` | `add`, `remove` | `watchlist_add`, `watchlist_remove` |
 | 24 | `portfolio_risk_get` | `policy`, `check` | `risk_policy_get`, `risk_check` |
 | 25 | `risk_policy_update` | — | `risk_policy_update` |
-| 26 | `monitor_read` | `definitions`, `events` | `monitor_query`, `monitor_event_list` |
+| 26 | `monitor_read` | `definitions`, `dashboard`, `runs`, `events` | Monitor query/dashboard/run/event adapters |
 | 27 | `monitor_manage` | `create`, `update`, `resolve_event` | `monitor_create`, `monitor_update`, `monitor_event_resolve` |
 | 28 | `monitor_evaluate` | — | `monitor_evaluate` |
 
@@ -151,7 +151,7 @@ annotation 不得谎称完全 read-only。
 
 ## 6. Workflow 收口规则
 
-`research_workflow_run` 合并五个 workflow，但不允许借合并扩大权限：
+`research_workflow_run` 合并研究 workflow 和 Phase 3C 手工验证桥接，但不允许借合并扩大权限：
 
 - `deep_dive` 默认仍只复用唯一 Draft；创建新 Case 必须先通过
   `investment_case_manage(operation="create")`，compact workflow 不接受 `create_case=true`；
@@ -159,6 +159,8 @@ annotation 不得谎称完全 read-only。
   `external_state_sync(operation="accounts")`；
 - workflow 仍只返回 fact packages/receipts，Codex 负责 synthesis；
 - workflow 不确认 Thesis、Trade Plan，不改变 Risk Policy/Monitor，不执行订单。
+- historical-validation 只解析/落盘代码并导入用户下载的 JSON；不会调用付费 API、
+  登录 QuantConnect 或在本地/远端启动回测。
 
 这两处是有意消除隐藏写入/刷新，即使会在显式创建或同步场景多一个调用步骤。
 
@@ -194,7 +196,7 @@ AGENTS、automation 和示例只使用 compact operation。旧 workflow 曾经�
 | R4 | 更新 Trading Partner Skill、AGENTS、docs、evals | compact 对话不再产生旧工具名 |
 | R5 | 运行 selection/safety evaluation，切 compact 默认 | 达到第 9 节门槛 |
 | R6 | 删除旧 profile、registrar、inventory、mapping 和专属测试 | 已完成；无 runtime alias 或 legacy public inventory dependency |
-| R7 | 删除内部 handler registry、补齐 eval、共享重复 schema | 已完成；28 tools 直接持有 capability adapters，87 eval 覆盖全部工具，输入 schema ≤40 KiB |
+| R7 | 删除内部 handler registry、补齐 eval、共享重复 schema | 已完成；28 tools 直接持有 capability adapters，89 eval 覆盖全部工具，输入 schema ≤36 KiB |
 
 Compact routing 只存在于 `interfaces/mcp/tools/`，不下沉到 domain/application；`server.py`
 保持 lifecycle-only。Capability 模块导出普通 operation adapter factory，`compact.py` 直接持有
@@ -202,8 +204,10 @@ callable 并组装 28 个工具，不创建第二个 FastMCP、不读取私有 `
 名查找的 HandlerRegistry。52 个业务 operation 仍是 closed union 的真实分支，但不再伪装成
 52 个内部工具 handler。
 
-公开 schema 最小化只删除非语义 title、缩短 `$defs` 名称并共享重复属性 schema；所有 `$ref`
-必须在同一工具 schema 内可解析。当前输入 schema 合计 37,712 bytes，门禁固定为 ≤40 KiB。
+公开 schema 最小化删除非验证性的 title/default、可由 `oneOf` literal 重建的 discriminator
+mapping，缩短 `$defs` 名称并共享重复属性 schema；服务端 Pydantic 默认值和验证行为不变。
+所有 `$ref` 必须在同一工具 schema 内可解析。`compact-v4` 输入 schema 合计 35,882 bytes，
+门禁固定为 ≤36 KiB。
 
 ## 9. 验收门
 
@@ -211,7 +215,7 @@ callable 并组装 28 个工具，不创建第二个 FastMCP、不读取私有 `
 
 - compact `PUBLIC_TOOL_NAMES` 精确为 28；运行时不存在第二套 inventory；
 - 每个 operation 有 schema golden、success/degraded/failure contract；
-- 所有本地 `$ref` 可解析，28 个输入 schema 合计不超过 40 KiB；
+- 所有本地 `$ref` 可解析，28 个输入 schema 合计不超过 36 KiB；
 - forbidden/retired/order surfaces 不可见；
 - `technical_render_chart` 仍返回 text envelope + artifact text + PNG image；
 - `external_state_sync` 以外的普通 account/watchlist read 不访问 broker/OpenD；

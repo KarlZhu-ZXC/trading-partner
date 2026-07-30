@@ -14,7 +14,7 @@ from domain.watchlist.enums import (
     WatchlistSource,
 )
 from domain.watchlist.models import WatchlistMutation
-from infrastructure.persistence.models import WatchlistMutationRow
+from infrastructure.persistence.orm import WatchlistMutationRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

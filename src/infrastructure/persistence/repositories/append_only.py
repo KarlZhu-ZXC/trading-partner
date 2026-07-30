@@ -13,7 +13,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Mapper
 
 from domain.common.errors import AppendOnlyViolation, ImmutableResearchRecord
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,

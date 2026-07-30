@@ -16,7 +16,7 @@ from domain.common.errors import (
     DataContractError,
 )
 from domain.research.models import CandidateThesisRevision
-from infrastructure.persistence.models import CandidateThesisRevisionRow
+from infrastructure.persistence.orm import CandidateThesisRevisionRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

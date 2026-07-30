@@ -18,7 +18,7 @@ from application.dto.monitoring import (
     MonitorRuleInput,
     MonitorUpdateInput,
 )
-from application.dto.tool_envelope import ErrorInfo, ToolEnvelope
+from application.dto.tool_envelope import ErrorInfo, ToolEnvelope, WarningInfo
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from domain.common.enums import Freshness, TradingSession
@@ -27,6 +27,7 @@ from domain.monitoring.enums import (
     MonitorEventType,
     MonitorRuleStateValue,
     MonitorRuleType,
+    MonitorRunStatus,
     MonitorSeverity,
     MonitorStatus,
 )
@@ -60,7 +61,9 @@ def _repository(tmp_path) -> SqlAlchemyMonitorRepository:
     return SqlAlchemyMonitorRepository(engine)
 
 
-def _quote(last: str) -> ToolEnvelope[USQuoteDTO]:
+def _quote(
+    last: str, warning_codes: tuple[str, ...] = ()
+) -> ToolEnvelope[USQuoteDTO]:
     data = USQuoteDTO(
         instrument_id="equity:US:NVDA",
         quote_at=NOW,
@@ -77,6 +80,10 @@ def _quote(last: str) -> ToolEnvelope[USQuoteDTO]:
         week_52_low=None,
         week_52_high=None,
     )
+    warnings = tuple(
+        WarningInfo(code=code, message="Fact quality warning.", details={})
+        for code in warning_codes
+    )
     return ToolEnvelope.success(
         request_id="req_quote",
         market=None,
@@ -85,6 +92,8 @@ def _quote(last: str) -> ToolEnvelope[USQuoteDTO]:
         freshness=Freshness.FRESH,
         sources=(),
         data=data,
+        degraded=bool(warnings),
+        warnings=warnings,
     )
 
 
@@ -129,6 +138,41 @@ async def test_price_monitor_emits_only_state_transitions(
     }
     final_state = repository.get_rule_states("monitor_00000000-0000-7000-8000-000000000001")[0]
     assert final_state.state is MonitorRuleStateValue.QUIET
+
+
+@pytest.mark.asyncio
+async def test_warning_only_monitor_run_succeeds_and_preserves_warnings(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    rule = MonitorRuleInput(
+        rule_code="price_floor",
+        rule_type=MonitorRuleType.PRICE_BELOW,
+        instrument_id="equity:US:NVDA",
+        price_threshold=Decimal("12"),
+        max_fact_age_seconds=3600,
+    )
+    repository = _repository(tmp_path)
+    repository.create(_monitor(rule))
+    fixed_clock.set(NOW)
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(
+        return_value=_quote("10", ("DELAYED_US_DATA", "EXTENDED_HOURS_PRICE"))
+    )
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+
+    result = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
+
+    assert result.status is MonitorRunStatus.SUCCEEDED
+    assert result.rules_evaluated == 1
+    assert result.warning_codes == ("DELAYED_US_DATA", "EXTENDED_HOURS_PRICE")
+    assert result.error_codes == ()
 
 
 def test_monitor_repository_keeps_append_only_versions(tmp_path) -> None:
@@ -258,10 +302,19 @@ async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None
     container = MagicMock()
     container.settings.mcp_server_name = "monitor-test"
     coordinator = MagicMock()
-    for name in ("create", "get", "list", "update", "list_events", "resolve_event"):
+    for name in (
+        "create",
+        "get",
+        "list",
+        "dashboard",
+        "list_runs",
+        "update",
+        "list_events",
+        "resolve_event",
+    ):
         getattr(coordinator, name).return_value = failure
     coordinator.evaluate = AsyncMock(return_value=failure)
-    container.monitor_tool_coordinator = coordinator
+    container.services.monitoring = coordinator
     manager = create_mcp_server(container)._tool_manager
 
     tools = manager.list_tools()
@@ -312,6 +365,11 @@ async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None
         },
     )
     await manager.call_tool("monitor_read", {"request": {"operation": "events"}})
+    await manager.call_tool("monitor_read", {"request": {"operation": "dashboard"}})
+    await manager.call_tool(
+        "monitor_read",
+        {"request": {"operation": "runs", "monitor_id": "monitor_example"}},
+    )
     await manager.call_tool(
         "monitor_manage",
         {
@@ -330,5 +388,7 @@ async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None
     coordinator.create.assert_called_once()
     assert coordinator.list.call_args.args[0].status is MonitorStatus.ACTIVE
     coordinator.update.assert_called_once()
+    coordinator.dashboard.assert_called_once()
+    coordinator.list_runs.assert_called_once()
     coordinator.resolve_event.assert_called_once()
     coordinator.evaluate.assert_awaited_once()

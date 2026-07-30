@@ -18,7 +18,7 @@ from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from domain.common.errors import PersistenceError
 from domain.common.ids import EntityIdPrefix
-from infrastructure.persistence.models import SystemAuditLogRow
+from infrastructure.persistence.orm import SystemAuditLogRow
 
 
 def _build_audit_row(

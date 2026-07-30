@@ -66,8 +66,9 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 
 运行时只创建一个 FastMCP。`interfaces/mcp/tools/` 中的 capability 模块提供普通 operation
 adapters，compact 组装器直接持有 callable；不存在旧工具名 HandlerRegistry 或第二套参数
-模型注册。`tools/list` 会删除非语义 schema 标题、共享重复属性定义并保证 discriminator 和
-全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。
+模型注册。`tools/list` 会删除不参与验证的 schema 标题/默认值和冗余 discriminator mapping、
+共享重复属性定义，并保证 closed union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。
+服务端 Pydantic 默认值与验证行为不变。
 
 ### 3.1 健康与 Mock 验证
 
@@ -266,6 +267,10 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
   时间伪装成报价时间；
 - `SCHWAB_OPEN_ORDERS_NOT_INGESTED`：`open_orders=()` 表示本版本未读取，不表示账户没有
   未成交订单；分析可用现金、购买力和杠杆时必须保留这项不确定性；
+- Schwab 历史成交优先读取明确的 BUY/SELL instruction；若真实交易历史 payload 省略该
+  字段，则使用证券 `amount` 的正负号恢复方向，并返回
+  `SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN`。任何无法标准化的 item 都必须通过
+  `SCHWAB_TRANSACTION_ITEM_OMITTED` 向 MCP envelope 透传，不能再表现为无 warning 的空结果；
 - `ASSET_TYPE_ASSUMED_EQUITY`：账户接口没有可靠区分股票与 ETF 等类型，当前按 EQUITY
   规范化，等待 Instrument Master 或人工 correction 校正；
 - `CLOSED_SESSION_LAST_KNOWN` 与 stale/degraded：闭市期间返回最近可用交易时段事实，不是
@@ -299,7 +304,7 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 payload 不同返回 `IDEMPOTENCY_CONFLICT`。质询 resolution 只记录用户态度，不会直接修改
 Thesis、候选或仓位，也不会执行交易。
 
-### 3.11 历史交易与六类工作流
+### 3.11 历史交易、六类研究工作流与历史验证桥接
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -309,6 +314,8 @@ Thesis、候选或仓位，也不会执行交易。
 | `research_workflow_run` (`us_market_review`) | 收集指数、宏观、新闻及组合影响事实 |
 | `research_workflow_run` (`portfolio_review`) | 收集持仓、交易、暴露、行业/主题、相关性和 beta |
 | `research_workflow_run` (`peer_comparison`) | 对调用方指定的 1–5 家同市场同行收集并对齐财报、估值及可选 A 股经营事实 |
+| `research_workflow_run` (`historical_validation_prepare`) | 验证但不执行 LEAN Python，生成 QuantConnect Free 手工回测包、manifest 和 SHA-256 |
+| `research_workflow_run` (`historical_validation_import`) | 导入网页下载的 QuantConnect Results JSON，提取有来源的指标并保留可复现性缺口 |
 
 六个工作流都要求请求级 `idempotency_key`。系统在访问 Provider 前持久化 `STARTED`，运行时
 标记 `RUNNING`，终态为 `SUCCEEDED` / `PARTIAL` / `FAILED`；标准化事实产物经过大小限制和
@@ -320,6 +327,15 @@ SHA-256 校验后与 receipt 一起保存。相同终态请求直接重放而不
 同行比较默认使用最近三个可见年报期间；不会自动发现同行、跨市场换汇、构造 TTM、评分、
 排名或生成目标价。历史 `as_of` 没有 cutoff-safe 估值时保持缺失；金额币种或期间口径不同
 时标记 `NOT_COMPARABLE`/`PARTIAL`，不得把缺失值解释为公司劣势。
+
+两个 historical-validation operation 不属于前述六类 Provider fact workflow，
+也不写 `research_runs` 表。它们使用 gitignored 的
+`data/artifacts/historical_validation/` 保存 owner-only 文件；prepare 和 import
+分别要求幂等键。Trading Partner 不登录 QuantConnect、不点击 Backtest，也不调用付费
+API。导入后 `REMOTE_RUN_ATTESTATION_UNAVAILABLE` 与
+`REMOTE_DATASET_VERSION_UNAVAILABLE` 必须保留，不能把用户下载文件描述为完全可复现的
+point-in-time 数据集。完整操作见
+[Phase 3C-0 QuantConnect Free bridge](../plans/phase3c-quantconnect-free-bridge.md)。
 
 ### 3.12 Watchlist Hub
 
@@ -357,15 +373,17 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 缺少 NAV、价格时间或 FX 事实不会被当作通过；系统默认阈值在用户确认前始终产生 warning。
 假设新增仅参与计算，`execution_effect=false`，不存在任何下单副作用。
 
-### 3.14 Monitoring v1
+### 3.14 Monitoring Hub
 
 | 工具 | 能力与边界 |
 |---|---|
 | `monitor_manage` (`create`) | 经明确确认创建一个版本化 Monitor |
 | `monitor_read` (`definitions`) | 传 `monitor_id` 恢复一个定义，否则列出定义、状态和最新规则结果 |
 | `monitor_manage` (`update`) | 以 expected version、确认人和幂等键追加新版本，可暂停或归档 |
-| `monitor_evaluate` | 按需评估 ACTIVE Monitor，只保存状态变化事件 |
+| `monitor_evaluate` | 评估 ACTIVE Monitor，保存全部逐规则观察；仅状态变化时创建事件 |
 | `monitor_read` (`events`) | 读取 TRIGGERED、RECOVERED、NOT_EVALUATED 事件 |
+| `monitor_read` (`dashboard`) | 一次读取全部当前 Monitor、最近运行、下一到期时间及全部规则状态 |
+| `monitor_read` (`runs`) | 按 run_id 或 monitor_id 读取不可变运行历史和逐规则观察值 |
 | `monitor_manage` (`resolve_event`) | 经确认和幂等键确认已读或解决一个事件 |
 
 监控枚举入参允许大小写不敏感并自动去除首尾空格，例如 `active`、`paused`、
@@ -380,9 +398,17 @@ V1 只支持 A 股/美股价格上穿、价格下穿，以及组合 Risk 总体�
 这与规则的 `max_fact_age_seconds` 是两个独立概念。Monitoring 不会修改 Thesis、Policy、
 仓位或订单。
 
-外部调度使用 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` 或
-`--cadence A_SHARE_POST_MARKET`，只评估 ACTIVE 且市场匹配的 Monitor。CLI 不是常驻
-scheduler，不负责选择运行时间。
+显式 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` 或
+`--cadence A_SHARE_POST_MARKET` 保留为诊断 force-run，本身不是 scheduler。正常调度统一使用
+`uv run trading-partner-monitor-run due`：它先在数据库中筛选到期的 `INTERVAL` 以及
+A 股/美股盘后组，未到期时不请求 Provider；每个市场组在对应交易日收盘加配置延迟后至多
+执行一次。Codex 的盘后/市场复盘 Automation 不再调用 Monitor 工具，也不重复发送告警。
+macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯一的每小时 launchd
+唤醒器。它直接运行确定性 CLI，不启动 Codex、不调用 LLM，因此不会产生 Codex token 用量。
+每次实际评估都会持久化所有规则的观察值、阈值、距离、事实时间/年龄和错误；事件仍只在
+状态迁移时创建，二者不再混为一谈。
+`0023` 之前的旧运行回执会明确标记 `observation_history_complete=false`，系统不会反推或
+伪造当时未保存的逐规则观察。
 
 ### 3.15 Technical Engine v2（1 个新增工具，1 个升级工具）
 
@@ -447,9 +473,12 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   Alpha Vantage 明确返回 HTTP 429 或额度/频率 notice 时才依次故障切换；网络错误、鉴权
   错误和数据契约错误不会触发轮换。该机制用于可用性而非并发扩容，使用者仍须遵守上游条款
   与各 key 配额。
-- Yahoo Chart 的 `chartPreviousClose` 是图表窗口基准，会随 `period1` 变化，不等于
-  上一交易日收盘。项目从完整日线派生 `previous_close`；盘后股价使用当天已完成的常规
-  收盘，盘前和常规时段使用更早交易日，不使用该 metadata 计算日内涨跌。
+- Yahoo Chart 的 `chartPreviousClose` 是图表窗口基准，会随 `period1` 变化；
+  `regularMarketPreviousClose` 又是相对于 Yahoo 当前 `regularMarketPrice` 观察值的基准，
+  两者都不直接映射为面向用户的“前收”。项目优先从完整日线派生 `previous_close`；盘后
+  股价使用当天已完成的常规收盘，盘前使用上一完整常规时段。若 Yahoo 最新日线临时缺少
+  `Close`，盘前/盘后可从带时间戳的 `regularMarketPrice` 恢复该完整时段收盘，并附带
+  `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`。
 - 对接近当前时刻且 Yahoo 常规报价字段已经过时的请求，项目只在非闭市时补查带
   `includePrePost` 的 1 分钟线，并按时间戳选更新观察值。盘前/盘后价格明确附带
   `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`；补查
@@ -468,8 +497,8 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   因此增加 sleep 或轮换身份不能视为可靠修复。
   StockTwits 正式接入已于 2026-07-25 退出当前路线图，运行时 adapter、设置和网络入口均已
   移除，仅保留历史数据兼容。CME、DCE、Dukascopy 与 Polymarket 可共用
-  `PROVIDER_PROXY_URL` HTTP(S) 代理，不设置则直连；旧 `POLYMARKET_PROXY_URL` 仅作
-  兼容 fallback。任一外部源网络不可达时不得阻塞普通个股研究主链。
+  `PROVIDER_PROXY_URL` HTTP(S) 代理，不设置则直连。任一外部源网络不可达时不得阻塞
+  普通个股研究主链。
 - Moomoo 评论流已作为固定 Provider 内化进 `us_context_get` (`sentiment`)，不依赖宿主侧
   Skill。它调用当前公开 `stock_feed`，按精确 ticker 清洗、去重、过滤低质量内容，并通过
   `moomoo_rules_v1` 中英规则给出可审计标签。上游是语义检索且可能混入其他标的，因此精确
@@ -528,22 +557,63 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
 
 ### Schwab 重新授权与后台行为
 
-- 重新授权只运行一次 `uv run python scripts/setup_schwab_oauth.py --replace`。该命令
-  持有跨进程锁并只启动一个浏览器 OAuth 流程；若已有授权在进行，第二次调用会要求完成
-  现有标签，而不会再创建 OAuth state 或标签页。
+- `uv run trading-partner-schwab-auth status` 只读取安全的 token 年龄和 OAuth
+  会话状态，不刷新 token、不打印 token/path/client ID，也不打开浏览器。
+- 重新授权只运行一次 `uv run trading-partner-schwab-auth renew`。该命令持有跨进程锁，
+  并保存不含凭据的 OAuth 会话状态。若已有授权在进行，后续调用只返回同一活动会话，
+  不会再创建 OAuth state 或标签页。用户只操作该命令刚刚打开的新标签，关闭或忽略更早
+  的 Schwab 授权标签。schwab-py 原始 authorization URL/OAuth state 会被 CLI 收口，
+  不进入 Codex 或 Automation 日志。旧
+  `uv run python scripts/setup_schwab_oauth.py --replace` 保留兼容，但委托给同一协调器。
+- 如果流程失败、被中断或五分钟 callback 超时，自动重试会被拒绝。先关闭旧 Schwab
+  标签；只有用户明确确认后，才允许运行一次
+  `uv run trading-partner-schwab-auth renew --confirm-new-flow`。Codex 的 tool wait/yield
+  不代表流程失败，不能据此重跑命令。
 - `external_state_sync(request={"operation":"accounts"})`、盘后同步和 MCP Provider 只通过
   `client_from_token_file` 加载并自动刷新现有 token。缺失、失效或无法刷新的 token 返回
   typed provider error；后台路径绝不打开浏览器。
 - 遇到 Schwab 鉴权错误时，不要反复重跑账户刷新。先完成上述专用授权命令，再重跑一次
   同步。不要复制或复用 schwab-trader plugin 的 token。
 
+盘后同步输出包含 `schwab_oauth` 安全诊断：`token_age_seconds`、
+`reauthorization_due_at` 和 `seconds_until_reauthorization`。年龄从 schwab-py
+token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新不会重置它。
+第 5 天起输出 `SCHWAB_OAUTH_REAUTH_DUE_SOON`，第 7 天起输出
+`SCHWAB_OAUTH_REAUTH_REQUIRED`。这些 warning 会进入当次盘后 receipt，供“美股：盘后小结”
+提前通知；诊断本身绝不会启动 OAuth。
+
 ## 7. 存储与运维边界
 
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
-数据库结构通过 Alembic 管理，当前 migration head 是 `0020_phase3d_plan_controls`；它增加
-append-only Trade Plan identity/version/conditions、Risk v2 policy 字段和 Monitor 的精确计划
-版本关联。
+数据库结构通过 Alembic 管理，当前 migration head 是
+`0024_monitor_notification_outbox`；它包含 append-only Trade Plan
+identity/version/conditions、Risk v2 policy 字段、Monitor 的精确计划版本关联，以及与
+Monitor 状态转移事件同事务写入的通知 Outbox。
+
+### Monitor 手机通知（可选）
+
+Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具。配置
+`MONITOR_NOTIFICATIONS_ENABLED=true`、`TELEGRAM_BOT_TOKEN` 和
+`TELEGRAM_CHAT_ID` 后，本地小时调度与市场收盘 Monitor CLI 会投递新的
+`TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移。相同状态的重复观测只写 run，
+不重复通知。失败消息保留在 Outbox 中进行有限重试；超过事件 TTL 后转为过期，避免旧
+报警延迟送达。`PROVIDER_PROXY_URL` 如有设置，也用于 Telegram Bot API。
+消息直接复用同一次 run 的 observations，显示标的当前观察价格/时间以及该 Monitor 的全部
+规则条件、级别、观察值、距离和状态，不会为了排版再次调用行情 Provider。同一 Monitor
+在同一 run 中出现多项状态变化时合并为一条 Telegram 消息，底层 event 仍逐条持久化。
+Telegram 不支持 Markdown 表格，因此通过 `sendMessage` 先用普通 HTML 展示本轮状态变化，
+再用经过转义的等宽 `<pre>` 表格展示当前价格、价格时间和完整规则。数据 warning 与期货
+口径说明留在表格后的普通正文中。该过程不生成或上传图片，也不调用 LLM。
+
+```bash
+uv run trading-partner-monitor-notifications status
+uv run trading-partner-monitor-notifications test
+uv run trading-partner-monitor-notifications flush
+```
+
+命令与回执不会显示 Bot Token、Chat ID、代理凭据或完整 Telegram 请求 URL。Telegram
+送达不等于 Monitor event 已确认或解决，也没有任何交易执行效果。
 
 ### Phase 3D 判断到计划控制链
 

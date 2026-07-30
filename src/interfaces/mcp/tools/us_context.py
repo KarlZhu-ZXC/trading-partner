@@ -43,7 +43,7 @@ def build_us_context_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "limit": limit,
                 }
             )
-            envelope = await container.us_context_tool_coordinator.get_live_news(inp)
+            envelope = await container.services.us_context.get_live_news(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -64,7 +64,7 @@ def build_us_context_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "as_of": as_of,
                 }
             )
-            envelope = await container.us_context_tool_coordinator.get_macro_context(inp)
+            envelope = await container.services.us_context.get_macro_context(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -89,7 +89,7 @@ def build_us_context_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "limit_per_source": limit_per_source,
                 }
             )
-            envelope = await container.us_context_tool_coordinator.get_sentiment_snapshot(inp)
+            envelope = await container.services.us_context.get_sentiment_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -106,7 +106,7 @@ def build_us_context_adapters(container: ApplicationContainer) -> SimpleNamespac
             inp = USGetPredictionMarketContextInput.model_validate(
                 {"topic": topic, "as_of": as_of, "limit": limit}
             )
-            envelope = await container.us_context_tool_coordinator.get_prediction_market_context(
+            envelope = await container.services.us_context.get_prediction_market_context(
                 inp
             )
             return envelope.model_dump(mode="json")

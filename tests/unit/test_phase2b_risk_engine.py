@@ -187,7 +187,7 @@ async def test_compact_risk_handlers_validate_and_delegate() -> None:
     coordinator.get_policy.return_value = envelope
     coordinator.update_policy.return_value = envelope
     coordinator.check = AsyncMock(return_value=envelope)
-    container.risk_tool_coordinator = coordinator
+    container.services.risk = coordinator
     manager = create_mcp_server(container)._tool_manager
 
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)

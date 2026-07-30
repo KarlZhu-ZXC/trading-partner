@@ -34,7 +34,7 @@ from domain.cross_asset.futures_models import (
     FuturesContractStatistics,
     FuturesProductDefinition,
 )
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     ContinuousContractMappingRow,
     ContinuousSeriesDefinitionRow,
     FuturesContractRow,

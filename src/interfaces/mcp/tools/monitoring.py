@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from application.dto.monitoring import (
     MonitorCadenceInput,
     MonitorCreateInput,
+    MonitorDashboardInput,
     MonitorEvaluateInput,
     MonitorEventActionInput,
     MonitorEventListInput,
@@ -18,11 +19,12 @@ from application.dto.monitoring import (
     MonitorGetInput,
     MonitorListInput,
     MonitorRuleInput,
+    MonitorRunListInput,
     MonitorStatusInput,
     MonitorUpdateInput,
 )
 from bootstrap import ApplicationContainer
-from domain.monitoring.enums import MonitorCadence
+from domain.monitoring.enums import MonitorCadence, MonitorStatus
 from interfaces.mcp.validation import unexpected_failure as _unexpected_failure
 
 
@@ -38,6 +40,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         case_id: str | None = None,
         primary_instrument_id: str | None = None,
         cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND,
+        interval_minutes: int | None = None,
         valid_until: datetime | None = None,
         trade_plan_id: str | None = None,
         trade_plan_version: int | None = None,
@@ -51,6 +54,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "case_id": case_id,
                     "primary_instrument_id": primary_instrument_id,
                     "cadence": cadence,
+                    "interval_minutes": interval_minutes,
                     "rules": rules,
                     "valid_until": valid_until,
                     "trade_plan_id": trade_plan_id,
@@ -60,7 +64,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "idempotency_key": idempotency_key,
                 }
             )
-            return container.monitor_tool_coordinator.create(request).model_dump(mode="json")
+            return container.services.monitoring.create(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -75,7 +79,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
             return monitor_list(status)
         try:
             request = MonitorGetInput(monitor_id=monitor_id)
-            return container.monitor_tool_coordinator.get(request).model_dump(mode="json")
+            return container.services.monitoring.get(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -85,7 +89,41 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         """List current monitor versions, optionally filtered by status."""
         try:
             request = MonitorListInput.model_validate({"status": status})
-            return container.monitor_tool_coordinator.list(request).model_dump(mode="json")
+            return container.services.monitoring.list(request).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def monitor_dashboard(
+        status: MonitorStatusInput | None = MonitorStatus.ACTIVE,
+    ) -> dict[str, Any]:
+        """Return unified schedule, latest-run, and current-rule-state status."""
+        try:
+            request = MonitorDashboardInput.model_validate({"status": status})
+            return container.services.monitoring.dashboard(request).model_dump(
+                mode="json"
+            )
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def monitor_runs(
+        run_id: str | None = None,
+        monitor_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Read immutable monitor runs with every persisted rule observation."""
+        try:
+            request = MonitorRunListInput(
+                run_id=run_id,
+                monitor_id=monitor_id,
+                limit=limit,
+            )
+            return container.services.monitoring.list_runs(request).model_dump(
+                mode="json"
+            )
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -99,6 +137,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         status: MonitorStatusInput,
         confirmed_by: str,
         idempotency_key: str,
+        interval_minutes: int | None = None,
         rules: tuple[MonitorRuleInput, ...] = (),
         case_id: str | None = None,
         primary_instrument_id: str | None = None,
@@ -117,6 +156,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "case_id": case_id,
                     "primary_instrument_id": primary_instrument_id,
                     "cadence": cadence,
+                    "interval_minutes": interval_minutes,
                     "status": status,
                     "rules": rules,
                     "valid_until": valid_until,
@@ -127,7 +167,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "idempotency_key": idempotency_key,
                 }
             )
-            return container.monitor_tool_coordinator.update(request).model_dump(mode="json")
+            return container.services.monitoring.update(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -138,12 +178,12 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         cadence: MonitorCadenceInput | None = None,
         as_of: datetime | None = None,
     ) -> dict[str, Any]:
-        """Evaluate active monitors and persist only rule-state transitions."""
+        """Persist all rule observations and emit events only on state transitions."""
         try:
             request = MonitorEvaluateInput.model_validate(
                 {"monitor_ids": monitor_ids, "cadence": cadence, "as_of": as_of}
             )
-            return (await container.monitor_tool_coordinator.evaluate(request)).model_dump(
+            return (await container.services.monitoring.evaluate(request)).model_dump(
                 mode="json"
             )
         except ValidationError:
@@ -158,7 +198,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         """List durable monitor transition events with latest resolution."""
         try:
             request = MonitorEventListInput(monitor_id=monitor_id, limit=limit)
-            return container.monitor_tool_coordinator.list_events(request).model_dump(mode="json")
+            return container.services.monitoring.list_events(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -182,7 +222,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "idempotency_key": idempotency_key,
                 }
             )
-            return container.monitor_tool_coordinator.resolve_event(request).model_dump(mode="json")
+            return container.services.monitoring.resolve_event(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -191,6 +231,8 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
     return SimpleNamespace(
         monitor_create=monitor_create,
         monitor_query=monitor_query,
+        monitor_dashboard=monitor_dashboard,
+        monitor_runs=monitor_runs,
         monitor_update=monitor_update,
         monitor_evaluate=monitor_evaluate,
         monitor_event_list=monitor_event_list,

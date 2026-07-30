@@ -18,7 +18,7 @@ async def _run(products: tuple[str, ...], trade_date: date) -> int:
     try:
         as_of = datetime.now(UTC)
         for product_key in products:
-            chain = await container.futures_contract_service.list_contracts(
+            chain = await container.operations.futures_contracts.list_contracts(
                 product_key,
                 as_of,
                 refresh=True,
@@ -40,7 +40,7 @@ async def _run(products: tuple[str, ...], trade_date: date) -> int:
                 )
                 continue
             instrument_ids = tuple(item.instrument_id for item in chain.data)
-            statistics = await container.futures_contract_service.get_statistics(
+            statistics = await container.operations.futures_contracts.get_statistics(
                 instrument_ids,
                 trade_date,
                 as_of,

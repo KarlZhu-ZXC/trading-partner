@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 
 from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 from domain.operations.models import PostMarketSyncRun
-from infrastructure.persistence.models import Base
+from infrastructure.persistence.orm import Base
 from infrastructure.persistence.post_market_sync_run_repository import (
     SqlAlchemyPostMarketSyncRunRepository,
 )

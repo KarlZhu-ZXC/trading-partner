@@ -25,6 +25,7 @@ from domain.common.ids import EntityIdPrefix
 from domain.common.values import parse_instrument_id
 from domain.monitoring.enums import (
     MonitorEventType,
+    MonitorNotificationChannel,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -33,9 +34,11 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
+    MonitorNotificationMessage,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
+    MonitorRunObservation,
 )
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
@@ -82,16 +85,21 @@ class MonitorEvaluationService:
         if as_of > started_at:
             raise DataContractError("monitor as_of must not be in the future")
         monitors, selection_warnings = self._select(request, as_of=as_of)
+        run_id = self._ids.new(EntityIdPrefix.MONITOR_RUN)
         price_cache: dict[str, _Fact] = {}
         risk_fact: _Fact | None = None
         generic_cache: dict[tuple[object, ...], _Fact] = {}
         states: list[MonitorRuleState] = []
         events: list[MonitorEvent] = []
+        notifications: list[MonitorNotificationMessage] = []
+        observations: list[MonitorRunObservation] = []
         warnings = list(selection_warnings)
         errors: list[str] = []
         rules_evaluated = 0
 
         for monitor in monitors:
+            monitor_events: list[MonitorEvent] = []
+            monitor_observations: list[MonitorRunObservation] = []
             previous = {
                 item.rule_code: item
                 for item in self._repository.get_rule_states(monitor.monitor_id)
@@ -151,6 +159,16 @@ class MonitorEvaluationService:
                 errors.extend(fact.error_codes)
                 state = self._evaluate_rule(monitor, rule, fact, as_of)
                 states.append(state)
+                observation = _run_observation(
+                    run_id=run_id,
+                    monitor=monitor,
+                    rule=rule,
+                    fact=fact,
+                    state=state,
+                    as_of=as_of,
+                )
+                observations.append(observation)
+                monitor_observations.append(observation)
                 event = self._transition_event(
                     monitor,
                     rule,
@@ -160,6 +178,15 @@ class MonitorEvaluationService:
                 )
                 if event is not None:
                     events.append(event)
+                    monitor_events.append(event)
+            if monitor_events:
+                notifications.extend(
+                    _notification_messages(
+                        monitor,
+                        tuple(monitor_events),
+                        tuple(monitor_observations),
+                    )
+                )
 
         warning_codes = tuple(dict.fromkeys(warnings))
         error_codes = tuple(dict.fromkeys(errors))
@@ -169,13 +196,16 @@ class MonitorEvaluationService:
             item.state is MonitorRuleStateValue.NOT_EVALUATED for item in states
         ):
             status = MonitorRunStatus.PARTIAL if monitors else MonitorRunStatus.FAILED
-        elif warning_codes:
-            status = MonitorRunStatus.PARTIAL
         else:
+            # Warnings describe fact quality/provenance, not run completeness.
+            # A run is complete when every selected rule produced an evaluated
+            # state and no typed error occurred.
             status = MonitorRunStatus.SUCCEEDED
         run = MonitorRun(
-            run_id=self._ids.new(EntityIdPrefix.MONITOR_RUN),
+            run_id=run_id,
             requested_monitor_ids=request.monitor_ids,
+            selected_monitor_ids=tuple(item.monitor_id for item in monitors),
+            cadence=request.cadence,
             as_of=as_of,
             started_at=started_at,
             completed_at=self._clock.now(),
@@ -185,9 +215,16 @@ class MonitorEvaluationService:
             events_created=len(events),
             warning_codes=warning_codes,
             error_codes=error_codes,
+            observation_history_complete=True,
+            observations=tuple(observations),
             execution_effect=False,
         )
-        return self._repository.record_evaluation(run, tuple(states), tuple(events))
+        return self._repository.record_evaluation(
+            run,
+            tuple(states),
+            tuple(events),
+            tuple(notifications),
+        )
 
     def _select(
         self, request: MonitorEvaluateInput, *, as_of: datetime
@@ -203,6 +240,8 @@ class MonitorEvaluationService:
                     warnings.append("MONITOR_NOT_ACTIVE")
                 elif value.valid_until is not None and as_of > value.valid_until:
                     warnings.append("MONITOR_EXPIRED")
+                elif request.cadence is not None and value.cadence is not request.cadence:
+                    warnings.append("MONITOR_CADENCE_MISMATCH")
                 else:
                     selected.append(value)
             return tuple(selected), tuple(dict.fromkeys(warnings))
@@ -446,3 +485,188 @@ def _compare(
     if comparator is TradePlanComparator.EQ:
         return observed == threshold
     raise DataContractError("OCCURRED comparator must use event evaluation")
+
+
+def _run_observation(
+    *,
+    run_id: str,
+    monitor: MonitorDefinition,
+    rule: MonitorRule,
+    fact: _Fact,
+    state: MonitorRuleState,
+    as_of: datetime,
+) -> MonitorRunObservation:
+    threshold = rule.price_threshold
+    if threshold is None and rule.risk_status_threshold is not None:
+        threshold = Decimal(_RISK_RANK[rule.risk_status_threshold])
+    if threshold is None:
+        threshold = rule.numeric_threshold
+    distance = (
+        fact.value - threshold
+        if fact.value is not None and threshold is not None
+        else None
+    )
+    distance_percent = (
+        distance / threshold * Decimal("100")
+        if distance is not None and threshold not in {None, Decimal(0)}
+        else None
+    )
+    fact_age_seconds = (
+        max(0, int((as_of - fact.as_of).total_seconds()))
+        if fact.as_of is not None
+        else None
+    )
+    return MonitorRunObservation(
+        run_id=run_id,
+        monitor_id=monitor.monitor_id,
+        monitor_version=monitor.version,
+        rule_code=rule.rule_code,
+        instrument_id=rule.instrument_id,
+        severity=rule.severity,
+        state=state.state,
+        observed_value=state.observed_value,
+        threshold_value=threshold,
+        distance_value=distance,
+        distance_percent=distance_percent,
+        fact_as_of=state.fact_as_of,
+        fact_age_seconds=fact_age_seconds,
+        warning_codes=fact.warning_codes,
+        error_codes=fact.error_codes,
+        message=state.message,
+    )
+
+
+def _notification_messages(
+    monitor: MonitorDefinition,
+    events: tuple[MonitorEvent, ...],
+    observations: tuple[MonitorRunObservation, ...],
+) -> tuple[MonitorNotificationMessage, ...]:
+    event_types = {event.event_type for event in events}
+    emoji = (
+        "🚨"
+        if MonitorEventType.TRIGGERED in event_types
+        else "⚠️"
+        if MonitorEventType.NOT_EVALUATED in event_types
+        else "✅"
+    )
+    instrument_id = monitor.primary_instrument_id or next(
+        (item.instrument_id for item in observations if item.instrument_id is not None),
+        None,
+    )
+    symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id is not None else monitor.name
+    rules_by_code = {item.rule_code: item for item in monitor.rules}
+    price_observation = next(
+        (
+            item
+            for item in observations
+            if item.instrument_id == instrument_id
+            and item.observed_value is not None
+            and (
+                rules_by_code[item.rule_code].rule_type
+                in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
+                or rules_by_code[item.rule_code].fact_type is TradePlanFactType.PRICE
+            )
+        ),
+        None,
+    )
+    current_price = (
+        str(price_observation.observed_value)
+        if price_observation is not None
+        else "不可用"
+    )
+    price_time = (
+        price_observation.fact_as_of.isoformat()
+        if price_observation is not None and price_observation.fact_as_of is not None
+        else "不可用"
+    )
+    lines = [monitor.name]
+    if price_observation is not None:
+        lines.extend((f"当前价格：{current_price}", f"价格时间：{price_time}"))
+    lines.append("CHANGES")
+    lines.extend(
+        f"• [{event.severity.value}] {event.rule_code} → {event.event_type.value}"
+        for event in events
+    )
+    table_rows: list[tuple[str, ...]] = []
+    for observation in observations:
+        rule = rules_by_code[observation.rule_code]
+        observed = (
+            str(observation.observed_value)
+            if observation.observed_value is not None
+            else "不可用"
+        )
+        distance = (
+            str(observation.distance_value)
+            if observation.distance_value is not None
+            else "不可用"
+        )
+        table_rows.append(
+            (
+                observation.rule_code,
+                _rule_condition(rule),
+                observed,
+                distance,
+                observation.state.value,
+                observation.severity.value,
+            )
+        )
+    lines.extend(("RULES", _format_rule_table(tuple(table_rows))))
+    warning_codes = tuple(
+        dict.fromkeys(
+            code for observation in observations for code in observation.warning_codes
+        )
+    )
+    if warning_codes:
+        lines.append(f"数据提示：{', '.join(warning_codes)}")
+    if instrument_id is not None and instrument_id.startswith("future:"):
+        lines.append("期货价格并非现货；连续合约存在换月风险。")
+    event_label = (
+        events[0].event_type.value if len(events) == 1 else f"{len(events)} 项状态变化"
+    )
+    title = f"{emoji} {symbol} · {event_label}"
+    body = "\n".join(lines)
+    return tuple(
+        MonitorNotificationMessage(
+            source_event_id=event.event_id,
+            channel=MonitorNotificationChannel.TELEGRAM,
+            title=title,
+            body=body,
+            created_at=event.created_at,
+        )
+        for event in events
+    )
+
+
+def _rule_condition(rule: MonitorRule) -> str:
+    if rule.rule_type is MonitorRuleType.PRICE_ABOVE:
+        return f"> {rule.price_threshold}"
+    if rule.rule_type is MonitorRuleType.PRICE_BELOW:
+        return f"< {rule.price_threshold}"
+    if rule.rule_type is MonitorRuleType.RISK_OVERALL_AT_LEAST:
+        assert rule.risk_status_threshold is not None
+        return f">= {rule.risk_status_threshold.value}"
+    comparator = rule.comparator.value if rule.comparator is not None else "UNKNOWN"
+    threshold = (
+        str(rule.numeric_threshold)
+        if rule.numeric_threshold is not None
+        else rule.event_after.isoformat()
+        if rule.event_after is not None
+        else "事件发生"
+    )
+    return f"{rule.metric_key} {comparator} {threshold}"
+
+
+def _format_rule_table(rows: tuple[tuple[str, ...], ...]) -> str:
+    headers = ("RULE", "COND", "VALUE", "DIST", "STATE", "LEVEL")
+    widths = tuple(
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    )
+
+    def render(row: tuple[str, ...]) -> str:
+        return "  ".join(
+            value.ljust(widths[index]) for index, value in enumerate(row)
+        ).rstrip()
+
+    separator = "  ".join("-" * width for width in widths)
+    return "\n".join((render(headers), separator, *(render(row) for row in rows)))

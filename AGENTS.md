@@ -7,7 +7,8 @@ agent host) talks to the user; Trading Partner MCP supplies facts, research stat
 and structured tools. The implemented Phase 1–3D boundary covers A-share/US research,
 accounts, Investment Cases, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
-analysis — **not** backtests or live order writes.
+analysis, plus a manual QuantConnect Free code/result bridge — **not** an automated
+backtest runner or live order writes.
 
 ## Implemented boundary
 
@@ -134,7 +135,14 @@ credentials for it.
 - `challenge_review_get`
 - `challenge_review_manage` (`start`, `resolve`)
 - `research_workflow_run` (`deep_dive`, `catalyst_review`,
-  `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`)
+  `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`,
+  `historical_validation_prepare`, `historical_validation_import`)
+
+The two historical-validation operations parse but never execute LEAN Python,
+write owner-only gitignored artifacts, and import only a user-downloaded
+QuantConnect Results JSON. The user operates the free web UI. Remote code matching
+and dataset version remain explicitly unverified; the bridge never confirms a
+Thesis, mutates a Trade Plan, or creates a broker order.
 
 Compact workflows never accept hidden Case creation or account refresh. Create a
 Case first with `investment_case_manage(request={"operation":"create",...})`;
@@ -156,9 +164,29 @@ does not discover/rank peers, and never mutates a Case, Thesis, Trade Plan, or a
 - `watchlist_manage` (`add`, `remove`)
 - `portfolio_risk_get` (`policy`, `check`)
 - `risk_policy_update`
-- `monitor_read` (`definitions`, `events`)
+- `monitor_read` (`definitions`, `dashboard`, `runs`, `events`)
 - `monitor_manage` (`create`, `update`, `resolve_event`)
 - `monitor_evaluate`
+
+Monitoring also supports `monitor_read` operations `dashboard` and `runs` without
+adding public tools. `INTERVAL` definitions use a whole-hour `interval_minutes`
+(minimum 60). `trading-partner-monitor-run due` performs deterministic due selection
+before provider access for INTERVAL plus A-share/US post-market groups;
+`trading-partner-monitor-scheduler install` installs one hourly macOS launchd wake
+and never invokes Codex or an LLM. A market group runs at most once per exchange
+session after close plus the configured delay. Every evaluated rule is stored as an
+immutable run observation, while events remain state-transition-only. Codex
+market-review Automations must not duplicate Monitor evaluation or alerts.
+Optional Telegram delivery uses an event-linked durable Outbox. Event and Outbox
+are committed atomically; only transitions notify, retry is bounded, and expired
+alerts are not delivered late. `trading-partner-monitor-notifications` provides
+secret-safe `status`, `test`, and `flush` operations without adding an MCP tool.
+Messages reuse the same run observations to include current price/time and every
+rule's condition, value, distance, severity, and state. Multiple same-Monitor
+transitions in one run are delivered as one Telegram message without collapsing
+their durable Monitor events. Telegram does not support Markdown tables, so the
+sender places the transition summary in native HTML before an escaped monospaced
+price/rule table. It does not generate or upload an image.
 
 **Phase 3D judgment-to-plan controls**
 
@@ -290,7 +318,9 @@ orders, fills, or positions.
 1. Domain never imports MCP, SQLAlchemy, Alembic, Pydantic Settings, or providers.
 2. Application never imports infrastructure or interfaces.
 3. Interfaces only adapt protocols / validate inputs / convert to DTOs.
-4. Only `src/bootstrap.py` wires application + infrastructure.
+4. Only `src/bootstrap.py` connects application services to infrastructure.
+   `infrastructure/composition/` may build infrastructure-only bundles but must
+   never import `application.services`.
 5. Provider raw payloads never cross the infrastructure boundary.
 6. Precise numbers come from tool snapshots with source, time, freshness, and basis.
 7. The sole FastMCP server directly composes compact capability adapters; do not
@@ -305,7 +335,7 @@ src/
 ├── bootstrap.py
 ├── application/
 ├── domain/
-├── infrastructure/
+├── infrastructure/       # composition/, persistence/orm/, providers/, config/
 └── interfaces/
 ```
 
@@ -343,7 +373,7 @@ user guides, and historical archives.
 ## Out of scope until later phases
 
 ```text
-strategies, backtest, execution, orders, fills
+local/automated backtest engines, execution, orders, fills
 automated evidence ingestion, runtime LLM synthesis
 order writes
 ```

@@ -34,7 +34,7 @@ async def _run(command: str = "run") -> int:
     container = build_default_application()
     if command == "status":
         try:
-            status_result = container.post_market_sync_service.status()
+            status_result = container.operations.post_market_sync.status()
             print(
                 json.dumps(
                     {
@@ -49,7 +49,7 @@ async def _run(command: str = "run") -> int:
         finally:
             await container.aclose()
 
-    lock = container.post_market_sync_lock
+    lock = container.resources.post_market_sync_lock
     if not lock.acquire():
         print(
             json.dumps(
@@ -63,9 +63,9 @@ async def _run(command: str = "run") -> int:
     progress = asyncio.create_task(_progress(command))
     try:
         run_result = (
-            await container.post_market_sync_service.run_if_due()
+            await container.operations.post_market_sync.run_if_due()
             if command == "run"
-            else await container.post_market_sync_service.catch_up_latest_due()
+            else await container.operations.post_market_sync.catch_up_latest_due()
         )
         payload = run_result.model_dump(mode="json")
         ok = run_result.run_status in {None, PostMarketSyncRunStatus.SUCCEEDED}

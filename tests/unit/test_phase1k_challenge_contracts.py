@@ -328,11 +328,11 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
             review=ChallengeReviewDTO.from_domain(review),
         ),
     )
-    container.challenge_review_service.start.return_value = start_envelope
-    container.challenge_review_service.get.return_value = start_envelope.model_copy(
+    container.services.challenge.start.return_value = start_envelope
+    container.services.challenge.get.return_value = start_envelope.model_copy(
         update={"request_id": "req_get", "data": review}
     )
-    container.challenge_review_service.resolve.return_value = start_envelope.model_copy(
+    container.services.challenge.resolve.return_value = start_envelope.model_copy(
         update={"request_id": "req_resolve", "data": review}
     )
     manager = create_mcp_server(container)._tool_manager
@@ -366,6 +366,6 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
     )
     assert started["request_id"] == "req_start"
     assert isinstance(
-        container.challenge_review_service.resolve.call_args.args[0],
+            container.services.challenge.resolve.call_args.args[0],
         ChallengeReviewResolveInput,
     )

@@ -33,7 +33,7 @@ from domain.common.enums import (
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
-from infrastructure.persistence.models import SystemAuditLogRow
+from infrastructure.persistence.orm import SystemAuditLogRow
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
 

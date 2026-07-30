@@ -1,8 +1,9 @@
 # Phase 3 — Cross-Asset Facts and Historical Validation
 
 Phase 3 grows Trading Partner beyond A-share/US equity research while preserving
-the same provenance, read-only, and no-fabrication rules. Backtests and order
-execution remain unimplemented unless explicitly marked otherwise below.
+the same provenance, read-only, and no-fabrication rules. Phase 3C-0 can prepare a
+QuantConnect Free package and import a user-downloaded result, but Trading Partner
+still does not run a backtest engine or execute an order.
 
 To keep ownership and dependencies clear, Phase 3 is consolidated into four tracks:
 
@@ -10,7 +11,7 @@ To keep ownership and dependencies clear, Phase 3 is consolidated into four trac
 |---|---|---|
 | Phase 3A | Formal futures and cross-asset market facts | Free CME/DCE/Dukascopy integration implemented; LME discovery deferred |
 | Phase 3B | Company financial/operating facts and optional industry datasets | Implemented, including caller-specified peer comparison |
-| Phase 3C | Historical validation platform | Pending |
+| Phase 3C | Historical validation platform | 3C-0 QuantConnect Free manual bridge implemented; full platform pending |
 | Phase 3D | Judgment-to-plan controls | Implemented: versioned Trade Plans, Position Sizing, Risk v2, and Monitoring v2 |
 
 ## Phase 3A — Formal futures and cross-asset market facts
@@ -226,7 +227,7 @@ integration in Phase 3A.
 
 - **3B-T02 — 调用方指定同行的可比事实包（已完成）。** 复用现有财报、行情和可选 A 股经营指标，
   对明确给出的同行标的生成同口径比较事实；MCP 不自动选择同行、排名或给出估值结论。
-  详细契约与验收记录见 [3B-T02 实施规划](../plans/phase3b-peer-comparison-plan.md)。
+  请求和输出契约以本节及 capability guide 为准。
 
 猪周期 Deep Dive 组合 DCE 期限结构、DCE 生猪监控和官方猪周期长期补源均不在当前优先
 队列。既有猪周期查询能力保留，但暂不扩展。
@@ -260,8 +261,17 @@ integration in Phase 3A.
 
 ## Phase 3C — Historical validation platform
 
-> Status: pending. Provider-backed bars exist, but there is no durable research
-> dataset/version registry or backtest/experiment engine.
+> Status: Phase 3C-0 implemented on 2026-07-30. The MCP prepares hashed LEAN
+> packages and imports user-exported QuantConnect result JSON. There is still no
+> local/automated backtest engine or durable dataset/version registry. See the
+> [QuantConnect Free bridge record](../plans/phase3c-quantconnect-free-bridge.md).
+
+The existing `research_workflow_run` tool now has
+`historical_validation_prepare` and `historical_validation_import` operations.
+They write owner-only, gitignored artifacts and preserve the 28-tool surface.
+QuantConnect login, web compilation and the Backtest click remain user-operated.
+Imported metrics are degraded because the free export cannot attest the exact
+remote code hash or immutable dataset version.
 
 This track combines all capabilities that must share the same point-in-time data
 contract and reproducibility boundary:

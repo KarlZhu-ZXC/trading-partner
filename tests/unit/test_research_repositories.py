@@ -46,7 +46,7 @@ from domain.research.models import (
     WatchlistItem,
 )
 from infrastructure.persistence.metadata import Base
-from infrastructure.persistence.models import ThesisRevisionRow
+from infrastructure.persistence.orm import ThesisRevisionRow
 from infrastructure.persistence.repositories.thesis_revision import (
     SqlAlchemyThesisRevisionRepository,
 )
@@ -1208,7 +1208,7 @@ def test_candidate_payload_immutable_after_leaving_proposed(engine: Engine, uow_
         )
         uow.commit()
 
-    from infrastructure.persistence.models import CandidateThesisRevisionRow
+    from infrastructure.persistence.orm import CandidateThesisRevisionRow
 
     with Session(engine) as session:
         row = session.get(CandidateThesisRevisionRow, candidate_id)

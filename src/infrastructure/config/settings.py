@@ -39,9 +39,10 @@ _SECRET_FIELD_NAMES = frozenset(
         "schwab_account_hashes",
         "schwab_token_path",
         "provider_proxy_url",
-        "polymarket_proxy_url",
         "apify_api_token",
         "dukascopy_api_key",
+        "telegram_bot_token",
+        "telegram_chat_id",
     }
 )
 
@@ -101,7 +102,6 @@ class AppSettings(BaseSettings):
     database_url: str = Field(min_length=1)
     mcp_server_name: str = Field(min_length=1)
     default_timezone: str = Field(min_length=1)
-    # Phase 1A global timeout (kept for wire/compat; timeout_for prefers D5b fields).
     provider_timeout_seconds: float = Field(gt=0)
 
     # Non-secret path to Vendor Chain YAML. Relative paths resolve against
@@ -219,10 +219,8 @@ class AppSettings(BaseSettings):
     reddit_cache_ttl_seconds: int = Field(default=3600, gt=0)
     reddit_cooldown_default_seconds: int = Field(default=900, gt=0)
     reddit_cooldown_max_seconds: int = Field(default=3600, gt=0)
-    # General outbound proxy for CME/DCE/Dukascopy and Polymarket. The old
-    # Polymarket-specific field remains as a compatibility fallback.
+    # General outbound proxy for CME/DCE/Dukascopy, Polymarket, and Telegram.
     provider_proxy_url: str | None = None
-    polymarket_proxy_url: str | None = None
 
     # Phase 1I read-only account providers. Sources are additive; no unlock/order
     # credentials exist. Environment values use a JSON array.
@@ -238,6 +236,16 @@ class AppSettings(BaseSettings):
     manual_watchlist_csv_path: Path | None = None
     post_market_sync_delay_minutes: int = Field(default=10, ge=0, le=120)
     post_market_sync_lock_path: Path = Path("data/locks/post_market_sync.lock")
+
+    # Deterministic Monitor event delivery. Telegram is an outbound notification
+    # adapter only; it never receives commands or mutates research/trading state.
+    monitor_notifications_enabled: bool = False
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_message_thread_id: int | None = Field(default=None, ge=1)
+    monitor_notification_max_attempts: int = Field(default=5, ge=1, le=10)
+    monitor_notification_event_ttl_hours: int = Field(default=24, ge=1, le=168)
+    monitor_notification_batch_size: int = Field(default=20, ge=1, le=100)
 
     # Schwab read-only accounts. schwab-py owns the rotating token file.
     schwab_client_id: str | None = None
@@ -284,9 +292,11 @@ class AppSettings(BaseSettings):
         "schwab_client_id",
         "schwab_client_secret",
         "provider_proxy_url",
-        "polymarket_proxy_url",
         "apify_api_token",
         "dukascopy_api_key",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "telegram_message_thread_id",
         mode="before",
     )
     @classmethod
@@ -317,7 +327,7 @@ class AppSettings(BaseSettings):
                 normalized.append(key)
         return tuple(normalized)
 
-    @field_validator("provider_proxy_url", "polymarket_proxy_url")
+    @field_validator("provider_proxy_url")
     @classmethod
     def _validate_proxy_url(cls, value: str | None) -> str | None:
         if value is None:
@@ -326,11 +336,6 @@ class AppSettings(BaseSettings):
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("proxy URL must be an HTTP(S) proxy URL")
         return value
-
-    @property
-    def effective_provider_proxy_url(self) -> str | None:
-        """Return the general proxy, falling back to the legacy setting."""
-        return self.provider_proxy_url or self.polymarket_proxy_url
 
     @field_validator(
         "manual_holdings_csv_path",
@@ -472,6 +477,19 @@ class AppSettings(BaseSettings):
             raise ValueError(
                 "reddit_cooldown_max_seconds must be >= reddit_cooldown_default_seconds"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_telegram_notification_configuration(self) -> Self:
+        if not self.monitor_notifications_enabled:
+            return self
+        if self.telegram_bot_token is None or self.telegram_chat_id is None:
+            raise ValueError(
+                "Telegram bot token and chat id are required when Monitor "
+                "notifications are enabled"
+            )
+        if re.fullmatch(r"-?[0-9]+|@[A-Za-z0-9_]{5,}", self.telegram_chat_id) is None:
+            raise ValueError("telegram_chat_id must be a numeric id or @channel username")
         return self
 
     @field_validator("iwencai_base_url", mode="before")
@@ -641,8 +659,8 @@ class AppSettings(BaseSettings):
         """Return provider timeout seconds for ``category`` (design §12.1 / 1E).
 
         Breadth uses its own bounded-batch override; other market categories use
-        the market override. Remaining categories use the D5b default. The 1A
-        ``provider_timeout_seconds`` remains available as a compatibility field.
+        the market override. Remaining categories use the default. The global
+        timeout remains a compatibility setting for existing deployments.
         """
         if category is DataCategory.MARKET_BREADTH:
             return self.provider_timeout_us_breadth_seconds
