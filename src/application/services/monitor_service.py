@@ -6,6 +6,9 @@ from datetime import datetime
 
 from application.dto.monitoring import (
     MonitorCreateInput,
+    MonitorDashboardDTO,
+    MonitorDashboardInput,
+    MonitorDashboardItemDTO,
     MonitorDefinitionDTO,
     MonitorDetailDTO,
     MonitorEventDTO,
@@ -16,12 +19,16 @@ from application.dto.monitoring import (
     MonitorListDTO,
     MonitorListInput,
     MonitorRuleStateDTO,
+    MonitorRunDTO,
+    MonitorRunListDTO,
+    MonitorRunListInput,
     MonitorUpdateInput,
 )
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
 from application.services._research_support import UowFactory
+from application.services.monitor_schedule_service import MonitorScheduleService
 from domain.common.errors import (
     DataContractError,
     IdempotencyConflict,
@@ -40,6 +47,7 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEventResolution,
     MonitorRule,
+    MonitorRun,
 )
 from domain.trade_plan.enums import TradePlanConditionMode, TradePlanStatus
 
@@ -51,11 +59,13 @@ class MonitorService:
         research_uow_factory: UowFactory,
         clock: Clock,
         id_generator: IdGenerator,
+        schedule: MonitorScheduleService | None = None,
     ) -> None:
         self._repository = repository
         self._research_uow_factory = research_uow_factory
         self._clock = clock
         self._ids = id_generator
+        self._schedule = schedule or MonitorScheduleService()
 
     def create(self, request: MonitorCreateInput) -> MonitorDetailDTO:
         rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(
@@ -81,6 +91,7 @@ class MonitorService:
             trade_plan_id=request.trade_plan_id,
             trade_plan_version=request.trade_plan_version,
             cadence=request.cadence,
+            interval_minutes=request.interval_minutes,
             status=MonitorStatus.ACTIVE,
             rules=rules,
             confirmed_by=request.confirmed_by,
@@ -126,6 +137,7 @@ class MonitorService:
             trade_plan_id=request.trade_plan_id,
             trade_plan_version=request.trade_plan_version,
             cadence=request.cadence,
+            interval_minutes=request.interval_minutes,
             status=request.status,
             rules=rules,
             confirmed_by=request.confirmed_by,
@@ -155,6 +167,50 @@ class MonitorService:
                 MonitorDefinitionDTO.from_domain(item)
                 for item in self._repository.list_current(request.status)
             )
+        )
+
+    def dashboard(self, request: MonitorDashboardInput) -> MonitorDashboardDTO:
+        now = self._clock.now()
+        items: list[MonitorDashboardItemDTO] = []
+        for monitor in self._repository.list_current(request.status):
+            latest = self._repository.latest_run_for_monitor(monitor.monitor_id)
+            schedule = self._schedule.status(
+                monitor,
+                latest,
+                now,
+            )
+            current_rule_codes = {item.rule_code for item in monitor.rules}
+            states = tuple(
+                MonitorRuleStateDTO.from_domain(item)
+                for item in self._repository.get_rule_states(monitor.monitor_id)
+                if item.rule_code in current_rule_codes
+            )
+            items.append(
+                MonitorDashboardItemDTO(
+                    monitor=MonitorDefinitionDTO.from_domain(monitor),
+                    rule_states=states,
+                    latest_run=(
+                        MonitorRunDTO.from_domain(latest)
+                        if latest is not None
+                        else None
+                    ),
+                    last_run_at=latest.completed_at if latest is not None else None,
+                    next_due_at=schedule.next_due_at,
+                    due=schedule.due,
+                    schedule_health=schedule.health,
+                )
+            )
+        return MonitorDashboardDTO(generated_at=now, items=tuple(items))
+
+    def list_runs(self, request: MonitorRunListInput) -> MonitorRunListDTO:
+        values: tuple[MonitorRun, ...]
+        if request.run_id is not None:
+            value = self._repository.get_run(request.run_id)
+            values = () if value is None else (value,)
+        else:
+            values = self._repository.list_runs(request.monitor_id, request.limit)
+        return MonitorRunListDTO(
+            runs=tuple(MonitorRunDTO.from_domain(item) for item in values)
         )
 
     def list_events(self, request: MonitorEventListInput) -> MonitorEventListDTO:
@@ -295,6 +351,7 @@ class MonitorService:
             and value.trade_plan_id == request.trade_plan_id
             and value.trade_plan_version == request.trade_plan_version
             and value.cadence is request.cadence
+            and value.interval_minutes == request.interval_minutes
             and value.rules == rules
             and value.valid_until == valid_until
             and value.confirmed_by == request.confirmed_by
@@ -317,6 +374,7 @@ class MonitorService:
             and value.trade_plan_id == request.trade_plan_id
             and value.trade_plan_version == request.trade_plan_version
             and value.cadence is request.cadence
+            and value.interval_minutes == request.interval_minutes
             and value.status is request.status
             and value.rules == rules
             and value.valid_until == valid_until

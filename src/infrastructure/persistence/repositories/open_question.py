@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from domain.common.enums import OpenQuestionStatus
 from domain.common.errors import DataContractError, OpenQuestionNotFound
 from domain.research.models import OpenQuestion
-from infrastructure.persistence.models import OpenQuestionRow
+from infrastructure.persistence.orm import OpenQuestionRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

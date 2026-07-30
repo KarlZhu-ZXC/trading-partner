@@ -121,84 +121,54 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
     try:
         assert isinstance(container, ApplicationContainer)
         assert container.settings is test_settings
-        assert container.health_service is not None
-        assert container.clock is not None
-        # Phase 1B research wiring (third-batch services)
-        assert container.investment_case_service is not None
-        assert container.thesis_revision_service is not None
-        assert container.watchlist_service is not None
-        assert container.research_state_query_service is not None
-        assert container.open_question_service is not None
-        assert callable(container.research_unit_of_work_factory)
-        # Phase 1D D3b instrument wiring (no seed/migration in build_application)
-        assert container.instrument_master_service is not None
-        assert container.instrument_resolve_service is not None
-        assert callable(container.instrument_unit_of_work_factory)
-        assert container.id_generator is not None
-        assert container.secret_redactor is not None
-        # Phase 1D D8b router surface
-        assert container.provider_router is not None
-        assert isinstance(container.vendor_registry, VendorRegistry)
-        # Phase 1C C5 research-memory services (shared research UoW factory)
-        assert container.evidence_service is not None
-        assert container.research_archive_service is not None
-        assert container.research_search_service is not None
-        assert container.research_timeline_service is not None
-        assert container.journal_service is not None
-        assert container.decision_record_service is not None
-        # Phase 1E E5b/E5c product services + coordinator (public MCP still 18)
-        assert container.a_share_trading_calendar is not None
-        assert container.a_share_snapshot_service is not None
-        assert container.a_share_market_structure_service is not None
-        assert container.a_share_capital_service is not None
-        assert container.a_share_limit_up_service is not None
-        assert container.a_share_sentiment_service is not None
-        assert container.a_share_etf_option_service is not None
-        assert container.research_report_search_service is not None
-        assert container.a_share_tool_coordinator is not None
-        # Phase 1F F3c US market services + coordinator
-        assert container.us_market_data_service is not None
-        assert container.us_market_context_service is not None
-        assert container.us_technical_service is not None
-        assert container.us_tool_coordinator is not None
-        assert container.account_snapshot_repository is not None
-        assert container.account_service is not None
-        assert container.portfolio_service is not None
-        assert container.portfolio_tool_coordinator is not None
-        assert container.watchlist_hub_service is not None
-        assert isinstance(container.watchlist_hub_service, WatchlistHubService)
-        assert container.post_market_sync_service is not None
-        assert isinstance(container.post_market_sync_service, PostMarketSyncService)
+        assert container.context.clock is not None
+        assert container.context.id_generator is not None
+        assert container.context.secret_redactor is not None
+        assert isinstance(container.providers.registry, VendorRegistry)
+        assert container.providers.router is not None
+        assert container.services.health is not None
+        assert container.services.investment_cases is not None
+        assert container.services.thesis_revisions is not None
+        assert container.services.research_state is not None
+        assert container.services.instruments is not None
+        assert container.services.research_archive is not None
+        assert container.services.research_search is not None
+        assert container.services.research_timeline is not None
+        assert container.services.journal is not None
+        assert container.services.decisions is not None
+        assert container.services.a_share is not None
+        assert container.services.us_market is not None
+        assert container.services.market is not None
+        assert container.services.technical is not None
+        assert container.services.us_research is not None
+        assert container.services.us_context is not None
+        assert container.services.portfolio is not None
+        assert container.services.risk is not None
+        assert container.services.monitoring is not None
+        assert isinstance(container.services.watchlist, WatchlistHubService)
+        assert isinstance(container.operations.post_market_sync, PostMarketSyncService)
         assert isinstance(
-            container.post_market_sync_service._calendar,  # type: ignore[attr-defined]
+            container.operations.post_market_sync._calendar,  # type: ignore[attr-defined]
             XnysMarketSessionCalendar,
         )
-        assert container.post_market_sync_service._portfolio is (  # type: ignore[attr-defined]
-            container.portfolio_tool_coordinator
+        assert container.operations.post_market_sync._portfolio is (  # type: ignore[attr-defined]
+            container.services.portfolio
         )
-        assert container.post_market_sync_service._watchlist is (  # type: ignore[attr-defined]
-            container.watchlist_hub_service
+        assert container.operations.post_market_sync._watchlist is (  # type: ignore[attr-defined]
+            container.services.watchlist
         )
-        assert container.post_market_sync_service._delay.total_seconds() == (  # type: ignore[attr-defined]
+        assert container.operations.post_market_sync._delay.total_seconds() == (  # type: ignore[attr-defined]
             test_settings.post_market_sync_delay_minutes * 60
         )
-        assert container.research_context_builder is not None
-        assert container.challenge_review_repository is not None
-        assert container.challenge_review_service is not None
-        assert container.account_transaction_repository is not None
-        assert container.account_transaction_coordinator is not None
-        assert container.workflow_run_repository is not None
-        assert container.portfolio_review_fact_service is not None
-        assert container.research_workflow_orchestrator is not None
         # Real adapters remain registered even when a provider is disabled.
-        registered = frozenset(container.vendor_registry.list_registered())
+        registered = frozenset(container.providers.registry.list_registered())
         assert registered == _EXPECTED_REGISTERED
-        assert isinstance(container.vendor_registry.get(VendorId.NULL), NullCategoryProvider)
+        assert isinstance(container.providers.registry.get(VendorId.NULL), NullCategoryProvider)
         assert VendorId.YFINANCE in registered
         assert VendorId.ALPHA_VANTAGE in registered
         assert VendorId.BROKER not in registered
         # Fresh unmigrated SQLite → schema not ready (in-memory state path).
-        assert provider_state_schema_ready(container.database.engine) is False
+        assert provider_state_schema_ready(container.resources.database.engine) is False
         assert len(PUBLIC_TOOL_NAMES) == 28
     finally:
         container.close()
@@ -218,10 +188,10 @@ def test_post_market_sync_uses_settings_delay_minutes(tmp_sqlite_url: str) -> No
     )
     container = build_application(settings)
     try:
-        assert isinstance(container.post_market_sync_service, PostMarketSyncService)
-        assert container.post_market_sync_service._delay.total_seconds() == 37 * 60  # type: ignore[attr-defined]
+        assert isinstance(container.operations.post_market_sync, PostMarketSyncService)
+        assert container.operations.post_market_sync._delay.total_seconds() == 37 * 60  # type: ignore[attr-defined]
         assert isinstance(
-            container.post_market_sync_service._calendar,  # type: ignore[attr-defined]
+            container.operations.post_market_sync._calendar,  # type: ignore[attr-defined]
             XnysMarketSessionCalendar,
         )
     finally:
@@ -235,7 +205,7 @@ def test_build_application_fresh_sqlite_uses_in_memory_provider_state(
     container = build_application(test_settings)
     try:
         # Peer into engine: router engine holds cache_store as private attr.
-        engine = container.provider_router._engine  # type: ignore[attr-defined]
+        engine = container.providers.router._engine  # type: ignore[attr-defined]
         cache = engine._cache_store  # type: ignore[attr-defined]
         assert isinstance(cache, InMemoryProviderCacheStore)
     finally:
@@ -248,7 +218,7 @@ def test_build_application_passes_exact_settings_to_router_engine(
     """v1.28: no bootstrap wrapper/override — engine receives the same AppSettings."""
     container = build_application(test_settings)
     try:
-        engine = container.provider_router._engine  # type: ignore[attr-defined]
+        engine = container.providers.router._engine  # type: ignore[attr-defined]
         assert isinstance(engine, ProviderRouterEngine)
         assert engine._settings is test_settings  # type: ignore[attr-defined]
         assert engine._settings is container.settings  # type: ignore[attr-defined]
@@ -293,21 +263,21 @@ def test_e5b_registry_disabled_vendor_remains_registered_unconfigured(
         ),
     )
     try:
-        registered = frozenset(container.vendor_registry.list_registered())
+        registered = frozenset(container.providers.registry.list_registered())
         assert registered == _EXPECTED_REGISTERED
-        tencent = container.vendor_registry.get(VendorId.TENCENT)
-        eastmoney = container.vendor_registry.get(VendorId.EASTMONEY)
-        iwencai = container.vendor_registry.get(VendorId.IWENCAI)
+        tencent = container.providers.registry.get(VendorId.TENCENT)
+        eastmoney = container.providers.registry.get(VendorId.EASTMONEY)
+        iwencai = container.providers.registry.get(VendorId.IWENCAI)
         assert isinstance(tencent, TencentAShareAdapter)
         assert isinstance(eastmoney, EastmoneyAShareAdapter)
         assert tencent.is_configured() is False
         assert eastmoney.is_configured() is False
-        assert container.vendor_registry.get(VendorId.EASTMONEY_FUTURES).is_configured() is False
+        assert container.providers.registry.get(VendorId.EASTMONEY_FUTURES).is_configured() is False
         assert iwencai.is_configured() is False
         # SSE/SZSE/HKEX remain configured (no enable flags in Phase 1E).
-        assert container.vendor_registry.get(VendorId.SSE).is_configured() is True
-        assert container.vendor_registry.get(VendorId.SZSE).is_configured() is True
-        assert container.vendor_registry.get(VendorId.HKEX).is_configured() is True
+        assert container.providers.registry.get(VendorId.SSE).is_configured() is True
+        assert container.providers.registry.get(VendorId.SZSE).is_configured() is True
+        assert container.providers.registry.get(VendorId.HKEX).is_configured() is True
     finally:
         container.close()
     assert transport.aclose_calls == 0
@@ -331,32 +301,27 @@ def test_e5b_single_transport_gate_calendar_and_codec_identity(
         ),
     )
     try:
-        assert container.providers.router is container.provider_router
-        assert container.providers.registry is container.vendor_registry
-        assert container.services.a_share is container.a_share_tool_coordinator
-        assert container.services.workflows is container.research_workflow_orchestrator
-        assert container.resources.database is container.database
-        assert container.a_share_trading_calendar is calendar
-        assert container._owned_a_share_transport is None
+        assert container.services.a_share._clock is container.context.clock  # type: ignore[attr-defined]
+        assert container.resources.a_share_transport is None
 
-        tencent = container.vendor_registry.get(VendorId.TENCENT)
-        eastmoney = container.vendor_registry.get(VendorId.EASTMONEY)
-        sina = container.vendor_registry.get(VendorId.SINA)
+        tencent = container.providers.registry.get(VendorId.TENCENT)
+        eastmoney = container.providers.registry.get(VendorId.EASTMONEY)
+        sina = container.providers.registry.get(VendorId.SINA)
         assert tencent._transport is transport  # type: ignore[attr-defined]
         assert eastmoney._transport is transport  # type: ignore[attr-defined]
         assert sina._transport is transport  # type: ignore[attr-defined]
-        yfinance = container.vendor_registry.get(VendorId.YFINANCE)
-        alpha = container.vendor_registry.get(VendorId.ALPHA_VANTAGE)
+        yfinance = container.providers.registry.get(VendorId.YFINANCE)
+        alpha = container.providers.registry.get(VendorId.ALPHA_VANTAGE)
         assert yfinance._transport is transport  # type: ignore[attr-defined]
         assert alpha._transport is transport  # type: ignore[attr-defined]
         assert eastmoney._gate is gate  # type: ignore[attr-defined]
         assert eastmoney._calendar is calendar  # type: ignore[attr-defined]
 
         # Shared codecs constructed once and injected by identity.
-        snap = container.a_share_snapshot_service
-        structure = container.a_share_market_structure_service
-        capital = container.a_share_capital_service
-        sentiment = container.a_share_sentiment_service
+        snap = container.services.a_share._snapshot_service  # type: ignore[attr-defined]
+        structure = container.services.a_share._market_structure_service  # type: ignore[attr-defined]
+        capital = container.services.a_share._capital_service  # type: ignore[attr-defined]
+        sentiment = container.services.a_share._sentiment_service  # type: ignore[attr-defined]
         assert snap._quote_codec is structure._quote_codec  # type: ignore[attr-defined]
         assert snap._news_codec is sentiment._news_codec  # type: ignore[attr-defined]
         assert (
@@ -405,56 +370,31 @@ def test_e5b_owned_transport_is_httpx_and_construction_is_offline(
         overrides=BootstrapOverrides(eastmoney_gate=gate),
     )
     try:
-        owned = container._owned_a_share_transport
+        owned = container.resources.a_share_transport
         assert isinstance(owned, HttpxTransport)
-        assert isinstance(container.a_share_trading_calendar, JsonAShareTradingCalendar)
+        structure = container.services.a_share._market_structure_service  # type: ignore[attr-defined]
+        assert isinstance(structure._calendar, JsonAShareTradingCalendar)  # type: ignore[attr-defined]
         # Owned transport shared into real adapters.
-        eastmoney = container.vendor_registry.get(VendorId.EASTMONEY)
+        eastmoney = container.providers.registry.get(VendorId.EASTMONEY)
         assert eastmoney._transport is owned  # type: ignore[attr-defined]
     finally:
         container.close()
 
 
-def test_legacy_polymarket_proxy_migrates_to_cross_asset_transport(
-    test_settings: AppSettings,
-) -> None:
-    settings = test_settings.model_copy(update={"polymarket_proxy_url": "http://127.0.0.1:7890"})
-    container = build_application(settings)
-    try:
-        shared = container._owned_a_share_transport
-        cross_asset = container._owned_cross_asset_transport
-        polymarket = container.vendor_registry.get(VendorId.POLYMARKET)
-        dukascopy = container.vendor_registry.get(VendorId.DUKASCOPY)
-        assert isinstance(shared, HttpxTransport)
-        assert isinstance(cross_asset, HttpxTransport)
-        assert cross_asset is not shared
-        assert container._owned_polymarket_transport is None
-        assert polymarket._transport is cross_asset  # type: ignore[attr-defined]
-        assert dukascopy._transport is cross_asset  # type: ignore[attr-defined]
-    finally:
-        container.close()
-
-
-def test_general_and_specific_proxy_can_use_separate_transports(
+def test_general_proxy_is_shared_by_cross_asset_providers(
     test_settings: AppSettings,
 ) -> None:
     settings = test_settings.model_copy(
-        update={
-            "provider_proxy_url": "http://127.0.0.1:7891",
-            "polymarket_proxy_url": "http://127.0.0.1:7890",
-        }
+        update={"provider_proxy_url": "http://127.0.0.1:7891"}
     )
     container = build_application(settings)
     try:
-        cross_asset = container._owned_cross_asset_transport
-        polymarket_transport = container._owned_polymarket_transport
-        polymarket = container.vendor_registry.get(VendorId.POLYMARKET)
-        cme = container.vendor_registry.get(VendorId.CME_PUBLIC)
+        cross_asset = container.resources.cross_asset_transport
+        polymarket = container.providers.registry.get(VendorId.POLYMARKET)
+        cme = container.providers.registry.get(VendorId.CME_PUBLIC)
         assert isinstance(cross_asset, HttpxTransport)
-        assert isinstance(polymarket_transport, HttpxTransport)
-        assert cross_asset is not polymarket_transport
         assert cme._transport is cross_asset  # type: ignore[attr-defined]
-        assert polymarket._transport is polymarket_transport  # type: ignore[attr-defined]
+        assert polymarket._transport is cross_asset  # type: ignore[attr-defined]
     finally:
         container.close()
 
@@ -475,14 +415,14 @@ def test_e5b_sync_close_is_idempotent_and_closes_owned_transport(
         ),
     )
     # Force an owned transport + recording database for order/idempotency checks.
-    container._owned_a_share_transport = transport  # type: ignore[assignment]
-    container.database = _RecordingDatabase(events)  # type: ignore[assignment]
+    container.resources.a_share_transport = transport  # type: ignore[assignment]
+    container.resources.database = _RecordingDatabase(events)  # type: ignore[assignment]
 
     container.close()
     container.close()
     assert events == ["transport.aclose", "database.close"]
     assert transport.aclose_calls == 1
-    assert container.database.closed is True  # type: ignore[attr-defined]
+    assert container.resources.database.closed is True  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -501,8 +441,8 @@ async def test_e5b_async_aclose_idempotent_and_running_loop_close_errors(
             eastmoney_gate=gate,
         ),
     )
-    container._owned_a_share_transport = transport  # type: ignore[assignment]
-    container.database = _RecordingDatabase(events)  # type: ignore[assignment]
+    container.resources.a_share_transport = transport  # type: ignore[assignment]
+    container.resources.database = _RecordingDatabase(events)  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="await container.aclose"):
         container.close()
@@ -531,8 +471,9 @@ def test_e5b_overrides_clock_identity(test_settings: AppSettings) -> None:
         ),
     )
     try:
-        assert container.clock is clock
-        assert container.a_share_snapshot_service._clock is clock  # type: ignore[attr-defined]
+        assert container.context.clock is clock
+        snapshot = container.services.a_share._snapshot_service  # type: ignore[attr-defined]
+        assert snapshot._clock is clock  # type: ignore[attr-defined]
     finally:
         container.close()
 
@@ -582,21 +523,7 @@ for name, mod in mods.items():
     print(f"{{name}}={{got}}")
     assert got == expected[name], (name, got, expected[name])
 fields = getattr(bootstrap.ApplicationContainer, "__dataclass_fields__", {{}})
-assert "investment_case_service" in fields
-assert "instrument_master_service" in fields
-assert "instrument_resolve_service" in fields
-assert "provider_router" in fields
-assert "vendor_registry" in fields
-assert "a_share_snapshot_service" in fields
-assert "a_share_trading_calendar" in fields
-assert "research_report_search_service" in fields
-assert "a_share_tool_coordinator" in fields
-assert "us_market_data_service" in fields
-assert "us_market_context_service" in fields
-assert "us_technical_service" in fields
-assert "us_tool_coordinator" in fields
-assert "watchlist_hub_service" in fields
-assert "post_market_sync_service" in fields
+assert set(fields) == {{"settings", "context", "resources", "providers", "services", "operations"}}
 assert hasattr(bootstrap, "build_application")
 assert hasattr(bootstrap, "BootstrapOverrides")
 print("OK")

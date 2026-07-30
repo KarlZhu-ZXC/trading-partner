@@ -21,7 +21,7 @@ from application.dto.research_memory import (
 )
 from domain.common.enums import EvidenceStance, ResearchSearchEntityType
 from domain.common.errors import ResearchMemoryNotFound, SearchBackendUnavailable
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     CaseEvidenceLinkRow,
     DecisionRecordRow,
     JournalEntryRow,

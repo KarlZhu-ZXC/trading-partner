@@ -35,6 +35,10 @@ class XnysMarketSessionCalendar:
         label = self._calendar.previous_session(session_date)
         return self._session(date.fromisoformat(str(label.date())))
 
+    def next_session(self, session_date: date) -> MarketSession | None:
+        label = self._calendar.next_session(session_date)
+        return self._session(date.fromisoformat(str(label.date())))
+
     def _session(self, session_date: date) -> MarketSession:
         close_at = self._calendar.session_close(session_date).to_pydatetime().astimezone(UTC)
         return MarketSession(session_date=session_date, close_at=close_at)

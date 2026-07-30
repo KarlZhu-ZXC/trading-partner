@@ -14,7 +14,7 @@ def build_system_adapters(
     *,
     surface_profile: str,
     public_tool_count: int,
-    surface_schema_version: str = "compact-v2",
+    surface_schema_version: str = "compact-v4",
 ) -> SimpleNamespace:
     """Build the compact system adapter."""
 
@@ -22,7 +22,7 @@ def build_system_adapters(
     def system_health() -> dict[str, Any]:
         """Return application and database health as a Tool Envelope."""
         try:
-            envelope = container.health_service.check()
+            envelope = container.services.health.check()
             result = envelope.model_dump(mode="json")
             data = result.get("data")
             if isinstance(data, dict):

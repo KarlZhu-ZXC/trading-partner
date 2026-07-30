@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from application.dto.schwab_oauth import SchwabOAuthHealthDTO
 from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 
 
@@ -38,6 +39,7 @@ class PostMarketSyncResultDTO(BaseModel):
     holding_count: int = 0
     watchlist_groups_synced: int | None = None
     watchlist_membership_relations_synced: int | None = None
+    schwab_oauth: SchwabOAuthHealthDTO | None = None
     warning_codes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
 
@@ -53,6 +55,7 @@ class PostMarketSyncStatusDTO(BaseModel):
     portfolio_status: PostMarketSyncStepStatus | None = None
     watchlist_status: PostMarketSyncStepStatus | None = None
     attempt_count: int | None = None
+    schwab_oauth: SchwabOAuthHealthDTO | None = None
     warning_codes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
 

@@ -11,7 +11,7 @@ from application.ports.clock import Clock
 from domain.common.enums import ThesisRole, ThesisStatus
 from domain.common.errors import DataContractError, ThesisNotFound
 from domain.research.models import Thesis
-from infrastructure.persistence.models import ThesisRevisionRow, ThesisRow
+from infrastructure.persistence.orm import ThesisRevisionRow, ThesisRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

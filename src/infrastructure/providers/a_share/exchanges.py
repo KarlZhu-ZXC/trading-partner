@@ -877,7 +877,3 @@ def _parse_exchange_dragon_json(
         )
     records.sort(key=lambda r: (r.instrument_id, r.reason))
     return records
-
-
-# Narrow alias used when a single factory is preferred in tests.
-ExchangeAShareDisclosureAdapter = SzseAShareDisclosureAdapter

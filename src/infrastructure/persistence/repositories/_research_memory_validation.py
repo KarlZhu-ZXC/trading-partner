@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from domain.common.errors import DataContractError, InvalidResearchLink
 from domain.common.time import require_aware_datetime
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     CaseEvidenceLinkRow,
     InstrumentRow,
     InvestmentCaseRow,

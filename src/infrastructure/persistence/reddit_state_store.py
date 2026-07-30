@@ -20,7 +20,7 @@ from application.ports.secret_redactor import SecretRedactor
 from domain.common.errors import DataContractError, PersistenceError
 from domain.common.time import require_aware_datetime
 from domain.us_context.models import USSentimentSample
-from infrastructure.persistence.models import RedditCooldownRow, RedditSampleCacheRow
+from infrastructure.persistence.orm import RedditCooldownRow, RedditSampleCacheRow
 from infrastructure.persistence.repositories._mapping import dt_from_db, dt_to_db
 
 _COOLDOWN_SCOPE = "anonymous_rss"

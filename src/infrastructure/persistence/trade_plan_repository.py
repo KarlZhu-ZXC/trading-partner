@@ -20,7 +20,7 @@ from domain.trade_plan.enums import (
     TradePlanStatus,
 )
 from domain.trade_plan.models import TradePlan, TradePlanCondition
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     TradePlanConditionRow,
     TradePlanIdentityRow,
     TradePlanVersionRow,

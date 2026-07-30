@@ -221,11 +221,18 @@ def _all_fields(adapter: Any, *, exclude: tuple[str, ...] = ()) -> tuple[str, ..
 
 
 def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Remove prose noise, shorten refs, and share repeated property schemas."""
+    """Remove non-validating noise, shorten refs, and share repeated schemas."""
 
     def clean(value: Any) -> Any:
         if isinstance(value, dict):
-            return {key: clean(item) for key, item in value.items() if key != "title"}
+            # ``oneOf`` plus each variant's required literal operation already
+            # carries the dispatch contract. Pydantic's discriminator ``mapping``
+            # repeats those refs and is optional JSON Schema metadata.
+            return {
+                key: clean(item)
+                for key, item in value.items()
+                if key not in {"title", "mapping", "default"}
+            }
         if isinstance(value, list):
             return [clean(item) for item in value]
         return value
@@ -313,7 +320,7 @@ def create_compact_mcp_server(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v2",
+            surface_schema_version="compact-v4",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -808,8 +815,8 @@ def _register_portfolio_challenge_workflows(
         server,
         name="research_workflow_run",
         description=(
-            "Run one closed research, peer-comparison, market, or portfolio fact workflow; "
-            "synthesis remains external."
+            "Run one closed research, market, portfolio, peer-comparison, or manual "
+            "historical-validation workflow; synthesis remains external."
         ),
         variants=(
             _spec(
@@ -859,6 +866,16 @@ def _register_portfolio_challenge_workflows(
                 "peer_comparison",
                 workflows.research_run_peer_comparison,
                 _all_fields(workflows.research_run_peer_comparison),
+            ),
+            _spec(
+                "historical_validation_prepare",
+                workflows.historical_validation_prepare,
+                _all_fields(workflows.historical_validation_prepare),
+            ),
+            _spec(
+                "historical_validation_import",
+                workflows.historical_validation_import,
+                _all_fields(workflows.historical_validation_import),
             ),
         ),
         annotations=APPEND_OPEN_WORLD,
@@ -933,7 +950,10 @@ def _register_watchlist_risk_monitoring(
     _register_dispatch_tool(
         server,
         name="monitor_read",
-        description="Read Monitor definitions/current rule states or durable Monitor events.",
+        description=(
+            "Read the unified Monitor dashboard, definitions/current rule states, "
+            "immutable run observations, or transition events."
+        ),
         variants=(
             _spec(
                 "definitions",
@@ -944,6 +964,16 @@ def _register_watchlist_risk_monitoring(
                 "events",
                 monitoring.monitor_event_list,
                 _all_fields(monitoring.monitor_event_list),
+            ),
+            _spec(
+                "dashboard",
+                monitoring.monitor_dashboard,
+                _all_fields(monitoring.monitor_dashboard),
+            ),
+            _spec(
+                "runs",
+                monitoring.monitor_runs,
+                _all_fields(monitoring.monitor_runs),
             ),
         ),
         annotations=READ_DURABLE,

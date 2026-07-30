@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from application.dto.workflow import WorkflowFactDTO, WorkflowStepReceiptDTO
-from infrastructure.evaluation.phase1_catalog import (
+from evaluation_support import (
     validate_dialogue_catalog,
     validate_longitudinal_catalog,
 )

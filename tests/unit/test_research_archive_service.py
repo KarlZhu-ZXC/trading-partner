@@ -44,7 +44,7 @@ from domain.research.models import (
     Thesis,
     ThesisRevision,
 )
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     ResearchEventRow,
     ResearchReportRow,
     SystemAuditLogRow,

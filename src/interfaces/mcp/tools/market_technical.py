@@ -49,7 +49,7 @@ def build_market_technical_adapters(
                     "as_of": as_of,
                 }
             )
-            envelope = await container.market_tool_coordinator.get_market_snapshot(inp)
+            envelope = await container.services.market.get_market_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -78,7 +78,7 @@ def build_market_technical_adapters(
                     "as_of": as_of,
                 }
             )
-            envelope = await container.market_tool_coordinator.get_market_bars(inp)
+            envelope = await container.services.market.get_market_bars(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -114,7 +114,7 @@ def build_market_technical_adapters(
             if right_instrument_id is not None:
                 payload["right_instrument_id"] = right_instrument_id
             inp = MarketGetContextInput.model_validate(payload)
-            envelope = await container.market_tool_coordinator.get_market_context(inp)
+            envelope = await container.services.market.get_market_context(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -140,7 +140,7 @@ def build_market_technical_adapters(
                     "intervals": tuple(intervals or ("1d", "1w")),
                 }
             )
-            envelope = await container.technical_tool_coordinator.get_snapshot(inp)
+            envelope = await container.services.technical.get_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -162,7 +162,7 @@ def build_market_technical_adapters(
                 "lookback_sessions": lookback_sessions,
             }
         )
-        artifact = await container.technical_tool_coordinator.render_chart(inp)
+        artifact = await container.services.technical.render_chart(inp)
         content: list[TextContent | ImageContent] = [
             TextContent(
                 type="text",
@@ -215,7 +215,7 @@ def build_market_technical_adapters(
                     "lookback_sessions": lookback_sessions,
                 }
             )
-            envelope = await container.us_tool_coordinator.get_us_snapshot(inp)
+            envelope = await container.services.us_market.get_us_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise

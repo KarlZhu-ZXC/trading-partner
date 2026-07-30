@@ -35,7 +35,7 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "offset": offset,
                 }
             )
-            envelope = await container.watchlist_hub_service.get_items(request)
+            envelope = await container.services.watchlist.get_items(request)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -57,7 +57,7 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
             request = WatchlistGetGroupsInput.model_validate(
                 {"refresh": refresh, "include_inactive": include_inactive}
             )
-            envelope = await container.watchlist_hub_service.get_groups(request)
+            envelope = await container.services.watchlist.get_groups(request)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -82,7 +82,7 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = await container.watchlist_hub_service.add(request)
+            envelope = await container.services.watchlist.add(request)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -103,7 +103,7 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = await container.watchlist_hub_service.remove(request)
+            envelope = await container.services.watchlist.remove(request)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise

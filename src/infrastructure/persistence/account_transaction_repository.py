@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from domain.common.enums import VendorId
 from domain.portfolio.enums import AccountTransactionKind, AccountTransactionSide
 from domain.portfolio.models import AccountTransaction
-from infrastructure.persistence.models import AccountTransactionRow
+from infrastructure.persistence.orm import AccountTransactionRow
 
 
 class SqlAlchemyAccountTransactionRepository:
@@ -40,7 +40,7 @@ class SqlAlchemyAccountTransactionRepository:
                         price=str(item.price) if item.price is not None else None,
                         fees=str(item.fees),
                         currency=item.currency,
-                        occurred_at=item.occurred_at.isoformat(),
+                        occurred_at=item.occurred_at.astimezone(UTC).isoformat(),
                     )
                 )
                 inserted.append(item)
@@ -59,18 +59,18 @@ class SqlAlchemyAccountTransactionRepository:
             statement = statement.where(
                 AccountTransactionRow.provider.in_(item.value for item in providers)
             )
-        if start is not None:
-            statement = statement.where(
-                AccountTransactionRow.occurred_at >= start.isoformat()
-            )
-        if end is not None:
-            statement = statement.where(AccountTransactionRow.occurred_at <= end.isoformat())
-        statement = statement.order_by(
-            AccountTransactionRow.occurred_at.desc(),
-            AccountTransactionRow.provider_transaction_id,
-        ).limit(limit)
         with Session(self._engine) as session:
-            return tuple(self._hydrate(item) for item in session.scalars(statement))
+            # Historical rows may preserve different UTC offsets. Comparing their
+            # ISO strings lexicographically can exclude an instant that is inside
+            # the requested window, so filter hydrated aware datetimes instead.
+            values = [self._hydrate(item) for item in session.scalars(statement)]
+        if start is not None:
+            values = [item for item in values if item.occurred_at >= start]
+        if end is not None:
+            values = [item for item in values if item.occurred_at <= end]
+        values.sort(key=lambda item: item.provider_transaction_id)
+        values.sort(key=lambda item: item.occurred_at, reverse=True)
+        return tuple(values[:limit])
 
     @staticmethod
     def _hydrate(row: AccountTransactionRow) -> AccountTransaction:

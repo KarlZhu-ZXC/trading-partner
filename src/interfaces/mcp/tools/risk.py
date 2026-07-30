@@ -21,7 +21,7 @@ def build_risk_adapters(container: ApplicationContainer) -> SimpleNamespace:
     def risk_policy_get() -> dict[str, Any]:
         """Return the current versioned portfolio risk policy."""
         try:
-            return container.risk_tool_coordinator.get_policy().model_dump(mode="json")
+            return container.services.risk.get_policy().model_dump(mode="json")
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
@@ -63,7 +63,7 @@ def build_risk_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "event_blackout_days": event_blackout_days,
                 }
             )
-            return container.risk_tool_coordinator.update_policy(inp).model_dump(mode="json")
+            return container.services.risk.update_policy(inp).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -108,7 +108,7 @@ def build_risk_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            return (await container.risk_tool_coordinator.check(inp)).model_dump(mode="json")
+            return (await container.services.risk.check(inp)).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001

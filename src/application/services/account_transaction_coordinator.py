@@ -20,6 +20,25 @@ from domain.common.enums import Freshness, SourceRole, VendorId
 from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 
+_PROVIDER_WARNING_MESSAGES = {
+    "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN": (
+        "Schwab omitted explicit trade instruction; side was derived from the signed "
+        "security quantity."
+    ),
+    "SCHWAB_TRANSACTION_ITEM_OMITTED": (
+        "One or more Schwab transaction items could not be normalized."
+    ),
+    "SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED": (
+        "A Schwab cash journal item was outside the security-transaction model."
+    ),
+    "SCHWAB_TRANSACTION_WINDOW_DEFAULTED": (
+        "Schwab transaction history used its supported default lookback window."
+    ),
+    "SCHWAB_TRANSACTION_WINDOW_CLAMPED": (
+        "The requested Schwab transaction window was clamped to 60 days."
+    ),
+}
+
 
 class AccountTransactionCoordinator:
     def __init__(
@@ -45,6 +64,7 @@ class AccountTransactionCoordinator:
             selected = request.providers or tuple(self._providers)
             unavailable: list[VendorId] = []
             sources: list[SourceReference] = []
+            provider_warnings: dict[str, VendorId] = {}
             for vendor in selected:
                 provider = self._providers.get(vendor)
                 if provider is None or not provider.is_configured():
@@ -54,6 +74,8 @@ class AccountTransactionCoordinator:
                     start=request.start, end=request.end, limit=request.limit
                 )
                 self._repository.append_many(result.value)
+                for code in result.meta.warnings:
+                    provider_warnings.setdefault(code, vendor)
                 sources.append(
                     SourceReference(
                         name=vendor.value,
@@ -67,7 +89,7 @@ class AccountTransactionCoordinator:
                 end=request.end,
                 limit=request.limit,
             )
-            warnings = tuple(
+            unavailable_warnings = tuple(
                 WarningInfo(
                     code=f"{vendor.value.upper()}_TRANSACTIONS_UNAVAILABLE",
                     message="Historical transactions are unavailable from this provider.",
@@ -75,6 +97,17 @@ class AccountTransactionCoordinator:
                 )
                 for vendor in unavailable
             )
+            upstream_warnings = tuple(
+                WarningInfo(
+                    code=code,
+                    message=_PROVIDER_WARNING_MESSAGES.get(
+                        code, "Account transaction provider warning."
+                    ),
+                    details={"provider": vendor.value},
+                )
+                for code, vendor in provider_warnings.items()
+            )
+            warnings = unavailable_warnings + upstream_warnings
             return ToolEnvelope.success(
                 request_id=request_id,
                 market=None,

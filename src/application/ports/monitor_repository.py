@@ -1,12 +1,19 @@
 """Durable Monitoring repository protocol."""
 
+from datetime import datetime
 from typing import Protocol
 
-from domain.monitoring.enums import MonitorStatus
+from domain.monitoring.enums import (
+    MonitorNotificationChannel,
+    MonitorNotificationStatus,
+    MonitorStatus,
+)
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
+    MonitorNotificationMessage,
+    MonitorNotificationOutboxEntry,
     MonitorRuleState,
     MonitorRun,
 )
@@ -32,7 +39,43 @@ class MonitorRepository(Protocol):
         run: MonitorRun,
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
+        notifications: tuple[MonitorNotificationMessage, ...],
     ) -> MonitorRun: ...
+
+    def list_due_notifications(
+        self,
+        channel: MonitorNotificationChannel,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[MonitorNotificationOutboxEntry, ...]: ...
+
+    def record_notification_attempt(
+        self,
+        source_event_id: str,
+        channel: MonitorNotificationChannel,
+        *,
+        status: MonitorNotificationStatus,
+        attempted_at: datetime,
+        next_attempt_at: datetime,
+        provider_message_id: str | None,
+        error_code: str | None,
+    ) -> MonitorNotificationOutboxEntry: ...
+
+    def notification_counts(
+        self, channel: MonitorNotificationChannel
+    ) -> dict[MonitorNotificationStatus, int]: ...
+
+    def last_notification_delivery_at(
+        self, channel: MonitorNotificationChannel
+    ) -> datetime | None: ...
+
+    def get_run(self, run_id: str) -> MonitorRun | None: ...
+
+    def list_runs(
+        self, monitor_id: str | None, limit: int
+    ) -> tuple[MonitorRun, ...]: ...
+
+    def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None: ...
 
     def get_event(self, event_id: str) -> MonitorEvent | None: ...
 

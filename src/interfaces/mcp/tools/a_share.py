@@ -124,7 +124,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     }
                 )
                 return (
-                    await container.a_share_tool_coordinator.get_financial_statements(
+                    await container.services.a_share.get_financial_statements(
                         financial_input
                     )
                 ).model_dump(mode="json")
@@ -146,7 +146,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     }
                 )
                 return (
-                    await container.a_share_tool_coordinator.get_industry_cycle(
+                    await container.services.a_share.get_industry_cycle(
                         industry_cycle_input
                     )
                 ).model_dump(mode="json")
@@ -170,7 +170,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     }
                 )
                 return (
-                    await container.a_share_tool_coordinator.get_company_operating_metrics(
+                    await container.services.a_share.get_company_operating_metrics(
                         company_metrics_input
                     )
                 ).model_dump(mode="json")
@@ -193,7 +193,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
             inp = AShareGetSnapshotInput.model_validate(
                 {"instrument_id": instrument_id, "as_of": as_of, "detail": detail}
             )
-            return (await container.a_share_tool_coordinator.get_snapshot(inp)).model_dump(
+            return (await container.services.a_share.get_snapshot(inp)).model_dump(
                 mode="json"
             )
         except ValidationError:
@@ -239,7 +239,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.get_market_structure(inp)
+            envelope = await container.services.a_share.get_market_structure(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -264,7 +264,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.get_capital_snapshot(inp)
+            envelope = await container.services.a_share.get_capital_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -285,7 +285,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.get_limit_up_context(inp)
+            envelope = await container.services.a_share.get_limit_up_context(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -308,7 +308,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.get_sentiment_snapshot(inp)
+            envelope = await container.services.a_share.get_sentiment_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -333,7 +333,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "as_of": as_of,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.get_etf_option_snapshot(inp)
+            envelope = await container.services.a_share.get_etf_option_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -366,7 +366,7 @@ def build_a_share_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "offset": offset,
                 }
             )
-            envelope = await container.a_share_tool_coordinator.search_reports(inp)
+            envelope = await container.services.a_share.search_reports(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise

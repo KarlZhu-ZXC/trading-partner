@@ -16,8 +16,7 @@ uv run trading-partner-mcp
 
 若运行环境不能直连这些公开域名，可在 `.env` 设置一个通用
 `PROVIDER_PROXY_URL`。它只供 CME、DCE、Dukascopy 和 Polymarket 使用；不设置时直连。
-旧的 `POLYMARKET_PROXY_URL` 暂作兼容 fallback，新的通用变量优先。代理地址属于敏感配置，
-不得进入日志、错误详情或提交历史。
+代理地址属于敏感配置，不得进入日志、错误详情或提交历史。
 
 Dukascopy 默认走与当前 `dukascopy-node` 相同的 keyless Jetta 分桶接口：1 分钟按 UTC
 日、1 小时按 UTC 月、日线按 UTC 年请求；每批最多 10 个并发请求，跨批等待 1 秒，

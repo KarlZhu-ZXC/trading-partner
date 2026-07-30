@@ -73,6 +73,7 @@ _CURRENT_QUOTE_CUTOFF_SECONDS = 300
 _EXTENDED_HOURS_PRICE_WARNING = "EXTENDED_HOURS_PRICE"
 _INTRADAY_QUOTE_RECOVERY_WARNING = "INTRADAY_QUOTE_RECOVERY"
 _INTRADAY_QUOTE_UNAVAILABLE_WARNING = "INTRADAY_QUOTE_UNAVAILABLE"
+_PREVIOUS_CLOSE_RECOVERY_WARNING = "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY"
 
 _INTERVAL_WIRE: Mapping[USBarInterval, str] = {
     USBarInterval.ONE_MINUTE: "1m",
@@ -376,10 +377,6 @@ class YahooFinanceAdapter:
                 "market": instrument.market.value,
             },
         )
-
-    # Backward-compatible alias used by existing call sites/tests.
-    def _require_us_instrument(self, instrument: Instrument) -> str:
-        return self._require_chart_instrument(instrument)
 
     @staticmethod
     def _futures_warning_codes(instrument: Instrument) -> tuple[str, ...]:
@@ -800,20 +797,27 @@ class YahooFinanceAdapter:
         quote_at: datetime,
         quote_session: TradingSession,
         asset_type: AssetType,
-    ) -> Decimal | None:
+        regular_market_at: datetime | None,
+        regular_market_price: Decimal | None,
+    ) -> tuple[Decimal | None, bool]:
         """Return the regular-session baseline for the selected quote.
 
-        Yahoo ``chartPreviousClose`` is the baseline immediately before the
-        requested chart window, not necessarily the previous trading session.
-        Its meaning therefore changes with ``period1`` and must never populate
-        the quote-level ``previous_close`` field. A post-market equity quote uses
-        that day's completed regular close; other sessions use an earlier date.
+        Yahoo ``chartPreviousClose`` is the baseline immediately before the chart
+        window, while ``regularMarketPreviousClose`` is relative to Yahoo's
+        ``regularMarketPrice`` observation. Neither field is a stable definition
+        of the previous close for an extended-hours quote, so both stay unused.
+
+        Prefer a complete daily bar. Yahoo can temporarily publish the latest
+        session's OHLC and volume with a null daily close; in pre/post market the
+        timestamped ``regularMarketPrice`` then provides the completed regular
+        close. The boolean reports that narrowly scoped recovery.
         """
         quote_day = quote_at.astimezone(_NY).date()
         same_day_close_allowed = (
             asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
             and quote_session is TradingSession.POST_MARKET
         )
+        selected_bar: MarketBar | None = None
         for bar in reversed(bars):
             bar_day = bar.timestamp.astimezone(_NY).date()
             if bar_day < quote_day or (
@@ -821,8 +825,44 @@ class YahooFinanceAdapter:
                 and bar_day == quote_day
                 and bar.timestamp <= quote_at
             ):
-                return bar.close
-        return None
+                selected_bar = bar
+                break
+
+        recoverable_session = quote_session in {
+            TradingSession.PRE_MARKET,
+            TradingSession.POST_MARKET,
+        }
+        equity_like = asset_type in {
+            AssetType.EQUITY,
+            AssetType.ETF,
+            AssetType.INDEX,
+        }
+        if (
+            equity_like
+            and recoverable_session
+            and regular_market_at is not None
+            and regular_market_price is not None
+            and regular_market_at <= quote_at
+        ):
+            regular_day = regular_market_at.astimezone(_NY).date()
+            completed_for_quote = (
+                quote_session is TradingSession.PRE_MARKET
+                and regular_day < quote_day
+            ) or (
+                quote_session is TradingSession.POST_MARKET
+                and regular_day == quote_day
+            )
+            selected_day = (
+                selected_bar.timestamp.astimezone(_NY).date()
+                if selected_bar is not None
+                else None
+            )
+            if completed_for_quote and (
+                selected_day is None or regular_day > selected_day
+            ):
+                return regular_market_price, True
+
+        return (selected_bar.close if selected_bar is not None else None), False
 
     async def _latest_intraday_quote_bar(
         self,
@@ -869,7 +909,7 @@ class YahooFinanceAdapter:
     ) -> ProviderSuccess[USQuote]:
         self._require_configured()
         now = self._require_as_of(as_of)
-        symbol = self._require_us_instrument(instrument)
+        symbol = self._require_chart_instrument(instrument)
 
         # Window ends exclusive of the calendar day after as_of (NY), inclusive wire.
         as_of_day = as_of.astimezone(_NY).date()
@@ -903,12 +943,14 @@ class YahooFinanceAdapter:
             as_of=as_of,
         )
 
-        quote_at: datetime | None = None
+        regular_market_at: datetime | None = None
         rmt = meta_raw.get("regularMarketTime")
         if type(rmt) is int or type(rmt) is Decimal:
             candidate = _unix_to_aware(int(rmt), field="regularMarketTime")
             if candidate <= as_of:
-                quote_at = candidate
+                regular_market_at = candidate
+
+        quote_at = regular_market_at
 
         last: Decimal | None = None
         open_: Decimal | None = None
@@ -922,7 +964,8 @@ class YahooFinanceAdapter:
         week_low: Decimal | None = None
         week_high: Decimal | None = None
 
-        if quote_at is not None:
+        regular_market_price: Decimal | None = None
+        if regular_market_at is not None:
             volume = _optional_decimal(
                 meta_raw.get("regularMarketVolume"), field="volume"
             )
@@ -932,7 +975,10 @@ class YahooFinanceAdapter:
             week_high = _optional_decimal(
                 meta_raw.get("fiftyTwoWeekHigh"), field="week_52_high"
             )
-            last = _optional_decimal(meta_raw.get("regularMarketPrice"), field="last")
+            regular_market_price = _optional_decimal(
+                meta_raw.get("regularMarketPrice"), field="last"
+            )
+            last = regular_market_price
             open_ = _optional_decimal(
                 meta_raw.get("regularMarketOpen")
                 if meta_raw.get("regularMarketOpen") is not None
@@ -1009,12 +1055,16 @@ class YahooFinanceAdapter:
                         else _INTRADAY_QUOTE_RECOVERY_WARNING
                     )
 
-        previous_close = self._previous_session_close(
+        previous_close, previous_close_recovered = self._previous_session_close(
             bars,
             quote_at=quote_at,
             quote_session=quote_session,
             asset_type=instrument.asset_type,
+            regular_market_at=regular_market_at,
+            regular_market_price=regular_market_price,
         )
+        if previous_close_recovered:
+            additional_warnings.append(_PREVIOUS_CLOSE_RECOVERY_WARNING)
         quote = USQuote(
             instrument_id=instrument.instrument_id,
             quote_at=quote_at,
@@ -1058,7 +1108,7 @@ class YahooFinanceAdapter:
     ) -> ProviderSuccess[USBarSeries]:
         self._require_configured()
         self._require_as_of(as_of)
-        symbol = self._require_us_instrument(instrument)
+        symbol = self._require_chart_instrument(instrument)
 
         if type(start) is not date or type(end) is not date:
             raise DataContractError(

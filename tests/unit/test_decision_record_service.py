@@ -50,7 +50,7 @@ from domain.research.models import (
     Thesis,
     ThesisRevision,
 )
-from infrastructure.persistence.models import DecisionRecordRow, SystemAuditLogRow
+from infrastructure.persistence.orm import DecisionRecordRow, SystemAuditLogRow
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
 

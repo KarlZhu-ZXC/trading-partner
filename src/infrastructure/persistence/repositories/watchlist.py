@@ -11,7 +11,7 @@ from application.ports.clock import Clock
 from domain.common.enums import Market, WatchlistItemStatus
 from domain.common.errors import WatchlistItemNotFound
 from domain.research.models import WatchlistItem
-from infrastructure.persistence.models import WatchlistItemRow
+from infrastructure.persistence.orm import WatchlistItemRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

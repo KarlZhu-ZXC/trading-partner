@@ -419,11 +419,17 @@ class SchwabAccountAdapter:
                     instrument = _mapping(item.get("instrument"), "transaction instrument")
                     instrument_id = _instrument_id(instrument)
                     if instrument_id is None:
-                        warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
+                        asset_type = (_text(instrument.get("assetType")) or "").upper()
+                        if asset_type == "CURRENCY":
+                            warnings.add("SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED")
+                        else:
+                            warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
                         continue
-                    normalized = self._transaction(
+                    normalized, side_inferred = self._transaction(
                         account_hash, transaction, item, index, instrument_id, occurred_at
                     )
+                    if side_inferred:
+                        warnings.add("SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN")
                     if normalized is not None:
                         values.append(normalized)
                     else:
@@ -442,7 +448,7 @@ class SchwabAccountAdapter:
         index: int,
         instrument_id: str,
         occurred_at: datetime,
-    ) -> AccountTransaction | None:
+    ) -> tuple[AccountTransaction | None, bool]:
         raw_id_value = transaction.get("activityId")
         raw_id = (
             str(raw_id_value)
@@ -455,15 +461,37 @@ class SchwabAccountAdapter:
         amount = _decimal(item.get("amount")) or Decimal(0)
         if raw_kind == "TRADE":
             if amount == 0:
-                return None
+                return None, False
             kind = AccountTransactionKind.TRADE
             instruction = (_text(item.get("instruction")) or "").upper()
-            if instruction in {"BUY", "BUY_TO_COVER"}:
+            if instruction in {
+                "BUY",
+                "BUY_TO_COVER",
+                "BUY_TO_OPEN",
+                "BUY_TO_CLOSE",
+            }:
                 side = AccountTransactionSide.BUY
-            elif instruction in {"SELL", "SELL_SHORT"}:
+                side_inferred = False
+            elif instruction in {
+                "SELL",
+                "SELL_SHORT",
+                "SELL_TO_OPEN",
+                "SELL_TO_CLOSE",
+            }:
                 side = AccountTransactionSide.SELL
+                side_inferred = False
+            elif not instruction:
+                # Transaction history can omit instruction while keeping the
+                # transferred security quantity signed. Positive moves the
+                # security into the account; negative moves it out.
+                side = (
+                    AccountTransactionSide.BUY
+                    if amount > 0
+                    else AccountTransactionSide.SELL
+                )
+                side_inferred = True
             else:
-                return None
+                return None, False
         elif raw_kind == "DIVIDEND_OR_INTEREST":
             description = (_text(transaction.get("description")) or "").upper()
             kind = (
@@ -472,6 +500,7 @@ class SchwabAccountAdapter:
                 else AccountTransactionKind.INTEREST
             )
             side = None
+            side_inferred = False
         elif raw_kind in {
             "ACH_RECEIPT",
             "ACH_DISBURSEMENT",
@@ -480,8 +509,10 @@ class SchwabAccountAdapter:
             "WIRE_OUT",
         }:
             kind, side = AccountTransactionKind.TRANSFER, None
+            side_inferred = False
         else:
             kind, side = AccountTransactionKind.OTHER, None
+            side_inferred = False
         fees = Decimal(0)
         raw_fees = transaction.get("fees")
         if isinstance(raw_fees, Mapping):
@@ -489,20 +520,23 @@ class SchwabAccountAdapter:
                 parsed = _decimal(value)
                 if parsed is not None:
                     fees += abs(parsed)
-        return AccountTransaction(
-            provider_transaction_id=_stable_ref(
-                "transaction", f"{account_hash}:{raw_id}:{index}:{instrument_id}"
+        return (
+            AccountTransaction(
+                provider_transaction_id=_stable_ref(
+                    "transaction", f"{account_hash}:{raw_id}:{index}:{instrument_id}"
+                ),
+                account_ref=_stable_ref("account", account_hash, prefix="schwab_"),
+                provider=VendorId.SCHWAB,
+                instrument_id=instrument_id,
+                kind=kind,
+                side=side,
+                quantity=abs(amount),
+                price=_decimal(item.get("price")),
+                fees=fees,
+                currency="USD",
+                occurred_at=occurred_at,
             ),
-            account_ref=_stable_ref("account", account_hash, prefix="schwab_"),
-            provider=VendorId.SCHWAB,
-            instrument_id=instrument_id,
-            kind=kind,
-            side=side,
-            quantity=abs(amount),
-            price=_decimal(item.get("price")),
-            fees=fees,
-            currency="USD",
-            occurred_at=occurred_at,
+            side_inferred,
         )
 
     @staticmethod

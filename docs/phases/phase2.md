@@ -4,7 +4,7 @@
 > Design version: Phase 2 v4  
 > Public MCP surface: 28 compact tools; the former 52-tool rollback profile is removed.
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
-> `0016_monitor_valid_until`.
+> `0024_monitor_notification_outbox`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
 
 ## 1. Product outcome
@@ -23,8 +23,9 @@ Typical conversations:
 刷新 CSV 自选，然后告诉我哪些标的已经有 Investment Case。
 ```
 
-Phase 2 is not a scheduler, alert daemon, backtest engine, trade planner, or order
-gateway. Its Portfolio Risk Engine is deterministic and read-only: it evaluates
+Phase 2 does not run a hidden in-process alert daemon, backtest engine, or order
+gateway. A local launchd integration may wake its deterministic due dispatcher hourly.
+Its Portfolio Risk Engine is deterministic and read-only: it evaluates
 facts and hypothetical additions but cannot place, modify, or cancel orders.
 
 Scheduling remains an external host responsibility. For Codex Automation, cron,
@@ -496,7 +497,7 @@ Completion evidence on 2026-07-20:
   a live durable-snapshot smoke returned a typed `BREACH`, 38 rule results,
   `execution_effect=false`, source/data-quality warnings, and no tool error.
 
-## 14. Phase 2C — Monitoring v1
+## 14. Phase 2C — Monitoring Hub
 
 Monitoring converts a small set of user-confirmed conditions into durable,
 repeatable checks. It is deliberately not a background LLM research loop. A run
@@ -507,7 +508,7 @@ Public tools:
 
 ```text
 monitor_manage (create)
-monitor_read (definitions)
+monitor_read (definitions, dashboard, runs)
 monitor_manage (update)
 monitor_evaluate
 monitor_read (events)
@@ -516,7 +517,7 @@ monitor_manage (resolve_event)
 
 Definitions are append-only versions with optimistic concurrency, explicit
 `user`/`external_agent` confirmation, and idempotency. A current version can be
-`ACTIVE`, `PAUSED`, or `ARCHIVED`; cadence is `ON_DEMAND`,
+`ACTIVE`, `PAUSED`, or `ARCHIVED`; cadence is `ON_DEMAND`, `INTERVAL`,
 `A_SHARE_POST_MARKET`, or `US_POST_MARKET`. A price rule in a scheduled Monitor
 must match that market, preventing an A-share rule from being evaluated after the
 US close (or vice versa) against an inevitably stale quote. V1 rules are:
@@ -563,31 +564,80 @@ External schedulers use:
 ```bash
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
+
+# Evaluate currently due INTERVAL and A-share/US post-market groups
+uv run trading-partner-monitor-run due
+
+# Install/status/remove the token-free macOS hourly wake
+uv run trading-partner-monitor-scheduler install
+uv run trading-partner-monitor-scheduler status
+uv run trading-partner-monitor-scheduler uninstall
 ```
 
-The CLI evaluates active monitors for the selected market cadence once under a
-process lock and prints one JSON run receipt. It does not decide when to run; Codex Automation,
-cron, or launchd remains the scheduler. Monitor runs, definitions, rule states,
-events, and resolutions are durable, and all runs have `execution_effect=false`.
+The explicit market-cadence CLI force-runs active monitors once under a process
+lock and is retained for diagnostics. The normal `due` dispatcher compares the
+database schedule and latest run for INTERVAL plus A-share/US post-market groups:
+an early wake does not fetch facts, each market group runs at most once after that
+exchange session's close plus the configured delay, and no Codex Automation needs
+to evaluate Monitor rules. Partial/failed interval runs retry on the next hourly
+wake; successful interval runs wait for their configured whole-hour interval. The
+launchd job wakes at minute 5 of each hour and invokes only this local deterministic
+path, so it consumes no Codex/LLM tokens. Monitor definitions, complete per-rule run observations, latest
+states, transition events, and resolutions are durable; all runs have
+`execution_effect=false`.
+
+An optional Telegram Bot channel consumes only durable transition events. The
+event and its notification Outbox row are committed in the same database
+transaction; repeated unchanged observations therefore produce neither duplicate
+events nor duplicate phone notifications. Delivery is deterministic and local—no
+Codex task or LLM is involved. Failed deliveries use bounded retry, Telegram `429`
+respects `retry_after`, and events older than the configured TTL expire instead of
+arriving as misleading late alerts.
+Each message reuses the exact same run observations to show the instrument's
+current observed price/time and the Monitor's complete rule table: condition,
+severity, observed value, distance, and state. It never performs a second quote
+request for presentation. Multiple transitions for one Monitor in one run are
+batched into one Telegram message; the underlying events remain separate and
+auditable.
+Telegram does not support Markdown tables, so the sender puts the transition result
+in native HTML before an escaped monospaced `<pre>` table. Only current price/time
+and complete rules appear inside the table; warnings and basis notes follow it as
+normal text. It does not generate or upload an image and does not invoke an LLM.
+
+```bash
+uv run trading-partner-monitor-notifications status
+uv run trading-partner-monitor-notifications test
+uv run trading-partner-monitor-notifications flush
+```
+
+The hourly due dispatcher flushes pending notifications even when no Monitor is
+due. Market-cadence groups flush after evaluation. Delivery does not
+acknowledge or resolve the source event and never changes a Thesis, Trade Plan,
+position, or order.
+
+`monitor_read(request={"operation":"dashboard"})` is the unified current control
+plane. `monitor_read(request={"operation":"runs",...})` restores exact historical
+observations including observed/threshold/distance values, fact age, and typed
+warnings/errors. Events remain sparse notifications created only on state changes.
+Runs created before migration `0023` remain readable with
+`observation_history_complete=false`; missing historical observations are not
+backfilled or inferred.
 
 Deferred Monitoring extensions include announcement/filing deltas, earnings
-windows, technical-cross rules, capital-flow rules, snooze/cooldown policy, push
-delivery, and market-specific due calendars.
+windows, technical-cross rules, capital-flow rules, snooze/cooldown policy, and
+market-specific due calendars.
 
-Completion evidence on 2026-07-20:
+Current acceptance evidence (2026-07-29):
 
-- runtime registration exposes exactly 68 tools, including all seven `monitor_*`
-  tools with closed nested rule schemas;
-- migration `0013_phase2c_monitoring` passes clean-database and full
-  upgrade/downgrade/upgrade verification;
-- focused transition tests prove first trigger, unchanged-state deduplication, and
-  recovery events; repository tests prove append-only definition versions;
-- 92 focused architecture, MCP, bootstrap, Risk, Monitoring, migration, and
-  delivery-audit tests passed in 4.37 seconds; repository-wide Ruff and mypy pass;
-- both market-specific CLI paths completed an empty active-set smoke with
-  `SUCCEEDED`, zero events, and `execution_effect=false`;
-- no real Monitor was created because the user has not yet confirmed a concrete
-  rule set or thresholds.
+- the public surface remains exactly 28 tools; `monitor_read` has four closed
+  operations and the surface schema is `compact-v4`;
+- migrations `0023_monitoring_hub_v3` and `0024_monitor_notification_outbox` pass
+  clean upgrade/downgrade/upgrade checks;
+- focused tests cover transition deduplication, immutable observations, whole-hour
+  schedule validation, due/skip behavior, compact schema, and launchd arguments;
+- a live GC=F 4-hour interval smoke persisted five observations, and an immediate
+  second dispatcher call returned `NO_DUE_MONITORS` without another quote request;
+- repository-wide Ruff and mypy pass.
 
 ## 15. Phase 2D — Technical Engine v2
 

@@ -20,7 +20,7 @@ from domain.common.enums import (
 )
 from domain.common.errors import DataContractError, PersistenceError
 from domain.common.time import require_aware_datetime
-from infrastructure.persistence.models import ProviderHealthRow
+from infrastructure.persistence.orm import ProviderHealthRow
 from infrastructure.persistence.repositories._mapping import (
     dt_opt_from_db,
     dt_to_db,

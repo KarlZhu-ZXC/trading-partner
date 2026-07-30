@@ -25,10 +25,7 @@ jobs:
       DEFAULT_TIMEZONE: UTC
       PROVIDER_TIMEOUT_SECONDS: "5"
       # Explicit empty secrets — never set real keys in CI.
-      ALPHA_VANTAGE_API_KEY: ""
       FRED_API_KEY: ""
-      BROKER_API_KEY: ""
-      BROKER_API_SECRET: ""
 
     steps:
       - name: Checkout

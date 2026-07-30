@@ -1,13 +1,17 @@
-"""Strict loader for the declarative Phase 1 dialogue and longitudinal evals."""
+"""Test-only validation for the declarative acceptance catalogs and release boundary."""
 
 from __future__ import annotations
 
 import json
+import tomllib
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from domain.common.errors import DataContractError
+from infrastructure.persistence import orm as _orm  # noqa: F401
+from infrastructure.persistence.metadata import Base
 
 EXPECTED_CATEGORY_COUNTS = {
     "continuity": 13,
@@ -34,15 +38,27 @@ FORBIDDEN_EVAL_TOOLS = frozenset(
         "event_create",
     }
 )
+FORBIDDEN_TABLES = frozenset(
+    {
+        "strategies",
+        "backtest_runs",
+        "backtest_trades",
+        "orders",
+        "fills",
+        "execution_approvals",
+    }
+)
+FORBIDDEN_RUNTIME_DEPENDENCIES = ("tradingagents", "langgraph", "minimax", "grok")
+EXPECTED_MIGRATION_HEADS = frozenset({"0024_monitor_notification_outbox"})
 
 
 def _load(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        raise DataContractError("Phase 1 evaluation catalog is unreadable") from None
+        raise DataContractError("Evaluation catalog is unreadable") from None
     if not isinstance(value, dict) or value.get("schema_version") != 1:
-        raise DataContractError("Phase 1 evaluation schema_version must be 1")
+        raise DataContractError("Evaluation schema_version must be 1")
     return value
 
 
@@ -51,7 +67,7 @@ def validate_dialogue_catalog(path: Path, public_tools: frozenset[str]) -> None:
     cases = payload.get("cases")
     if not isinstance(cases, list) or len(cases) != DIALOGUE_CASE_COUNT:
         raise DataContractError(
-            f"Phase 1 dialogue catalog must contain exactly {DIALOGUE_CASE_COUNT} cases"
+            f"Dialogue catalog must contain exactly {DIALOGUE_CASE_COUNT} cases"
         )
     ids: set[str] = set()
     categories: Counter[str] = Counter()
@@ -89,8 +105,7 @@ def validate_dialogue_catalog(path: Path, public_tools: frozenset[str]) -> None:
                     not isinstance(operations, list)
                     or not operations
                     or any(
-                        not isinstance(operation, str) or not operation
-                        for operation in operations
+                        not isinstance(operation, str) or not operation for operation in operations
                     )
                     or len(set(operations)) != len(operations)
                 ):
@@ -99,11 +114,7 @@ def validate_dialogue_catalog(path: Path, public_tools: frozenset[str]) -> None:
                     )
         if not isinstance(assertions, list) or not assertions:
             raise DataContractError("Dialogue assertions must be nonempty")
-        if (
-            not isinstance(forbidden, list)
-            or "trade_execution" not in forbidden
-            or not forbidden
-        ):
+        if not isinstance(forbidden, list) or "trade_execution" not in forbidden:
             raise DataContractError("Dialogue must forbid trade execution")
         ids.add(case_id)
         categories[category] += 1
@@ -147,3 +158,42 @@ def validate_longitudinal_catalog(path: Path) -> None:
         case_ids.add(case_id)
     if linked < 1:
         raise DataContractError("At least one longitudinal Case requires an account link")
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryAuditReceipt:
+    public_tool_count: int
+    table_count: int
+    migration_head: str
+    dialogue_count: int = DIALOGUE_CASE_COUNT
+    longitudinal_case_count: int = 3
+
+
+def audit_delivery(project_root: Path, public_tools: frozenset[str]) -> DeliveryAuditReceipt:
+    root = project_root.resolve()
+    if len(public_tools) != 28 or public_tools & FORBIDDEN_EVAL_TOOLS:
+        raise DataContractError("Public tool surface is invalid")
+    tables = frozenset(Base.metadata.tables)
+    if tables & FORBIDDEN_TABLES:
+        raise DataContractError("Forbidden execution/backtest tables are present")
+    for head in EXPECTED_MIGRATION_HEADS:
+        path = root / "migrations" / "versions" / f"{head}.py"
+        if not path.is_file():
+            raise DataContractError(f"Migration head is missing: {head}")
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = tuple(
+        str(item).lower() for item in pyproject.get("project", {}).get("dependencies", ())
+    )
+    if any(
+        forbidden in dependency
+        for forbidden in FORBIDDEN_RUNTIME_DEPENDENCIES
+        for dependency in dependencies
+    ):
+        raise DataContractError("Forbidden agent/runtime dependency is present")
+    validate_dialogue_catalog(root / "evals" / "phase1-dialogues.v1.json", public_tools)
+    validate_longitudinal_catalog(root / "evals" / "phase1-longitudinal-cases.v1.json")
+    return DeliveryAuditReceipt(
+        public_tool_count=len(public_tools),
+        table_count=len(tables),
+        migration_head=",".join(sorted(EXPECTED_MIGRATION_HEADS)),
+    )

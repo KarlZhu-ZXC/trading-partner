@@ -190,6 +190,40 @@ def test_only_bootstrap_is_composition_root() -> None:
     assert not violations, "Composition root violations:\n" + "\n".join(violations)
 
 
+def test_composition_root_and_orm_modules_stay_bounded() -> None:
+    """Prevent the two refactored hotspots from collapsing back into monoliths."""
+    from bootstrap import ApplicationContainer
+
+    bootstrap = SRC / "bootstrap.py"
+    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_050
+    assert set(ApplicationContainer.__dataclass_fields__) == {
+        "settings",
+        "context",
+        "resources",
+        "providers",
+        "services",
+        "operations",
+    }
+
+    composition_root = LAYER_ROOTS["infrastructure"] / "composition"
+    for path in composition_root.glob("*.py"):
+        assert all(
+            not _is_module(imp, "application.services") for imp in _imports(path)
+        ), path
+
+    persistence_root = LAYER_ROOTS["infrastructure"] / "persistence"
+    assert not (persistence_root / "models.py").exists()
+    orm_root = persistence_root / "orm"
+    declaration_modules = [
+        path for path in orm_root.glob("*.py") if path.name not in {"__init__.py", "common.py"}
+    ]
+    assert len(declaration_modules) == 10
+    largest_module = max(
+        len(path.read_text(encoding="utf-8").splitlines()) for path in declaration_modules
+    )
+    assert largest_module <= 650
+
+
 def test_no_forbidden_phase_modules() -> None:
     forbidden_names = {
         "strategies",
@@ -253,9 +287,7 @@ def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
     assert (sina / "daily_flow.py").is_file()
     assert (sina / "financials.py").is_file()
     assert (sina / "options.py").is_file()
-    typed_text = (codecs / "typed.py").read_text(encoding="utf-8")
-    assert len(typed_text.splitlines()) <= 160
-    assert "def " not in typed_text
+    assert not (codecs / "typed.py").exists()
     for capability in ("market", "research", "capital", "sentiment", "options"):
         text = (codecs / f"{capability}.py").read_text(encoding="utf-8")
         assert "def " in text
@@ -390,50 +422,6 @@ def test_domain_market_validation_imports_only_domain_or_stdlib() -> None:
     assert "def validate_verified_market_snapshot" in text
 
 
-def test_contract_validation_is_domain_reexport_only() -> None:
-    """Infrastructure contract_validation is a compatibility re-export only."""
-    path = LAYER_ROOTS["infrastructure"] / "providers" / "common" / "contract_validation.py"
-    imports = _imports(path)
-    for imp in imports:
-        assert not _is_module(imp, "application.services"), imp
-        assert not _is_module(imp, "interfaces"), imp
-        assert not _is_module(imp, "bootstrap"), imp
-    assert any(_is_module(i, "domain.market.validation") for i in imports), (
-        "must re-export from domain.market.validation"
-    )
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    defined = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-    }
-    assert "validate_verified_market_snapshot" not in defined, (
-        "infrastructure must not redefine validate_verified_market_snapshot"
-    )
-    assert not any(name.startswith("_require_") for name in defined), (
-        f"infrastructure must not host validation helpers: {defined}"
-    )
-
-
-def test_contract_validation_symbol_is_domain_function_object() -> None:
-    """Compatibility export must be the same function object as domain."""
-    from domain.market.validation import (
-        validate_verified_market_snapshot as domain_fn,
-    )
-    from infrastructure.providers.common import (
-        validate_verified_market_snapshot as package_fn,
-    )
-    from infrastructure.providers.common.contract_validation import (
-        validate_verified_market_snapshot as infra_fn,
-    )
-
-    assert domain_fn is infra_fn
-    assert domain_fn is package_fn
-    # No second implementation body in infrastructure module source.
-    infra_path = LAYER_ROOTS["infrastructure"] / "providers" / "common" / "contract_validation.py"
-    assert "def validate_verified_market_snapshot" not in infra_path.read_text(encoding="utf-8")
-
-
 def test_criticality_policy_stays_in_application() -> None:
     """CriticalityPolicy is application-only; must not import infrastructure."""
     path = LAYER_ROOTS["application"] / "services" / "criticality_policy.py"
@@ -463,9 +451,13 @@ def test_d8b_bootstrap_wires_router_fields() -> None:
     text = path.read_text(encoding="utf-8")
     assert "provider_router" in text
     assert "vendor_registry" in text
-    assert "build_provider_state_backend" in text
-    assert "YamlVendorChainConfig" in text
-    assert "ProviderRouterEngine" in text
+    assert "build_provider_infrastructure" in text
+    provider_composition = (
+        LAYER_ROOTS["infrastructure"] / "composition" / "providers.py"
+    ).read_text(encoding="utf-8")
+    assert "build_provider_state_backend" in provider_composition
+    assert "YamlVendorChainConfig" in provider_composition
+    assert "ProviderRouterEngine" in provider_composition
     # Must not run migrations or seed in build_application (imports / call sites).
     assert "command.upgrade" not in text
     imports = _imports(path)
@@ -508,16 +500,18 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
         assert f'name="{forbidden}"' not in adapter_text
     bootstrap = (PROJECT_ROOT / "src" / "bootstrap.py").read_text(encoding="utf-8")
     for field in (
-        "evidence_service",
         "research_archive_service",
         "research_search_service",
         "research_timeline_service",
         "journal_service",
         "decision_record_service",
-        "search_backend_probe",
         "us_tool_coordinator",
     ):
         assert field in bootstrap
+    persistence_composition = (
+        LAYER_ROOTS["infrastructure"] / "composition" / "persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "search_backend_probe" in persistence_composition
 
 
 def test_c3_uow_exposes_search_index_with_business_properties() -> None:
@@ -566,8 +560,8 @@ def test_c3_search_index_uses_core_sql_without_orm_rows() -> None:
 
 def test_c2a_business_orm_rows_only_no_search_rows() -> None:
     """Exactly seven frozen business ORM rows; no Search document/FTS ORM rows."""
-    path = LAYER_ROOTS["infrastructure"] / "persistence" / "models.py"
-    text = path.read_text(encoding="utf-8")
+    root = LAYER_ROOTS["infrastructure"] / "persistence" / "orm"
+    text = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
     for name in _C2A_BUSINESS_ROW_NAMES:
         assert f"class {name}(" in text, f"missing ORM row {name}"
     for forbidden in (
@@ -592,16 +586,16 @@ def test_c2a_business_orm_rows_only_no_search_rows() -> None:
 
 def test_c2a_models_stay_in_infrastructure_without_outer_layers() -> None:
     """Phase 1C ORM models may use SQLAlchemy + local metadata only."""
-    path = LAYER_ROOTS["infrastructure"] / "persistence" / "models.py"
-    imports = _imports(path)
-    for imp in imports:
-        assert not _is_module(imp, "application.services"), imp
-        assert not _is_module(imp, "interfaces"), imp
-        assert not _is_module(imp, "bootstrap"), imp
-        assert not _is_module(imp, "mcp"), imp
-    # Domain enums must not be imported into ORM rows (wire values are plain TEXT).
-    domain_imports = [i for i in imports if _is_module(i, "domain")]
-    assert not domain_imports, f"models.py must not import domain packages: {domain_imports}"
+    root = LAYER_ROOTS["infrastructure"] / "persistence" / "orm"
+    for path in root.glob("*.py"):
+        imports = _imports(path)
+        for imp in imports:
+            assert not _is_module(imp, "application.services"), (path, imp)
+            assert not _is_module(imp, "interfaces"), (path, imp)
+            assert not _is_module(imp, "bootstrap"), (path, imp)
+            assert not _is_module(imp, "mcp"), (path, imp)
+        domain_imports = [i for i in imports if _is_module(i, "domain")]
+        assert not domain_imports, (path, domain_imports)
 
 
 def test_c2a_migration_file_is_sqlite_safe_and_probes_fts5() -> None:

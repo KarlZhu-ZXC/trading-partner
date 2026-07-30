@@ -107,6 +107,11 @@ replaced only by a newer timestamped one-minute `includePrePost` bar. Preserve
 `EXTENDED_HOURS_PRICE`, `INTRADAY_QUOTE_RECOVERY`, or
 `INTRADAY_QUOTE_UNAVAILABLE`; do not describe Yahoo extended-hours coverage as a
 complete overnight equity market. Historical `as_of` requests stay cutoff-safe.
+Treat the returned `previous_close` as the session-aware previous completed regular
+session close. The adapter never maps Yahoo `chartPreviousClose` or
+`regularMarketPreviousClose` directly to this field; when a temporarily null daily
+close is recovered from timestamped `regularMarketPrice`, preserve
+`PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`.
 Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
 its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
 warning when the local OpenD predates 10.9.
@@ -200,14 +205,36 @@ hash allowlist. Its adapter reads balances, positions, and at most the documente
 60-day transaction window. It does not ingest open orders and emits an explicit
 warning; it has no place/replace/cancel surface and never reuses the schwab-trader
 plugin token.
+Schwab transaction history prefers explicit BUY/SELL instruction. When the upstream
+security item omits it, the adapter uses signed security quantity and emits
+`SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN`; preserve this and every item-omission
+warning in the public envelope instead of describing an empty result as complete.
 
 Background account refresh, post-market sync, and MCP calls never start Schwab
 browser OAuth. On a Schwab authentication failure, do not retry `account_get`
-or the post-market CLI to obtain a login page. Run exactly one foreground
-`uv run python scripts/setup_schwab_oauth.py --replace`, let the user complete
-that single browser tab, and only then retry the failed read once. The setup
-command is cross-process locked; an already-running message means reuse the
-existing tab rather than launching another flow.
+or the post-market CLI to obtain a login page.
+
+When the user says “刷新 Schwab token”, “重新授权 Schwab”, or an equivalent
+request, follow this fixed foreground protocol:
+
+1. Run `uv run trading-partner-schwab-auth status`.
+2. If `flow.state=ACTIVE`, do **not** run `renew`; tell the user to complete the
+   existing browser tab and keep polling that same process/status.
+3. Otherwise run `uv run trading-partner-schwab-auth renew` exactly once and
+   keep the same terminal process alive for the five-minute callback window.
+   Tell the user to operate only the newly opened Schwab tab from this command
+   and to close/ignore any older Schwab authorization tabs.
+   A tool wait/yield is not a failure and never authorizes rerunning the command.
+4. If it returns `FAILED` or `INTERRUPTED`, do not create another OAuth state.
+   Ask the user to close the old Schwab tab first. Only after the user explicitly
+   confirms that may you run
+   `uv run trading-partner-schwab-auth renew --confirm-new-flow` once.
+5. After `SUCCEEDED`, retry the failed account sync once.
+
+The legacy `uv run python scripts/setup_schwab_oauth.py --replace` delegates to
+the same coordinator. Its process lock prevents concurrent tabs, while its
+credential-free durable flow receipt prevents an automatic sequential retry
+after a failure or callback timeout.
 
 ### Durable context restore (Phase 1J)
 
@@ -235,7 +262,7 @@ resolve a review.
 
 | Tool | Purpose |
 |---|---|
-| `research_workflow_run` | Run one closed `deep_dive`, `catalyst_review`, `a_share_market_review`, `us_market_review`, durable `portfolio_review`, or caller-specified `peer_comparison` fact package |
+| `research_workflow_run` | Run one closed research workflow or prepare/import a manual QuantConnect Free historical-validation artifact |
 
 Compact `deep_dive` cannot create a Case and compact `portfolio_review` cannot
 refresh brokers. Use `investment_case_manage(request={"operation":"create",...})`
@@ -246,6 +273,16 @@ Workflow `synthesis_contract` tells the host which bull/bear/risk/portfolio-fit
 sections to cover. Codex synthesizes; the backend does not run a second LLM.
 Preserve partial/degraded step receipts, and never turn descriptive correlation or
 beta into a forecast, backtest, order, or sizing instruction.
+
+`research_workflow_run` also supports `historical_validation_prepare` and
+`historical_validation_import`. Prepare accepts complete LEAN Python, parses but
+never executes it, and writes owner-only `main.py`, manifest, and runbook artifacts.
+Import accepts only a local QuantConnect Results JSON for the exact prepared
+`validation_id`. The user must operate the QuantConnect Free web UI. Always
+preserve `REMOTE_RUN_ATTESTATION_UNAVAILABLE` and
+`REMOTE_DATASET_VERSION_UNAVAILABLE`; imported results are not proof of the remote
+code hash or a versioned point-in-time dataset. These operations never confirm a
+Thesis, mutate a Trade Plan, or place an order.
 
 For `peer_comparison`, require one A-share/US equity primary and 1–5 explicit
 same-market equity peers. Resolve instruments first; do not ask the MCP to discover
@@ -311,9 +348,9 @@ A Trade Plan is a research control document, not an order; every response has
 
 | Tool | Purpose |
 |---|---|
-| `monitor_read` | Read `definitions` or durable `events` |
+| `monitor_read` | Read `dashboard`, `definitions`, immutable `runs`, or transition `events` |
 | `monitor_manage` | Confirmed/idempotent `create`, `update`, or `resolve_event` |
-| `monitor_evaluate` | Evaluate active rules and persist only state transitions |
+| `monitor_evaluate` | Persist every rule observation; emit events only on state transitions |
 
 Monitoring enum inputs are case-insensitive and whitespace-tolerant at the DTO
 boundary. Canonical tool schemas, responses, domain objects, and persisted values
@@ -330,10 +367,39 @@ quiet. Repeated unchanged conditions do not create another event; a later recove
 does. A version may set an aware `valid_until`; after that inclusive deadline it is
 skipped without a provider call, state mutation, or new event and returns
 `MONITOR_EXPIRED`. This alarm lifetime is separate from each rule's
-`max_fact_age_seconds`. Monitoring never changes a Thesis, policy, position, or order. The external
+`max_fact_age_seconds`. `INTERVAL` cadence accepts a whole-hour
+`interval_minutes` value (minimum 60). The application dispatcher selects due
+INTERVAL definitions and due A-share/US post-market groups; an early hourly wake
+performs no market-data request. Each market group runs at most once for a trading
+session after close plus the configured delay. Each
+evaluated run durably records every rule's observed value, threshold, distance,
+fact time, age, warning/error codes, and state—even when no transition event is
+created. Use `monitor_read(request={"operation":"dashboard"})` for the unified
+current view and `monitor_read(request={"operation":"runs",...})` for run history.
+Monitoring never changes a Thesis, policy, position, or order. The external
 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` (or
-`A_SHARE_POST_MARKET`) evaluates only active monitors for that market cadence and
-is not a scheduler itself.
+`A_SHARE_POST_MARKET`) remains an explicit diagnostic force-run and is not a
+scheduler. On macOS, `uv run trading-partner-monitor-scheduler
+install` installs one hourly launchd wake that runs `trading-partner-monitor-run
+due`; this deterministic path does not open a Codex task and consumes no LLM tokens.
+Do not duplicate Monitor evaluation inside Codex market-review Automations.
+When Telegram notifications are enabled, transition events and notification Outbox
+rows are committed atomically. The hourly due dispatcher flushes pending messages
+even when no Monitor evaluation is due; market-cadence runs flush after evaluation.
+Only `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED` state transitions notify—never
+repeat observations. Each Telegram message reuses the same run observations to
+show the instrument's current observed price/time and every rule's condition,
+severity, observed value, distance, and state without another provider request.
+Telegram does not implement Markdown tables. The transition summary therefore
+renders as native HTML before one escaped monospaced `<pre>` block containing only
+the current price/time and complete rule table. Warnings and basis notes stay after
+the table. The sender does not generate or upload an image. Do not place unescaped
+monitor text into `parse_mode=HTML`.
+Multiple transitions for one Monitor in one run are batched into one message while
+their durable events remain separate. Use `uv run trading-partner-monitor-notifications status`,
+`test`, or `flush` for operations. Never request or echo the Bot Token in chat;
+the user must place it in the project `.env`. Delivery does not acknowledge or
+resolve the source event and has no execution effect.
 
 ### Technical Engine v2 (Phase 2D)
 
@@ -393,6 +459,6 @@ args = ["run", "trading-partner-mcp"]
 
 ## Later phases (not yet available)
 
-Additional brokers, automated evidence ingestion, runtime LLM synthesis, backtest,
-and order execution remain out
+Additional brokers, automated evidence ingestion, runtime LLM synthesis, automated
+backtest execution, and order execution remain out
 of scope. Do not call tools that are not registered.

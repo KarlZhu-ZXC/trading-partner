@@ -25,6 +25,7 @@ class _Envelope:
 def _container() -> MagicMock:
     container = MagicMock()
     container.settings = SimpleNamespace(mcp_server_name="Trading Partner Test")
+    container.services = MagicMock()
     return container
 
 
@@ -86,7 +87,8 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
         "investment_case_read": 2,
         "market_data_get": 6,
         "external_state_sync": 3,
-        "research_workflow_run": 6,
+        "research_workflow_run": 8,
+        "monitor_read": 4,
         "monitor_manage": 3,
     }
 
@@ -107,7 +109,6 @@ async def test_judgment_confirmation_schema_exposes_chat_authorization_provenanc
     properties = tools["research_judgment_confirm"].inputSchema["properties"]
 
     assert properties["reviewed_by"]["enum"] == ["user", "external_agent", "codex"]
-    assert properties["submitted_via"]["default"] == "direct"
     assert properties["submitted_via"]["enum"] == ["direct", "codex_chat"]
     assert "authorization_note" in properties
 
@@ -119,7 +120,7 @@ async def test_compact_wire_schema_and_each_tool_stay_bounded() -> None:
     assert _wire_size(compact) <= 64 * 1024
     assert sum(
         len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact
-    ) <= 40 * 1024
+    ) <= 36 * 1024
     for tool in compact:
         assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 8 * 1024, tool.name
 
@@ -158,22 +159,22 @@ async def test_compact_annotations_distinguish_reads_sync_appends_and_destructiv
 @pytest.mark.asyncio
 async def test_system_health_discloses_the_active_surface_profile() -> None:
     container = _container()
-    container.health_service.check.return_value = _Envelope()
+    container.services.health.check.return_value = _Envelope()
     result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
 
     assert result["data"] == {
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v2",
+        "surface_schema_version": "compact-v4",
     }
 
 
 @pytest.mark.asyncio
 async def test_durable_account_and_watchlist_reads_cannot_refresh_upstreams() -> None:
     container = _container()
-    container.portfolio_tool_coordinator.get_account_positions.return_value = _Envelope()
-    container.portfolio_tool_coordinator.get_account_snapshot = AsyncMock(return_value=_Envelope())
-    container.watchlist_hub_service.get_items = AsyncMock(return_value=_Envelope())
+    container.services.portfolio.get_account_positions.return_value = _Envelope()
+    container.services.portfolio.get_account_snapshot = AsyncMock(return_value=_Envelope())
+    container.services.watchlist.get_items = AsyncMock(return_value=_Envelope())
     manager = create_mcp_server(container)._tool_manager
 
     account_result = await manager.call_tool("account_get", {})
@@ -184,16 +185,16 @@ async def test_durable_account_and_watchlist_reads_cannot_refresh_upstreams() ->
 
     assert account_result["ok"] is True
     assert watchlist_result["ok"] is True
-    container.portfolio_tool_coordinator.get_account_snapshot.assert_not_awaited()
-    request = container.watchlist_hub_service.get_items.await_args.args[0]
+    container.services.portfolio.get_account_snapshot.assert_not_awaited()
+    request = container.services.watchlist.get_items.await_args.args[0]
     assert request.refresh is False
 
 
 @pytest.mark.asyncio
 async def test_external_state_sync_refreshes_accounts_and_watchlist_only_when_selected() -> None:
     container = _container()
-    container.portfolio_tool_coordinator.get_account_snapshot = AsyncMock(return_value=_Envelope())
-    container.watchlist_hub_service.get_items = AsyncMock(return_value=_Envelope())
+    container.services.portfolio.get_account_snapshot = AsyncMock(return_value=_Envelope())
+    container.services.watchlist.get_items = AsyncMock(return_value=_Envelope())
     manager = create_mcp_server(container)._tool_manager
 
     accounts_result = await manager.call_tool(
@@ -207,6 +208,6 @@ async def test_external_state_sync_refreshes_accounts_and_watchlist_only_when_se
 
     assert accounts_result["ok"] is True
     assert watchlist_result["ok"] is True
-    container.portfolio_tool_coordinator.get_account_snapshot.assert_awaited_once()
-    request = container.watchlist_hub_service.get_items.await_args.args[0]
+    container.services.portfolio.get_account_snapshot.assert_awaited_once()
+    request = container.services.watchlist.get_items.await_args.args[0]
     assert request.refresh is True

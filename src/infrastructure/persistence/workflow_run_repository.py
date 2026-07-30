@@ -20,7 +20,7 @@ from application.ports.workflow_run_repository import (
 from domain.common.errors import IdempotencyConflict, WorkflowRunNotFound
 from domain.workflow.enums import WorkflowRunStatus, WorkflowType
 from domain.workflow.models import WorkflowRun, WorkflowStepReceipt
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     WorkflowRunFactArtifactRow,
     WorkflowRunRow,
     WorkflowRunStepRow,

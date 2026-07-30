@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from domain.common.enums import EvidenceStance
 from domain.common.errors import DataContractError, InvalidResearchLink
 from domain.research.models import EvidenceAssessment
-from infrastructure.persistence.models import EvidenceAssessmentRow
+from infrastructure.persistence.orm import EvidenceAssessmentRow
 from infrastructure.persistence.repositories import append_only as _append_only  # noqa: F401
 from infrastructure.persistence.repositories._mapping import (
     decimal_from_db,

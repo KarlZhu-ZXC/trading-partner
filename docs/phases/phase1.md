@@ -89,10 +89,13 @@ Detailed input/output and degradation semantics live in the
 [MCP capability guide](../guide/mcp-capability-boundary.md). Agent-facing hard
 constraints live in [AGENTS.md](../../AGENTS.md).
 
-All five `research_workflow_run` operations require a request-level
+All six Phase 1/3B research `research_workflow_run` operations require a request-level
 `idempotency_key`. The durable run
 state is `STARTED` → `RUNNING` → `SUCCEEDED` / `PARTIAL` / `FAILED`, and terminal
 retries replay bounded, hashed fact artifacts without another Provider call.
+The two later Phase 3C historical-validation variants use a separate local artifact
+contract documented in the Phase 3 specification; they do not write these workflow
+receipts.
 
 ## 4. Research model
 
@@ -156,9 +159,11 @@ a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
   equity market.
 - Yahoo quote `previous_close` is derived from the latest completed daily bar before
   `quote_at`; for a post-market equity quote, that day's regular close is the
-  previous close. The range-dependent `chartPreviousClose` metadata field is never
-  used as a previous-session close; this prevents chart-window baselines from
-  corrupting intraday percentage comparisons.
+  previous close. If Yahoo temporarily leaves that daily close null, a pre/post-market
+  quote may recover the newer completed session from timestamped `regularMarketPrice`
+  and emits `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`. The range-dependent
+  `chartPreviousClose` and observation-relative `regularMarketPreviousClose` metadata
+  fields are never used as the user-facing previous-session close.
 - Alpha Vantage is a configured fallback, not a broker quote substitute. Its optional
   comma-separated key pool is ordered and sticky, and advances only on explicit
   provider rate-limit responses; it is not a round-robin throughput mechanism.
@@ -183,7 +188,12 @@ Phase 1 account access is read-only:
 - Moomoo OpenD: balances, positions, open orders, and historical deals supported
   by the adapter boundary;
 - Schwab: balances, positions, and the documented transaction window through a
-  project-owned `schwab-py` OAuth token; open orders are explicitly not ingested;
+  project-owned `schwab-py` OAuth token; open orders are explicitly not ingested.
+  Transaction rows prefer explicit BUY/SELL instructions; if Schwab omits that
+  field, signed security quantity deterministically supplies the direction and
+  emits `SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN`. Provider filtering warnings
+  propagate to the public transaction envelope instead of returning a clean empty
+  set;
 - Manual CSV: strict versioned holdings import.
 
 Provider account/order/transaction identifiers are stored as stable hashes. A
@@ -226,7 +236,12 @@ src/
 - Domain imports no MCP, SQLAlchemy, Alembic, settings, or providers.
 - Application imports no infrastructure or interfaces.
 - Interfaces validate and adapt protocols; they do not own business policy.
-- Only `bootstrap.py` wires application and infrastructure.
+- Only `bootstrap.py` connects application services to infrastructure ports.
+- Infrastructure-only Provider and persistence builders live under
+  `infrastructure/composition/`; they never import application services.
+- `ApplicationContainer` exposes five explicit bundles rather than flat service
+  fields. ORM declarations are capability-grouped under
+  `infrastructure/persistence/orm/` and registered through one metadata module.
 - Provider payloads never cross the infrastructure boundary.
 - Money and precise market values use `Decimal`; datetimes are timezone-aware.
 
@@ -282,9 +297,10 @@ Phase 2 is the Watchlist Hub: one active upstream source (Moomoo or strict Manua
 CSV), database-persisted groups/memberships/history, research metadata, and
 conversation-authorized add/remove. Phase 3A–3D now add cross-asset facts, company
 operating facts, automatic Monitoring v2, versioned Trade Plans, Position Sizing,
-and deterministic Risk v2. Historical validation/backtests remain pending; order
-execution remains outside this MCP. The [global roadmap](../roadmap/global-roadmap-cn-us.md) is the
-authority for later-phase sequencing.
+and deterministic Risk v2. The Phase 3C-0 bridge can prepare a hashed LEAN package
+and import a user-downloaded QuantConnect Free result, but it does not run a
+backtest. Order execution remains outside this MCP. The
+[global roadmap](../roadmap/global-roadmap-cn-us.md) is the authority for later-phase sequencing.
 
 ## 13. Public documentation policy
 

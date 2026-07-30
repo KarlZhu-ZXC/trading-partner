@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from application.ports.clock import Clock
 from domain.common.enums import AliasType, AssetType, Market
 from domain.instruments.models import Instrument, InstrumentAlias
-from infrastructure.persistence.models import InstrumentAliasRow, InstrumentRow
+from infrastructure.persistence.orm import InstrumentAliasRow, InstrumentRow
 from infrastructure.persistence.repositories._mapping import (
     bool_from_db,
     bool_to_db,

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from domain.common.enums import InvalidationSeverity, InvalidationStatus
 from domain.common.errors import PersistenceError
 from domain.research.models import InvalidationCondition
-from infrastructure.persistence.models import InvalidationConditionRow
+from infrastructure.persistence.orm import InvalidationConditionRow
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
     dt_opt_from_db,

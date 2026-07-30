@@ -62,15 +62,19 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   observations with publication-time cutoffs and no fabricated phase verdict.
 - Run repeatable deep-dive, catalyst, market-review, portfolio-review, and explicit
   same-market peer-comparison workflows while keeping the AI host as the synthesizer.
+- Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
+  backtests and import downloaded result JSON with explicit reproducibility gaps.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
 Trading Partner is a research service, not a broker or autonomous trading agent.
 
-It does **not** expose order placement, fills, live execution, backtests, or
-autonomous thesis confirmation. Technical outputs are derived facts—not forecasts,
-strategies, or trade signals. Ordinary portfolio questions read durable snapshots;
-broker refreshes happen only when explicitly requested.
+It does **not** expose order placement, fills, live execution, a local/remote
+automated backtest runner, or autonomous thesis confirmation. Its QuantConnect Free
+bridge only prepares code and imports a result after the user operates the web UI.
+Technical outputs are derived facts—not forecasts, strategies, or trade signals.
+Ordinary portfolio questions read durable snapshots; broker refreshes happen only
+when explicitly requested.
 
 ## <img src="docs/assets/readme/sections/quickstart.svg" alt="" width="24" /> Quick start
 
@@ -135,15 +139,39 @@ uv run trading-partner-watchlist-sync
 # Due-checked US post-market account and Watchlist refresh
 uv run trading-partner-post-market-sync
 
-# Evaluate active monitors from cron, launchd, or Codex Automation
+# Diagnose Schwab token age without opening a browser
+uv run trading-partner-schwab-auth status
+
+# Manually force one market-close cadence (diagnostic use)
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
+
+# Install the token-free unified hourly dispatcher
+uv run trading-partner-monitor-scheduler install
+uv run trading-partner-monitor-scheduler status
+
+# Due-check INTERVAL plus A-share/US post-market groups
+uv run trading-partner-monitor-run due
+
+# Optional Telegram delivery: inspect, test, or retry the durable outbox
+uv run trading-partner-monitor-notifications status
+uv run trading-partner-monitor-notifications test
+uv run trading-partner-monitor-notifications flush
 
 # Explicitly refresh free futures definitions and persist EOD statistics
 uv run trading-partner-futures-sync --product CME:GC --trade-date 2026-07-24
 ```
 
 These commands never execute an order.
+
+Telegram delivery is opt-in. Create a bot with Telegram's `@BotFather`, send the
+bot one message, then set `MONITOR_NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`,
+and `TELEGRAM_CHAT_ID` in the gitignored `.env`. Only Monitor state-transition
+events are pushed; repeat observations remain in run history without notifying
+again. The hourly local dispatcher retries the durable outbox without opening a
+Codex task or consuming LLM tokens.
+The unified dispatcher also owns A-share and US post-market Monitor execution;
+Codex market-review Automations must not duplicate Monitor evaluation or alerts.
 
 ## <img src="docs/assets/readme/sections/architecture.svg" alt="" width="24" /> Architecture
 
@@ -152,7 +180,7 @@ src/
 ├── bootstrap.py          # composition root
 ├── application/          # ports, DTOs, use cases
 ├── domain/               # pure domain model
-├── infrastructure/       # persistence, providers, configuration
+├── infrastructure/       # composition builders, persistence, providers, config
 └── interfaces/           # MCP adapters
 ```
 
@@ -163,7 +191,11 @@ infrastructure ───→ application ports ─→ domain
 
 The domain has no dependency on MCP, SQLAlchemy, Alembic, settings, or provider SDKs.
 Provider payloads are normalized at the infrastructure boundary, and only
-`src/bootstrap.py` composes the application.
+`src/bootstrap.py` connects infrastructure ports to application services. The
+resulting container exposes five explicit bundles (`context`, `resources`,
+`providers`, `services`, and `operations`) instead of a flat service locator.
+Infrastructure-owned construction lives under `infrastructure/composition/`, while
+SQLAlchemy declarations are grouped under `infrastructure/persistence/orm/`.
 
 ## <img src="docs/assets/readme/sections/data.svg" alt="" width="24" /> Data-source routing
 

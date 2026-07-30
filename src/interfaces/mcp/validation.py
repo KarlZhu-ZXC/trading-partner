@@ -14,9 +14,9 @@ def unexpected_failure(
     exc: BaseException,
 ) -> dict[str, Any]:
     """Map unexpected handler exceptions to a redacted Tool Envelope."""
-    request_id = container.id_generator.new(EntityIdPrefix.REQ)
-    now = container.clock.now()
-    error = to_error_info_from_exception(exc, container.secret_redactor)
+    request_id = container.context.id_generator.new(EntityIdPrefix.REQ)
+    now = container.context.clock.now()
+    error = to_error_info_from_exception(exc, container.context.secret_redactor)
     envelope: ToolEnvelope[None] = ToolEnvelope.failure(
         request_id=request_id,
         market=None,

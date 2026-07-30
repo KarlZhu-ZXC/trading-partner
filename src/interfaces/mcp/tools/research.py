@@ -57,7 +57,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.investment_case_service.create_case(
+            envelope = container.services.investment_cases.create_case(
                 case_type=inp.case_type,
                 title=inp.title,
                 summary=inp.summary,
@@ -87,7 +87,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         try:
             if case_id is not None:
                 get_input = InvestmentCaseGetInput.model_validate({"case_id": case_id})
-                return container.investment_case_service.get_case(get_input.case_id).model_dump(
+                return container.services.investment_cases.get_case(get_input.case_id).model_dump(
                     mode="json"
                 )
             list_input = InvestmentCaseListInput.model_validate(
@@ -101,7 +101,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "offset": offset,
                 }
             )
-            envelope = container.investment_case_service.list_cases(
+            envelope = container.services.investment_cases.list_cases(
                 case_type=list_input.case_type,
                 status=list_input.status,
                 primary_instrument_id=list_input.primary_instrument_id,
@@ -132,7 +132,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.investment_case_service.archive_case(
+            envelope = container.services.investment_cases.archive_case(
                 inp.case_id,
                 archived_reason=inp.archived_reason,
                 reviewed_by=inp.reviewed_by,
@@ -158,7 +158,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "include_watchlist": include_watchlist,
                 }
             )
-            envelope = container.research_state_query_service.get_state(
+            envelope = container.services.research_state.get_state(
                 inp.case_id,
                 include_archived_theses=inp.include_archived_theses,
                 include_watchlist=inp.include_watchlist,
@@ -189,7 +189,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.thesis_revision_service.propose_state_update(
+            envelope = container.services.thesis_revisions.propose_state_update(
                 case_id=inp.case_id,
                 payload=inp.payload,
                 confirmation_mode=inp.confirmation_mode,
@@ -225,7 +225,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.thesis_revision_service.propose_revision(
+            envelope = container.services.thesis_revisions.propose_revision(
                 case_id=inp.case_id,
                 thesis_id=inp.thesis_id,
                 payload=inp.payload,
@@ -271,7 +271,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 else None
             )
             if inp.action == "confirm":
-                return container.thesis_revision_service.confirm_candidate(
+                return container.services.thesis_revisions.confirm_candidate(
                     inp.candidate_id,
                     reviewed_by=inp.reviewed_by,
                     review_note=inp.review_note,
@@ -279,14 +279,14 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 ).model_dump(mode="json")
             if inp.action == "reject":
                 assert inp.rejection_reason is not None
-                return container.thesis_revision_service.reject_candidate(
+                return container.services.thesis_revisions.reject_candidate(
                     inp.candidate_id,
                     reviewed_by=inp.reviewed_by,
                     rejection_reason=inp.rejection_reason,
                     actor_context=actor_context,
                 ).model_dump(mode="json")
             assert inp.review_note is not None
-            return container.thesis_revision_service.withdraw_candidate(
+            return container.services.thesis_revisions.withdraw_candidate(
                 inp.candidate_id,
                 reviewed_by=inp.reviewed_by,
                 review_note=inp.review_note,
@@ -301,7 +301,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         """Return append-only history for one investment judgment (Thesis)."""
         try:
             inp = ThesisHistoryGetInput.model_validate({"thesis_id": thesis_id})
-            envelope = container.thesis_revision_service.get_revision_history(inp.thesis_id)
+            envelope = container.services.thesis_revisions.get_revision_history(inp.thesis_id)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -324,7 +324,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "token_budget": token_budget,
                 }
             )
-            return container.research_context_builder.build(inp).model_dump(mode="json")
+            return container.services.research_context.build(inp).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001

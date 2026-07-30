@@ -16,6 +16,10 @@ from application.dto.post_market_sync import (
     PostMarketSyncResultDTO,
     PostMarketSyncStatusDTO,
 )
+from application.dto.schwab_oauth import (
+    SchwabOAuthHealthDTO,
+    SchwabOAuthHealthState,
+)
 from application.ports.market_session_calendar import MarketSession
 from application.services.post_market_sync_service import PostMarketSyncService
 from domain.operations.enums import PostMarketSyncRunStatus
@@ -65,6 +69,19 @@ class _Repository:
 class _Ids:
     def new(self, prefix: object) -> str:
         return "run_00000000-0000-7000-8000-000000000001"
+
+
+class _SchwabOAuthHealth:
+    def inspect(self, *, now: datetime) -> SchwabOAuthHealthDTO:
+        return SchwabOAuthHealthDTO(
+            state=SchwabOAuthHealthState.EXPIRING,
+            checked_at=now,
+            token_created_at=now,
+            token_age_seconds=5 * 24 * 60 * 60,
+            reauthorization_due_at=now,
+            seconds_until_reauthorization=2 * 24 * 60 * 60,
+            warning_codes=("SCHWAB_OAUTH_REAUTH_DUE_SOON",),
+        )
 
 
 class _Portfolio:
@@ -127,8 +144,8 @@ class _ResultService:
 
 class _CliContainer:
     def __init__(self, lock_path: Path, result: Any) -> None:
-        self.post_market_sync_lock = ProcessFileLock(lock_path)
-        self.post_market_sync_service = _ResultService(result)
+        self.resources = SimpleNamespace(post_market_sync_lock=ProcessFileLock(lock_path))
+        self.operations = SimpleNamespace(post_market_sync=_ResultService(result))
         self.aclose_calls = 0
 
     async def aclose(self) -> None:
@@ -142,6 +159,7 @@ def _service(
     repository: _Repository | None = None,
     portfolio_ok: bool = True,
     watchlist_ok: bool = True,
+    schwab_oauth_health: object | None = None,
 ) -> tuple[PostMarketSyncService, _Repository, list[str]]:
     calls: list[str] = []
     repo = repository or _Repository()
@@ -152,6 +170,7 @@ def _service(
         watchlist=_Watchlist(calls, ok=watchlist_ok),
         clock=_Clock(now),
         id_generator=_Ids(),
+        schwab_oauth_health=schwab_oauth_health,
     )
     return service, repo, calls
 
@@ -230,6 +249,24 @@ async def test_runs_portfolio_before_exact_watchlist_sync_and_persists_receipt()
     assert result.watchlist_groups_synced == 24
     assert result.watchlist_membership_relations_synced == 143
     assert repository.value is not None
+
+
+async def test_run_includes_schwab_token_age_and_persists_early_warning() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    service, repository, _ = _service(
+        now=datetime(2026, 7, 17, 20, 10, tzinfo=UTC),
+        close_at=close_at,
+        schwab_oauth_health=_SchwabOAuthHealth(),
+    )
+
+    result = await service.run_if_due()
+
+    assert result.schwab_oauth is not None
+    assert result.schwab_oauth.state is SchwabOAuthHealthState.EXPIRING
+    assert result.schwab_oauth.token_age_seconds == 5 * 24 * 60 * 60
+    assert result.warning_codes == ("SCHWAB_OAUTH_REAUTH_DUE_SOON",)
+    assert repository.value is not None
+    assert repository.value.warning_codes == ("SCHWAB_OAUTH_REAUTH_DUE_SOON",)
 
 
 async def test_partial_result_is_durable_and_retryable() -> None:
@@ -336,7 +373,7 @@ async def test_cli_outputs_executed_success_payload_and_zero_exit(
     assert payload["ok"] is True
     assert payload["disposition"] == PostMarketSyncDisposition.EXECUTED.value
     assert payload["run_status"] == PostMarketSyncRunStatus.SUCCEEDED.value
-    assert container.post_market_sync_service.calls == 1
+    assert container.operations.post_market_sync.calls == 1
     assert container.aclose_calls == 1
 
     lock = ProcessFileLock(tmp_path / "post_market_sync.lock")
@@ -409,7 +446,7 @@ async def test_cli_status_is_read_only_and_reports_health(
     assert code == 0
     assert payload["ok"] is True
     assert payload["health"] == PostMarketSyncHealth.HEALTHY.value
-    assert container.post_market_sync_service.calls == 1
+    assert container.operations.post_market_sync.calls == 1
     assert container.aclose_calls == 1
 
 
@@ -426,7 +463,7 @@ async def test_cli_catch_up_uses_bounded_service_path(
 
     assert code == 0
     assert payload["disposition"] == PostMarketSyncDisposition.EXECUTED.value
-    assert container.post_market_sync_service.calls == 1
+    assert container.operations.post_market_sync.calls == 1
 
 
 def test_cli_help_does_not_build_application(

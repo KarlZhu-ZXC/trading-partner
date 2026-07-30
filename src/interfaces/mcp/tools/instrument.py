@@ -44,7 +44,7 @@ def build_instrument_adapters(container: ApplicationContainer) -> SimpleNamespac
                 asset_hint = inp.asset_type
             else:
                 asset_hint = AssetType(inp.asset_type)
-            envelope = await container.instrument_resolve_service.resolve_dynamic(
+            envelope = await container.services.instruments.resolve_dynamic(
                 market=market_enum,
                 query=inp.query,
                 asset_type_hint=asset_hint,

@@ -536,14 +536,16 @@ Watchlist Hub，不复制 Candidate/Confirm 状态机。
 或持仓市值替代账户净值。系统默认阈值在用户确认前保持明确 warning。该引擎只有
 `risk_policy_get`、`risk_policy_update`、`risk_check` 三个 MCP 工具，永远没有订单副作用。
 
-## 9.8 Monitoring v1
+## 9.8 Monitoring Hub
 
 > 实施状态：已于 2026-07-20 完成。
 
-提供 append-only Monitor 版本、最新规则状态、状态变化事件、显式事件 resolution 和运行回执。
+提供 append-only Monitor 版本、统一 dashboard、完整逐规则运行观察、最新规则状态、状态变化事件、显式事件 resolution 和运行回执。
 V1 规则限制为 A 股/美股价格上穿/下穿与 Portfolio Risk 总体状态阈值；事实过期或 Provider
 失败为 `NOT_EVALUATED`。按需 MCP 与 `trading-partner-monitor-run` CLI 共用同一评估服务，
-连续相同状态不会重复建事件，所有结果均无交易副作用。
+连续相同状态不会重复建事件，所有结果均无交易副作用。`INTERVAL` 支持不同 Monitor 使用
+不同整小时间隔；唯一的本地每小时 launchd 唤醒只执行到期筛选，未到期不请求行情，也不调用
+Codex/LLM。
 
 ## 9.9 Technical Engine v2
 
@@ -567,7 +569,7 @@ Phase 3 不再按零散工具或单一品种拆分，而按共享领域模型与
 |---|---|---|
 | 3A 正式期货与跨资产行情 | 连续代理、正式合约、现货、基差、期限结构 | 免费 CME/DCE/Dukascopy 主链已完成；LME discovery 延后 |
 | 3B 公司财务/经营与可选行业数据 | A股/美股财报、财务质量、公司公告经营指标、按需行业数据、Deep Dive 组合 | 财报与猪周期主链路已完成，行业长期历史 best effort |
-| 3C 历史验证平台 | 历史库、Strategy、Backtest、Experiments、Bias Checks、Artifacts | 待实施 |
+| 3C 历史验证平台 | QuantConnect Free 手工桥接；后续历史库、Strategy、Experiments 与 Bias Checks | 3C-0 已完成，完整平台待实施 |
 | 3D 判断到计划控制链 | Monitoring v2、Trade Plan、Position Sizing、Risk v2 | 已完成（2026-07-26） |
 
 ## 10.2 Phase 3A：正式期货与跨资产行情
@@ -601,13 +603,17 @@ LME Cash/LME 3M 保留为零费用用途许可 discovery；Crypto 与普通 Fore
 公司公告经营指标用于补充销量、售价、产能、成本等非标准化披露。猪周期只是首个按需行业
 数据集，已经包含全国价格/饲料/猪粮比/周期性产能、历史发布版本和显式 Deep Dive 组合，
 并不要求所有行业建立周期模型。调用方明确指定同行的同口径比较事实已经实现，MCP 不会
-自动选同行、排名或下估值结论；契约与验收见
-[3B-T02 同行比较事实包](../plans/phase3b-peer-comparison-plan.md)。猪周期数据、DCE 生猪
-监控和长期补源暂不扩展。
+自动选同行、排名或下估值结论。猪周期数据、DCE 生猪监控和长期补源暂不扩展。
 
 DCE 生猪期限结构属于 3A，不在此重复列为独立 Provider。
 
 ## 10.4 Phase 3C：历史验证平台
+
+> 3C-0 已于 2026-07-30 实现：在保留 28 工具公共面的前提下，通过
+> `research_workflow_run.historical_validation_prepare/import` 生成带 SHA-256 的
+> LEAN 包并导入用户从 QuantConnect Free 下载的结果。网页登录、编译和点击回测仍由
+> 用户完成；远程代码一致性和数据集版本保持 `NOT_EVALUATED`。完整本地引擎与数据层
+> 仍是后续工作。
 
 `historical_data`、`strategy_registry`、`backtest`、`experiments`、`metrics`、
 `bias_checks` 和 `artifact_store` 合并建设，共享同一 point-in-time 与数据版本契约。
@@ -641,8 +647,8 @@ Thesis 失效监控；入场、分批、退出、有效期和目标仓位计划�
 
 所有结果仍是计划、区间或检查，不产生订单、成交或确认权限。
 
-具体生命周期、Sizing 约束、Risk v2 缺失事实语义、Monitor 编译和验收证据见
-[Phase 3D 实施规格](../plans/phase3d-judgment-plan-controls.md)。
+具体生命周期、Sizing 约束、Risk v2 缺失事实语义和 Monitor 编译契约已经合并进
+Phase 3 规范与 capability guide。
 
 ## 10.6 MCP 公共面原则
 

@@ -39,7 +39,7 @@ def build_challenge_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "idempotency_key": idempotency_key,
                 }
             )
-            return container.challenge_review_service.start(request).model_dump(mode="json")
+            return container.services.challenge.start(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -49,7 +49,7 @@ def build_challenge_adapters(container: ApplicationContainer) -> SimpleNamespace
         """Get one persisted Challenge Review."""
         try:
             request = ChallengeReviewGetInput.model_validate({"review_id": review_id})
-            return container.challenge_review_service.get(request.review_id).model_dump(mode="json")
+            return container.services.challenge.get(request.review_id).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -73,7 +73,7 @@ def build_challenge_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "idempotency_key": idempotency_key,
                 }
             )
-            return container.challenge_review_service.resolve(request).model_dump(mode="json")
+            return container.services.challenge.resolve(request).model_dump(mode="json")
         except ValidationError:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -42,7 +42,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
             raise ValueError("operation must be positions, refresh, or transactions")
         try:
             inp = AccountGetSnapshotInput.model_validate({"providers": providers, "as_of": as_of})
-            envelope = await container.portfolio_tool_coordinator.get_account_snapshot(inp)
+            envelope = await container.services.portfolio.get_account_snapshot(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -53,7 +53,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         """Return positions from one snapshot or the latest durable accounts."""
         try:
             inp = AccountGetPositionsInput.model_validate({"snapshot_id": snapshot_id})
-            envelope = container.portfolio_tool_coordinator.get_account_positions(inp)
+            envelope = container.services.portfolio.get_account_positions(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -72,7 +72,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "base_currency": base_currency,
                 }
             )
-            envelope = container.portfolio_tool_coordinator.analyze_portfolio(inp)
+            envelope = container.services.portfolio.analyze_portfolio(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -99,7 +99,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "base_currency": base_currency,
                 }
             )
-            envelope = container.portfolio_tool_coordinator.simulate_addition(inp)
+            envelope = container.services.portfolio.simulate_addition(inp)
             return envelope.model_dump(mode="json")
         except ValidationError:
             raise
@@ -120,7 +120,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
                 {"providers": providers, "start": start, "end": end, "limit": limit}
             )
             return (
-                await container.account_transaction_coordinator.get_transactions(inp)
+                await container.services.account_transactions.get_transactions(inp)
             ).model_dump(mode="json")
         except ValidationError:
             raise

@@ -89,7 +89,7 @@ assert ctor.vendor_chain_path == PACKAGED_VENDOR_CHAIN_PATH.resolve()
 
 container = build_application(settings)
 try:
-    health = container.health_service.check()
+    health = container.services.health.check()
     assert health.ok is True, health
     assert health.data is not None
 

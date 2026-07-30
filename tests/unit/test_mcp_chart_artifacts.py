@@ -57,7 +57,7 @@ async def test_mcp_chart_returns_envelope_local_reference_and_image(
     )
     container = MagicMock()
     container.settings.mcp_server_name = "chart-artifact-test"
-    container.technical_tool_coordinator.render_chart = AsyncMock(
+    container.services.technical.render_chart = AsyncMock(
         return_value=TechnicalChartArtifact(
             envelope=envelope,
             png=b"\x89PNG\r\n\x1a\nfixture",

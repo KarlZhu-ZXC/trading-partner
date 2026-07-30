@@ -31,7 +31,7 @@ from domain.common.enums import (
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
-from infrastructure.persistence.models import (
+from infrastructure.persistence.orm import (
     ResearchEvidenceRow,
     SystemAuditLogRow,
 )

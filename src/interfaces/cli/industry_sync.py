@@ -19,7 +19,7 @@ def _month_count(start: date, end: date) -> int:
 async def _run(months: int) -> int:
     container = build_default_application()
     try:
-        envelope = await container.a_share_tool_coordinator.get_industry_cycle(
+        envelope = await container.services.a_share.get_industry_cycle(
             AShareGetIndustryCycleInput(cycle="hog", lookback_months=months)
         )
         if not envelope.ok or envelope.data is None:
@@ -34,7 +34,7 @@ async def _run(months: int) -> int:
                 )
             )
             return 1
-        stored = container.industry_metric_repository.list_visible(
+        stored = container.operations.industry_metrics.list_visible(
             cycle=IndustryCycleType.HOG,
             as_of=envelope.as_of,
         )

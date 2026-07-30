@@ -8,7 +8,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from infrastructure.config.settings import AppSettings
-from infrastructure.persistence import models as _models  # noqa: F401
+from infrastructure.persistence import orm as _orm  # noqa: F401
 from infrastructure.persistence.database import ensure_sqlite_parent_dir
 from infrastructure.persistence.metadata import Base
 

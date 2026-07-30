@@ -83,6 +83,8 @@ _PHASE2_TABLES = {
     "monitor_events",
     "monitor_event_resolutions",
     "monitor_runs",
+    "monitor_run_observations",
+    "monitor_notification_outbox",
 }
 
 _HARDENING_TABLES = {
@@ -105,7 +107,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0022_workflow_execution_replay"})
+_HEAD_REVISIONS = frozenset({"0024_monitor_notification_outbox"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -131,6 +133,8 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0020_phase3d_plan_controls",
     "0021_challenge_review_idempotency",
     "0022_workflow_execution_replay",
+    "0023_monitoring_hub_v3",
+    "0024_monitor_notification_outbox",
 }
 
 

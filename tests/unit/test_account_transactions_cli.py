@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,7 +31,7 @@ class _Coordinator:
 
 class _Container:
     def __init__(self) -> None:
-        self.account_transaction_coordinator = _Coordinator()
+        self.services = SimpleNamespace(account_transactions=_Coordinator())
         self.closed = False
 
     async def aclose(self) -> None:
@@ -46,7 +47,7 @@ async def test_cli_uses_et_day_window_and_both_providers(
     code = await cli._run(["--date", "2026-07-21"])
 
     payload = json.loads(capsys.readouterr().out)
-    request = container.account_transaction_coordinator.request
+    request = container.services.account_transactions.request
     assert code == 0
     assert payload == {"ok": True, "data": {"transactions": []}}
     assert request is not None
@@ -69,7 +70,7 @@ async def test_cli_honors_provider_filter(
     )
 
     capsys.readouterr()
-    request = container.account_transaction_coordinator.request
+    request = container.services.account_transactions.request
     assert code == 0
     assert request is not None
     assert request.providers == (VendorId.SCHWAB,)

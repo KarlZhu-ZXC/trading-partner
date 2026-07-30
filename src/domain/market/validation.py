@@ -4,9 +4,8 @@ Authoritative field/rule checks for domain snapshots. Failures raise
 DataContractError with stable field/rule names only — never echo payload
 values (prices, secrets, raw bars).
 
-Infrastructure keeps a compatibility re-export at
-``infrastructure.providers.common.contract_validation``; callers that must
-stay domain-facing and import from here.
+Provider codecs and application services import this framework-free module
+directly.
 """
 
 from __future__ import annotations
