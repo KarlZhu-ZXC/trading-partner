@@ -158,6 +158,9 @@ from infrastructure.providers.a_share.codecs import (
     statements_codec,
     ticks_codec,
 )
+from infrastructure.providers.account.reconciliation_writer import (
+    OwnerOnlyBrokerReconciliationWriter,
+)
 from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthFlowManager,
     SchwabOAuthTokenInspector,
@@ -301,11 +304,6 @@ def build_application(
         artifact_root=PROJECT_ROOT / "data" / "artifacts" / "historical_validation",
         backup_root=PROJECT_ROOT / "data" / "backups",
         clock=clock,
-    )
-    performance_reconciliation_service = PerformanceReconciliationService(
-        SchwabRealizedGainLossCsvParser(
-            PROJECT_ROOT / "data" / "artifacts" / "reconciliation"
-        )
     )
     health_service = HealthService(
         database=database,
@@ -858,6 +856,13 @@ def build_application(
         account_transaction_repository, account_snapshot_repository, clock,
         id_generator,
         secret_redactor,
+    )
+    reconciliation_root = PROJECT_ROOT / "data" / "artifacts" / "reconciliation"
+    performance_reconciliation_service = PerformanceReconciliationService(
+        SchwabRealizedGainLossCsvParser(reconciliation_root),
+        account_transaction_coordinator,
+        OwnerOnlyBrokerReconciliationWriter(reconciliation_root),
+        clock,
     )
     portfolio_review_fact_service = PortfolioReviewFactService(
         account_service,

@@ -70,6 +70,9 @@ _ALIASES: dict[str, frozenset[str]] = {
     "long_term_pnl": frozenset({"lt gain loss", "long term gain loss"}),
     "short_term_pnl": frozenset({"st gain loss", "short term gain loss"}),
     "term": frozenset({"term", "hold period"}),
+    "cost_basis_method": frozenset(
+        {"cost basis method", "cost basis method used", "cost method"}
+    ),
     "wash_sale_disallowed": frozenset(
         {"disallowed loss", "wash sale loss disallowed", "wash sale adjustment"}
     ),
@@ -336,6 +339,7 @@ class SchwabRealizedGainLossCsvParser:
                     _cell(row, mapping, "short_term_pnl"), field="short_term_pnl"
                 ),
                 term=_cell(row, mapping, "term") or None,
+                cost_basis_method=_cell(row, mapping, "cost_basis_method") or None,
                 wash_sale_disallowed=_optional_decimal(
                     _cell(row, mapping, "wash_sale_disallowed"),
                     field="wash_sale_disallowed",

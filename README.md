@@ -162,6 +162,13 @@ uv run trading-partner-schwab-auth status
 uv run trading-partner-performance-reconciliation inspect-schwab-realized \
   --realized-csv schwab-realized-2026-06.csv
 
+# Compare one statement account/month with durable FIFO attribution
+uv run trading-partner-performance-reconciliation compare-schwab-realized \
+  --realized-csv schwab-realized-2026-06.csv \
+  --account-ref schwab_STABLE_ACCOUNT_REF \
+  --statement-account-ref schwab_statement_HASH_FROM_INSPECT \
+  --month 2026-06
+
 # Manually force one market-close cadence (diagnostic use)
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
@@ -194,10 +201,13 @@ uv run trading-partner-maintenance prune-cache --retention-days 30
 
 These commands never execute an order.
 
-Broker-statement inspection only accepts a relative CSV path below the gitignored
-`data/artifacts/reconciliation/` directory. It restricts the file to owner-only
-permissions and emits hashes and redacted account summaries—not raw rows or account
-labels. It prepares independent A1 reconciliation but does not constitute sign-off.
+Broker-statement inspection and comparison accept only a relative CSV path below the
+gitignored `data/artifacts/reconciliation/` directory. They restrict the file to
+owner-only permissions and emit hashes and redacted account summaries—not raw rows
+or account labels. Comparison is durable-only: it never refreshes Schwab. It records
+symbol-level FIFO-after-fee residuals and typed gaps in an owner-only JSON draft under
+`receipts/`; offsetting symbol residuals cannot be hidden by a zero account total.
+Neither a matching draft nor the command itself constitutes sign-off.
 
 Telegram delivery is opt-in. Create a bot with Telegram's `@BotFather`, send the
 bot one message, then set `MONITOR_NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`,
