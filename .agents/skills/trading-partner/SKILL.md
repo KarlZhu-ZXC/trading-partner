@@ -1,6 +1,6 @@
 ---
 name: trading-partner
-description: Use Trading Partner MCP for investment research facts, health checks, research files, investment judgments and Trade Plans, instrument resolution, A-share/US/cross-asset facts, technical analysis, durable accounts, explicit upstream sync, portfolio risk, monitoring, Challenge Review, workflows, and research memory. The default public surface is compact_28.
+description: Use Trading Partner MCP for investment research facts, health checks, research files, investment judgments and Trade Plans, instrument resolution, A-share/US/KR/cross-asset facts, technical analysis, durable accounts, explicit upstream sync, portfolio risk, monitoring, Challenge Review, workflows, and research memory. The default public surface is compact_28.
 ---
 
 # Trading Partner Skill
@@ -62,8 +62,9 @@ out-of-scope execution.
 ### Instrument resolve (Phase 1D)
 
 - `instrument_resolve` — local-first instrument registry lookup. On a local miss,
-  it discovers through Yahoo → Alpha Vantage for US instruments or validates an
-  A-share code through Tencent, then atomically caches one unambiguous candidate.
+  it discovers through Yahoo → Alpha Vantage for US instruments, Yahoo for KR
+  instruments, or validates an A-share code through Tencent, then atomically caches
+  one unambiguous candidate.
   It is still not a live quote. Preserve provider failures instead of relabeling
   them as `INVALID_INSTRUMENT`.
 
@@ -92,13 +93,21 @@ Preserve their warnings and source timestamps when answering the user.
 
 | Tool | Purpose |
 |---|---|
-| `market_data_get` | Cross-market `quote`, US-only `composite`, inclusive-end `bars`, `us_market`, official-settlement `futures_curve`, or gated `spot_future_basis` |
+| `market_data_get` | Cross-market `quote`, bounded `quotes` (1–50), US-only `composite`, inclusive-end `bars`, `us_market`, official-settlement `futures_curve`, or gated `spot_future_basis` |
 | `technical_get_snapshot` | Cross-market daily/weekly indicators, regimes, structure levels, and recent patterns |
 | `technical_render_chart` | Auditable envelope plus an in-memory PNG candlestick/volume/RSI chart |
 
 Technicals are deterministic derived facts, not backtested predictions. Both tools
-support A-share and US equity/ETF/index instruments. Preserve
+support A-share, US, and KR equity/ETF/index instruments. Preserve
 `historically_validated=false`, adjustment basis, source warnings, and stale-data failures.
+All supported instrument-scoped public capabilities use one local-first access
+gateway. A valid A-share equity/ETF/index, US equity/ETF/index/future, KR
+equity/ETF/index, or CME/DCE
+future Master miss discovers and caches one validated candidate before the requested
+fact call. Do not require a separate `instrument_resolve` call or describe the Master
+as an allowlist; preserve typed directory failures when discovery is unavailable.
+`quotes` accepts 1–50 unique IDs, limits concurrency, and returns one complete typed
+result per ID so a partial failure never hides the other quotes.
 Yahoo breadth uses a disclosed listed-security universe that may include ETFs and
 ADRs; never describe it as official exchange common-stock breadth. New-high/low
 and moving-average participation remain unavailable rather than fabricated.
@@ -115,6 +124,13 @@ close is recovered from timestamped `regularMarketPrice`, preserve
 Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
 its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
 warning when the local OpenD predates 10.9.
+
+KR identities use bare canonical symbols such as `equity:KR:005930`,
+`equity:KR:000660`, `index:KR:KS11`, `index:KR:KQ11`, `index:KR:KS200`, and
+`etf:KR:069500`. Yahoo `.KS`/`.KQ`/caret values are provider aliases. Quote,
+batch quote, bars, and technical facts use `Asia/Seoul`; preserve
+`YAHOO_KR_DELAYED_QUOTE` and `data_delay_seconds`. Do not claim DART fundamentals,
+KR sentiment/breadth, account sync, peer workflows, or position sizing.
 
 Phase 3A preserves continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`,
 and `PA=F` under `future:US:*` IDs. Yahoo is primary; Sina provides timestamped
@@ -163,8 +179,8 @@ package automatically; industry-cycle/company-operating facts remain explicit.
 
 | Tool | Purpose |
 |---|---|
-| `us_company_get` | `fundamentals_snapshot`, normalized `fundamental_statements`, `filings`, `insider_activity`, `company_updates`, typed `events`, or dated `live_news` |
-| `us_context_get` | Vintage-safe `macro`, source-separated `sentiment`, or current-only `prediction_market` context |
+| `us_company_get` | Equity `fundamentals_snapshot`, normalized `fundamental_statements`, `filings`, `insider_activity`, `company_updates`, typed `events`, plus equity/ETF dated `live_news` |
+| `us_context_get` | Vintage-safe `macro`, equity/ETF source-separated `sentiment`, or current-only `prediction_market` context |
 
 Do not relabel current Polymarket odds as historical. Keep versioned Reddit inference
 and versioned Moomoo deterministic inference separate. StockTwits formal access was
@@ -184,7 +200,7 @@ emitted for the deduplicated latest view.
 
 | Tool | Purpose |
 |---|---|
-| `account_get` | Read durable positions only; it cannot contact a broker |
+| `account_get` | Read durable `positions` or normalized `transactions`; it cannot contact a broker |
 | `external_state_sync` | Explicitly fetch/persist `accounts`, `transactions`, or the active `watchlist` upstream |
 | `portfolio_analyze` | `exposure` or pure before/after `simulate_addition`; never executes |
 
@@ -281,8 +297,11 @@ Import accepts only a local QuantConnect Results JSON for the exact prepared
 `validation_id`. The user must operate the QuantConnect Free web UI. Always
 preserve `REMOTE_RUN_ATTESTATION_UNAVAILABLE` and
 `REMOTE_DATASET_VERSION_UNAVAILABLE`; imported results are not proof of the remote
-code hash or a versioned point-in-time dataset. These operations never confirm a
-Thesis, mutate a Trade Plan, or place an order.
+code hash or a versioned point-in-time dataset. Treat formal `statistics` as the
+performance source when runtime display fields conflict, surface any prepared vs
+exported run-period mismatch, and label Benchmark-derived comparisons as the
+exported QuantConnect curve rather than an official total-return index. These
+operations never confirm a Thesis, mutate a Trade Plan, or place an order.
 
 For `peer_comparison`, require one A-share/US equity primary and 1–5 explicit
 same-market equity peers. Resolve instruments first; do not ask the MCP to discover
@@ -295,6 +314,9 @@ decision and not a confirmed investment judgment. Catalyst Review does not
 auto-create a Case; pass the Deep Dive `case_id` to continue the same judgment
 history. When multiple open Cases match one instrument, require an explicit
 `case_id` instead of guessing.
+US equity workflows include company fundamentals/statements/events. US ETF workflows
+instead use composite market/technical facts, exact-symbol ETF news, ETF sentiment,
+and macro context; they never call equity-only company fundamentals or filings.
 
 ### Watchlist hub (Phase 2)
 
@@ -303,10 +325,17 @@ history. When multiple open Cases match one instrument, require an explicit
 - `external_state_sync(request={"operation":"watchlist"})` is the only public
   upstream refresh.
 
+For Moomoo, omitting `group_name` from `watchlist_get/items` selects the durable
+system `All` group when present; it never silently substitutes `Favorites`. The
+response discloses `group_was_defaulted`, `total_count`, and `has_more`.
+`external_state_sync/watchlist` always performs an exact all-group/all-membership
+refresh and returns its sync receipt; it is not a paged single-group read.
+
 Moomoo and Manual CSV are alternatives, not merged or reconciled sources. External
 removal keeps inactive membership history and never deletes a research
-`WatchlistItem` or Investment Case. Unsupported Moomoo codes remain visible with
-`research_supported=false`; never fabricate an A-share/US instrument for them.
+`WatchlistItem` or Investment Case. Manual CSV supports KR identities; Moomoo
+Watchlist mutation does not. Unsupported Moomoo codes remain visible with
+`research_supported=false`; never fabricate an A-share/US/KR instrument for them.
 
 For external post-market scheduling, `uv run trading-partner-post-market-sync`
 refreshes all configured durable account snapshots before the exact Watchlist
@@ -355,8 +384,12 @@ A Trade Plan is a research control document, not an order; every response has
 Monitoring enum inputs are case-insensitive and whitespace-tolerant at the DTO
 boundary. Canonical tool schemas, responses, domain objects, and persisted values
 remain uppercase; do not treat normalized lowercase input as a distinct status.
+Every explicitly supplied rule requires a bounded human-readable `description` on
+create/update. Keep this meaning separate from the stable machine `rule_code` and
+from the typed direction/threshold fields. Legacy versions without descriptions
+remain readable, but a new version must fill every rule description.
 
-Legacy rules remain A-share/US `PRICE_ABOVE`, `PRICE_BELOW`, and portfolio
+Legacy rules remain A-share/US/KR `PRICE_ABOVE`, `PRICE_BELOW`, and portfolio
 `RISK_OVERALL_AT_LEAST`. Monitoring v2 also supports deterministic fact comparisons for
 price, volume, technical, fundamental, company-event, macro, sentiment, Thesis-state,
 and portfolio-risk facts. `monitor_manage` operations `create` and `update` may bind an
@@ -369,41 +402,48 @@ skipped without a provider call, state mutation, or new event and returns
 `MONITOR_EXPIRED`. This alarm lifetime is separate from each rule's
 `max_fact_age_seconds`. `INTERVAL` cadence accepts a whole-hour
 `interval_minutes` value (minimum 60). The application dispatcher selects due
-INTERVAL definitions and due A-share/US post-market groups; an early hourly wake
+INTERVAL definitions and due A-share/US/KR post-market groups; an early hourly wake
 performs no market-data request. Each market group runs at most once for a trading
 session after close plus the configured delay. Each
 evaluated run durably records every rule's observed value, threshold, distance,
 fact time, age, warning/error codes, and state—even when no transition event is
 created. Use `monitor_read(request={"operation":"dashboard"})` for the unified
 current view and `monitor_read(request={"operation":"runs",...})` for run history.
+The dashboard embeds only a compact latest-run summary per Monitor. A run query
+filtered by `monitor_id` returns only that Monitor's observations, even when the
+underlying scheduled run evaluated several Monitors together; querying by `run_id`
+still returns the immutable full batch.
 Monitoring never changes a Thesis, policy, position, or order. The external
 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` (or
-`A_SHARE_POST_MARKET`) remains an explicit diagnostic force-run and is not a
+`A_SHARE_POST_MARKET` / `KR_POST_MARKET`) remains an explicit diagnostic force-run and is not a
 scheduler. On macOS, `uv run trading-partner-monitor-scheduler
 install` installs one hourly launchd wake that runs `trading-partner-monitor-run
 due`; this deterministic path does not open a Codex task and consumes no LLM tokens.
 Do not duplicate Monitor evaluation inside Codex market-review Automations.
-When Telegram notifications are enabled, transition events and notification Outbox
-rows are committed atomically. The hourly due dispatcher flushes pending messages
-even when no Monitor evaluation is due; market-cadence runs flush after evaluation.
-Only `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED` state transitions notify—never
-repeat observations. Each Telegram message reuses the same run observations to
+When Telegram notifications are enabled, the notification Outbox is linked to
+either a transition event or an A-share/US/KR post-market run and committed atomically
+with that source. The hourly due dispatcher flushes pending messages even when no
+Monitor evaluation is due; market-cadence runs flush after evaluation. INTERVAL
+alerts remain limited to `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED` transitions.
+Every evaluated market-close group also emits one consolidated run summary, including
+an explicit zero-change heartbeat; it does not create a fake Monitor event. Each
+Telegram message reuses the same run observations to
 show the instrument's current observed price/time and every rule's condition,
 severity, observed value, distance, and state without another provider request.
-Telegram does not implement Markdown tables. The transition summary therefore
-renders as native HTML before one escaped monospaced `<pre>` block containing only
-the current price/time and complete rule table. Warnings and basis notes stay after
-the table. The sender does not generate or upload an image. Do not place unescaped
-monitor text into `parse_mode=HTML`.
+Telegram does not implement responsive tables. The sender therefore places the
+symbol/current price in the first line, then renders the transition summary and
+every rule as a mobile-first vertical HTML card without `<pre>` spacing. Warnings
+and basis notes stay after the rule cards. The sender does not generate or upload
+an image. Do not place unescaped monitor text into `parse_mode=HTML`.
 Multiple transitions for one Monitor in one run are batched into one message while
 their durable events remain separate. Use `uv run trading-partner-monitor-notifications status`,
 `test`, or `flush` for operations. Never request or echo the Bot Token in chat;
 the user must place it in the project `.env`. Delivery does not acknowledge or
-resolve the source event and has no execution effect.
+resolve a source event/run and has no execution effect.
 
 ### Technical Engine v2 (Phase 2D)
 
-- `technical_get_snapshot` returns shared A-share/US `1d` and `1w` facts using
+- `technical_get_snapshot` returns shared A-share/US/KR `1d` and `1w` facts using
   provider-backed adjusted equity bars or unadjusted futures bars, TA-Lib standard
   indicators, project-owned
   structure clustering, and recent candlestick recognition.

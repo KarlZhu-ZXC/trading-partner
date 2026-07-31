@@ -69,7 +69,7 @@ class MonitorNotificationService:
             if now - item.created_at > self._event_ttl:
                 for entry in group:
                     self._repository.record_notification_attempt(
-                        entry.source_event_id,
+                        entry.notification_id,
                         entry.channel,
                         status=MonitorNotificationStatus.EXPIRED,
                         attempted_at=now,
@@ -91,7 +91,7 @@ class MonitorNotificationService:
             if receipt.delivered:
                 for entry in group:
                     self._repository.record_notification_attempt(
-                        entry.source_event_id,
+                        entry.notification_id,
                         entry.channel,
                         status=MonitorNotificationStatus.DELIVERED,
                         attempted_at=now,
@@ -112,14 +112,12 @@ class MonitorNotificationService:
                 dead_lettered += 1
             else:
                 status = MonitorNotificationStatus.PENDING
-                delay_seconds = receipt.retry_after_seconds or _retry_delay_seconds(
-                    attempt_no
-                )
+                delay_seconds = receipt.retry_after_seconds or _retry_delay_seconds(attempt_no)
                 next_attempt_at = now + timedelta(seconds=delay_seconds)
                 retry_scheduled += 1
             for entry in group:
                 self._repository.record_notification_attempt(
-                    entry.source_event_id,
+                    entry.notification_id,
                     entry.channel,
                     status=status,
                     attempted_at=now,
@@ -149,7 +147,9 @@ class MonitorNotificationService:
         now = self._clock.now()
         return await self._sender.send(
             MonitorNotificationOutboxEntry(
+                notification_id="monitor_notification_test",
                 source_event_id="monitor_event_notification_test",
+                source_run_id=None,
                 channel=MonitorNotificationChannel.TELEGRAM,
                 title="✅ Trading Partner Telegram 测试",
                 body=(
@@ -165,9 +165,7 @@ class MonitorNotificationService:
         )
 
     def status(self) -> NotificationStatusReceipt:
-        counts = self._repository.notification_counts(
-            MonitorNotificationChannel.TELEGRAM
-        )
+        counts = self._repository.notification_counts(MonitorNotificationChannel.TELEGRAM)
         return NotificationStatusReceipt(
             enabled=self._enabled,
             provider="TELEGRAM",

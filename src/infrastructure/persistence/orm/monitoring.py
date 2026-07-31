@@ -36,7 +36,8 @@ class MonitorVersionRow(Base):
         UniqueConstraint("idempotency_key", name="uq_monitor_versions_idempotency_key"),
         CheckConstraint("version >= 1", name="ck_monitor_versions_version"),
         CheckConstraint(
-            "cadence IN ('ON_DEMAND','INTERVAL','A_SHARE_POST_MARKET','US_POST_MARKET')",
+            "cadence IN ("
+            "'ON_DEMAND','INTERVAL','A_SHARE_POST_MARKET','US_POST_MARKET','KR_POST_MARKET')",
             name="ck_monitor_versions_cadence",
         ),
         CheckConstraint(
@@ -169,7 +170,7 @@ class MonitorRunRow(Base):
         ),
         CheckConstraint(
             "cadence IS NULL OR cadence IN ("
-            "'ON_DEMAND','INTERVAL','A_SHARE_POST_MARKET','US_POST_MARKET')",
+            "'ON_DEMAND','INTERVAL','A_SHARE_POST_MARKET','US_POST_MARKET','KR_POST_MARKET')",
             name="ck_monitor_runs_cadence",
         ),
         CheckConstraint("completed_at >= started_at", name="ck_monitor_runs_time_order"),
@@ -257,6 +258,21 @@ class MonitorNotificationOutboxRow(Base):
             "attempt_count >= 0",
             name="ck_monitor_notification_outbox_attempt_count",
         ),
+        CheckConstraint(
+            "(source_event_id IS NOT NULL AND source_run_id IS NULL) OR "
+            "(source_event_id IS NULL AND source_run_id IS NOT NULL)",
+            name="ck_monitor_notification_outbox_source",
+        ),
+        UniqueConstraint(
+            "source_event_id",
+            "channel",
+            name="uq_monitor_notification_outbox_event_channel",
+        ),
+        UniqueConstraint(
+            "source_run_id",
+            "channel",
+            name="uq_monitor_notification_outbox_run_channel",
+        ),
         Index(
             "ix_monitor_notification_outbox_due",
             "channel",
@@ -265,12 +281,16 @@ class MonitorNotificationOutboxRow(Base):
         ),
     )
 
-    source_event_id: Mapped[str] = mapped_column(
+    notification_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_event_id: Mapped[str | None] = mapped_column(
         Text,
         ForeignKey("monitor_events.event_id", ondelete="CASCADE"),
-        primary_key=True,
     )
-    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_run_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("monitor_runs.run_id", ondelete="CASCADE"),
+    )
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)

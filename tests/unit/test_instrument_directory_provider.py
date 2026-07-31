@@ -59,6 +59,29 @@ async def test_yahoo_discovers_us_equity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_yahoo_discovers_korean_equity_with_canonical_bare_code() -> None:
+    transport = _Transport(
+        b'{"quotes":[{"symbol":"005930.KS","longname":"Samsung Electronics Co., Ltd.",'
+        b'"quoteType":"EQUITY","exchange":"KSC","currency":"KRW"}]}'
+    )
+    adapter = YahooInstrumentDirectoryAdapter(transport, clock=FixedClock(NOW))
+
+    result = await adapter.lookup(
+        market=Market.KR,
+        query="005930",
+        asset_type_hint=AssetType.EQUITY,
+        as_of=NOW,
+    )
+
+    instrument = result.value[0]
+    assert instrument.instrument_id == "equity:KR:005930"
+    assert instrument.symbol == "005930"
+    assert instrument.exchange == "KOSPI"
+    assert instrument.currency == "KRW"
+    assert instrument.timezone == "Asia/Seoul"
+
+
+@pytest.mark.asyncio
 async def test_alpha_vantage_discovers_us_equity_without_exposing_key() -> None:
     transport = _Transport(
         b'{"bestMatches":[{"1. symbol":"KO","2. name":"Coca-Cola",'

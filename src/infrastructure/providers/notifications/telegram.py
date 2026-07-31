@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 import logging
 import re
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -14,9 +16,7 @@ from domain.monitoring.models import MonitorNotificationOutboxEntry
 
 _MAX_RESPONSE_BYTES = 64_000
 _RULE_ROW_PATTERN = re.compile(r"\s{2,}")
-_CHANGE_PATTERN = re.compile(
-    r"^\u2022 \[(?P<severity>[^]]+)] (?P<rule>.+?) \u2192 (?P<event>\S+)$"
-)
+_CHANGE_PATTERN = re.compile(r"^\u2022 \[(?P<severity>[^]]+)] (?P<rule>.+?) \u2192 (?P<event>\S+)$")
 
 
 class TelegramMonitorNotificationAdapter:
@@ -48,9 +48,7 @@ class TelegramMonitorNotificationAdapter:
         if self._owns_client:
             await self._client.aclose()
 
-    async def send(
-        self, notification: MonitorNotificationOutboxEntry
-    ) -> NotificationSendReceipt:
+    async def send(self, notification: MonitorNotificationOutboxEntry) -> NotificationSendReceipt:
         payload: dict[str, object] = {
             "chat_id": self._chat_id,
             "text": _format_notification_html(notification.title, notification.body),
@@ -89,9 +87,7 @@ class TelegramMonitorNotificationAdapter:
             return NotificationSendReceipt(
                 delivered=True,
                 retryable=False,
-                provider_message_id=(
-                    str(message_id) if isinstance(message_id, int) else None
-                ),
+                provider_message_id=(str(message_id) if isinstance(message_id, int) else None),
             )
         if response.status_code == 429:
             retry_after = _retry_after_seconds(data)
@@ -138,8 +134,10 @@ def _retry_after_seconds(data: dict[str, Any]) -> int | None:
 
 
 def _format_notification_html(title: str, body: str) -> str:
-    """Render a Telegram-native vertical rule card; Telegram has no table markup."""
+    """Render a mobile-first Telegram rule card; Telegram has no table markup."""
     lines = body.splitlines()
+    if lines and lines[0] == "POST_MARKET_SUMMARY":
+        return _format_post_market_summary_html(title, lines)
     try:
         rules_index = lines.index("RULES")
     except ValueError:
@@ -156,9 +154,17 @@ def _format_notification_html(title: str, body: str) -> str:
     if not rows:
         return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
 
-    sections = [f"<b>{html.escape(title)}</b>"]
+    sections = [f"<b>{html.escape(_headline_with_price(title, price))}</b>"]
     if monitor_name:
         sections.append(f"<i>{html.escape(monitor_name)}</i>")
+
+    price_lines: list[str] = []
+    if price is not None:
+        price_lines.append(f"💰 <b>当前价格：{html.escape(price)}</b>")
+    if price_time is not None:
+        price_lines.append(f"🕒 价格时间：{html.escape(_format_price_time(price_time))}")
+    if price_lines:
+        sections.append("\n".join(price_lines))
 
     formatted_changes = tuple(
         formatted for line in changes if (formatted := _format_change(line)) is not None
@@ -166,20 +172,71 @@ def _format_notification_html(title: str, body: str) -> str:
     if formatted_changes:
         sections.append("<b>本轮结果</b>\n" + "\n".join(formatted_changes))
 
-    table_lines: list[str] = []
-    if price is not None:
-        table_lines.append(f"PRICE  {price}")
-    if price_time is not None:
-        table_lines.append(f"TIME   {price_time}")
-    if table_lines:
-        table_lines.append("")
-    table_lines.append(_format_rule_table(rows))
-    sections.append(
-        "<b>价格与规则</b>\n<pre>" + html.escape("\n".join(table_lines)) + "</pre>"
-    )
+    sections.append("<b>全部监控规则</b>\n\n" + _format_rule_cards(rows))
     if notes:
         sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
     return "\n\n".join(sections)
+
+
+def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
+    run_time = _prefixed_value(lines, "运行时间：")
+    change_count = _prefixed_value(lines, "本轮变化：")
+    sections = [f"<b>{html.escape(title)}</b>"]
+    summary: list[str] = []
+    if run_time is not None:
+        summary.append(f"🕒 运行时间：{html.escape(_format_price_time(run_time))}")
+    if change_count == "0":
+        summary.append("✅ 本轮无状态变化")
+    elif change_count is not None:
+        summary.append(f"🔔 本轮状态变化：{html.escape(change_count)}")
+    if summary:
+        sections.append("\n".join(summary))
+
+    index = 1
+    notes: list[str] = []
+    while index < len(lines):
+        if lines[index] != "MONITOR":
+            if lines[index].startswith(("数据提示：", "运行错误：", "期货价格")):
+                notes.append(lines[index])
+            index += 1
+            continue
+        end_index = index + 1
+        while end_index < len(lines) and lines[end_index] != "END_MONITOR":
+            end_index += 1
+        block = lines[index + 1 : end_index]
+        rendered = _format_digest_monitor_block(block)
+        if rendered is not None:
+            sections.append(rendered)
+        index = end_index + 1
+    if notes:
+        sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
+    return "\n\n".join(sections)
+
+
+def _format_digest_monitor_block(lines: list[str]) -> str | None:
+    if not lines:
+        return None
+    name = lines[0].strip()
+    symbol = _prefixed_value(lines, "标的：")
+    price = _prefixed_value(lines, "当前价格：")
+    price_time = _prefixed_value(lines, "价格时间：")
+    try:
+        rules_index = lines.index("RULES")
+    except ValueError:
+        return None
+    rows, _notes = _parse_rule_rows(lines[rules_index + 3 :])
+    if not rows:
+        return None
+    heading = symbol or name
+    if price is not None:
+        heading = f"{heading} · {price}"
+    parts = [f"<b>{html.escape(heading)}</b>"]
+    if name and name != symbol:
+        parts.append(f"<i>{html.escape(name)}</i>")
+    if price_time is not None:
+        parts.append(f"🕒 {html.escape(_format_price_time(price_time))}")
+    parts.append(_format_rule_cards(rows))
+    return "\n".join(parts)
 
 
 def _parse_rule_rows(
@@ -212,20 +269,72 @@ def _format_change(line: str) -> str | None:
     )
 
 
-def _format_rule_table(rows: tuple[tuple[str, str, str, str, str, str], ...]) -> str:
-    headers = ("RULE", "COND", "VALUE", "DIST", "STATE", "LEVEL")
-    widths = tuple(
-        max(len(headers[index]), *(len(row[index]) for row in rows))
-        for index in range(len(headers))
-    )
+def _format_rule_cards(
+    rows: tuple[tuple[str, str, str, str, str, str], ...],
+) -> str:
+    cards: list[str] = []
+    for rule, condition, value, distance, state, level in rows:
+        cards.append(
+            "\n".join(
+                (
+                    f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
+                    f" · <b>{html.escape(state)}</b> · {html.escape(level)}",
+                    f"当前 <code>{html.escape(value)}</code>"
+                    f" · {html.escape(_distance_label(condition, distance, state))}",
+                    f"规则：<code>{html.escape(rule)}</code>",
+                )
+            )
+        )
+    return "\n\n".join(cards)
 
-    def format_row(row: tuple[str, ...]) -> str:
-        return "  ".join(
-            value.ljust(widths[index]) for index, value in enumerate(row)
-        ).rstrip()
 
-    separator = "  ".join("-" * width for width in widths)
-    return "\n".join((format_row(headers), separator, *(format_row(row) for row in rows)))
+def _headline_with_price(title: str, price: str | None) -> str:
+    if price is None:
+        return title
+    prefix, separator, event = title.rpartition(" · ")
+    if not separator:
+        return f"{title} · {price}"
+    return f"{prefix} · {price} · {event}"
+
+
+def _format_price_time(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    offset = parsed.utcoffset()
+    if offset is None:
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    return f"{parsed:%Y-%m-%d %H:%M} UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _distance_label(condition: str, distance: str, state: str) -> str:
+    if distance == "不可用":
+        return "距阈值：不可用"
+    try:
+        delta = Decimal(distance)
+    except InvalidOperation:
+        return f"距阈值：{distance}"
+    comparator = condition.split(maxsplit=1)[0] if condition else ""
+    magnitude = _format_decimal(abs(delta))
+    if state == "TRIGGERED":
+        if comparator.startswith(">"):
+            return f"已高于阈值 {magnitude}"
+        if comparator.startswith("<"):
+            return f"已低于阈值 {magnitude}"
+    if comparator.startswith(">") and delta < 0:
+        return f"距触发 {magnitude}"
+    if comparator.startswith("<") and delta > 0:
+        return f"距触发 {magnitude}"
+    return f"距阈值：{_format_decimal(delta)}"
+
+
+def _format_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
 
 
 def _state_emoji(state: str) -> str:

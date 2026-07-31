@@ -32,6 +32,7 @@ from domain.us_market.enums import USBarInterval
 from infrastructure.providers.us.yahoo_finance import YahooFinanceAdapter
 
 NY = ZoneInfo("America/New_York")
+SEOUL = ZoneInfo("Asia/Seoul")
 # Friday regular session (not weekend closed).
 AS_OF = datetime(2026, 7, 17, 16, 5, tzinfo=NY)
 CLOCK = FixedClock(AS_OF)
@@ -60,6 +61,19 @@ def _future_instrument() -> Instrument:
         currency="USD",
         timezone="America/New_York",
         asset_type=AssetType.FUTURE,
+    )
+
+
+def _kr_instrument() -> Instrument:
+    return Instrument(
+        instrument_id="equity:KR:005930",
+        symbol="005930",
+        name="Samsung Electronics",
+        market=Market.KR,
+        exchange="KOSPI",
+        currency="KRW",
+        timezone="Asia/Seoul",
+        asset_type=AssetType.EQUITY,
     )
 
 
@@ -710,3 +724,64 @@ async def test_daily_stale_boundary_four_natural_days_ok() -> None:
         as_of=AS_OF,
     )
     assert len(result.value.bars) == 1
+
+
+@pytest.mark.asyncio
+async def test_yahoo_korean_quote_uses_seoul_day_and_provider_symbol() -> None:
+    days = [date(2026, 7, 29), date(2026, 7, 30)]
+    timestamps = [
+        _unix(datetime(day.year, day.month, day.day, 0, 0, tzinfo=SEOUL))
+        for day in days
+    ]
+    regular_at = datetime(2026, 7, 30, 15, 30, tzinfo=SEOUL)
+    payload = {
+        "chart": {
+            "result": [
+                {
+                    "meta": {
+                        "currency": "KRW",
+                        "symbol": "005930.KS",
+                        "regularMarketTime": _unix(regular_at),
+                        "regularMarketPrice": 70000,
+                        "regularMarketVolume": 123456,
+                        "regularMarketOpen": 69500,
+                        "regularMarketDayHigh": 70500,
+                        "regularMarketDayLow": 69000,
+                        "currentTradingPeriod": {
+                            "regular": {
+                                "start": _unix(
+                                    datetime(2026, 7, 30, 9, 0, tzinfo=SEOUL)
+                                ),
+                                "end": _unix(regular_at),
+                            }
+                        },
+                    },
+                    "timestamp": timestamps,
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [68000, 69500],
+                                "high": [69000, 70500],
+                                "low": [67500, 69000],
+                                "close": [68500, 70000],
+                                "volume": [100000, 123456],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [68500, 70000]}],
+                    },
+                }
+            ],
+            "error": None,
+        }
+    }
+    as_of = datetime(2026, 7, 30, 16, 0, tzinfo=SEOUL)
+    transport = RecordingTransport(body=json.dumps(payload).encode())
+    adapter = YahooFinanceAdapter(transport, clock=FixedClock(as_of))
+
+    result = await adapter.get_quote(_kr_instrument(), as_of)
+
+    assert transport.requests[0].url.endswith("/005930.KS")
+    assert result.value.quote_at == regular_at
+    assert result.value.previous_close == Decimal("68500")
+    assert result.value.last == Decimal("70000")
+    assert "YAHOO_KR_DELAYED_QUOTE" in result.meta.warnings

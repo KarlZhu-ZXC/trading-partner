@@ -182,6 +182,7 @@ def _require_us_instrument_id(
     *,
     field: str,
     allowed_assets: frozenset[AssetType],
+    allow_kr: bool = False,
 ) -> str:
     text = _require_str(value, field=field, max_len=128)
     try:
@@ -193,10 +194,14 @@ def _require_us_instrument_id(
         ) from exc
     market_asset_allowed = market is Market.US or (
         market is Market.CME and asset_type is AssetType.FUTURE
+    ) or (
+        allow_kr
+        and market is Market.KR
+        and asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
     )
     if not market_asset_allowed:
         raise DataContractError(
-            f"{field} must use Market.US, or Market.CME for a future",
+            f"{field} must use Market.US, Market.KR when enabled, or Market.CME for a future",
             details={
                 "field": field,
                 "rule": "market_asset_pair",
@@ -279,6 +284,7 @@ class USQuote:
             self.instrument_id,
             field="instrument_id",
             allowed_assets=_QUOTE_ASSET_TYPES,
+            allow_kr=True,
         )
         require_aware_datetime(self.quote_at, field_name="quote_at")
         _require_enum(self.session, TradingSession, field="session")
@@ -328,11 +334,13 @@ class USBarSeries:
     bars: tuple[MarketBar, ...]
 
     def __post_init__(self) -> None:
-        _require_us_instrument_id(
+        instrument_id = _require_us_instrument_id(
             self.instrument_id,
             field="instrument_id",
             allowed_assets=_QUOTE_ASSET_TYPES,
+            allow_kr=True,
         )
+        _asset_type, market, _symbol = parse_instrument_id(instrument_id)
         _require_enum(self.interval, USBarInterval, field="interval")
         _require_enum(self.adjustment, AdjustmentMethod, field="adjustment")
         start = _require_date(self.start, field="start")
@@ -349,7 +357,8 @@ class USBarSeries:
             _validate_market_bar(bar, index=idx)  # type: ignore[arg-type]
             assert isinstance(bar, MarketBar)
             ts = bar.timestamp
-            local_day = ts.astimezone(_NEW_YORK).date()
+            local_zone = ZoneInfo("Asia/Seoul") if market is Market.KR else _NEW_YORK
+            local_day = ts.astimezone(local_zone).date()
             if local_day < start or local_day > end:
                 raise DataContractError(
                     "bar timestamp must fall inside inclusive start/end",

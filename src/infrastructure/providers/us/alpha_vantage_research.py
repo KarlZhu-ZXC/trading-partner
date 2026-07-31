@@ -152,6 +152,15 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
             )
         return symbol
 
+    def _news_symbol(self, instrument: Instrument) -> str:
+        symbol = self._require_us_instrument(instrument)
+        if instrument.asset_type not in {AssetType.EQUITY, AssetType.ETF}:
+            raise DataContractError(
+                "Alpha news supports US equities and ETFs",
+                details={"field": "instrument", "rule": "asset_type"},
+            )
+        return symbol
+
     def _current(self, as_of: datetime) -> datetime:
         self._require_configured()
         now = self._require_as_of(as_of)
@@ -213,7 +222,7 @@ class AlphaVantageResearchAdapter(AlphaVantageAdapter):
         }
         symbol: str | None = None
         if instrument is not None:
-            symbol = self._equity(instrument)
+            symbol = self._news_symbol(instrument)
             params["tickers"] = symbol
         else:
             params["topics"] = "financial_markets,economy_macro,economy_monetary"

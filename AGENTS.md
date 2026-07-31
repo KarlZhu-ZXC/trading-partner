@@ -5,6 +5,7 @@
 Trading Partner is a long-horizon investment judgment companion. Codex (or another
 agent host) talks to the user; Trading Partner MCP supplies facts, research state,
 and structured tools. The implemented Phase 1–3D boundary covers A-share/US research,
+Korea Exchange quote/technical monitoring,
 accounts, Investment Cases, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
 analysis, plus a manual QuantConnect Free code/result bridge — **not** an automated
@@ -24,7 +25,7 @@ services remain separate; compact routing belongs only to `interfaces/mcp/`.
 - `instrument_resolve` — local-first lookup; a unique provider result may be cached.
 
 Instrument resolution is local-first, not local-only. A local miss may use the
-configured US/A-share instrument directories; only one validated candidate is
+configured US/A-share/KR instrument directories; only one validated candidate is
 atomically cached in the Instrument Master. The Master is a registry/cache, not
 an allowlist. Directory failures remain typed provider errors.
 
@@ -54,7 +55,7 @@ other out-of-scope execution.
 - `a_share_get_facts` (`snapshot`, `market_structure`, `capital`, `limit_up`,
   `sentiment`, `etf_option`, `financials`, `industry_cycle`,
   `company_operating_metrics`, or `research_reports`)
-- `market_data_get` (`quote`, `composite`, `bars`, `us_market`, `futures_curve`,
+- `market_data_get` (`quote`, bounded `quotes`, `composite`, `bars`, `us_market`, `futures_curve`,
   or `spot_future_basis`)
 - `technical_get_snapshot`
 - `technical_render_chart`
@@ -83,6 +84,22 @@ other out-of-scope execution.
   buckets are not. `DUKASCOPY_API_KEY` is legacy-fallback-only.
 - `uv run trading-partner-futures-sync` explicitly refreshes contract definitions
   and persists EOD statistics vintages. It is idempotent and has no order effect.
+
+**Korea Exchange market facts**
+
+- `Market.KR` uses canonical bare-code identities such as `equity:KR:005930`,
+  `equity:KR:000660`, `index:KR:KS11`, `index:KR:KQ11`, `index:KR:KS200`, and
+  `etf:KR:069500`; Yahoo `.KS`/`.KQ`/caret symbols remain Provider aliases.
+- `instrument_resolve`, `market_data_get` quote/bounded quotes/bars, and both
+  technical tools support KR equity/ETF/index instruments through Yahoo with
+  `Asia/Seoul` dates. Preserve `YAHOO_KR_DELAYED_QUOTE`, `data_delay_seconds`,
+  and upstream intraday-history limits.
+- Manual CSV Watchlist and durable price/technical Monitoring support KR. Moomoo
+  Watchlist writes do not. `KR_POST_MARKET` uses XKRX sessions in the unified
+  hourly dispatcher and Telegram run summaries.
+- DART fundamentals/filings, KR news/sentiment/breadth, account sync, peer
+  workflows, and KR Position Sizing are not implemented. Do not route them through
+  US services or infer them from Yahoo quote data.
 
 **Phase 3B company financial/operating facts and optional industry datasets**
 
@@ -128,7 +145,7 @@ credentials for it.
 
 **Accounts, sync, portfolio, workflows, and Challenge Review**
 
-- `account_get` — durable positions only
+- `account_get` (`positions`, `transactions`) — durable only; never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
 - `portfolio_analyze` (`exposure`, `simulate_addition`)
@@ -168,25 +185,37 @@ does not discover/rank peers, and never mutates a Case, Thesis, Trade Plan, or a
 - `monitor_manage` (`create`, `update`, `resolve_event`)
 - `monitor_evaluate`
 
+Every explicitly supplied Monitor rule requires a bounded human-readable
+`description` on create/update. The stable `rule_code` remains a machine identity;
+direction, threshold, severity, and meaning are separate persisted fields. Legacy
+versions without a description remain readable but must be completed before an edit
+can create a new version.
+
 Monitoring also supports `monitor_read` operations `dashboard` and `runs` without
-adding public tools. `INTERVAL` definitions use a whole-hour `interval_minutes`
+adding public tools. Dashboard embeds a compact per-Monitor latest-run summary;
+`runs` filtered by `monitor_id` contains only that Monitor's observations, while
+`run_id` returns the full immutable batch. `INTERVAL` definitions use a whole-hour `interval_minutes`
 (minimum 60). `trading-partner-monitor-run due` performs deterministic due selection
-before provider access for INTERVAL plus A-share/US post-market groups;
+before provider access for INTERVAL plus A-share/US/KR post-market groups;
 `trading-partner-monitor-scheduler install` installs one hourly macOS launchd wake
 and never invokes Codex or an LLM. A market group runs at most once per exchange
 session after close plus the configured delay. Every evaluated rule is stored as an
 immutable run observation, while events remain state-transition-only. Codex
 market-review Automations must not duplicate Monitor evaluation or alerts.
-Optional Telegram delivery uses an event-linked durable Outbox. Event and Outbox
-are committed atomically; only transitions notify, retry is bounded, and expired
-alerts are not delivered late. `trading-partner-monitor-notifications` provides
+Optional Telegram delivery uses a durable Outbox linked to either an event or a
+market-close run. Event alerts remain transition-only, while every evaluated
+A-share/US/KR post-market group emits one consolidated run summary even when no state
+changes; INTERVAL runs remain transition-only. Source and Outbox are committed
+atomically, retry is bounded, and expired messages are not delivered late.
+`trading-partner-monitor-notifications` provides
 secret-safe `status`, `test`, and `flush` operations without adding an MCP tool.
 Messages reuse the same run observations to include current price/time and every
 rule's condition, value, distance, severity, and state. Multiple same-Monitor
 transitions in one run are delivered as one Telegram message without collapsing
-their durable Monitor events. Telegram does not support Markdown tables, so the
-sender places the transition summary in native HTML before an escaped monospaced
-price/rule table. It does not generate or upload an image.
+their durable Monitor events. Telegram does not support responsive tables, so the
+sender places symbol/current price in the first line, followed by the transition
+summary and mobile-first vertical rule cards. It does not generate or upload an
+image.
 
 **Phase 3D judgment-to-plan controls**
 
@@ -263,6 +292,9 @@ requested, and fall back to stale durable state with a
 typed warning. Adds/removes require an allowed confirmer and idempotency key;
 external deletion never deletes Phase 1 Research WatchlistItems or Investment
 Cases. Unsupported provider codes stay visible without fabricated instruments.
+For Moomoo durable item reads, omitted `group_name` selects the system `All` group
+when present and returns explicit total/continuation metadata. Public Watchlist sync
+always refreshes all groups and memberships.
 
 Phase 2B stores append-only, explicitly confirmed risk-policy versions and performs
 deterministic read-only checks over durable or explicitly refreshed account facts.
@@ -275,7 +307,7 @@ all risk results carry `execution_effect=false` and no order surface exists.
 
 Phase 2C stores explicitly confirmed, append-only Monitor versions and evaluates
 active rules on demand or through the external `trading-partner-monitor-run` CLI.
-V1 supports A-share/US `PRICE_ABOVE`/`PRICE_BELOW` rules and a portfolio
+V1 supports A-share/US/KR `PRICE_ABOVE`/`PRICE_BELOW` rules and a portfolio
 `RISK_OVERALL_AT_LEAST` rule. Rule states are `QUIET`, `TRIGGERED`, or
 `NOT_EVALUATED`; durable events are emitted only on state transitions, so repeated
 unchanged facts do not create duplicate alerts. Provider failures and stale facts
@@ -288,7 +320,7 @@ position, Risk Policy, or order, and every run carries `execution_effect=false`.
 Phase 2D derives standard indicators through the open-source TA-Lib backend and
 project-owned structure analysis over provider-backed adjusted daily bars. Phase 3A
 adds explicitly unadjusted continuous-futures bars with Yahoo primary and a scoped
-Eastmoney daily fallback. It supports A-share and US
+Eastmoney daily fallback. The shared technical engine supports A-share, US, and KR
 equity/ETF/index instruments plus the seeded commodity-futures proxies, emitting daily and weekly
 timeframes, regime states, disclosed metrics, clustered support/resistance, and
 recent candlestick patterns. `technical_render_chart` returns an auditable

@@ -8,10 +8,12 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from application.dto.monitoring import (
     MonitorCreateInput,
+    MonitorDashboardInput,
     MonitorEvaluateInput,
     MonitorEventResolveInput,
     MonitorListInput,
@@ -21,6 +23,7 @@ from application.dto.monitoring import (
 from application.dto.tool_envelope import ErrorInfo, ToolEnvelope, WarningInfo
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import MonitorEvaluationService
+from application.services.monitor_service import MonitorService
 from domain.common.enums import Freshness, TradingSession
 from domain.monitoring.enums import (
     MonitorCadence,
@@ -103,6 +106,7 @@ async def test_price_monitor_emits_only_state_transitions(
 ) -> None:
     rule = MonitorRuleInput(
         rule_code="price_floor",
+        description="Price fell below the configured floor.",
         rule_type=MonitorRuleType.PRICE_BELOW,
         severity=MonitorSeverity.HIGH,
         instrument_id="equity:US:NVDA",
@@ -146,6 +150,7 @@ async def test_warning_only_monitor_run_succeeds_and_preserves_warnings(
 ) -> None:
     rule = MonitorRuleInput(
         rule_code="price_floor",
+        description="Price fell below the configured floor.",
         rule_type=MonitorRuleType.PRICE_BELOW,
         instrument_id="equity:US:NVDA",
         price_threshold=Decimal("12"),
@@ -178,6 +183,7 @@ async def test_warning_only_monitor_run_succeeds_and_preserves_warnings(
 def test_monitor_repository_keeps_append_only_versions(tmp_path) -> None:
     rule = MonitorRuleInput(
         rule_code="price_floor",
+        description="Price fell below the configured floor.",
         rule_type="PRICE_BELOW",
         instrument_id="equity:US:NVDA",
         price_threshold=Decimal("100"),
@@ -196,13 +202,56 @@ def test_monitor_repository_keeps_append_only_versions(tmp_path) -> None:
         rules=first.rules,
         confirmed_by="user",
         idempotency_key="monitor-update-2",
-        created_at=NOW,
+        created_at=NOW + timedelta(days=1),
     )
     repository.append_version(second)
 
     assert repository.get_current(first.monitor_id) == second
     assert repository.list_current(MonitorStatus.ACTIVE) == ()
     assert repository.get_by_idempotency_key("monitor-create-1") == first
+    assert repository.get_created_at(first.monitor_id) == NOW
+
+
+def test_monitor_dashboard_distinguishes_created_and_updated_times(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    rule = MonitorRuleInput(
+        rule_code="price_floor",
+        description="Price fell below the configured floor.",
+        rule_type="PRICE_BELOW",
+        instrument_id="equity:US:NVDA",
+        price_threshold=Decimal("100"),
+    )
+    repository = _repository(tmp_path)
+    first = _monitor(rule)
+    repository.create(first)
+    updated_at = NOW + timedelta(days=1)
+    repository.append_version(
+        replace(
+            first,
+            version=2,
+            name="NVDA downside edited",
+            idempotency_key="monitor-update-2",
+            created_at=updated_at,
+        )
+    )
+    fixed_clock.set(updated_at)
+    service = MonitorService(repository, MagicMock(), fixed_clock, id_generator)
+
+    item = service.dashboard(MonitorDashboardInput()).items[0]
+
+    assert item.monitor_created_at == NOW
+    assert item.monitor_updated_at == updated_at
+
+
+def test_monitor_rule_description_is_required_for_new_inputs() -> None:
+    with pytest.raises(ValidationError, match="description"):
+        MonitorRuleInput(
+            rule_code="price_floor",
+            rule_type="PRICE_BELOW",
+            instrument_id="equity:US:NVDA",
+            price_threshold=Decimal("100"),
+        )
 
 
 @pytest.mark.asyncio
@@ -211,6 +260,7 @@ async def test_expired_monitor_is_skipped_without_fetch_or_event(
 ) -> None:
     rule = MonitorRuleInput(
         rule_code="price_floor",
+        description="Price fell below the configured floor.",
         rule_type="PRICE_BELOW",
         instrument_id="equity:US:NVDA",
         price_threshold=Decimal("100"),
@@ -248,6 +298,7 @@ async def test_expired_monitor_is_skipped_without_fetch_or_event(
 def test_monitor_inputs_normalize_conversational_enum_casing() -> None:
     rule = MonitorRuleInput(
         rule_code="price_floor",
+        description="Price fell below the configured floor.",
         rule_type=" price_below ",
         severity="high",
         instrument_id="equity:US:NVDA",
@@ -321,6 +372,7 @@ async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None
     assert {tool.name for tool in tools} == set(PUBLIC_TOOL_NAMES)
     rule = {
         "rule_code": "price_floor",
+        "description": "Price fell below the configured floor.",
         "rule_type": "PRICE_BELOW",
         "severity": "HIGH",
         "instrument_id": "equity:US:NVDA",

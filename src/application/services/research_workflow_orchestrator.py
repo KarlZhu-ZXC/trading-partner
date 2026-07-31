@@ -278,7 +278,7 @@ class ResearchWorkflowOrchestrator:
         steps = (
             _Step(
                 "market_board",
-                "a_share_get_facts",
+                "a_share_get_facts/market_structure",
                 True,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -291,7 +291,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "industry_rotation",
-                "a_share_get_facts",
+                "a_share_get_facts/market_structure",
                 False,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -304,7 +304,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "limit_ecology",
-                "a_share_get_facts",
+                "a_share_get_facts/limit_up",
                 True,
                 lambda: self._a_share.get_limit_up_context(
                     AShareGetLimitUpContextInput(trade_date=trade_date, as_of=as_of)
@@ -312,7 +312,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "northbound_capital",
-                "a_share_get_facts",
+                "a_share_get_facts/capital",
                 False,
                 lambda: self._a_share.get_capital_snapshot(
                     AShareGetCapitalSnapshotInput(
@@ -322,7 +322,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_sentiment",
-                "a_share_get_facts",
+                "a_share_get_facts/sentiment",
                 False,
                 lambda: self._a_share.get_sentiment_snapshot(
                     AShareGetSentimentSnapshotInput(trade_date=trade_date, as_of=as_of)
@@ -347,13 +347,13 @@ class ResearchWorkflowOrchestrator:
         steps: list[_Step] = [
             _Step(
                 "major_index_context",
-                "market_get_context",
+                "market_data_get/us_market",
                 True,
                 lambda: self._us_market.get_market_context(MarketGetContextInput(as_of=as_of)),
             ),
             _Step(
                 "macro_rates_volatility",
-                "us_get_macro_context",
+                "us_context_get/macro",
                 False,
                 lambda: self._us_context.get_macro_context(
                     USGetMacroContextInput(as_of=as_of, lookback_days=365)
@@ -361,7 +361,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_news",
-                "market_get_live_news",
+                "us_company_get/live_news",
                 False,
                 lambda: self._us_context.get_live_news(
                     MarketGetLiveNewsInput(query="US market", as_of=as_of, limit=30)
@@ -373,7 +373,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "prediction_context",
-                    "us_get_prediction_market_context",
+                    "us_context_get/prediction_market",
                     False,
                     lambda: self._us_context.get_prediction_market_context(
                         USGetPredictionMarketContextInput(
@@ -401,7 +401,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "account_refresh",
-                    "account_get",
+                    "external_state_sync/accounts",
                     False,
                     lambda: self._portfolio.get_account_snapshot(
                         AccountGetSnapshotInput(providers=request.providers, as_of=as_of)
@@ -412,7 +412,7 @@ class ResearchWorkflowOrchestrator:
             (
                 _Step(
                     "current_positions",
-                    "account_get",
+                    "account_get/positions",
                     True,
                     lambda: self._async_envelope(
                         self._portfolio.get_account_positions(AccountGetPositionsInput())
@@ -421,7 +421,7 @@ class ResearchWorkflowOrchestrator:
                 self._portfolio_step(request.account_snapshot_ids, True),
                 _Step(
                     "historical_transactions",
-                    "account_get",
+                    "account_get/transactions",
                     False,
                     lambda: self._async_envelope(
                         self._transactions.list_durable_transactions(
@@ -431,7 +431,7 @@ class ResearchWorkflowOrchestrator:
                 ),
                 _Step(
                     "industry_theme_correlation_beta",
-                    "portfolio_run_review",
+                    "research_workflow_run/portfolio_review",
                     False,
                     lambda: self._portfolio_review_facts.build(
                         account_snapshot_ids=request.account_snapshot_ids,
@@ -459,7 +459,7 @@ class ResearchWorkflowOrchestrator:
         as_of = request.as_of or self._clock.now()
         step = _Step(
             "peer_comparison_facts",
-            "research_workflow_run",
+            "research_workflow_run/peer_comparison",
             True,
             lambda: self._peer_comparison.compare(request),
         )
@@ -531,7 +531,7 @@ class ResearchWorkflowOrchestrator:
         )
         context_step = _Step(
             "durable_research_context",
-            "research_context_build",
+            "investment_case_read/context",
             True,
             lambda: self._async_envelope(context_envelope),
         )
@@ -599,76 +599,155 @@ class ResearchWorkflowOrchestrator:
         workflow_type: WorkflowType,
         request: ResearchRunDeepDiveInput | ResearchRunCatalystReviewInput,
     ) -> list[_Step]:
-        steps = [
+        asset_type, _, symbol = parse_instrument_id(instrument_id)
+        steps: list[_Step] = [
             _Step(
                 "market_technical_context",
-                "market_get_snapshot",
+                "market_data_get/composite",
                 True,
                 lambda: self._us_market.get_us_snapshot(
                     USGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
                 ),
-            ),
-            _Step(
-                "fundamentals",
-                "us_get_fundamentals",
-                workflow_type is WorkflowType.DEEP_DIVE,
-                lambda: self._us_research.get_fundamental_snapshot(
-                    FundamentalGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
-                ),
-            ),
-            _Step(
-                "company_events",
-                "us_get_company_research",
-                True,
-                lambda: self._us_research.get_company_updates(
-                    ResearchGetCompanyUpdatesInput(
-                        instrument_id=instrument_id, since=since, as_of=as_of
-                    )
-                ),
-            ),
-            _Step(
-                "company_news",
-                "market_get_live_news",
-                False,
-                lambda: self._us_context.get_live_news(
-                    MarketGetLiveNewsInput(
-                        instrument_id=instrument_id,
-                        start=since.date(),
-                        end=as_of.date(),
-                        as_of=as_of,
-                    )
-                ),
-            ),
-            _Step(
-                "social_sentiment",
-                "us_get_sentiment_snapshot",
-                False,
-                lambda: self._us_context.get_sentiment_snapshot(
-                    USGetSentimentSnapshotInput(
-                        instrument_id=instrument_id,
-                        start=since.date(),
-                        end=as_of.date(),
-                        as_of=as_of,
-                    )
-                ),
-            ),
-            _Step(
-                "macro_context",
-                "us_get_macro_context",
-                False,
-                lambda: self._us_context.get_macro_context(
-                    USGetMacroContextInput(
-                        lookback_days=min(3_650, max(30, (as_of - since).days)), as_of=as_of
-                    )
-                ),
-            ),
+            )
         ]
+        if asset_type is not AssetType.EQUITY:
+            asset_label = asset_type.value.replace("_", " ")
+            steps.extend(
+                (
+                    _Step(
+                        "instrument_news",
+                        "us_company_get/live_news",
+                        False,
+                        lambda: self._us_context.get_live_news(
+                            MarketGetLiveNewsInput(
+                                instrument_id=(
+                                    instrument_id
+                                    if asset_type is AssetType.ETF
+                                    else None
+                                ),
+                                query=(
+                                    None
+                                    if asset_type is AssetType.ETF
+                                    else f"{symbol} {asset_label}"
+                                ),
+                                start=since.date(),
+                                end=as_of.date(),
+                                as_of=as_of,
+                            )
+                        ),
+                    ),
+                    _Step(
+                        "macro_context",
+                        "us_context_get/macro",
+                        False,
+                        lambda: self._us_context.get_macro_context(
+                            USGetMacroContextInput(
+                                lookback_days=min(3_650, max(30, (as_of - since).days)),
+                                as_of=as_of,
+                            )
+                        ),
+                    ),
+                )
+            )
+            if asset_type is AssetType.ETF:
+                steps.insert(
+                    2,
+                    _Step(
+                        "social_sentiment",
+                        "us_context_get/sentiment",
+                        False,
+                        lambda: self._us_context.get_sentiment_snapshot(
+                            USGetSentimentSnapshotInput(
+                                instrument_id=instrument_id,
+                                start=since.date(),
+                                end=as_of.date(),
+                                as_of=as_of,
+                            )
+                        ),
+                    ),
+                )
+            topic = getattr(request, "topic", None)
+            if isinstance(topic, str) and topic.strip():
+                prediction_topic = topic.strip()
+                steps.append(
+                    _Step(
+                        "prediction_context",
+                        "us_context_get/prediction_market",
+                        False,
+                        lambda: self._us_context.get_prediction_market_context(
+                            USGetPredictionMarketContextInput(
+                                topic=prediction_topic,
+                                as_of=as_of,
+                            )
+                        ),
+                    )
+                )
+            return steps
+
+        steps.extend(
+            (
+                _Step(
+                    "fundamentals",
+                    "us_company_get/fundamentals_snapshot",
+                    workflow_type is WorkflowType.DEEP_DIVE,
+                    lambda: self._us_research.get_fundamental_snapshot(
+                        FundamentalGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
+                    ),
+                ),
+                _Step(
+                    "company_events",
+                    "us_company_get/company_updates",
+                    True,
+                    lambda: self._us_research.get_company_updates(
+                        ResearchGetCompanyUpdatesInput(
+                            instrument_id=instrument_id, since=since, as_of=as_of
+                        )
+                    ),
+                ),
+                _Step(
+                    "company_news",
+                    "us_company_get/live_news",
+                    False,
+                    lambda: self._us_context.get_live_news(
+                        MarketGetLiveNewsInput(
+                            instrument_id=instrument_id,
+                            start=since.date(),
+                            end=as_of.date(),
+                            as_of=as_of,
+                        )
+                    ),
+                ),
+                _Step(
+                    "social_sentiment",
+                    "us_context_get/sentiment",
+                    False,
+                    lambda: self._us_context.get_sentiment_snapshot(
+                        USGetSentimentSnapshotInput(
+                            instrument_id=instrument_id,
+                            start=since.date(),
+                            end=as_of.date(),
+                            as_of=as_of,
+                        )
+                    ),
+                ),
+                _Step(
+                    "macro_context",
+                    "us_context_get/macro",
+                    False,
+                    lambda: self._us_context.get_macro_context(
+                        USGetMacroContextInput(
+                            lookback_days=min(3_650, max(30, (as_of - since).days)), as_of=as_of
+                        )
+                    ),
+                ),
+            )
+        )
         if workflow_type is WorkflowType.DEEP_DIVE:
             steps.insert(
                 2,
                 _Step(
                     "financial_statements",
-                    "us_get_fundamentals",
+                    "us_company_get/fundamental_statements",
                     False,
                     lambda: self._us_research.get_fundamental_statements(
                         FundamentalGetStatementsInput(instrument_id=instrument_id, as_of=as_of)
@@ -680,7 +759,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "prediction_context",
-                    "us_get_prediction_market_context",
+                    "us_context_get/prediction_market",
                     False,
                     lambda: self._us_context.get_prediction_market_context(
                         USGetPredictionMarketContextInput(topic=topic, as_of=as_of)
@@ -707,7 +786,7 @@ class ResearchWorkflowOrchestrator:
         steps = [
             _Step(
                 "company_snapshot",
-                "a_share_get_facts",
+                "a_share_get_facts/snapshot",
                 True,
                 lambda: self._a_share.get_snapshot(
                     AShareGetSnapshotInput(instrument_id=instrument_id, detail=detail, as_of=as_of)
@@ -715,7 +794,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_technical_context",
-                "a_share_get_facts",
+                "a_share_get_facts/market_structure",
                 True,
                 lambda: self._a_share.get_market_structure(
                     AShareGetMarketStructureInput(
@@ -731,7 +810,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "capital_ownership",
-                "a_share_get_facts",
+                "a_share_get_facts/capital",
                 False,
                 lambda: self._a_share.get_capital_snapshot(
                     AShareGetCapitalSnapshotInput(
@@ -745,7 +824,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "sentiment_crowding",
-                "a_share_get_facts",
+                "a_share_get_facts/sentiment",
                 False,
                 lambda: self._a_share.get_sentiment_snapshot(
                     AShareGetSentimentSnapshotInput(
@@ -755,7 +834,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "research_reports",
-                "research_search_reports",
+                "a_share_get_facts/research_reports",
                 False,
                 lambda: self._a_share.search_reports(
                     ResearchSearchReportsInput(
@@ -772,7 +851,7 @@ class ResearchWorkflowOrchestrator:
                 1,
                 _Step(
                     "financial_statements",
-                    "a_share_get_facts",
+                    "a_share_get_facts/financials",
                     False,
                     lambda: self._a_share.get_financial_statements(
                         AShareGetFinancialStatementsInput(
@@ -793,7 +872,7 @@ class ResearchWorkflowOrchestrator:
                     1,
                     _Step(
                         "company_operating_metrics",
-                        "a_share_get_facts",
+                        "a_share_get_facts/company_operating_metrics",
                         False,
                         lambda: self._a_share.get_company_operating_metrics(
                             AShareGetCompanyOperatingMetricsInput(
@@ -809,7 +888,7 @@ class ResearchWorkflowOrchestrator:
                 2 if asset_type is AssetType.EQUITY else 1,
                 _Step(
                     "industry_cycle_hog",
-                    "a_share_get_facts",
+                    "a_share_get_facts/industry_cycle",
                     False,
                     lambda: self._a_share.get_industry_cycle(
                         AShareGetIndustryCycleInput(
@@ -826,7 +905,7 @@ class ResearchWorkflowOrchestrator:
     def _portfolio_step(self, account_snapshot_ids: tuple[str, ...], required: bool) -> _Step:
         return _Step(
             "portfolio_context",
-            "portfolio_analyze",
+            "portfolio_analyze/exposure",
             required,
             lambda: self._async_envelope(
                 self._portfolio.analyze_portfolio(

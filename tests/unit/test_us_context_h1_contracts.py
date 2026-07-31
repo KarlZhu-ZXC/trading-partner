@@ -11,7 +11,11 @@ from pydantic import ValidationError
 
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.dto.provider_state import CacheEntry
-from application.dto.us_context import MarketGetLiveNewsInput, USGetMacroContextInput
+from application.dto.us_context import (
+    MarketGetLiveNewsInput,
+    USGetMacroContextInput,
+    USGetSentimentSnapshotInput,
+)
 from domain.common.enums import (
     CacheDisposition,
     DataCategory,
@@ -67,6 +71,8 @@ def _feed() -> USNewsFeed:
 
 def test_h1_inputs_and_settings_keep_the_surface_bounded() -> None:
     assert MarketGetLiveNewsInput(instrument_id=INSTRUMENT).limit == 20
+    assert MarketGetLiveNewsInput(instrument_id="etf:US:UGL").instrument_id == "etf:US:UGL"
+    assert USGetSentimentSnapshotInput(instrument_id="etf:US:UGL").instrument_id == "etf:US:UGL"
     assert len(USGetMacroContextInput().series_ids) == 12
     assert AppSettings.model_fields["fred_enabled"].default is True
     assert AppSettings.model_fields["reddit_user_agent"].default == "TradingPartner/1.0"

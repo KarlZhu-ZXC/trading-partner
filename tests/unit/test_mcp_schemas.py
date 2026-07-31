@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from domain.common.enums import (
+    AssetType,
     ConfirmationMode,
     DecisionType,
     EvidenceStance,
@@ -82,8 +83,11 @@ def test_public_tool_surface_excludes_forbidden_and_retired_names() -> None:
 def test_instrument_resolve_input_validation() -> None:
     ok = InstrumentResolveInput.model_validate({"market": "US", "query": "NVDA"})
     assert ok.market == "US" or ok.market is Market.US
-    with pytest.raises(ValidationError):
-        InstrumentResolveInput.model_validate({"market": "us", "query": "NVDA"})
+    normalized = InstrumentResolveInput.model_validate(
+        {"market": " us ", "query": "NVDA", "asset_type": " ETF "}
+    )
+    assert normalized.market == "US" or normalized.market is Market.US
+    assert normalized.asset_type == "etf" or normalized.asset_type is AssetType.ETF
 
     ok = InstrumentResolveInput.model_validate({"market": "A_SHARE", "query": "  600519  "})
     assert ok.query == "600519"

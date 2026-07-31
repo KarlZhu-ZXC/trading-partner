@@ -10,12 +10,14 @@ Never imports infrastructure or MCP layers.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from application.dto.cross_asset import BasisSnapshotDTO
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
+from application.dto.market_batch import MarketBatchQuoteItemDTO, MarketBatchQuotesDTO
 from application.dto.provider_routing import ProviderResultMeta
 from application.dto.tool_envelope import (
     ErrorInfo,
@@ -25,6 +27,7 @@ from application.dto.tool_envelope import (
 )
 from application.dto.us_market import (
     MarketGetBarsInput,
+    MarketGetBatchQuotesInput,
     MarketGetContextInput,
     MarketGetSnapshotInput,
 )
@@ -33,8 +36,7 @@ from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services.commodity_spot_service import CommoditySpotService
 from application.services.futures_curve_service import FuturesCurveService
-from application.services.instrument_master_service import InstrumentMasterService
-from application.services.instrument_resolve_service import InstrumentResolveService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_market_data_service import USMarketDataService
 from application.services.us_tool_coordinator import USToolCoordinator
 from domain.common.enums import (
@@ -47,18 +49,15 @@ from domain.common.enums import (
 )
 from domain.common.errors import (
     DataContractError,
-    InvalidInstrument,
     NoMarketData,
     TradingPartnerError,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.common.values import parse_instrument_id
 from domain.cross_asset.basis_service import BasisLeg, build_basis_snapshot
 from domain.cross_asset.enums import OfferSide, PriceBasis
 from domain.instruments.models import Instrument
 from domain.us_market.enums import USBarInterval
 
-_DYNAMIC_RESOLVE_MARKETS = frozenset({Market.CME, Market.DCE})
 _DCE_QUOTE_BARS_UNAVAILABLE = NoMarketData(
     "DCE specific contracts have no quote/OHLCV path in Phase 3A; "
     "use market_get_context(operation=futures_curve) for official EOD facts",
@@ -78,6 +77,12 @@ _BASIS_NOT_COMPARABLE = WarningInfo(
     message="Spot and futures legs are not comparable under the disclosed gate.",
     details={},
 )
+_FRESHNESS_ORDER = {
+    Freshness.FRESH: 0,
+    Freshness.DELAYED: 1,
+    Freshness.STALE: 2,
+    Freshness.UNKNOWN: 3,
+}
 
 
 def _parse_offer_side(raw: str | None) -> OfferSide:
@@ -129,7 +134,7 @@ class MarketToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -137,9 +142,8 @@ class MarketToolCoordinator:
         data_service: USMarketDataService,
         commodity_spot_service: CommoditySpotService | None = None,
         futures_curve_service: FuturesCurveService | None = None,
-        instrument_resolve_service: InstrumentResolveService | None = None,
     ) -> None:
-        self._instrument_master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -147,33 +151,92 @@ class MarketToolCoordinator:
         self._data_service = data_service
         self._commodity_spot = commodity_spot_service
         self._futures_curve = futures_curve_service
-        self._instrument_resolve = instrument_resolve_service
 
-    async def get_market_snapshot(
-        self, request: MarketGetSnapshotInput
-    ) -> ToolEnvelope[Any]:
+    async def get_market_snapshot(self, request: MarketGetSnapshotInput) -> ToolEnvelope[Any]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = await self._resolve_local_or_dynamic(
+            instrument = await self._instrument_access.get(
                 request.instrument_id, as_of=effective_as_of
             )
             if instrument.market is Market.DCE:
                 raise _DCE_QUOTE_BARS_UNAVAILABLE
             if _is_otc_spot_or_cfd(instrument):
-                return await self._otc_quote(
-                    request_id, effective_as_of, instrument
-                )
+                return await self._otc_quote(request_id, effective_as_of, instrument)
             # US equity/ETF/index/legacy future + CME specific contracts.
             return await self._us.get_market_snapshot(request)
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
 
-    async def get_market_bars(
-        self, request: MarketGetBarsInput
-    ) -> ToolEnvelope[Any]:
+    async def get_market_snapshots(
+        self, request: MarketGetBatchQuotesInput
+    ) -> ToolEnvelope[MarketBatchQuotesDTO]:
+        """Fetch a bounded quote set with per-instrument typed results."""
+        request_id, effective_as_of = self._begin(request.as_of)
+        semaphore = asyncio.Semaphore(8)
+
+        async def fetch(instrument_id: str) -> ToolEnvelope[Any]:
+            async with semaphore:
+                return await self.get_market_snapshot(
+                    MarketGetSnapshotInput(
+                        instrument_id=instrument_id,
+                        as_of=effective_as_of,
+                    )
+                )
+
+        results = await asyncio.gather(*(fetch(item) for item in request.instrument_ids))
+        items = tuple(
+            MarketBatchQuoteItemDTO(instrument_id=instrument_id, result=result)
+            for instrument_id, result in zip(request.instrument_ids, results, strict=True)
+        )
+        failed_ids = tuple(item.instrument_id for item in items if not item.result.ok)
+        warning_items: list[WarningInfo] = []
+        if failed_ids:
+            warning_items.append(
+                WarningInfo(
+                    code="BATCH_QUOTE_ITEMS_FAILED",
+                    message="One or more requested quotes failed; inspect each item result.",
+                    details={"instrument_ids": failed_ids},
+                )
+            )
+        degraded_ids = tuple(
+            item.instrument_id
+            for item in items
+            if item.result.ok and item.result.degraded
+        )
+        if degraded_ids:
+            warning_items.append(
+                WarningInfo(
+                    code="BATCH_QUOTE_ITEMS_DEGRADED",
+                    message="One or more requested quotes are degraded; inspect each item result.",
+                    details={"instrument_ids": degraded_ids},
+                )
+            )
+        warnings = tuple(warning_items)
+        sources = tuple(dict.fromkeys(source for result in results for source in result.sources))
+        return ToolEnvelope.success(
+            request_id=request_id,
+            market=None,
+            as_of=effective_as_of,
+            fetched_at=max(result.fetched_at for result in results),
+            freshness=max(
+                (result.freshness for result in results),
+                key=lambda value: _FRESHNESS_ORDER[value],
+            ),
+            sources=sources,
+            data=MarketBatchQuotesDTO(
+                items=items,
+                total_requested=len(items),
+                succeeded=len(items) - len(failed_ids),
+                failed=len(failed_ids),
+            ),
+            degraded=bool(failed_ids) or any(result.degraded for result in results),
+            warnings=warnings,
+        )
+
+    async def get_market_bars(self, request: MarketGetBarsInput) -> ToolEnvelope[Any]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = await self._resolve_local_or_dynamic(
+            instrument = await self._instrument_access.get(
                 request.instrument_id, as_of=effective_as_of
             )
             if instrument.market is Market.DCE:
@@ -196,21 +259,15 @@ class MarketToolCoordinator:
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
 
-    async def get_market_context(
-        self, request: MarketGetContextInput
-    ) -> ToolEnvelope[Any]:
+    async def get_market_context(self, request: MarketGetContextInput) -> ToolEnvelope[Any]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
             if request.operation == "us_market":
                 return await self._us.get_market_context(request)
             if request.operation == "futures_curve":
-                return await self._futures_curve_envelope(
-                    request_id, effective_as_of, request
-                )
+                return await self._futures_curve_envelope(request_id, effective_as_of, request)
             if request.operation == "spot_future_basis":
-                return await self._spot_future_basis_envelope(
-                    request_id, effective_as_of, request
-                )
+                return await self._spot_future_basis_envelope(request_id, effective_as_of, request)
             raise DataContractError(
                 "unsupported market_get_context operation",
                 details={"operation": request.operation},
@@ -223,48 +280,6 @@ class MarketToolCoordinator:
         effective_as_of = self._clock.now() if as_of is None else as_of
         return request_id, effective_as_of
 
-    async def _resolve_local_or_dynamic(
-        self, instrument_id: str, *, as_of: datetime
-    ) -> Instrument:
-        """Local-first Instrument Master; CME/DCE miss uses dynamic directory cache."""
-        try:
-            return self._instrument_master.get(instrument_id)
-        except InvalidInstrument:
-            pass
-        try:
-            asset_type, market, _symbol = parse_instrument_id(instrument_id)
-        except TradingPartnerError as exc:
-            raise InvalidInstrument(
-                "instrument not found",
-                details={"instrument_id": instrument_id},
-            ) from exc
-        if (
-            market not in _DYNAMIC_RESOLVE_MARKETS
-            or self._instrument_resolve is None
-            or asset_type is not AssetType.FUTURE
-        ):
-            raise InvalidInstrument(
-                "instrument not found",
-                details={"instrument_id": instrument_id},
-            )
-        envelope = await self._instrument_resolve.resolve_dynamic(
-            market=market,
-            query=instrument_id,
-            asset_type_hint=asset_type,
-            as_of=as_of,
-        )
-        if (
-            not envelope.ok
-            or envelope.data is None
-            or envelope.data.instrument is None
-        ):
-            raise InvalidInstrument(
-                "instrument not found",
-                details={"instrument_id": instrument_id},
-            )
-        # resolve_dynamic upserts the validated candidate; re-read Master.
-        return self._instrument_master.get(instrument_id)
-
     async def _otc_quote(
         self,
         request_id: str,
@@ -276,9 +291,7 @@ class MarketToolCoordinator:
                 "commodity spot service is not configured",
                 details={"code": "PROVIDER_NOT_CONFIGURED"},
             )
-        result = await self._commodity_spot.get_quote(
-            instrument, as_of=effective_as_of
-        )
+        result = await self._commodity_spot.get_quote(instrument, as_of=effective_as_of)
         if not result.ok or result.data is None:
             return self._service_failure(
                 request_id,
@@ -446,11 +459,11 @@ class MarketToolCoordinator:
             )
         assert request.left_instrument_id is not None
         assert request.right_instrument_id is not None
-        left = await self._resolve_local_or_dynamic(
+        left = await self._instrument_access.get(
             request.left_instrument_id,
             as_of=effective_as_of,
         )
-        right = await self._resolve_local_or_dynamic(
+        right = await self._instrument_access.get(
             request.right_instrument_id,
             as_of=effective_as_of,
         )
@@ -490,14 +503,10 @@ class MarketToolCoordinator:
             warnings=warnings,
         )
 
-    async def _basis_leg(
-        self, instrument: Instrument, as_of: datetime
-    ) -> BasisLeg:
+    async def _basis_leg(self, instrument: Instrument, as_of: datetime) -> BasisLeg:
         if _is_otc_spot_or_cfd(instrument):
             assert self._commodity_spot is not None
-            spot_result = await self._commodity_spot.get_quote(
-                instrument, as_of=as_of
-            )
+            spot_result = await self._commodity_spot.get_quote(instrument, as_of=as_of)
             if not spot_result.ok or spot_result.data is None:
                 raise spot_result.error or NoMarketData(
                     "spot leg unavailable for basis",
@@ -524,10 +533,7 @@ class MarketToolCoordinator:
                 price_basis=PriceBasis.MID if obs.mid is not None else PriceBasis.LAST,
                 delivery_location=obs.delivery_location,
             )
-        if (
-            instrument.asset_type is AssetType.FUTURE
-            and instrument.market is Market.CME
-        ):
+        if instrument.asset_type is AssetType.FUTURE and instrument.market is Market.CME:
             quote_result = await self._data_service.get_quote(instrument, as_of)
             if not quote_result.ok or quote_result.value is None:
                 raise quote_result.error or NoMarketData(

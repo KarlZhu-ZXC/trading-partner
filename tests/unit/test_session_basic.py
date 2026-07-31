@@ -13,6 +13,7 @@ from domain.market.session import infer_session_basic
 
 SH = ZoneInfo("Asia/Shanghai")
 NY = ZoneInfo("America/New_York")
+SEOUL = ZoneInfo("Asia/Seoul")
 
 
 def _a(local: datetime) -> TradingSession:
@@ -23,6 +24,11 @@ def _a(local: datetime) -> TradingSession:
 def _us(local: datetime) -> TradingSession:
     assert local.tzinfo is not None
     return infer_session_basic(Market.US, local, timezone="America/New_York")
+
+
+def _kr(local: datetime) -> TradingSession:
+    assert local.tzinfo is not None
+    return infer_session_basic(Market.KR, local, timezone="Asia/Seoul")
 
 
 # --- A-share half-open boundaries (local Asia/Shanghai) ---
@@ -78,6 +84,12 @@ def test_us_post_end_exclusive() -> None:
 def test_us_overnight_closed() -> None:
     assert _us(datetime(2026, 7, 16, 3, 59, tzinfo=NY)) is TradingSession.CLOSED
     assert _us(datetime(2026, 7, 16, 21, 0, tzinfo=NY)) is TradingSession.CLOSED
+
+
+def test_kr_regular_session_boundaries() -> None:
+    assert _kr(datetime(2026, 7, 16, 9, 0, tzinfo=SEOUL)) is TradingSession.REGULAR
+    assert _kr(datetime(2026, 7, 16, 15, 29, 59, tzinfo=SEOUL)) is TradingSession.REGULAR
+    assert _kr(datetime(2026, 7, 16, 15, 30, tzinfo=SEOUL)) is TradingSession.CLOSED
 
 
 # --- Weekend always CLOSED ---

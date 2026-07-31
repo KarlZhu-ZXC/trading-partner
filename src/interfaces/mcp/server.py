@@ -14,7 +14,13 @@ from mcp.server.fastmcp import FastMCP
 from bootstrap import ApplicationContainer, build_default_application
 from interfaces.mcp import tool_inventory as _tool_inventory
 from interfaces.mcp.chart_artifacts import persist_chart_png
-from interfaces.mcp.tools.compact import create_compact_mcp_server as _create_compact_mcp_server
+from interfaces.mcp.tools.compact import (
+    CompactCapabilityRegistry,
+    create_compact_capability_registry,
+)
+from interfaces.mcp.tools.compact import (
+    create_compact_mcp_server as _create_compact_mcp_server,
+)
 
 COMPACT_28_TOOL_NAMES = _tool_inventory.COMPACT_28_TOOL_NAMES
 PUBLIC_TOOL_NAMES = _tool_inventory.PUBLIC_TOOL_NAMES
@@ -25,6 +31,16 @@ RETIRED_PUBLIC_TOOL_NAMES = _tool_inventory.RETIRED_PUBLIC_TOOL_NAMES
 def create_mcp_server(container: ApplicationContainer) -> FastMCP:
     """Bind the sole public compact MCP surface."""
     return _create_compact_mcp_server(container, chart_persister=persist_chart_png)
+
+
+def create_capability_registry(
+    container: ApplicationContainer,
+) -> CompactCapabilityRegistry:
+    """Build the transport-neutral compact registry used by local HTTP clients."""
+    return create_compact_capability_registry(
+        container,
+        chart_persister=persist_chart_png,
+    )
 
 
 async def _run_stdio() -> None:

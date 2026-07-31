@@ -14,6 +14,7 @@ class MonitorCadence(StrEnum):
     INTERVAL = "INTERVAL"
     A_SHARE_POST_MARKET = "A_SHARE_POST_MARKET"
     US_POST_MARKET = "US_POST_MARKET"
+    KR_POST_MARKET = "KR_POST_MARKET"
 
 
 class MonitorRuleType(StrEnum):

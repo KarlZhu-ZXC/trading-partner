@@ -4,7 +4,7 @@
 > Design version: Phase 2 v4  
 > Public MCP surface: 28 compact tools; the former 52-tool rollback profile is removed.
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
-> `0024_monitor_notification_outbox`.
+> `0026_korean_market_support`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
 
 ## 1. Product outcome
@@ -565,7 +565,7 @@ External schedulers use:
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
 
-# Evaluate currently due INTERVAL and A-share/US post-market groups
+# Evaluate currently due INTERVAL and A-share/US/KR post-market groups
 uv run trading-partner-monitor-run due
 
 # Install/status/remove the token-free macOS hourly wake
@@ -576,7 +576,7 @@ uv run trading-partner-monitor-scheduler uninstall
 
 The explicit market-cadence CLI force-runs active monitors once under a process
 lock and is retained for diagnostics. The normal `due` dispatcher compares the
-database schedule and latest run for INTERVAL plus A-share/US post-market groups:
+database schedule and latest run for INTERVAL plus A-share/US/KR post-market groups:
 an early wake does not fetch facts, each market group runs at most once after that
 exchange session's close plus the configured delay, and no Codex Automation needs
 to evaluate Monitor rules. Partial/failed interval runs retry on the next hourly
@@ -586,10 +586,12 @@ path, so it consumes no Codex/LLM tokens. Monitor definitions, complete per-rule
 states, transition events, and resolutions are durable; all runs have
 `execution_effect=false`.
 
-An optional Telegram Bot channel consumes only durable transition events. The
-event and its notification Outbox row are committed in the same database
-transaction; repeated unchanged observations therefore produce neither duplicate
-events nor duplicate phone notifications. Delivery is deterministic and local—no
+An optional Telegram Bot channel consumes durable transition events and scheduled
+market-close run summaries. The source event/run and its notification Outbox row
+are committed in the same database transaction. Repeated unchanged INTERVAL
+observations produce no duplicate alert, while each evaluated A-share/US/KR post-market
+group emits one consolidated zero-change-or-change heartbeat without fabricating a
+Monitor event. Delivery is deterministic and local—no
 Codex task or LLM is involved. Failed deliveries use bounded retry, Telegram `429`
 respects `retry_after`, and events older than the configured TTL expire instead of
 arriving as misleading late alerts.
@@ -599,10 +601,10 @@ severity, observed value, distance, and state. It never performs a second quote
 request for presentation. Multiple transitions for one Monitor in one run are
 batched into one Telegram message; the underlying events remain separate and
 auditable.
-Telegram does not support Markdown tables, so the sender puts the transition result
-in native HTML before an escaped monospaced `<pre>` table. Only current price/time
-and complete rules appear inside the table; warnings and basis notes follow it as
-normal text. It does not generate or upload an image and does not invoke an LLM.
+Telegram does not support responsive tables, so the sender uses a price-first
+headline and mobile-first vertical rule cards. Current price/time, complete rules,
+warnings, and basis notes remain normal wrapping text. It does not generate or
+upload an image and does not invoke an LLM.
 
 ```bash
 uv run trading-partner-monitor-notifications status
@@ -612,7 +614,7 @@ uv run trading-partner-monitor-notifications flush
 
 The hourly due dispatcher flushes pending notifications even when no Monitor is
 due. Market-cadence groups flush after evaluation. Delivery does not
-acknowledge or resolve the source event and never changes a Thesis, Trade Plan,
+acknowledge or resolve the source event/run and never changes a Thesis, Trade Plan,
 position, or order.
 
 `monitor_read(request={"operation":"dashboard"})` is the unified current control
@@ -630,8 +632,9 @@ market-specific due calendars.
 Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
-  operations and the surface schema is `compact-v4`;
-- migrations `0023_monitoring_hub_v3` and `0024_monitor_notification_outbox` pass
+  operations and the surface schema is `compact-v7`;
+- migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
+  `0026_korean_market_support` pass
   clean upgrade/downgrade/upgrade checks;
 - focused tests cover transition deduplication, immutable observations, whole-hour
   schedule validation, due/skip behavior, compact schema, and launchd arguments;

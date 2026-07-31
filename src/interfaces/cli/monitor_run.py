@@ -96,6 +96,7 @@ def main() -> None:
         choices=(
             MonitorCadence.A_SHARE_POST_MARKET.value,
             MonitorCadence.US_POST_MARKET.value,
+            MonitorCadence.KR_POST_MARKET.value,
         ),
     )
     args = parser.parse_args()

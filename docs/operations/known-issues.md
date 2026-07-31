@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-07-30
+> Updated: 2026-07-31
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -28,6 +28,14 @@ These are deliberate product boundaries, not open defects:
   fallback handles rate limiting or unavailability.
 - CME/DCE/Dukascopy/Polymarket public endpoints may be unavailable through a
   particular network. `PROVIDER_PROXY_URL` is optional and failures stay typed.
+- Risk v2 evaluates durable positions but does not consume broker open orders.
+  Moomoo snapshots retain open orders for read-only display; Schwab open orders are
+  not ingested. Pending-order exposure and duplicate-order prevention therefore
+  remain unavailable rather than being treated as a pass.
+- The scheduled account plus Watchlist synchronization is keyed to the XNYS close.
+  QMT, A-share account synchronization, and FX aggregation are intentionally
+  deferred for at least two months; A-share monitoring remains fact-only and does
+  not imply an A-share broker snapshot.
 - Local stdio MCP exposes no authenticated user identity, order write, fill,
   execution, runtime LLM, or automated backtest runner.
 
@@ -44,6 +52,12 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Workflows | Request claim before provider access and durable terminal fact replay |
 | Challenge Review | Payload-hashed idempotent start and resolution |
 | Architecture | Sole 28-tool compact MCP surface and capability-split provider adapters |
+| Release identity | Python package metadata, health, and Console API share one application version source |
+| KR Console Monitor | Monitor builder resolves KR instruments and exposes `KR_POST_MARKET` without changing backend scope |
+| Instrument first use | One shared local-first discovery gateway across market, technical, research, context, workflow, and Monitor facts |
+| Watchlist reads/sync | Omitted Moomoo scope selects durable `All`; public sync refreshes every group and membership; pagination is explicit |
+| Monitor read scope | Monitor-filtered runs contain only that Monitor's observations; Dashboard uses compact run summaries |
+| ETF research | US ETF workflow uses ETF quote/technical/news/sentiment/macro facts without equity-only company calls |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
 [Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the

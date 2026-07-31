@@ -128,6 +128,56 @@ def test_import_extracts_metrics_and_keeps_reproducibility_checks_explicit(
     assert replay.ok and replay.data is not None and replay.data.duplicate is True
 
 
+def test_import_prefers_formal_statistics_and_checks_benchmark_and_run_period(
+    tmp_path: Path,
+    fixed_clock: object,
+    id_generator: object,
+    secret_redactor: object,
+) -> None:
+    service = _service(tmp_path, fixed_clock, id_generator, secret_redactor)
+    prepared = service.prepare_quantconnect(_prepare_request())
+    assert prepared.data is not None
+    download = tmp_path / "quantconnect-results.json"
+    download.write_text(
+        json.dumps(
+            {
+                "algorithmConfiguration": {
+                    "startDate": "2008-07-01T00:00:00Z",
+                    "endDate": "2026-05-01T23:59:59Z",
+                },
+                "statistics": {"Net Profit": "213.064%"},
+                "runtimeStatistics": {"Net Profit": "$185,871.28"},
+                "charts": {
+                    "Benchmark": {
+                        "series": {
+                            "Benchmark": {
+                                "values": [[1214870400, 100.0], [1780272000, 400.0]]
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.import_quantconnect(
+        QuantConnectImportInput(
+            idempotency_key="benchmark-result",
+            validation_id=prepared.data.validation_id,
+            results_path=str(download),
+        )
+    )
+
+    assert result.ok and result.data is not None
+    assert result.data.normalized_metrics["net_profit"] == "213.064%"
+    assert result.data.raw_statistics["Runtime Net Profit"] == "$185,871.28"
+    assert result.data.normalized_metrics["benchmark_curve_total_return"] == "300.000%"
+    checks = {item.code: item.status for item in result.data.checks}
+    assert checks["BENCHMARK_SERIES_PRESENT"] == "PASS"
+    assert checks["RESULT_PERIOD_MATCH"] == "WARN"
+
+
 def test_prepare_rejects_non_lean_python_without_executing_it(
     tmp_path: Path,
     fixed_clock: object,

@@ -36,7 +36,7 @@ from application.dto.us_market import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
-from application.services.instrument_master_service import InstrumentMasterService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_market_context_service import (
     USMarketContextResult,
     USMarketContextService,
@@ -98,6 +98,14 @@ _CLOSED_SESSION_LAST_KNOWN_WARNING = WarningInfo(
 _UNKNOWN_FRESHNESS_WARNING = WarningInfo(
     code="UNKNOWN_US_FRESHNESS",
     message="One or more US components have unknown freshness.",
+    details={},
+)
+_YAHOO_KR_DELAYED_QUOTE = WarningInfo(
+    code="YAHOO_KR_DELAYED_QUOTE",
+    message=(
+        "Yahoo labels Korea Exchange quotes as delayed but does not provide a "
+        "stable declared delay in this response; inspect data_delay_seconds."
+    ),
     details={},
 )
 _CONTEXT_UNAVAILABLE = WarningInfo(
@@ -211,6 +219,7 @@ _KNOWN_WARNINGS = {
         _EXTENDED_HOURS_PRICE,
         _INTRADAY_QUOTE_RECOVERY,
         _INTRADAY_QUOTE_UNAVAILABLE,
+        _YAHOO_KR_DELAYED_QUOTE,
     )
 }
 
@@ -231,7 +240,7 @@ class USToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -239,7 +248,7 @@ class USToolCoordinator:
         context_service: USMarketContextService,
         technical_service: USTechnicalService,
     ) -> None:
-        self._instrument_master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -252,7 +261,9 @@ class USToolCoordinator:
     ) -> ToolEnvelope[USQuoteDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve(request.instrument_id)
+            instrument = await self._instrument_access.get(
+                request.instrument_id, as_of=effective_as_of
+            )
             result = await self._data_service.get_quote(instrument, effective_as_of)
             return self._envelope_from_router(
                 request_id,
@@ -267,7 +278,9 @@ class USToolCoordinator:
     async def get_market_bars(self, request: MarketGetBarsInput) -> ToolEnvelope[USBarSeriesDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve(request.instrument_id)
+            instrument = await self._instrument_access.get(
+                request.instrument_id, as_of=effective_as_of
+            )
             adjustment = request.adjustment
             if adjustment is None:
                 adjustment = (
@@ -314,7 +327,9 @@ class USToolCoordinator:
     ) -> ToolEnvelope[USTechnicalSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve(request.instrument_id)
+            instrument = await self._instrument_access.get(
+                request.instrument_id, as_of=effective_as_of
+            )
             bars_result = await self._fetch_technical_bars(
                 instrument,
                 as_of=effective_as_of,
@@ -355,7 +370,9 @@ class USToolCoordinator:
     ) -> ToolEnvelope[USCompositeSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve(request.instrument_id)
+            instrument = await self._instrument_access.get(
+                request.instrument_id, as_of=effective_as_of
+            )
             if instrument.market is not Market.US:
                 raise DataContractError(
                     "composite snapshot remains US-only",
@@ -470,9 +487,6 @@ class USToolCoordinator:
         effective_as_of = self._clock.now() if as_of is None else as_of
         return request_id, effective_as_of
 
-    def _resolve(self, instrument_id: str) -> Instrument:
-        return self._instrument_master.get(instrument_id)
-
     async def _fetch_technical_bars(
         self,
         instrument: Instrument,
@@ -513,9 +527,7 @@ class USToolCoordinator:
         market: Market = Market.US,
     ) -> ToolEnvelope[U]:
         if not result.ok or result.value is None:
-            return self._router_failure(
-                request_id, effective_as_of, result, market=market
-            )
+            return self._router_failure(request_id, effective_as_of, result, market=market)
 
         data = dto_factory(result.value)
         metas = _metas_from_router(result)
@@ -524,6 +536,7 @@ class USToolCoordinator:
             metas=metas,
             extra_codes=(),
         )
+        warnings = _market_warnings(warnings, market=market)
         return self._success_envelope(
             request_id,
             effective_as_of,
@@ -597,6 +610,7 @@ class USToolCoordinator:
             metas=metas,
             extra_codes=(),
         )
+        warnings = _market_warnings(warnings, market=market)
         sources = _sources_from_metas(metas)
         freshness = _worst_freshness(metas)
         fetched_at = _max_fetched_at(metas)
@@ -753,6 +767,31 @@ def _merge_warnings(
     for warning in _synthesized_from_metas(metas):
         _add(warning)
     return tuple(merged)
+
+
+def _market_warnings(
+    warnings: tuple[WarningInfo, ...], *, market: Market
+) -> tuple[WarningInfo, ...]:
+    if market is not Market.KR:
+        return warnings
+    replacements = {
+        "FALLBACK_US_SOURCE": ("FALLBACK_KR_SOURCE", "A Korean market fallback source was used."),
+        "DELAYED_US_DATA": ("DELAYED_KR_DATA", "Korean market data is delayed."),
+        "STALE_US_DATA": ("STALE_KR_DATA", "Korean market data is stale."),
+        "UNKNOWN_US_FRESHNESS": (
+            "UNKNOWN_KR_FRESHNESS",
+            "Korean market data freshness is unknown.",
+        ),
+    }
+    localized: list[WarningInfo] = []
+    for warning in warnings:
+        replacement = replacements.get(warning.code)
+        if replacement is None:
+            localized.append(warning)
+            continue
+        code, message = replacement
+        localized.append(WarningInfo(code=code, message=message, details=warning.details))
+    return tuple(localized)
 
 
 def _error_from_router(

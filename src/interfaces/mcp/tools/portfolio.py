@@ -119,8 +119,27 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
             inp = AccountGetTransactionsInput.model_validate(
                 {"providers": providers, "start": start, "end": end, "limit": limit}
             )
-            return (
-                await container.services.account_transactions.get_transactions(inp)
+            return (await container.services.account_transactions.get_transactions(inp)).model_dump(
+                mode="json"
+            )
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def account_list_transactions(
+        providers: tuple[str, ...] = (),
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Read normalized durable transactions without contacting a broker."""
+        try:
+            inp = AccountGetTransactionsInput.model_validate(
+                {"providers": providers, "start": start, "end": end, "limit": limit}
+            )
+            return container.services.account_transactions.list_durable_transactions(
+                inp
             ).model_dump(mode="json")
         except ValidationError:
             raise
@@ -129,6 +148,7 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
 
     return SimpleNamespace(
         account_get=account_get,
+        account_list_transactions=account_list_transactions,
         portfolio_analyze=portfolio_analyze,
         portfolio_simulate_addition=portfolio_simulate_addition,
     )

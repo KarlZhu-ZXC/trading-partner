@@ -294,6 +294,21 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
             )
         return quote(instrument.symbol.upper(), safe=".-^")
 
+    def _news_instrument(self, instrument: Instrument) -> str:
+        if not isinstance(instrument, Instrument):
+            raise DataContractError(
+                "instrument must be Instrument", details={"field": "instrument"}
+            )
+        if instrument.market is not Market.US or instrument.asset_type not in {
+            AssetType.EQUITY,
+            AssetType.ETF,
+        }:
+            raise DataContractError(
+                "Yahoo news supports US equities and ETFs",
+                details={"field": "instrument"},
+            )
+        return quote(instrument.symbol.upper(), safe=".-^")
+
     def _as_of(self, as_of: datetime, *, current_only: bool) -> datetime:
         require_aware_datetime(as_of, field_name="as_of")
         now = self._clock.now()
@@ -407,7 +422,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
     ) -> ProviderSuccess[USNewsFeed]:
         self._as_of(as_of, current_only=False)
         if instrument is not None:
-            search = self._instrument(instrument)
+            search = self._news_instrument(instrument)
             instrument_id = instrument.instrument_id
             scope = USNewsScope.COMPANY
         else:

@@ -32,9 +32,7 @@ from domain.us_market.models import (
 _DATE_WIRE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Equity / ETF / index instruments for quote, bars, technical, composite.
-_QUOTE_ASSET_TYPES = frozenset(
-    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
-)
+_QUOTE_ASSET_TYPES = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE})
 
 # Phase 3A market_get_snapshot / market_get_bars quote+bars matrix.
 _SNAPSHOT_BARS_ASSET_TYPES = frozenset(
@@ -47,7 +45,7 @@ _SNAPSHOT_BARS_ASSET_TYPES = frozenset(
         AssetType.CFD,
     }
 )
-_SNAPSHOT_BARS_MARKETS = frozenset({Market.US, Market.CME, Market.DCE, Market.OTC})
+_SNAPSHOT_BARS_MARKETS = frozenset({Market.US, Market.KR, Market.CME, Market.DCE, Market.OTC})
 
 # US wire adjustment values (design §5; excludes A-share forward/backward).
 _US_ADJUSTMENT = frozenset(
@@ -102,7 +100,7 @@ def _validate_snapshot_bars_instrument_id(
     *,
     field_name: str = "instrument_id",
 ) -> str:
-    """Accept US equity/ETF/index/future, CME futures, and OTC spot/CFD ids."""
+    """Accept US/KR exchange instruments, CME/DCE futures, and OTC spot/CFD ids."""
     try:
         asset_type, market, _symbol = parse_instrument_id(value)
     except TradingPartnerError:
@@ -114,22 +112,22 @@ def _validate_snapshot_bars_instrument_id(
         )
     if asset_type not in _SNAPSHOT_BARS_ASSET_TYPES:
         allowed = ", ".join(sorted(a.value for a in _SNAPSHOT_BARS_ASSET_TYPES))
-        raise ValueError(
-            f"{field_name} asset type must be one of [{allowed}] for this tool"
-        )
+        raise ValueError(f"{field_name} asset type must be one of [{allowed}] for this tool")
     if market is Market.US and asset_type not in _QUOTE_ASSET_TYPES:
-        raise ValueError(
-            f"{field_name} Market.US only supports equity/etf/index/future"
-        )
+        raise ValueError(f"{field_name} Market.US only supports equity/etf/index/future")
+    if market is Market.KR and asset_type not in {
+        AssetType.EQUITY,
+        AssetType.ETF,
+        AssetType.INDEX,
+    }:
+        raise ValueError(f"{field_name} Market.KR only supports equity/etf/index")
     if market in {Market.CME, Market.DCE} and asset_type is not AssetType.FUTURE:
         raise ValueError(f"{field_name} futures exchange markets only support future")
     if market is Market.OTC and asset_type not in {
         AssetType.COMMODITY_SPOT,
         AssetType.CFD,
     }:
-        raise ValueError(
-            f"{field_name} Market.OTC only supports commodity_spot or cfd"
-        )
+        raise ValueError(f"{field_name} Market.OTC only supports commodity_spot or cfd")
     return value
 
 
@@ -152,6 +150,25 @@ class MarketGetSnapshotInput(_FrozenForbid):
     @classmethod
     def _instrument_id(cls, value: str) -> str:
         return _validate_snapshot_bars_instrument_id(value)
+
+    @field_validator("as_of")
+    @classmethod
+    def _aware_as_of(cls, value: datetime | None) -> datetime | None:
+        return _require_aware_as_of(value)
+
+
+class MarketGetBatchQuotesInput(_FrozenForbid):
+    instrument_ids: tuple[str, ...]
+    as_of: datetime | None = None
+
+    @field_validator("instrument_ids")
+    @classmethod
+    def _instrument_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if not 1 <= len(values) <= 50:
+            raise ValueError("instrument_ids must contain 1..50 values")
+        if len(values) != len(set(values)):
+            raise ValueError("instrument_ids must be unique")
+        return tuple(_validate_snapshot_bars_instrument_id(value) for value in values)
 
     @field_validator("as_of")
     @classmethod
@@ -188,9 +205,7 @@ class MarketGetBarsInput(_FrozenForbid):
 
     @field_validator("adjustment")
     @classmethod
-    def _us_adjustment(
-        cls, value: AdjustmentMethod | None
-    ) -> AdjustmentMethod | None:
+    def _us_adjustment(cls, value: AdjustmentMethod | None) -> AdjustmentMethod | None:
         if value is None:
             return None
         if value not in _US_ADJUSTMENT:
@@ -252,9 +267,7 @@ class MarketGetContextInput(_FrozenForbid):
     def _price_basis(cls, value: str) -> str:
         allowed = {"last", "mid", "settlement"}
         if value not in allowed:
-            raise ValueError(
-                f"price_basis must be one of [{', '.join(sorted(allowed))}]"
-            )
+            raise ValueError(f"price_basis must be one of [{', '.join(sorted(allowed))}]")
         return value
 
     @field_validator("left_instrument_id", "right_instrument_id")
@@ -287,8 +300,7 @@ class MarketGetContextInput(_FrozenForbid):
         if self.operation == "spot_future_basis":
             if not self.left_instrument_id or not self.right_instrument_id:
                 raise ValueError(
-                    "left_instrument_id and right_instrument_id are required "
-                    "for spot_future_basis"
+                    "left_instrument_id and right_instrument_id are required for spot_future_basis"
                 )
             if self.left_instrument_id == self.right_instrument_id:
                 raise ValueError("left and right instrument ids must differ")

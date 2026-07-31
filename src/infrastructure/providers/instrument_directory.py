@@ -1,4 +1,4 @@
-"""Provider-backed instrument discovery for US and A-share symbols."""
+"""Provider-backed instrument discovery for US, Korean, and A-share symbols."""
 
 from __future__ import annotations
 
@@ -125,6 +125,20 @@ def _us_exchange(raw: str | None) -> str:
     }.get(upper, upper)
 
 
+def _kr_symbol(raw: str, asset_type: AssetType) -> tuple[str, str] | None:
+    upper = raw.upper()
+    if asset_type is AssetType.INDEX:
+        symbol = upper.removeprefix("^")
+        if symbol not in {"KS11", "KQ11", "KS200"}:
+            return None
+        return symbol, "KOSDAQ" if symbol == "KQ11" else "KOSPI"
+    match = re.fullmatch(r"(\d{6})\.(KS|KQ)", upper)
+    if match is None or asset_type not in {AssetType.EQUITY, AssetType.ETF}:
+        return None
+    code, suffix = match.groups()
+    return code, "KOSPI" if suffix == "KS" else "KOSDAQ"
+
+
 class YahooInstrumentDirectoryAdapter:
     def __init__(
         self,
@@ -148,7 +162,7 @@ class YahooInstrumentDirectoryAdapter:
         return self.vendor_id.value
 
     def supports(self, market: Market, category: DataCategory) -> bool:
-        return market is Market.US and category is DataCategory.INSTRUMENT_MASTER
+        return market in {Market.US, Market.KR} and category is DataCategory.INSTRUMENT_MASTER
 
     def is_configured(self) -> bool:
         return self._enabled
@@ -163,6 +177,11 @@ class YahooInstrumentDirectoryAdapter:
     ) -> ProviderSuccess[tuple[Instrument, ...]]:
         if not self.is_configured():
             raise ProviderNotConfigured("Yahoo instrument directory is disabled")
+        if market not in {Market.US, Market.KR}:
+            raise DataContractError(
+                "Yahoo instrument directory supports US and KR only",
+                details={"market": market.value, "operation": "instrument_lookup"},
+            )
         require_aware_datetime(as_of, field_name="as_of")
         response = await self._transport.send(
             HttpRequest(
@@ -197,24 +216,38 @@ class YahooInstrumentDirectoryAdapter:
                 continue
             if asset_type_hint is not None and asset_type is not asset_type_hint:
                 continue
-            symbol = symbol.upper()
+            provider_symbol = symbol.upper()
             name = _text(item.get("longname")) or _text(item.get("shortname")) or symbol
-            exchange = _us_exchange(_text(item.get("exchange")) or _text(item.get("exchDisp")))
-            timezone = _text(item.get("exchangeTimezoneName")) or "America/New_York"
+            if market is Market.KR:
+                normalized = _kr_symbol(provider_symbol, asset_type)
+                if normalized is None:
+                    continue
+                symbol, exchange = normalized
+                timezone = "Asia/Seoul"
+                currency = "KRW"
+                country = "KR"
+            else:
+                symbol = provider_symbol
+                exchange = _us_exchange(
+                    _text(item.get("exchange")) or _text(item.get("exchDisp"))
+                )
+                timezone = _text(item.get("exchangeTimezoneName")) or "America/New_York"
+                currency = _text(item.get("currency")) or "USD"
+                country = "US"
             instrument = Instrument(
-                instrument_id=build_instrument_id(asset_type, Market.US, symbol),
+                instrument_id=build_instrument_id(asset_type, market, symbol),
                 symbol=symbol,
                 name=name,
-                market=Market.US,
+                market=market,
                 exchange=exchange,
-                currency=_text(item.get("currency")) or "USD",
+                currency=currency,
                 timezone=timezone,
                 asset_type=asset_type,
-                country="US",
+                country=country,
             )
             candidates[instrument.instrument_id] = instrument
         if not candidates:
-            raise NoMarketData("Yahoo instrument search returned no candidates")
+            raise NoMarketData(f"Yahoo instrument search returned no {market.value} candidates")
         fetched_at = self._clock.now()
         return ProviderSuccess(
             value=tuple(candidates[key] for key in sorted(candidates)),

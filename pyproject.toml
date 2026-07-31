@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trading-partner"
-version = "0.2.0"
-description = "Long-horizon investment research and judgment companion for A-share and US markets"
+dynamic = ["version"]
+description = "Local-first investment judgment companion for A-share, US, Korean, and cross-asset research"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = "Apache-2.0"
@@ -25,16 +25,25 @@ dependencies = [
     "ta-lib>=0.6.8,<0.7",
 ]
 
+[tool.hatch.version]
+path = "src/application/__init__.py"
+
 [project.optional-dependencies]
 accounts-moomoo = ["moomoo-api>=10.8,<11"]
 accounts-schwab = ["schwab-py>=1.5,<2"]
 chart = ["matplotlib>=3.10,<4"]
 company-pdf = ["pypdf>=5.0,<7"]
+console = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.32,<1",
+]
 all = [
     "moomoo-api>=10.8,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
     "pypdf>=5.0,<7",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.32,<1",
 ]
 
 [project.scripts]
@@ -48,6 +57,8 @@ trading-partner-monitor-scheduler = "interfaces.cli.monitor_scheduler:main"
 trading-partner-monitor-notifications = "interfaces.cli.monitor_notifications:main"
 trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
 trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
+trading-partner-maintenance = "interfaces.cli.maintenance:main"
+trading-partner-console = "interfaces.console.server:main"
 
 # Editable installs: put src/ on sys.path so bootstrap.py and the four packages
 # resolve to live workspace sources. Do not use force-include for bootstrap —
@@ -89,6 +100,10 @@ dev = [
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
     "pypdf>=5.0,<7",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.32,<1",
+    "pip-audit>=2.9,<3",
+    "cyclonedx-bom>=6.0,<8",
 ]
 
 [tool.pytest.ini_options]
@@ -96,6 +111,11 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src"]
+filterwarnings = [
+    # schwab-py 1.x imports the compatibility namespace from websockets 14+.
+    # Keep the dependency current while suppressing this upstream-only warning.
+    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets\\.legacy",
+]
 
 [tool.ruff]
 target-version = "py313"

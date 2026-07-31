@@ -17,6 +17,7 @@ from domain.monitoring.enums import MonitorCadence, MonitorStatus
 _SCHEDULED_CADENCES = (
     MonitorCadence.A_SHARE_POST_MARKET,
     MonitorCadence.US_POST_MARKET,
+    MonitorCadence.KR_POST_MARKET,
     MonitorCadence.INTERVAL,
 )
 

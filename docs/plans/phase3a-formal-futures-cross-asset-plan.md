@@ -266,8 +266,8 @@ cash-and-carry basis。`LH - 全国生猪均价` 的品级、地区、发布时�
 `comparability=INDICATIVE_ONLY`，不得输出伪精确套利结论。
 
 Phase 3A 只返回当前/指定 `as_of` 的 basis snapshot 及缓存。长期、可复现的 durable basis
-dataset 归入 Phase 3C 的 dataset manifest/Parquet 历史层；建议同步修正现有 Phase 3 文档中
-“durable basis series 属于 3A”的表述。
+dataset 属于未来可选的历史数据计划，不在当前 Phase 3 范围内；现有 Phase 3 文档不再把
+durable basis series 列为 3A 或 3C 的退出条件。
 
 ### 5.5 代码目录、类名与方法名
 
@@ -528,8 +528,8 @@ multiplier、settlement/OI 能追溯到 CME/Yahoo；`GCZ24.CMX` 类到期历史�
 
 实施说明：定义、roll rule 和 continuous→specific mapping 已落库；受免费源到期合约历史
 限制，不在本轮拼接长期 continuous OHLCV，也不在图上伪造历史 roll marker。该历史数据集
-工作随 Phase 3C dataset manifest/Parquet 一并完成，不影响具体合约、期限结构和现有 `*=F`
-兼容代理的使用。
+属于未来可选工作，不影响具体合约、期限结构和现有 `*=F` 兼容代理的使用，也不阻塞当前
+Phase 3 收口。
 
 ### 3A-3 — 免费 OTC 金银观察源（完成）
 

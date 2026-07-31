@@ -73,6 +73,15 @@ markets:
       vendors: [polymarket]
     account:
       vendors: [schwab, moomoo, manual_csv]
+  # Korea Exchange quote/bars and local-first symbol discovery. Yahoo symbols
+  # (.KS/.KQ/^KS11) stay provider aliases rather than canonical identities.
+  KR:
+    instrument_master:
+      vendors: [local_master, seed_fixture]
+    market_quote:
+      vendors: [yfinance]
+    market_ohlcv:
+      vendors: [yfinance]
   # Phase 3A CME specific-contract quote/bars (Yahoo) + public definitions/EOD.
   CME:
     market_quote:

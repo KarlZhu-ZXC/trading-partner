@@ -54,6 +54,8 @@ _OCC_RE = re.compile(r"^([A-Z0-9.]{1,6})(\d{6})([CP])(\d{8})$")
 
 _US_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 _YAHOO_CONTINUOUS_FUTURE_RE = re.compile(r"^[A-Z0-9]{1,8}=F$")
+_KR_SECURITY_RE = re.compile(r"^(\d{6})(?:\.(KS|KQ))?$")
+_KR_INDEXES = frozenset({"KS11", "KQ11", "KS200"})
 
 # A-share option-style contract codes (exchange native), e.g. 10007601.SH
 _A_SHARE_OPTION_CODE_RE = re.compile(r"^(\d{6,10})(\.(?:SH|SZ|BJ))?$", re.IGNORECASE)
@@ -98,6 +100,8 @@ def normalize_symbol_input(
         return _normalize_a_share(cleaned, raw=raw, asset_type_hint=asset_type_hint)
     if market is Market.US:
         return _normalize_us(cleaned, raw=raw, asset_type_hint=asset_type_hint)
+    if market is Market.KR:
+        return _normalize_kr(cleaned, raw=raw, asset_type_hint=asset_type_hint)
     raise InvalidInstrument(
         "unsupported market for symbol normalization",
         details={"market": market.value, "raw": raw},
@@ -327,6 +331,51 @@ def _normalize_us(
         exchange_hint=exchange_hint,
         display_symbol=normalized,
         warnings=tuple(warnings),
+    )
+
+
+def _normalize_kr(
+    cleaned: str,
+    *,
+    raw: str,
+    asset_type_hint: AssetType | None,
+) -> NormalizedSymbol:
+    compact = re.sub(r"\s+", "", cleaned).upper()
+    if compact.startswith("^"):
+        compact = compact[1:]
+    if compact in _KR_INDEXES:
+        if asset_type_hint not in {None, AssetType.INDEX}:
+            raise InvalidInstrument(
+                "Korean index symbol conflicts with asset type hint",
+                details={"raw": raw, "market": Market.KR.value, "reason": "asset_type"},
+            )
+        exchange = "KOSDAQ" if compact == "KQ11" else "KOSPI"
+        return NormalizedSymbol(
+            market=Market.KR,
+            asset_type_hint=AssetType.INDEX,
+            canonical_candidate=compact,
+            local_code=compact,
+            exchange_hint=exchange,
+            display_symbol=f"^{compact}",
+            warnings=(),
+        )
+
+    match = _KR_SECURITY_RE.fullmatch(compact)
+    if match is None:
+        raise InvalidInstrument(
+            "Korean security symbol must be a six-digit code or supported index",
+            details={"raw": raw, "market": Market.KR.value, "reason": "format"},
+        )
+    code, suffix = match.groups()
+    security_exchange = {"KS": "KOSPI", "KQ": "KOSDAQ"}.get(suffix)
+    return NormalizedSymbol(
+        market=Market.KR,
+        asset_type_hint=asset_type_hint,
+        canonical_candidate=code,
+        local_code=code,
+        exchange_hint=security_exchange,
+        display_symbol=f"{code}.{suffix}" if suffix is not None else code,
+        warnings=() if suffix is not None else ("kr_exchange_resolved_by_directory",),
     )
 
 

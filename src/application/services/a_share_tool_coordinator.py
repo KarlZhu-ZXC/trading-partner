@@ -55,7 +55,7 @@ from application.services.a_share_market_structure_service import (
 )
 from application.services.a_share_sentiment_service import AShareSentimentService
 from application.services.a_share_snapshot_service import AShareSnapshotService
-from application.services.instrument_master_service import InstrumentMasterService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.research_report_search_service import (
     ResearchReportSearchService,
 )
@@ -148,7 +148,7 @@ class AShareToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -162,7 +162,7 @@ class AShareToolCoordinator:
         company_operating_metrics_service: AShareCompanyOperatingMetricsService,
         report_search_service: ResearchReportSearchService,
     ) -> None:
-        self._instrument_master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -181,7 +181,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[AShareCompositeSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_required(request.instrument_id)
+            instrument = await self._resolve_required(request.instrument_id, as_of=effective_as_of)
             result = await self._snapshot_service.get_snapshot(
                 instrument, effective_as_of, request.detail
             )
@@ -196,7 +196,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[AShareFinancialStatementsDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_required(request.instrument_id)
+            instrument = await self._resolve_required(request.instrument_id, as_of=effective_as_of)
             result = await self._snapshot_service.get_financial_statements(
                 instrument,
                 effective_as_of,
@@ -234,7 +234,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[CompanyOperatingMetricsSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_required(request.instrument_id)
+            instrument = await self._resolve_required(request.instrument_id, as_of=effective_as_of)
             result = await self._company_operating_metrics_service.get_company_operating_metrics(
                 instrument,
                 lookback_months=request.lookback_months,
@@ -253,7 +253,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[AShareMarketStructureSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_optional(request.instrument_id)
+            instrument = await self._resolve_optional(request.instrument_id, as_of=effective_as_of)
             result = await self._market_structure_service.get(
                 scope=request.scope,
                 instrument=instrument,
@@ -282,7 +282,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[AShareCapitalSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_optional(request.instrument_id)
+            instrument = await self._resolve_optional(request.instrument_id, as_of=effective_as_of)
             result = await self._capital_service.get(
                 instrument=instrument,
                 metrics=request.metrics,
@@ -317,7 +317,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[AShareSentimentSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_optional(request.instrument_id)
+            instrument = await self._resolve_optional(request.instrument_id, as_of=effective_as_of)
             result = await self._sentiment_service.get(
                 instrument=instrument,
                 sources=request.sources,
@@ -335,7 +335,9 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[EtfOptionSnapshotDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            underlying = self._resolve_required(request.underlying_instrument_id)
+            underlying = await self._resolve_required(
+                request.underlying_instrument_id, as_of=effective_as_of
+            )
             result = await self._etf_option_service.get(
                 underlying,
                 expiry=request.expiry,
@@ -354,7 +356,7 @@ class AShareToolCoordinator:
     ) -> ToolEnvelope[ResearchReportSearchDTO]:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
-            instrument = self._resolve_optional(request.instrument_id)
+            instrument = await self._resolve_optional(request.instrument_id, as_of=effective_as_of)
             result = await self._report_search_service.search(
                 text=request.text,
                 instrument=instrument,
@@ -378,13 +380,13 @@ class AShareToolCoordinator:
         effective_as_of = self._clock.now() if as_of is None else as_of
         return request_id, effective_as_of
 
-    def _resolve_required(self, instrument_id: str) -> Instrument:
-        return self._instrument_master.get(instrument_id)
+    async def _resolve_required(self, instrument_id: str, *, as_of: datetime) -> Instrument:
+        return await self._instrument_access.get(instrument_id, as_of=as_of)
 
-    def _resolve_optional(self, instrument_id: str | None) -> Instrument | None:
-        if instrument_id is None:
-            return None
-        return self._instrument_master.get(instrument_id)
+    async def _resolve_optional(
+        self, instrument_id: str | None, *, as_of: datetime
+    ) -> Instrument | None:
+        return await self._instrument_access.get_optional(instrument_id, as_of=as_of)
 
     def _envelope_from_result(
         self,

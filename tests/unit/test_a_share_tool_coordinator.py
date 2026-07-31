@@ -21,6 +21,7 @@ from application.dto.provider_routing import ProviderResultMeta
 from application.dto.tool_envelope import WarningInfo
 from application.services.a_share_snapshot_service import AShareSnapshotResult
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
+from application.services.instrument_access_service import InstrumentAccessService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.a_share.enums import AShareComponentType, AShareSnapshotDetail
 from domain.common.enums import (
@@ -134,6 +135,7 @@ def _snapshot_dto(
 def _coordinator(
     *,
     instrument_master: MagicMock | None = None,
+    instrument_resolver: MagicMock | None = None,
     snapshot_service: MagicMock | None = None,
     clock: FixedClock | None = None,
     ids: SequentialIdGenerator | None = None,
@@ -145,7 +147,7 @@ def _coordinator(
     clock = clock or FixedClock(_NOW)
     ids = ids or SequentialIdGenerator()
     coord = AShareToolCoordinator(
-        instrument_master=master,
+        instrument_access=InstrumentAccessService(master, instrument_resolver or MagicMock()),
         clock=clock,
         id_generator=ids,
         secret_redactor=DefaultSecretRedactor(),
@@ -339,8 +341,16 @@ async def test_clock_request_id_and_instrument_resolution() -> None:
         "instrument not found",
         details={"instrument_id": _INSTRUMENT_ID},
     )
+    resolver = MagicMock()
+    resolver.resolve_dynamic = AsyncMock(
+        side_effect=InvalidInstrument(
+            "instrument not found",
+            details={"instrument_id": _INSTRUMENT_ID},
+        )
+    )
     coord, _master, snap, _clock, _ids = _coordinator(
         instrument_master=master,
+        instrument_resolver=resolver,
         clock=clock,
         ids=ids,
     )

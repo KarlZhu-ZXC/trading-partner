@@ -25,7 +25,7 @@ from application.ports.technical_chart_renderer import TechnicalChartRenderer
 from application.ports.technical_indicator_engine import TechnicalIndicatorEngine
 from application.services.a_share_market_structure_service import AShareMarketStructureService
 from application.services.commodity_spot_service import CommoditySpotService
-from application.services.instrument_master_service import InstrumentMasterService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_market_data_service import USMarketDataService
 from domain.a_share.enums import BarInterval
 from domain.a_share.models import AShareBar
@@ -48,6 +48,7 @@ from domain.us_market.models import USBarSeries
 
 _NEW_YORK = ZoneInfo("America/New_York")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_SEOUL = ZoneInfo("Asia/Seoul")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +122,7 @@ def _warnings(result: RouterExecutionResult[object]) -> tuple[WarningInfo, ...]:
                     message="The configured fallback market-data source was used.",
                 )
             )
-        if (
-            result.meta.freshness is not Freshness.FRESH
-            and "TECHNICAL_DATA_NOT_FRESH" not in seen
-        ):
+        if result.meta.freshness is not Freshness.FRESH and "TECHNICAL_DATA_NOT_FRESH" not in seen:
             merged.append(
                 WarningInfo(
                     code="TECHNICAL_DATA_NOT_FRESH",
@@ -139,7 +137,7 @@ class TechnicalToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -149,7 +147,7 @@ class TechnicalToolCoordinator:
         chart_renderer: TechnicalChartRenderer,
         commodity_spot_service: CommoditySpotService | None = None,
     ) -> None:
-        self._instrument_master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -165,7 +163,7 @@ class TechnicalToolCoordinator:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         as_of = request.as_of or self._clock.now()
         try:
-            instrument = self._instrument_master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result, bars, basis = await self._load_daily_bars(
                 instrument, as_of=as_of, lookback=request.lookback_sessions
             )
@@ -198,7 +196,7 @@ class TechnicalToolCoordinator:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         as_of = request.as_of or self._clock.now()
         try:
-            instrument = self._instrument_master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result, daily, basis = await self._load_daily_bars(
                 instrument, as_of=as_of, lookback=request.lookback_sessions
             )
@@ -251,8 +249,7 @@ class TechnicalToolCoordinator:
     ) -> tuple[RouterExecutionResult[object], tuple[MarketBar, ...], str]:
         if instrument.market is Market.DCE:
             error = NoMarketData(
-                "DCE futures have no OHLCV path in Phase 3A; "
-                "technical analysis is unavailable",
+                "DCE futures have no OHLCV path in Phase 3A; technical analysis is unavailable",
                 details={
                     "code": "DCE_OHLCV_UNAVAILABLE",
                     "instrument_id": instrument.instrument_id,
@@ -271,13 +268,12 @@ class TechnicalToolCoordinator:
                 (),
                 "unavailable",
             )
-        if instrument.market in {Market.US, Market.CME}:
-            day = as_of.astimezone(_NEW_YORK).date()
+        if instrument.market in {Market.US, Market.KR, Market.CME}:
+            timezone = _SEOUL if instrument.market is Market.KR else _NEW_YORK
+            day = as_of.astimezone(timezone).date()
             is_future = instrument.asset_type is AssetType.FUTURE
             adjustment = (
-                AdjustmentMethod.NONE
-                if is_future
-                else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
+                AdjustmentMethod.NONE if is_future else AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED
             )
             if instrument.market is Market.CME:
                 basis = "unadjusted_specific_futures_close"
@@ -304,9 +300,7 @@ class TechnicalToolCoordinator:
             AssetType.COMMODITY_SPOT,
             AssetType.CFD,
         }:
-            return await self._load_otc_daily_bars(
-                instrument, as_of=as_of, lookback=lookback
-            )
+            return await self._load_otc_daily_bars(instrument, as_of=as_of, lookback=lookback)
         if instrument.market is Market.A_SHARE:
             day = as_of.astimezone(_SHANGHAI).date()
             a_result = await self._a_share_data_service.get_bars(
@@ -334,7 +328,7 @@ class TechnicalToolCoordinator:
             )
             return a_result, bars, "forward_adjusted_daily_close"
         raise DataContractError(
-            "technical analysis supports A_SHARE, US, CME, and OTC markets",
+            "technical analysis supports A_SHARE, US, KR, CME, and OTC markets",
             details={
                 "market": instrument.market.value,
                 "asset_type": instrument.asset_type.value,

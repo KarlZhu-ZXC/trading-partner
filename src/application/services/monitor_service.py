@@ -16,6 +16,7 @@ from application.dto.monitoring import (
     MonitorEventListInput,
     MonitorEventResolveInput,
     MonitorGetInput,
+    MonitorLatestRunSummaryDTO,
     MonitorListDTO,
     MonitorListInput,
     MonitorRuleStateDTO,
@@ -68,9 +69,7 @@ class MonitorService:
         self._schedule = schedule or MonitorScheduleService()
 
     def create(self, request: MonitorCreateInput) -> MonitorDetailDTO:
-        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(
-            request
-        )
+        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
         existing = self._repository.get_by_idempotency_key(request.idempotency_key)
         if existing is not None:
             if not self._matches_create(
@@ -106,17 +105,13 @@ class MonitorService:
         )
 
     def update(self, request: MonitorUpdateInput) -> MonitorDetailDTO:
-        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(
-            request
-        )
+        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
         replay = self._repository.get_by_idempotency_key(request.idempotency_key)
         if replay is not None:
             if replay.monitor_id != request.monitor_id or not self._matches_update(
                 replay, request, rules, case_id, instrument_id, valid_until
             ):
-                raise IdempotencyConflict(
-                    "idempotency_key belongs to a different monitor update"
-                )
+                raise IdempotencyConflict("idempotency_key belongs to a different monitor update")
             return self.get(MonitorGetInput(monitor_id=replay.monitor_id))
         current = self._require(request.monitor_id)
         if current.version != request.expected_version:
@@ -188,9 +183,13 @@ class MonitorService:
             items.append(
                 MonitorDashboardItemDTO(
                     monitor=MonitorDefinitionDTO.from_domain(monitor),
+                    monitor_created_at=(
+                        self._repository.get_created_at(monitor.monitor_id) or monitor.created_at
+                    ),
+                    monitor_updated_at=monitor.created_at,
                     rule_states=states,
                     latest_run=(
-                        MonitorRunDTO.from_domain(latest)
+                        MonitorLatestRunSummaryDTO.from_domain(latest)
                         if latest is not None
                         else None
                     ),
@@ -209,27 +208,19 @@ class MonitorService:
             values = () if value is None else (value,)
         else:
             values = self._repository.list_runs(request.monitor_id, request.limit)
-        return MonitorRunListDTO(
-            runs=tuple(MonitorRunDTO.from_domain(item) for item in values)
-        )
+        return MonitorRunListDTO(runs=tuple(MonitorRunDTO.from_domain(item) for item in values))
 
     def list_events(self, request: MonitorEventListInput) -> MonitorEventListDTO:
         events = self._repository.list_events(request.monitor_id, request.limit)
         return MonitorEventListDTO(
             events=tuple(
-                MonitorEventDTO.from_domain(
-                    item, self._repository.latest_resolution(item.event_id)
-                )
+                MonitorEventDTO.from_domain(item, self._repository.latest_resolution(item.event_id))
                 for item in events
             )
         )
 
-    def resolve_event(
-        self, request: MonitorEventResolveInput
-    ) -> MonitorEventResolution:
-        replay = self._repository.get_resolution_by_idempotency_key(
-            request.idempotency_key
-        )
+    def resolve_event(self, request: MonitorEventResolveInput) -> MonitorEventResolution:
+        replay = self._repository.get_resolution_by_idempotency_key(request.idempotency_key)
         if replay is not None:
             if (
                 replay.event_id != request.event_id
@@ -237,9 +228,7 @@ class MonitorService:
                 or replay.note != request.note.strip()
                 or replay.confirmed_by != request.confirmed_by
             ):
-                raise IdempotencyConflict(
-                    "idempotency_key belongs to a different event resolution"
-                )
+                raise IdempotencyConflict("idempotency_key belongs to a different event resolution")
             return replay
         if self._repository.get_event(request.event_id) is None:
             raise MonitorEventNotFound("Monitor event was not found")
@@ -292,9 +281,7 @@ class MonitorService:
             if case_id is not None and case_id != plan.case_id:
                 raise DataContractError("Monitor case_id conflicts with Trade Plan")
             if instrument_id is not None and instrument_id != plan.instrument_id:
-                raise DataContractError(
-                    "Monitor primary_instrument_id conflicts with Trade Plan"
-                )
+                raise DataContractError("Monitor primary_instrument_id conflicts with Trade Plan")
             case_id = plan.case_id
             instrument_id = plan.instrument_id
             if plan.valid_until is not None and (
@@ -312,6 +299,7 @@ class MonitorService:
                     rules.append(
                         MonitorRule(
                             rule_code=condition.condition_code,
+                            description=condition.description,
                             rule_type=MonitorRuleType.FACT_COMPARISON,
                             severity=MonitorSeverity(condition.severity),
                             instrument_id=condition.instrument_id,

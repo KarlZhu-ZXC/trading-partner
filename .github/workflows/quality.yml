@@ -14,7 +14,7 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     env:
       APP_NAME: trading-partner-ci
@@ -49,11 +49,56 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
 
+      - name: Python dependency vulnerability audit
+        run: uv run pip-audit
+
+      - name: Python CycloneDX SBOM
+        run: >-
+          uv run cyclonedx-py environment .venv/bin/python
+          --pyproject pyproject.toml
+          --output-reproducible
+          --output-format JSON
+          --output-file trading-partner-python.cdx.json
+
       - name: Ruff
         run: uv run ruff check .
 
       - name: Mypy
         run: uv run mypy src
+
+      - name: Set up Node.js for local console
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Console install and vulnerability audit
+        working-directory: console
+        run: |
+          npm ci
+          npm audit
+
+      - name: Console lint and render tests
+        working-directory: console
+        run: |
+          npm run lint
+          npm test
+
+      - name: Console CycloneDX SBOM
+        working-directory: console
+        run: >-
+          npm sbom --package-lock-only --sbom-format cyclonedx
+          --sbom-type application > ../trading-partner-console.cdx.json
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-partner-sboms
+          path: |
+            trading-partner-python.cdx.json
+            trading-partner-console.cdx.json
+          if-no-files-found: error
 
       - name: Full pytest
         run: uv run pytest

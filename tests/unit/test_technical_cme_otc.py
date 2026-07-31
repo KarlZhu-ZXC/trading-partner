@@ -16,6 +16,7 @@ from application.dto.provider_routing import (
 )
 from application.dto.tool_envelope import WarningInfo
 from application.services.commodity_spot_service import CommoditySpotBarsResult
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
@@ -122,7 +123,7 @@ def _coordinator(
     indicator = MagicMock()
     indicator.analyze.side_effect = lambda bars, interval: _timeframe(interval)
     return TechnicalToolCoordinator(
-        instrument_master=master,
+        instrument_access=InstrumentAccessService(master, MagicMock()),
         clock=FixedClock(AS_OF),
         id_generator=SequentialIdGenerator(),
         secret_redactor=DefaultSecretRedactor(),
@@ -215,25 +216,23 @@ async def test_technical_snapshot_otc_uses_commodity_spot_unadjusted() -> None:
         return_value=CommoditySpotBarsResult(
             ok=True,
             data=series,
-            warnings=(
-                WarningInfo(code="DUKASCOPY_SWFX_NOT_LBMA", message="not lbma"),
-                ),
-                error=None,
-                meta=ProviderResultMeta(
-                    vendor=VendorId.DUKASCOPY,
-                    category=DataCategory.MARKET_OHLCV,
-                    role=SourceRole.PRIMARY,
-                    as_of=AS_OF,
-                    fetched_at=AS_OF,
-                    freshness=Freshness.DELAYED,
-                    session=TradingSession.UNKNOWN,
-                    latency_ms=1,
-                    cache_disposition=CacheDisposition.MISS,
-                    adjustment=AdjustmentMethod.NONE,
-                    data_delay_seconds=600,
-                    warnings=("DUKASCOPY_SWFX_NOT_LBMA",),
-                ),
-            )
+            warnings=(WarningInfo(code="DUKASCOPY_SWFX_NOT_LBMA", message="not lbma"),),
+            error=None,
+            meta=ProviderResultMeta(
+                vendor=VendorId.DUKASCOPY,
+                category=DataCategory.MARKET_OHLCV,
+                role=SourceRole.PRIMARY,
+                as_of=AS_OF,
+                fetched_at=AS_OF,
+                freshness=Freshness.DELAYED,
+                session=TradingSession.UNKNOWN,
+                latency_ms=1,
+                cache_disposition=CacheDisposition.MISS,
+                adjustment=AdjustmentMethod.NONE,
+                data_delay_seconds=600,
+                warnings=("DUKASCOPY_SWFX_NOT_LBMA",),
+            ),
+        )
     )
     coord = _coordinator(
         instruments={_OTC.instrument_id: _OTC},

@@ -60,8 +60,8 @@ def _instrument(value: str | None) -> None:
     if value is None:
         return
     asset, market, _ = parse_instrument_id(value)
-    if asset is not AssetType.EQUITY or market is not Market.US:
-        raise DataContractError("instrument_id must be a US equity")
+    if asset not in {AssetType.EQUITY, AssetType.ETF} or market is not Market.US:
+        raise DataContractError("instrument_id must be a US equity or ETF")
 
 
 def _warnings(value: tuple[str, ...]) -> None:

@@ -6,17 +6,20 @@ import inspect
 import json
 from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import cache, reduce
 from operator import or_
 from types import SimpleNamespace
-from typing import Annotated, Any, Literal, cast, get_type_hints
+from typing import Annotated, Any, Literal, Protocol, cast, get_type_hints
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from bootstrap import ApplicationContainer
+from interfaces.mcp.tool_inventory import COMPACT_28_TOOL_NAMES
 from interfaces.mcp.tools.a_share import build_a_share_adapters
 from interfaces.mcp.tools.challenge import build_challenge_adapters
 from interfaces.mcp.tools.instrument import build_instrument_adapters
@@ -32,60 +35,240 @@ from interfaces.mcp.tools.us_research import build_us_research_adapters
 from interfaces.mcp.tools.watchlist import build_watchlist_adapters
 from interfaces.mcp.tools.workflows import build_workflow_adapters
 
-READ_DURABLE = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+
+class CapabilityEffect(StrEnum):
+    READ_DURABLE = "READ_DURABLE"
+    READ_PROVIDER = "READ_PROVIDER"
+    CACHE_DISCOVERY = "CACHE_DISCOVERY"
+    APPEND = "APPEND"
+    APPEND_OPEN_WORLD = "APPEND_OPEN_WORLD"
+    MANAGE = "MANAGE"
+    MANAGE_OPEN_WORLD = "MANAGE_OPEN_WORLD"
+    SYNC = "SYNC"
+    EVALUATE = "EVALUATE"
+    LOCAL_ARTIFACT = "LOCAL_ARTIFACT"
+
+
+class ConfirmationPolicy(StrEnum):
+    NONE = "NONE"
+    MATCH_CAPABILITY_NAME = "MATCH_CAPABILITY_NAME"
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityPolicy:
+    effect: CapabilityEffect
+    confirmation: ConfirmationPolicy
+    annotations: ToolAnnotations
+
+    @property
+    def confirmation_required(self) -> bool:
+        return self.confirmation is not ConfirmationPolicy.NONE
+
+
+def _policy(
+    effect: CapabilityEffect,
+    *,
+    confirmation: ConfirmationPolicy,
+    read_only: bool,
+    destructive: bool,
+    idempotent: bool,
+    open_world: bool,
+) -> CapabilityPolicy:
+    return CapabilityPolicy(
+        effect=effect,
+        confirmation=confirmation,
+        annotations=ToolAnnotations(
+            readOnlyHint=read_only,
+            destructiveHint=destructive,
+            idempotentHint=idempotent,
+            openWorldHint=open_world,
+        ),
+    )
+
+
+READ_DURABLE = _policy(
+    CapabilityEffect.READ_DURABLE,
+    confirmation=ConfirmationPolicy.NONE,
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    open_world=False,
 )
-READ_PROVIDER = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+READ_PROVIDER = _policy(
+    CapabilityEffect.READ_PROVIDER,
+    confirmation=ConfirmationPolicy.NONE,
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    open_world=True,
 )
-MANAGE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=True,
-    openWorldHint=False,
+CACHE_DISCOVERY = _policy(
+    CapabilityEffect.CACHE_DISCOVERY,
+    confirmation=ConfirmationPolicy.NONE,
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=True,
 )
-MANAGE_OPEN_WORLD = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=True,
-    openWorldHint=True,
+MANAGE = _policy(
+    CapabilityEffect.MANAGE,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=True,
+    idempotent=True,
+    open_world=False,
 )
-APPEND = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+MANAGE_OPEN_WORLD = _policy(
+    CapabilityEffect.MANAGE_OPEN_WORLD,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=True,
+    idempotent=True,
+    open_world=True,
 )
-APPEND_OPEN_WORLD = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+APPEND = _policy(
+    CapabilityEffect.APPEND,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=False,
 )
-SYNC = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=True,
+APPEND_OPEN_WORLD = _policy(
+    CapabilityEffect.APPEND_OPEN_WORLD,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=True,
 )
-EVALUATE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+SYNC = _policy(
+    CapabilityEffect.SYNC,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    open_world=True,
 )
-LOCAL_ARTIFACT = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+EVALUATE = _policy(
+    CapabilityEffect.EVALUATE,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=True,
 )
+LOCAL_ARTIFACT = _policy(
+    CapabilityEffect.LOCAL_ARTIFACT,
+    confirmation=ConfirmationPolicy.MATCH_CAPABILITY_NAME,
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=True,
+)
+
+
+class CapabilityNotFoundError(LookupError):
+    pass
+
+
+class CapabilityConfirmationRequiredError(PermissionError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredCapability:
+    tool: FastMCPTool
+    policy: CapabilityPolicy
+
+
+class CapabilityRegistrar(Protocol):
+    def add_capability(
+        self,
+        fn: Any,
+        *,
+        name: str | None,
+        description: str | None,
+        policy: CapabilityPolicy,
+    ) -> None: ...
+
+
+class CompactCapabilityRegistry:
+    """One validated compact capability graph shared by MCP and HTTP adapters."""
+
+    def __init__(self) -> None:
+        self._capabilities: dict[str, RegisteredCapability] = {}
+
+    def add_capability(
+        self,
+        fn: Any,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        policy: CapabilityPolicy,
+    ) -> None:
+        tool = FastMCPTool.from_function(
+            fn,
+            name=name,
+            description=description,
+            annotations=policy.annotations,
+        )
+        if tool.name in self._capabilities:
+            raise RuntimeError(f"compact capability already exists: {tool.name}")
+        self._capabilities[tool.name] = RegisteredCapability(tool=tool, policy=policy)
+
+    @property
+    def policies(self) -> dict[str, CapabilityPolicy]:
+        return {name: item.policy for name, item in self._capabilities.items()}
+
+    def list_tools(self) -> list[MCPTool]:
+        return [
+            MCPTool(
+                name=item.tool.name,
+                title=item.tool.title,
+                description=item.tool.description,
+                inputSchema=_minimize_public_schema(deepcopy(item.tool.parameters)),
+                outputSchema=item.tool.output_schema,
+                annotations=item.policy.annotations,
+                icons=item.tool.icons,
+                _meta=item.tool.meta,
+            )
+            for item in self._capabilities.values()
+        ]
+
+    async def invoke(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> Any:
+        capability = self._capabilities.get(name)
+        if capability is None:
+            raise CapabilityNotFoundError(name)
+        if (
+            capability.policy.confirmation is ConfirmationPolicy.MATCH_CAPABILITY_NAME
+            and confirmation != name
+        ):
+            raise CapabilityConfirmationRequiredError(name)
+        # HTTP callers need the validated handler result before MCP content-block
+        # conversion. FastMCP performs that transport conversion only when serving
+        # an MCP request.
+        return await capability.tool.run(arguments)
+
+    def bind_mcp(self, server: FastMCP) -> None:
+        """Render the same registry as FastMCP transport tools."""
+        for capability in self._capabilities.values():
+            tool = capability.tool
+            server.add_tool(
+                tool.fn,
+                name=tool.name,
+                title=tool.title,
+                description=tool.description,
+                annotations=capability.policy.annotations,
+                icons=tool.icons,
+                meta=tool.meta,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,12 +353,12 @@ def _variant_model(*, compact_tool_name: str, spec: VariantSpec) -> type[BaseMod
 
 
 def _register_dispatch_tool(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     *,
     name: str,
     description: str,
     variants: tuple[VariantSpec, ...],
-    annotations: ToolAnnotations,
+    policy: CapabilityPolicy,
 ) -> None:
     models = tuple(_variant_model(compact_tool_name=name, spec=spec) for spec in variants)
     request_union = reduce(or_, models)
@@ -198,21 +381,26 @@ def _register_dispatch_tool(
     dispatch.__name__ = name
     dispatch.__doc__ = description
     dispatch.__annotations__ = {"request": request_type, "return": Any}
-    server.add_tool(dispatch, name=name, annotations=annotations)
+    registry.add_capability(
+        dispatch,
+        name=name,
+        description=description,
+        policy=policy,
+    )
 
 
 def _copy_handler(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     *,
     adapter: Any,
     target_name: str | None = None,
-    annotations: ToolAnnotations,
+    policy: CapabilityPolicy,
 ) -> None:
-    server.add_tool(
+    registry.add_capability(
         adapter,
         name=target_name or adapter.__name__,
         description=inspect.getdoc(adapter) or "",
-        annotations=annotations,
+        policy=policy,
     )
 
 
@@ -309,18 +497,18 @@ class CompactFastMCP(FastMCP):
         return tools
 
 
-def create_compact_mcp_server(
+def create_compact_capability_registry(
     container: ApplicationContainer,
     *,
     chart_persister: Any,
-) -> FastMCP:
-    """Build the sole compact 28-tool public surface."""
+) -> CompactCapabilityRegistry:
+    """Build the sole compact-28 handler/schema/policy registry."""
     adapters = SimpleNamespace(
         system=build_system_adapters(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v4",
+            surface_schema_version="compact-v7",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -336,21 +524,21 @@ def create_compact_mcp_server(
         risk=build_risk_adapters(container),
         monitoring=build_monitoring_adapters(container),
     )
-    server = CompactFastMCP(container.settings.mcp_server_name)
+    registry = CompactCapabilityRegistry()
 
     _copy_handler(
-        server,
+        registry,
         adapter=adapters.system.system_health,
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _copy_handler(
-        server,
+        registry,
         adapter=adapters.instrument.instrument_resolve,
-        annotations=APPEND_OPEN_WORLD,
+        policy=CACHE_DISCOVERY,
     )
 
     _register_dispatch_tool(
-        server,
+        registry,
         name="investment_case_read",
         description="Query durable research files or build one bounded current research context.",
         variants=(
@@ -365,10 +553,10 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research.research_context_build),
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="investment_case_manage",
         description="Create or archive a durable research file with confirmation and idempotency.",
         variants=(
@@ -383,10 +571,10 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research.investment_case_archive),
             ),
         ),
-        annotations=MANAGE,
+        policy=MANAGE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="research_judgment_get",
         description="Read current research state or the append-only history of one Thesis.",
         variants=(
@@ -401,10 +589,10 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research.thesis_history_get),
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="research_judgment_propose",
         description=(
             "Propose a research-state, Trade Plan, or Thesis revision candidate; never confirm it."
@@ -421,17 +609,17 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research.thesis_revision_propose),
             ),
         ),
-        annotations=APPEND,
+        policy=APPEND,
     )
     _copy_handler(
-        server,
+        registry,
         adapter=adapters.research.thesis_revision_confirm,
         target_name="research_judgment_confirm",
-        annotations=APPEND,
+        policy=APPEND,
     )
 
     _register_dispatch_tool(
-        server,
+        registry,
         name="research_memory_get",
         description="Search durable research memory, read one report, or restore a Case timeline.",
         variants=(
@@ -451,10 +639,10 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research_memory.research_timeline_get),
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="research_memory_append",
         description="Append a confirmed Journal or Decision intent record; never create an order.",
         variants=(
@@ -469,37 +657,70 @@ def create_compact_mcp_server(
                 _all_fields(adapters.research_memory.decision_record_append),
             ),
         ),
-        annotations=APPEND,
+        policy=APPEND,
     )
 
-    _register_a_share(server, adapters.a_share)
-    _register_market_and_us(server, adapters.market, adapters.us_research, adapters.us_context)
+    _register_a_share(registry, adapters.a_share)
+    _register_market_and_us(
+        registry,
+        adapters.market,
+        adapters.us_research,
+        adapters.us_context,
+    )
 
-    async def account_get(snapshot_id: str | None = None) -> Any:
-        """Read durable account positions only; this compact tool never refreshes a broker."""
-        return await adapters.portfolio.account_get(
-            operation="positions",
-            snapshot_id=snapshot_id,
-        )
-
-    server.add_tool(account_get, name="account_get", annotations=READ_DURABLE)
-    _register_external_sync(server, adapters.portfolio, adapters.watchlist)
+    _register_dispatch_tool(
+        registry,
+        name="account_get",
+        description="Read durable positions or transactions without contacting a broker.",
+        variants=(
+            _spec(
+                "positions",
+                adapters.portfolio.account_get,
+                ("snapshot_id",),
+                adapter_operation="positions",
+            ),
+            _spec(
+                "transactions",
+                adapters.portfolio.account_list_transactions,
+                _all_fields(adapters.portfolio.account_list_transactions),
+            ),
+        ),
+        policy=READ_DURABLE,
+    )
+    _register_external_sync(registry, adapters.portfolio, adapters.watchlist)
     _register_portfolio_challenge_workflows(
-        server,
+        registry,
         adapters.portfolio,
         adapters.challenge,
         adapters.workflows,
     )
     _register_watchlist_risk_monitoring(
-        server,
+        registry,
         adapters.watchlist,
         adapters.risk,
         adapters.monitoring,
     )
+    if set(registry.policies) != set(COMPACT_28_TOOL_NAMES):
+        raise RuntimeError("compact capability registry must contain exactly compact_28")
+    return registry
+
+
+def create_compact_mcp_server(
+    container: ApplicationContainer,
+    *,
+    chart_persister: Any,
+) -> FastMCP:
+    """Render the compact capability registry through the FastMCP transport."""
+    registry = create_compact_capability_registry(
+        container,
+        chart_persister=chart_persister,
+    )
+    server = CompactFastMCP(container.settings.mcp_server_name)
+    registry.bind_mcp(server)
     return server
 
 
-def _register_a_share(server: FastMCP, adapters: SimpleNamespace) -> None:
+def _register_a_share(registry: CapabilityRegistrar, adapters: SimpleNamespace) -> None:
     facts = "a_share_get_facts"
     variants = (
         _spec(
@@ -579,27 +800,28 @@ def _register_a_share(server: FastMCP, adapters: SimpleNamespace) -> None:
         ),
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name=facts,
         description=(
             "Read one closed A-share fact family or search current provider research reports."
         ),
         variants=variants,
-        annotations=READ_PROVIDER,
+        policy=READ_PROVIDER,
     )
 
 
 def _register_market_and_us(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     market: SimpleNamespace,
     us_research: SimpleNamespace,
     us_context: SimpleNamespace,
 ) -> None:
     _register_dispatch_tool(
-        server,
+        registry,
         name="market_data_get",
         description=(
-            "Read a cross-market quote/composite, bars, US market context, futures curve, or basis."
+            "Read cross-market quote(s)/composite, bars, US market context, "
+            "futures curve, or basis."
         ),
         variants=(
             _spec(
@@ -607,6 +829,11 @@ def _register_market_and_us(
                 market.market_get_snapshot,
                 ("instrument_id", "as_of"),
                 adapter_operation="quote",
+            ),
+            _spec(
+                "quotes",
+                market.market_get_quotes,
+                _all_fields(market.market_get_quotes),
             ),
             _spec(
                 "composite",
@@ -639,19 +866,19 @@ def _register_market_and_us(
                 adapter_operation="spot_future_basis",
             ),
         ),
-        annotations=READ_PROVIDER,
+        policy=READ_PROVIDER,
     )
-    _copy_handler(server, adapter=market.technical_get_snapshot, annotations=READ_PROVIDER)
+    _copy_handler(registry, adapter=market.technical_get_snapshot, policy=READ_PROVIDER)
     _copy_handler(
-        server,
+        registry,
         adapter=market.technical_render_chart,
-        annotations=LOCAL_ARTIFACT,
+        policy=LOCAL_ARTIFACT,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="us_company_get",
         description=(
-            "Read US fundamentals, filings, insiders, company updates, events, or dated live news."
+            "Read US equity company facts or dated US equity/ETF live news."
         ),
         variants=(
             _spec(
@@ -696,10 +923,10 @@ def _register_market_and_us(
                 _all_fields(us_context.market_get_live_news),
             ),
         ),
-        annotations=READ_PROVIDER,
+        policy=READ_PROVIDER,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="us_context_get",
         description=(
             "Read vintage-safe macro, source-separated sentiment, or current "
@@ -722,18 +949,17 @@ def _register_market_and_us(
                 _all_fields(us_context.us_get_prediction_market_context),
             ),
         ),
-        annotations=READ_PROVIDER,
+        policy=READ_PROVIDER,
     )
 
 
 def _register_external_sync(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
     watchlist: SimpleNamespace,
 ) -> None:
-    view_type = Literal["groups", "items"]
     _register_dispatch_tool(
-        server,
+        registry,
         name="external_state_sync",
         description=(
             "Explicitly fetch and persist broker accounts, transactions, or the active "
@@ -754,25 +980,21 @@ def _register_external_sync(
             ),
             _spec(
                 "watchlist",
-                watchlist.watchlist_get,
-                ("group_name", "include_inactive", "limit", "offset"),
-                overrides={"refresh": True},
-                extra_fields={"view": (view_type, "items")},
-                adapter_operation_field="view",
+                watchlist.watchlist_sync_all,
             ),
         ),
-        annotations=SYNC,
+        policy=SYNC,
     )
 
 
 def _register_portfolio_challenge_workflows(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
     challenge: SimpleNamespace,
     workflows: SimpleNamespace,
 ) -> None:
     _register_dispatch_tool(
-        server,
+        registry,
         name="portfolio_analyze",
         description=(
             "Analyze durable portfolio exposure or simulate one calculation-only "
@@ -790,11 +1012,11 @@ def _register_portfolio_challenge_workflows(
                 _all_fields(portfolio.portfolio_simulate_addition),
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
-    _copy_handler(server, adapter=challenge.challenge_review_get, annotations=READ_DURABLE)
+    _copy_handler(registry, adapter=challenge.challenge_review_get, policy=READ_DURABLE)
     _register_dispatch_tool(
-        server,
+        registry,
         name="challenge_review_manage",
         description="Start or explicitly resolve a non-executing Challenge Review.",
         variants=(
@@ -809,10 +1031,10 @@ def _register_portfolio_challenge_workflows(
                 _all_fields(challenge.challenge_review_resolve),
             ),
         ),
-        annotations=APPEND,
+        policy=APPEND,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="research_workflow_run",
         description=(
             "Run one closed research, market, portfolio, peer-comparison, or manual "
@@ -878,18 +1100,18 @@ def _register_portfolio_challenge_workflows(
                 _all_fields(workflows.historical_validation_import),
             ),
         ),
-        annotations=APPEND_OPEN_WORLD,
+        policy=APPEND_OPEN_WORLD,
     )
 
 
 def _register_watchlist_risk_monitoring(
-    server: FastMCP,
+    registry: CapabilityRegistrar,
     watchlist: SimpleNamespace,
     risk: SimpleNamespace,
     monitoring: SimpleNamespace,
 ) -> None:
     _register_dispatch_tool(
-        server,
+        registry,
         name="watchlist_get",
         description=(
             "Read durable Watchlist groups or items without contacting the upstream provider."
@@ -898,7 +1120,7 @@ def _register_watchlist_risk_monitoring(
             _spec(
                 "groups",
                 watchlist.watchlist_get,
-                ("group_name", "include_inactive", "limit", "offset"),
+                ("include_inactive",),
                 adapter_operation="groups",
                 overrides={"refresh": False},
             ),
@@ -910,10 +1132,10 @@ def _register_watchlist_risk_monitoring(
                 overrides={"refresh": False},
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="watchlist_manage",
         description=(
             "Add or remove one active-source Watchlist membership with confirmation and "
@@ -927,10 +1149,10 @@ def _register_watchlist_risk_monitoring(
                 _all_fields(watchlist.watchlist_remove),
             ),
         ),
-        annotations=MANAGE_OPEN_WORLD,
+        policy=MANAGE_OPEN_WORLD,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="portfolio_risk_get",
         description=(
             "Read the current Risk Policy or run a deterministic non-executing Risk v2 check."
@@ -944,11 +1166,11 @@ def _register_watchlist_risk_monitoring(
                 overrides={"refresh_accounts": False},
             ),
         ),
-        annotations=READ_PROVIDER,
+        policy=READ_PROVIDER,
     )
-    _copy_handler(server, adapter=risk.risk_policy_update, annotations=APPEND)
+    _copy_handler(registry, adapter=risk.risk_policy_update, policy=APPEND)
     _register_dispatch_tool(
-        server,
+        registry,
         name="monitor_read",
         description=(
             "Read the unified Monitor dashboard, definitions/current rule states, "
@@ -976,10 +1198,10 @@ def _register_watchlist_risk_monitoring(
                 _all_fields(monitoring.monitor_runs),
             ),
         ),
-        annotations=READ_DURABLE,
+        policy=READ_DURABLE,
     )
     _register_dispatch_tool(
-        server,
+        registry,
         name="monitor_manage",
         description=(
             "Create/update a versioned Monitor or resolve one event; never mutate Thesis "
@@ -1002,6 +1224,6 @@ def _register_watchlist_risk_monitoring(
                 _all_fields(monitoring.monitor_event_resolve),
             ),
         ),
-        annotations=MANAGE,
+        policy=MANAGE,
     )
-    _copy_handler(server, adapter=monitoring.monitor_evaluate, annotations=EVALUATE)
+    _copy_handler(registry, adapter=monitoring.monitor_evaluate, policy=EVALUATE)

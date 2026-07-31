@@ -26,7 +26,7 @@ class InstrumentRow(Base):
             name="uq_instruments_asset_type_market_symbol",
         ),
         CheckConstraint(
-            "market IN ('A_SHARE','US','CME','DCE','OTC','LME')",
+            "market IN ('A_SHARE','US','KR','CME','DCE','OTC','LME')",
             name="ck_instruments_market",
         ),
         CheckConstraint(
@@ -82,7 +82,7 @@ class InstrumentAliasRow(Base):
             name="ck_instrument_aliases_is_primary",
         ),
         CheckConstraint(
-            "market IN ('A_SHARE','US','CME','DCE','OTC','LME')",
+            "market IN ('A_SHARE','US','KR','CME','DCE','OTC','LME')",
             name="ck_instrument_aliases_market",
         ),
         Index("ix_instrument_aliases_value", "market", "alias_value"),

@@ -2,6 +2,7 @@
 
 from application.services.criticality_policy import CriticalityPolicy
 from application.services.health_service import HealthService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.instrument_master_service import (
     InstrumentMasterService,
     InstrumentResolveOutcome,
@@ -17,6 +18,7 @@ from application.services.watchlist_service import WatchlistService
 __all__ = [
     "CriticalityPolicy",
     "HealthService",
+    "InstrumentAccessService",
     "InstrumentMasterService",
     "InstrumentResolveOutcome",
     "InstrumentResolveService",

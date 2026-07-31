@@ -24,6 +24,7 @@ from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 from domain.common.values import parse_instrument_id
 from domain.monitoring.enums import (
+    MonitorCadence,
     MonitorEventType,
     MonitorNotificationChannel,
     MonitorRuleStateValue,
@@ -185,6 +186,7 @@ class MonitorEvaluationService:
                         monitor,
                         tuple(monitor_events),
                         tuple(monitor_observations),
+                        self._ids,
                     )
                 )
 
@@ -192,9 +194,7 @@ class MonitorEvaluationService:
         error_codes = tuple(dict.fromkeys(errors))
         if not monitors and request.monitor_ids:
             error_codes = tuple(dict.fromkeys((*error_codes, "NO_ACTIVE_MONITORS")))
-        if error_codes or any(
-            item.state is MonitorRuleStateValue.NOT_EVALUATED for item in states
-        ):
+        if error_codes or any(item.state is MonitorRuleStateValue.NOT_EVALUATED for item in states):
             status = MonitorRunStatus.PARTIAL if monitors else MonitorRunStatus.FAILED
         else:
             # Warnings describe fact quality/provenance, not run completeness.
@@ -219,6 +219,16 @@ class MonitorEvaluationService:
             observations=tuple(observations),
             execution_effect=False,
         )
+        if (
+            run.cadence
+            in {
+                MonitorCadence.A_SHARE_POST_MARKET,
+                MonitorCadence.US_POST_MARKET,
+                MonitorCadence.KR_POST_MARKET,
+            }
+            and monitors
+        ):
+            notifications.append(_post_market_summary_message(run, monitors, self._ids))
         return self._repository.record_evaluation(
             run,
             tuple(states),
@@ -294,7 +304,7 @@ class MonitorEvaluationService:
                 (),
                 ("DCE_QUOTE_BARS_UNAVAILABLE", "MONITOR_PRICE_UNAVAILABLE"),
             )
-        if market in {Market.US, Market.CME, Market.OTC}:
+        if market in {Market.US, Market.KR, Market.CME, Market.OTC}:
             market_envelope = await self._market.get_market_snapshot(
                 MarketGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
             )
@@ -304,9 +314,7 @@ class MonitorEvaluationService:
                     return _Fact(
                         value=value,
                         as_of=fact_as_of,
-                        warning_codes=tuple(
-                            item.code for item in market_envelope.warnings
-                        ),
+                        warning_codes=tuple(item.code for item in market_envelope.warnings),
                         error_codes=(),
                         closed_session_last_known=(
                             "CLOSED_SESSION_LAST_KNOWN"
@@ -356,9 +364,7 @@ class MonitorEvaluationService:
                 updated_at=as_of,
             )
         age = (as_of - fact.as_of).total_seconds()
-        if age < 0 or (
-            age > rule.max_fact_age_seconds and not fact.closed_session_last_known
-        ):
+        if age < 0 or (age > rule.max_fact_age_seconds and not fact.closed_session_last_known):
             return MonitorRuleState(
                 monitor_id=monitor.monitor_id,
                 monitor_version=monitor.version,
@@ -384,18 +390,12 @@ class MonitorEvaluationService:
                 triggered = fact.value >= 1
             else:
                 assert rule.numeric_threshold is not None
-                triggered = _compare(
-                    fact.value, rule.numeric_threshold, rule.comparator
-                )
+                triggered = _compare(fact.value, rule.numeric_threshold, rule.comparator)
         return MonitorRuleState(
             monitor_id=monitor.monitor_id,
             monitor_version=monitor.version,
             rule_code=rule.rule_code,
-            state=(
-                MonitorRuleStateValue.TRIGGERED
-                if triggered
-                else MonitorRuleStateValue.QUIET
-            ),
+            state=(MonitorRuleStateValue.TRIGGERED if triggered else MonitorRuleStateValue.QUIET),
             observed_value=fact.value,
             fact_as_of=fact.as_of,
             message="Rule condition triggered." if triggered else "Rule condition is quiet.",
@@ -471,9 +471,7 @@ def _extract_price_fact(data: Any) -> tuple[Decimal | None, datetime | None]:
     return None, None
 
 
-def _compare(
-    observed: Decimal, threshold: Decimal, comparator: TradePlanComparator
-) -> bool:
+def _compare(observed: Decimal, threshold: Decimal, comparator: TradePlanComparator) -> bool:
     if comparator is TradePlanComparator.GT:
         return observed > threshold
     if comparator is TradePlanComparator.GTE:
@@ -501,20 +499,14 @@ def _run_observation(
         threshold = Decimal(_RISK_RANK[rule.risk_status_threshold])
     if threshold is None:
         threshold = rule.numeric_threshold
-    distance = (
-        fact.value - threshold
-        if fact.value is not None and threshold is not None
-        else None
-    )
+    distance = fact.value - threshold if fact.value is not None and threshold is not None else None
     distance_percent = (
         distance / threshold * Decimal("100")
         if distance is not None and threshold not in {None, Decimal(0)}
         else None
     )
     fact_age_seconds = (
-        max(0, int((as_of - fact.as_of).total_seconds()))
-        if fact.as_of is not None
-        else None
+        max(0, int((as_of - fact.as_of).total_seconds())) if fact.as_of is not None else None
     )
     return MonitorRunObservation(
         run_id=run_id,
@@ -540,6 +532,7 @@ def _notification_messages(
     monitor: MonitorDefinition,
     events: tuple[MonitorEvent, ...],
     observations: tuple[MonitorRunObservation, ...],
+    id_generator: IdGenerator,
 ) -> tuple[MonitorNotificationMessage, ...]:
     event_types = {event.event_type for event in events}
     emoji = (
@@ -570,9 +563,7 @@ def _notification_messages(
         None,
     )
     current_price = (
-        str(price_observation.observed_value)
-        if price_observation is not None
-        else "不可用"
+        str(price_observation.observed_value) if price_observation is not None else "不可用"
     )
     price_time = (
         price_observation.fact_as_of.isoformat()
@@ -591,14 +582,10 @@ def _notification_messages(
     for observation in observations:
         rule = rules_by_code[observation.rule_code]
         observed = (
-            str(observation.observed_value)
-            if observation.observed_value is not None
-            else "不可用"
+            str(observation.observed_value) if observation.observed_value is not None else "不可用"
         )
         distance = (
-            str(observation.distance_value)
-            if observation.distance_value is not None
-            else "不可用"
+            str(observation.distance_value) if observation.distance_value is not None else "不可用"
         )
         table_rows.append(
             (
@@ -612,28 +599,144 @@ def _notification_messages(
         )
     lines.extend(("RULES", _format_rule_table(tuple(table_rows))))
     warning_codes = tuple(
-        dict.fromkeys(
-            code for observation in observations for code in observation.warning_codes
-        )
+        dict.fromkeys(code for observation in observations for code in observation.warning_codes)
     )
     if warning_codes:
         lines.append(f"数据提示：{', '.join(warning_codes)}")
     if instrument_id is not None and instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
-    event_label = (
-        events[0].event_type.value if len(events) == 1 else f"{len(events)} 项状态变化"
-    )
+    event_label = events[0].event_type.value if len(events) == 1 else f"{len(events)} 项状态变化"
     title = f"{emoji} {symbol} · {event_label}"
     body = "\n".join(lines)
     return tuple(
         MonitorNotificationMessage(
+            notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
             source_event_id=event.event_id,
+            source_run_id=None,
             channel=MonitorNotificationChannel.TELEGRAM,
             title=title,
             body=body,
             created_at=event.created_at,
         )
         for event in events
+    )
+
+
+def _post_market_summary_message(
+    run: MonitorRun,
+    monitors: tuple[MonitorDefinition, ...],
+    id_generator: IdGenerator,
+) -> MonitorNotificationMessage:
+    if run.cadence is MonitorCadence.A_SHARE_POST_MARKET:
+        market_label = "A股"
+    elif run.cadence is MonitorCadence.US_POST_MARKET:
+        market_label = "美股"
+    elif run.cadence is MonitorCadence.KR_POST_MARKET:
+        market_label = "韩股"
+    else:
+        market_label = "市场"
+    lines = [
+        "POST_MARKET_SUMMARY",
+        f"运行时间：{run.completed_at.isoformat()}",
+        f"本轮变化：{run.events_created}",
+    ]
+    observations_by_monitor = {
+        monitor.monitor_id: tuple(
+            item for item in run.observations if item.monitor_id == monitor.monitor_id
+        )
+        for monitor in monitors
+    }
+    for monitor in monitors:
+        observations = observations_by_monitor[monitor.monitor_id]
+        instrument_id, symbol, price, price_time = _monitor_price_context(
+            monitor,
+            observations,
+        )
+        lines.extend(
+            (
+                "MONITOR",
+                monitor.name,
+                f"标的：{symbol}",
+                f"当前价格：{price}",
+                f"价格时间：{price_time}",
+                "RULES",
+                _format_rule_table(_notification_rule_rows(monitor, observations)),
+                "END_MONITOR",
+            )
+        )
+        if instrument_id is not None and instrument_id.startswith("future:"):
+            lines.append("期货价格并非现货；连续合约存在换月风险。")
+    if run.warning_codes:
+        lines.append(f"数据提示：{', '.join(run.warning_codes)}")
+    if run.error_codes:
+        lines.append(f"运行错误：{', '.join(run.error_codes)}")
+    return MonitorNotificationMessage(
+        notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
+        source_event_id=None,
+        source_run_id=run.run_id,
+        channel=MonitorNotificationChannel.TELEGRAM,
+        title=(f"📊 {market_label}盘后 Monitor · {len(monitors)} 标的 · {run.events_created} 变化"),
+        body="\n".join(lines),
+        created_at=run.completed_at,
+    )
+
+
+def _monitor_price_context(
+    monitor: MonitorDefinition,
+    observations: tuple[MonitorRunObservation, ...],
+) -> tuple[str | None, str, str, str]:
+    instrument_id = monitor.primary_instrument_id or next(
+        (item.instrument_id for item in observations if item.instrument_id is not None),
+        None,
+    )
+    symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id else monitor.name
+    rules_by_code = {item.rule_code: item for item in monitor.rules}
+    price_observation = next(
+        (
+            item
+            for item in observations
+            if item.instrument_id == instrument_id
+            and item.observed_value is not None
+            and (
+                rules_by_code[item.rule_code].rule_type
+                in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
+                or rules_by_code[item.rule_code].fact_type is TradePlanFactType.PRICE
+            )
+        ),
+        None,
+    )
+    price = str(price_observation.observed_value) if price_observation is not None else "不可用"
+    price_time = (
+        price_observation.fact_as_of.isoformat()
+        if price_observation is not None and price_observation.fact_as_of is not None
+        else "不可用"
+    )
+    return instrument_id, symbol, price, price_time
+
+
+def _notification_rule_rows(
+    monitor: MonitorDefinition,
+    observations: tuple[MonitorRunObservation, ...],
+) -> tuple[tuple[str, ...], ...]:
+    rules_by_code = {item.rule_code: item for item in monitor.rules}
+    return tuple(
+        (
+            observation.rule_code,
+            _rule_condition(rules_by_code[observation.rule_code]),
+            (
+                str(observation.observed_value)
+                if observation.observed_value is not None
+                else "不可用"
+            ),
+            (
+                str(observation.distance_value)
+                if observation.distance_value is not None
+                else "不可用"
+            ),
+            observation.state.value,
+            observation.severity.value,
+        )
+        for observation in observations
     )
 
 
@@ -664,9 +767,7 @@ def _format_rule_table(rows: tuple[tuple[str, ...], ...]) -> str:
     )
 
     def render(row: tuple[str, ...]) -> str:
-        return "  ".join(
-            value.ljust(widths[index]) for index, value in enumerate(row)
-        ).rstrip()
+        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
 
     separator = "  ".join("-" * width for width in widths)
     return "\n".join((render(headers), separator, *(render(row) for row in rows)))

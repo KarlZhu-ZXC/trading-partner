@@ -147,10 +147,10 @@ def test_context_is_contrary_first_and_budget_trims_journal_not_evidence() -> No
     assert result.data.budget.truncated is True
     assert "journals" in result.data.budget.truncated_collections
     assert result.data.live_fact_tools_required == (
-        "market_get_snapshot",
-        "a_share_get_facts",
-        "us_get_fundamentals",
-        "us_get_company_research",
+        "market_data_get/quote",
+        "a_share_get_facts/snapshot",
+        "us_company_get/fundamentals_snapshot",
+        "us_company_get/company_updates",
     )
 
 

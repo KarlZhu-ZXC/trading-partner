@@ -32,10 +32,12 @@ class MonitorScheduleService:
         *,
         us_calendar: MarketSessionCalendar | None = None,
         a_share_calendar: MarketSessionCalendar | None = None,
+        kr_calendar: MarketSessionCalendar | None = None,
         post_market_delay_minutes: int = 10,
     ) -> None:
         self._us_calendar = us_calendar
         self._a_share_calendar = a_share_calendar
+        self._kr_calendar = kr_calendar
         self._post_market_delay = timedelta(minutes=post_market_delay_minutes)
 
     def status(
@@ -51,6 +53,7 @@ class MonitorScheduleService:
         calendar = {
             MonitorCadence.US_POST_MARKET: self._us_calendar,
             MonitorCadence.A_SHARE_POST_MARKET: self._a_share_calendar,
+            MonitorCadence.KR_POST_MARKET: self._kr_calendar,
         }.get(monitor.cadence)
         if calendar is None:
             return MonitorSchedule(None, False, "MARKET_SCHEDULED")

@@ -124,8 +124,8 @@ class WatchlistHubService:
     async def sync_all(self) -> ToolEnvelope[WatchlistSyncResultDTO]:
         """Refresh every upstream group and membership into durable storage.
 
-        This operational entry point is intentionally not an MCP tool. It exists
-        for explicit CLI/scheduler jobs and never performs an upstream mutation.
+        This is shared by the explicit MCP sync operation and CLI/scheduler jobs;
+        it never performs an upstream mutation.
         """
 
         request_id = self._ids.new(EntityIdPrefix.REQ)
@@ -179,11 +179,10 @@ class WatchlistHubService:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, exc)
 
-    async def get_items(
-        self, request: WatchlistGetItemsInput
-    ) -> ToolEnvelope[WatchlistItemsDTO]:
+    async def get_items(self, request: WatchlistGetItemsInput) -> ToolEnvelope[WatchlistItemsDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
-        group_name = request.group_name or self._default_group
+        group_was_defaulted = request.group_name is None
+        group_name = request.group_name or self._default_read_group_name()
         refreshed = False
         warning: WarningInfo | None = None
         try:
@@ -199,7 +198,7 @@ class WatchlistHubService:
                     )
                     refreshed = True
                 except Exception as exc:  # noqa: BLE001
-                    durable_group, _ = self._read_group_items(
+                    durable_group, _, _ = self._read_group_items(
                         group_name,
                         include_inactive=request.include_inactive,
                         limit=request.limit,
@@ -208,7 +207,7 @@ class WatchlistHubService:
                     if durable_group is None:
                         return self._failure(request_id, exc)
                     warning = self._stale_warning(exc, scope="memberships")
-            group, memberships = self._read_group_items(
+            group, memberships, total_count = self._read_group_items(
                 group_name,
                 include_inactive=request.include_inactive,
                 limit=request.limit,
@@ -233,6 +232,9 @@ class WatchlistHubService:
                     group=WatchlistGroupDTO.from_domain(group),
                     items=items,
                     total_returned=len(items),
+                    total_count=total_count,
+                    has_more=request.offset + len(items) < total_count,
+                    group_was_defaulted=group_was_defaulted,
                 ),
                 degraded=warning is not None,
                 warnings=() if warning is None else (warning,),
@@ -240,9 +242,7 @@ class WatchlistHubService:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, exc)
 
-    async def add(
-        self, request: WatchlistAddInput
-    ) -> ToolEnvelope[WatchlistMutationResultDTO]:
+    async def add(self, request: WatchlistAddInput) -> ToolEnvelope[WatchlistMutationResultDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         group_name = request.group_name or self._default_group
         provider_code, display_name = self._source_identity(
@@ -675,17 +675,32 @@ class WatchlistHubService:
         include_inactive: bool,
         limit: int,
         offset: int,
-    ) -> tuple[WatchlistGroup | None, tuple[WatchlistMembership, ...]]:
+    ) -> tuple[WatchlistGroup | None, tuple[WatchlistMembership, ...], int]:
         with self._uow_factory() as uow:
             group = uow.groups.get_by_source_key(self.source, group_name)
             if group is None:
-                return None, ()
-            return group, uow.memberships.list(
-                group_id=group.group_id,
-                include_inactive=include_inactive,
-                limit=limit,
-                offset=offset,
+                return None, (), 0
+            return (
+                group,
+                uow.memberships.list(
+                    group_id=group.group_id,
+                    include_inactive=include_inactive,
+                    limit=limit,
+                    offset=offset,
+                ),
+                uow.memberships.count(
+                    group_id=group.group_id,
+                    include_inactive=include_inactive,
+                ),
             )
+
+    def _default_read_group_name(self) -> str:
+        """Use Moomoo's durable aggregate group for omitted read scope."""
+        if self.source is not WatchlistSource.MOOMOO:
+            return self._default_group
+        with self._uow_factory() as uow:
+            aggregate = uow.groups.get_by_source_key(self.source, "All")
+        return "All" if aggregate is not None else self._default_group
 
     def _membership_from_source(
         self,
@@ -756,15 +771,19 @@ class WatchlistHubService:
             )
         return tuple(result)
 
-    def _source_identity(
-        self, instrument_id: str, display_name: str | None
-    ) -> tuple[str, str]:
+    def _source_identity(self, instrument_id: str, display_name: str | None) -> tuple[str, str]:
         _, market, symbol = parse_instrument_id(instrument_id)
-        if market not in {Market.A_SHARE, Market.US}:
-            raise DataContractError("watchlist supports A_SHARE and US instruments only")
+        if market not in {Market.A_SHARE, Market.US, Market.KR}:
+            raise DataContractError("watchlist supports A_SHARE, US, and KR instruments only")
         name = display_name or symbol
         if self.source is WatchlistSource.MANUAL_CSV:
             return instrument_id, name
+        if market is Market.KR:
+            raise DataContractError(
+                "Moomoo watchlist mutation does not support KR instruments; "
+                "use WATCHLIST_SOURCE=MANUAL_CSV for Korean watchlists",
+                details={"instrument_id": instrument_id},
+            )
         if market is Market.US:
             return f"US.{symbol}", name
         if symbol.endswith(".SH"):
