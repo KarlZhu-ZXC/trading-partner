@@ -144,9 +144,9 @@ class ManualCsvWatchlistAdapter(WatchlistSourceProvider):
             instrument_id = _require_text(row["instrument_id"], field="instrument_id")
             display_name = _require_text(row["display_name"], field="display_name")
             _, market, _ = parse_instrument_id(instrument_id)
-            if market not in {Market.A_SHARE, Market.US}:
+            if market not in {Market.A_SHARE, Market.US, Market.KR}:
                 raise DataContractError(
-                    "manual watchlist supports A_SHARE and US instruments only",
+                    "manual watchlist supports A_SHARE, US, and KR instruments only",
                     details={"instrument_id": instrument_id},
                 )
             key = (group_name, instrument_id)
@@ -165,9 +165,9 @@ class ManualCsvWatchlistAdapter(WatchlistSourceProvider):
     def _validate_instrument_id(value: str) -> str:
         value = _require_text(value, field="instrument_id")
         _, market, _ = parse_instrument_id(value)
-        if market not in {Market.A_SHARE, Market.US}:
+        if market not in {Market.A_SHARE, Market.US, Market.KR}:
             raise DataContractError(
-                "manual watchlist supports A_SHARE and US instruments only",
+                "manual watchlist supports A_SHARE, US, and KR instruments only",
                 details={"instrument_id": value},
             )
         return value

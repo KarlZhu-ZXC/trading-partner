@@ -12,8 +12,10 @@ import pytest
 from interfaces.mcp.server import (
     COMPACT_28_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
+    create_capability_registry,
     create_mcp_server,
 )
+from interfaces.mcp.tools.compact import ConfirmationPolicy
 
 
 class _Envelope:
@@ -70,6 +72,46 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_registry_and_mcp_transport_publish_identical_contracts() -> None:
+    container = _container()
+    registry_tools = {
+        tool.name: tool.model_dump(mode="json")
+        for tool in create_capability_registry(container).list_tools()
+    }
+    mcp_tools = {
+        tool.name: tool.model_dump(mode="json")
+        for tool in await create_mcp_server(container).list_tools()
+    }
+
+    assert registry_tools == mcp_tools
+
+
+def test_registry_uses_explicit_confirmation_policy_not_read_only_hint() -> None:
+    policies = create_capability_registry(_container()).policies
+
+    assert policies["instrument_resolve"].annotations.readOnlyHint is False
+    assert policies["instrument_resolve"].confirmation is ConfirmationPolicy.NONE
+    assert policies["external_state_sync"].confirmation is ConfirmationPolicy.MATCH_CAPABILITY_NAME
+
+
+@pytest.mark.asyncio
+async def test_registry_and_mcp_transport_invoke_the_same_health_handler() -> None:
+    container = _container()
+    container.services.health.check.return_value = _Envelope()
+
+    registry_result = await create_capability_registry(container).invoke(
+        "system_health",
+        {},
+    )
+    mcp_result = await create_mcp_server(container)._tool_manager.call_tool(
+        "system_health",
+        {},
+    )
+
+    assert registry_result == mcp_result
+
+
+@pytest.mark.asyncio
 async def test_technical_snapshot_description_discloses_cross_market_support() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
 
@@ -85,7 +127,7 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
     expected_variants = {
         "investment_case_read": 2,
-        "market_data_get": 6,
+        "market_data_get": 7,
         "external_state_sync": 3,
         "research_workflow_run": 8,
         "monitor_read": 4,
@@ -118,9 +160,10 @@ async def test_compact_wire_schema_and_each_tool_stay_bounded() -> None:
     compact = await create_mcp_server(_container()).list_tools()
 
     assert _wire_size(compact) <= 64 * 1024
-    assert sum(
-        len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact
-    ) <= 36 * 1024
+    assert (
+        sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact)
+        <= 36 * 1024
+    )
     for tool in compact:
         assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 8 * 1024, tool.name
 
@@ -165,7 +208,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
     assert result["data"] == {
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v4",
+        "surface_schema_version": "compact-v7",
     }
 
 
@@ -177,7 +220,7 @@ async def test_durable_account_and_watchlist_reads_cannot_refresh_upstreams() ->
     container.services.watchlist.get_items = AsyncMock(return_value=_Envelope())
     manager = create_mcp_server(container)._tool_manager
 
-    account_result = await manager.call_tool("account_get", {})
+    account_result = await manager.call_tool("account_get", {"request": {"operation": "positions"}})
     watchlist_result = await manager.call_tool(
         "watchlist_get",
         {"request": {"operation": "items"}},
@@ -191,10 +234,26 @@ async def test_durable_account_and_watchlist_reads_cannot_refresh_upstreams() ->
 
 
 @pytest.mark.asyncio
+async def test_account_transactions_read_is_durable_only() -> None:
+    container = _container()
+    container.services.account_transactions.list_durable_transactions.return_value = _Envelope()
+    container.services.account_transactions.get_transactions = AsyncMock(return_value=_Envelope())
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "account_get",
+        {"request": {"operation": "transactions", "limit": 20}},
+    )
+
+    assert result["ok"] is True
+    container.services.account_transactions.list_durable_transactions.assert_called_once()
+    container.services.account_transactions.get_transactions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_external_state_sync_refreshes_accounts_and_watchlist_only_when_selected() -> None:
     container = _container()
     container.services.portfolio.get_account_snapshot = AsyncMock(return_value=_Envelope())
-    container.services.watchlist.get_items = AsyncMock(return_value=_Envelope())
+    container.services.watchlist.sync_all = AsyncMock(return_value=_Envelope())
     manager = create_mcp_server(container)._tool_manager
 
     accounts_result = await manager.call_tool(
@@ -203,11 +262,10 @@ async def test_external_state_sync_refreshes_accounts_and_watchlist_only_when_se
     )
     watchlist_result = await manager.call_tool(
         "external_state_sync",
-        {"request": {"operation": "watchlist", "view": "items"}},
+        {"request": {"operation": "watchlist"}},
     )
 
     assert accounts_result["ok"] is True
     assert watchlist_result["ok"] is True
     container.services.portfolio.get_account_snapshot.assert_awaited_once()
-    request = container.services.watchlist.get_items.await_args.args[0]
-    assert request.refresh is True
+    container.services.watchlist.sync_all.assert_awaited_once_with()

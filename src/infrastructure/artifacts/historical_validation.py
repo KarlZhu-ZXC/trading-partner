@@ -106,6 +106,7 @@ class FileHistoricalValidationArtifactRepository:
         existing = self._read_key(key_path)
         if existing is not None:
             self._assert_same_request(existing, request_sha256)
+            self._refresh_derived_summary_if_upgraded(directory, summary)
             return self._imported_record(validation_id, duplicate=True)
 
         result_file = directory / "result.json"
@@ -123,9 +124,7 @@ class FileHistoricalValidationArtifactRepository:
                     "Prepared validation result metadata differs from the immutable import"
                 )
         else:
-            descriptor, temporary = tempfile.mkstemp(
-                prefix=".result.json.", dir=directory
-            )
+            descriptor, temporary = tempfile.mkstemp(prefix=".result.json.", dir=directory)
             os.close(descriptor)
             try:
                 shutil.copyfile(source_path, temporary)
@@ -147,6 +146,24 @@ class FileHistoricalValidationArtifactRepository:
             ),
         )
         return self._imported_record(validation_id, duplicate=duplicate_result)
+
+    @staticmethod
+    def _refresh_derived_summary_if_upgraded(
+        directory: Path, summary: Mapping[str, object]
+    ) -> None:
+        """Refresh a reproducible summary only when its schema version advances."""
+        summary_file = directory / "result-summary.json"
+        if not summary_file.exists():
+            _atomic_write(summary_file, _canonical_json(summary))
+            return
+        try:
+            existing = json.loads(summary_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise PersistenceError("Prepared validation result summary is corrupted") from exc
+        existing_version = existing.get("schema_version") if isinstance(existing, dict) else None
+        new_version = summary.get("schema_version")
+        if existing_version != new_version:
+            _atomic_write(summary_file, _canonical_json(summary))
 
     def _prepared_record(
         self, validation_id: str, *, duplicate: bool

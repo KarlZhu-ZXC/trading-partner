@@ -55,10 +55,10 @@ def _aware(value: datetime | None) -> datetime | None:
     return value
 
 
-def _validate_us_equity_instrument_id(value: str) -> str:
+def _validate_us_sentiment_instrument_id(value: str) -> str:
     asset_type, market, _ = parse_instrument_id(value)
-    if asset_type is not AssetType.EQUITY or market is not Market.US:
-        raise ValueError("instrument_id must be a US equity")
+    if asset_type not in {AssetType.EQUITY, AssetType.ETF} or market is not Market.US:
+        raise ValueError("instrument_id must be a US equity or ETF")
     return value
 
 
@@ -73,7 +73,7 @@ class MarketGetLiveNewsInput(_DTO):
     @field_validator("instrument_id")
     @classmethod
     def instrument(cls, value: str | None) -> str | None:
-        return None if value is None else _validate_us_equity_instrument_id(value)
+        return None if value is None else _validate_us_sentiment_instrument_id(value)
 
     @field_validator("as_of")
     @classmethod
@@ -120,7 +120,7 @@ class USGetSentimentSnapshotInput(_DTO):
     @field_validator("instrument_id")
     @classmethod
     def instrument(cls, value: str) -> str:
-        return _validate_us_equity_instrument_id(value)
+        return _validate_us_sentiment_instrument_id(value)
 
     @field_validator("as_of")
     @classmethod

@@ -1,8 +1,119 @@
 # Unreleased
 
+- Unified the Python distribution, health response, and Console API on product
+  version `0.3.0`; Hatch now reads the version from `application.__version__`
+  instead of maintaining a second value in `pyproject.toml`.
+- Extended the Console Monitor builder to resolve Korea Exchange instruments and
+  select `KR_POST_MARKET`; changing between A-share, US, and KR markets now keeps
+  an already selected post-market cadence aligned with the market.
+- Removed unused Sites/D1/R2 packaging scaffolding and starter icons from the
+  loopback-only Console; local vinext builds retain only the runtime worker they use.
+- Published `compact-v7` without adding MCP tools. Korea Exchange is now a formal
+  `KR` market with local-first Yahoo discovery, canonical bare-code identities,
+  quote/batch quote, minute-to-month bars, daily/weekly technical analysis, Manual
+  CSV Watchlist support, price monitoring, and XKRX-aware `KR_POST_MARKET` dispatch.
+  Yahoo `.KS`/`.KQ`/caret symbols remain provider aliases; Korean fundamentals,
+  DART filings, sentiment, breadth, account sync, and Moomoo Watchlist writes are
+  explicitly outside this slice.
+- Fixed batch quote envelopes when every item succeeds but one or more item results
+  are degraded: the batch now emits `BATCH_QUOTE_ITEMS_DEGRADED` instead of violating
+  the envelope's degraded-with-warning invariant.
+- Published `compact-v6` without increasing the 28-tool inventory. All supported
+  instrument-scoped capabilities now share one local-first discovery gateway;
+  US ETF workflows use ETF-appropriate news/sentiment rather than equity company
+  facts; `market_data_get/quotes` adds bounded batch quotes; and `account_get`
+  exposes durable-only positions and transactions.
+- Corrected Watchlist and Monitor read semantics: omitted Moomoo item scope selects
+  the durable `All` group, explicit Watchlist sync is exact/full, pagination reports
+  `total_count`/`has_more`, Monitor-scoped runs exclude sibling observations, and
+  Dashboard embeds a compact latest-run summary instead of repeating a full batch.
+- Public workflow receipts and research-context hints now name only active compact
+  tools plus their operations. Instrument resolve market/asset enum inputs are
+  whitespace-tolerant and case-insensitive, while system health distinguishes live
+  probes from configuration-only checks.
+- Made `market_data_get` quote/bars local-first rather than local-only for typed
+  US equity, ETF, index, and futures IDs. A Master miss now discovers and caches
+  one validated candidate before fetching market data, while directory outages
+  retain their typed Provider error instead of becoming `INVALID_INSTRUMENT`.
+- Made every durable account-position column independently sortable in the
+  Console and added an adjacent snapshot-price column. The column displays only
+  persisted `market_price` paired with `market_price_at`; Schwab/Moomoo snapshots
+  that provide market value without an auditable price timestamp explicitly show
+  the price as unavailable instead of deriving one from value and quantity.
+- Published `compact-v5` with a required human-readable description on every new
+  or updated Monitor rule while preserving legacy Monitor versions whose stored
+  JSON predates the field. The Console now displays that meaning beside the
+  machine rule code, condition, severity, observation, and state, and distinguishes
+  the Monitor's original creation time from its latest run time. Aggregate public
+  input schema size is 35,958 bytes and remains below the 36 KiB acceptance bound.
+- Unified MCP and Console HTTP capability execution behind one compact-28 Registry.
+  Both transports now share handlers, Pydantic validation, minimized schemas, and
+  explicit effect/confirmation policies; the Console no longer reaches into
+  FastMCP's private tool manager, and cache-capable instrument resolution is no
+  longer misclassified as a user-confirmed write.
+- Added persistent light/dark console themes with light as the first-run default
+  and an accessible selector at the lower-left of the navigation rail.
+- Fixed the Monitor event stream to render the actual event type, severity,
+  observed value, threshold, message, and latest resolution. The console now
+  offers explicit, noted, idempotent acknowledge/resolve actions without
+  weakening `monitor_manage` confirmation.
+- Added instrument-aware recent Monitor Run labels on both overview and Monitor
+  pages. Historical runs prefer their immutable observation instrument and only
+  reuse the current Monitor name when the persisted versions match.
+- Linked each overview Monitor title to its exact definition card on the Monitor
+  page, including async-load scrolling and a visible target highlight.
+- Replaced the Console's Watchlist Groups panel with a full durable-instrument
+  table showing symbol, name, asset type, source, sync time, and research support.
+  For Moomoo, the page BFF now uses durable group metadata to select the system
+  `All` group instead of silently counting only the configured default `Favorites`
+  group; other sources retain the documented default-group fallback.
+- Improved the compact-28 workbench with schema-derived required-field templates,
+  inline PNG rendering for `technical_render_chart`, and copy-result feedback.
+  Portfolio cards now format values and summarize position market value/P&L per
+  native currency without claiming NAV or performing implicit FX conversion.
+- Increased critical console text and control sizes, added consistent keyboard
+  focus rings and mobile-accessible navigation labels, and repaired the narrow
+  Monitor card hierarchy.
+- Reworked Telegram Monitor alerts for mobile screens: the symbol and observed
+  price now lead the message, while complete rules render as vertical cards rather
+  than a fixed-width pseudo-table.
+- Added durable run-linked A-share/US post-market Telegram summaries. Each evaluated
+  market-close group now sends one consolidated heartbeat even when no rule changes;
+  interval monitoring remains transition-only.
+
+- Added a loopback-only, LLM-free operational console with five views over system
+  health, the exact compact-28 capability catalog, Monitor definitions/runs/events,
+  durable accounts/watchlist, sync/OAuth/notifications, and storage. The console
+  can run all 28 public MCP tools plus gated Monitor/sync/notification/backup/cache
+  operations without weakening schema, actor, confirmation, or idempotency rules.
+- Added a dedicated Monitor builder to the local console: resolve A-share/US
+  instruments, configure cadence and expiry, compose price/risk/all nine v2 fact
+  categories, and create or version Monitor definitions without hand-writing MCP
+  JSON. Client validation mirrors the domain's instrument, comparator, threshold,
+  freshness, and portfolio-risk constraints.
+- Added explicit operational maintenance: owner-only online SQLite backups,
+  inventory/retention status, and dry-run-by-default pruning limited to expired
+  Provider and Reddit caches. Durable research, transactions, Monitor history, and
+  validation artifacts remain keep-forever.
+- Planned real performance attribution as coverage ledger → actual P/L → returns →
+  contribution → decision adherence. QMT, A-share account sync, and FX aggregation
+  are explicitly deferred for at least two months; initial attribution is US/per-
+  currency only and must disclose incomplete broker history.
+- Closed the current Phase 3 implementation scope around cross-asset facts,
+  company/industry facts, the QuantConnect Free manual bridge, and plan controls.
+  Historical storage, local/automated backtests, experiment orchestration, and
+  market-rule simulation are future options rather than Phase 3 exit gates; one
+  user-operated bridge smoke remains an operational closeout item.
+- Corrected the Phase 3D boundary: Risk v2 checks duplicate instruments across
+  accounts but does not yet consume broker open orders or claim duplicate-order
+  prevention. Phase 4 planning now requires a trusted approval channel and staged
+  SIMULATE-to-REAL rollout before any execution work.
 - Added the Phase 3C-0 QuantConnect Free manual bridge without increasing the
   28-tool MCP inventory: prepare hashed LEAN packages and import user-downloaded
   result JSON with explicit remote-code and dataset-version limitations.
+- Hardened QuantConnect result imports so formal statistics cannot be overwritten
+  by runtime display fields, exported run dates are checked against the manifest,
+  and usable Benchmark curves receive deterministic comparison metrics.
 - Slimmed the runtime package by removing unused provider/codec compatibility
   façades and moving delivery-evaluation validators into test support while
   retaining the declarative eval catalogs.
@@ -18,3 +129,6 @@
   builders, and reduced `bootstrap.py` to a bounded cross-layer connector.
 - Split the 2,327-line ORM declaration monolith into ten capability modules under a
   single metadata registry without changing tables, constraints, or migrations.
+- Monitor 工作台将同一次运行共享的价格与价格事实时间提升为 Monitor 级“最近运行价格”摘要；价格规则卡不再重复展示相同价格，异构非价格事实及不一致的价格观测仍保留逐规则明细。
+- Monitor 列表整合为一个可检索面板，支持按标的代码或完整 instrument ID 即时筛选；每个 Monitor 同时展示首次创建、当前版本最近编辑和最近运行时间，桌面规则区固定支持一行六个规则块并在平板/手机自适应降列。
+- 操作中心的 Schwab OAuth 卡片新增受控的手动重授权流程：一次点击只启动一个前台 OAuth 会话并打开新标签页，页面轮询等待本地回调；失败/中断后必须确认关闭旧标签才能创建新的 OAuth state，前端与日志均不接触 Token、secret 或原始授权 URL。

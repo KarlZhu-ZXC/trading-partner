@@ -127,6 +127,12 @@ class InstrumentMasterService:
                     normalized.canonical_candidate,
                     asset_type=asset_type_hint,
                 )
+                if market is Market.KR and normalized.exchange_hint is not None:
+                    symbol_hits = tuple(
+                        instrument
+                        for instrument in symbol_hits
+                        if instrument.exchange.upper() == normalized.exchange_hint
+                    )
                 symbol_hits = _sort_by_instrument_id(symbol_hits)
                 if len(symbol_hits) == 1:
                     hit = symbol_hits[0]

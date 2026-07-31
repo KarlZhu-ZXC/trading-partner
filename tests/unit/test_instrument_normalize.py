@@ -213,3 +213,16 @@ def test_normalized_symbol_is_frozen() -> None:
     assert isinstance(result, NormalizedSymbol)
     with pytest.raises(AttributeError):
         result.canonical_candidate = "X"  # type: ignore[misc]
+
+
+def test_kr_normalizes_yahoo_security_and_index_aliases() -> None:
+    samsung = normalize_symbol_input(
+        Market.KR, "005930.KS", asset_type_hint=AssetType.EQUITY
+    )
+    kosdaq = normalize_symbol_input(Market.KR, "^KQ11")
+
+    assert samsung.canonical_candidate == "005930"
+    assert samsung.exchange_hint == "KOSPI"
+    assert kosdaq.canonical_candidate == "KQ11"
+    assert kosdaq.asset_type_hint is AssetType.INDEX
+    assert kosdaq.exchange_hint == "KOSDAQ"

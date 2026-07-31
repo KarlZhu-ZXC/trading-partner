@@ -7,6 +7,7 @@ GET chart JSON — no yfinance package. Implements ``USQuoteProvider`` + ``USBar
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -52,6 +53,7 @@ from domain.us_market.models import USBarSeries, USQuote
 from infrastructure.system.clock import SystemClock
 
 _NY = ZoneInfo("America/New_York")
+_SEOUL = ZoneInfo("Asia/Seoul")
 _CHART_HOST = "https://query1.finance.yahoo.com"
 _CHART_PATH_PREFIX = "/v8/finance/chart/"
 _ALLOWED_ASSETS = frozenset(
@@ -69,6 +71,7 @@ _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 # Latest daily bar more than this many natural days behind expected end/as_of → stale.
 _MAX_DAILY_STALE_NATURAL_DAYS = 4
 _SESSION_CLOSE = time(16, 0)
+_KR_SESSION_CLOSE = time(15, 30)
 _CURRENT_QUOTE_CUTOFF_SECONDS = 300
 _EXTENDED_HOURS_PRICE_WARNING = "EXTENDED_HOURS_PRICE"
 _INTRADAY_QUOTE_RECOVERY_WARNING = "INTRADAY_QUOTE_RECOVERY"
@@ -200,17 +203,17 @@ def _optional_decimal(value: object, *, field: str) -> Decimal | None:
     return _as_decimal(value, field=field)
 
 
-def _ny_midnight(day: date) -> datetime:
-    return datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=_NY)
+def _local_midnight(day: date, timezone: ZoneInfo) -> datetime:
+    return datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone)
 
 
-def _ny_session_close(day: date) -> datetime:
+def _local_session_close(day: date, timezone: ZoneInfo, close: time) -> datetime:
     return datetime(
-        day.year, day.month, day.day, _SESSION_CLOSE.hour, _SESSION_CLOSE.minute, tzinfo=_NY
+        day.year, day.month, day.day, close.hour, close.minute, tzinfo=timezone
     )
 
 
-def _unix_to_aware(ts: object, *, field: str) -> datetime:
+def _unix_to_aware(ts: object, *, field: str, timezone: ZoneInfo = _NY) -> datetime:
     if type(ts) is not int or isinstance(ts, bool):
         if type(ts) is Decimal:
             try:
@@ -225,7 +228,7 @@ def _unix_to_aware(ts: object, *, field: str) -> datetime:
                 f"{field} must be a unix timestamp",
                 details={"field": field, "rule": "unix_int"},
             )
-    return datetime.fromtimestamp(int(ts), tz=_NY)
+    return datetime.fromtimestamp(int(ts), tz=timezone)
 
 
 class YahooFinanceAdapter:
@@ -293,8 +296,8 @@ class YahooFinanceAdapter:
     def supports(self, market: Market, category: DataCategory) -> bool:
         if category not in _SUPPORTED_CATEGORIES:
             return False
-        # US equities/ETFs/indices/continuous futures, plus CME specific contracts.
-        return market in {Market.US, Market.CME}
+        # US/KR exchange instruments and continuous futures, plus CME contracts.
+        return market in {Market.US, Market.KR, Market.CME}
 
     def is_configured(self) -> bool:
         return self._enabled
@@ -346,6 +349,19 @@ class YahooFinanceAdapter:
                     details={"field": "symbol", "rule": "non_blank"},
                 )
             return symbol
+        if instrument.market is Market.KR:
+            symbol = instrument.symbol.strip().upper()
+            if instrument.asset_type is AssetType.INDEX:
+                return symbol if symbol.startswith("^") else f"^{symbol}"
+            if re.fullmatch(r"\d{6}\.(?:KS|KQ)", symbol):
+                return symbol
+            if re.fullmatch(r"\d{6}", symbol) is None:
+                raise DataContractError(
+                    "Korean Yahoo symbol requires a six-digit exchange code",
+                    details={"instrument_id": instrument.instrument_id, "rule": "kr_symbol"},
+                )
+            suffix = ".KQ" if instrument.exchange.upper() in {"KOE", "KOSDAQ"} else ".KS"
+            return f"{symbol}{suffix}"
         if instrument.market is Market.CME and instrument.asset_type is AssetType.FUTURE:
             # Specific contracts only — never rewrite or fall back to GC=F.
             if is_legacy_us_continuous_proxy(instrument.instrument_id):
@@ -370,7 +386,7 @@ class YahooFinanceAdapter:
                     },
                 ) from exc
         raise DataContractError(
-            "Yahoo Finance instrument market must be US or CME futures",
+            "Yahoo Finance instrument market must be US, KR, or CME futures",
             details={
                 "field": "instrument",
                 "rule": "market",
@@ -519,11 +535,12 @@ class YahooFinanceAdapter:
         return first
 
     def _session_from_meta(
-        self, meta: Mapping[str, object], at: datetime
+        self, meta: Mapping[str, object], at: datetime, *, market: Market = Market.US
     ) -> TradingSession:
         periods = meta.get("currentTradingPeriod")
         if not isinstance(periods, dict):
-            return infer_session_basic(Market.US, at, timezone="America/New_York")
+            timezone = "Asia/Seoul" if market is Market.KR else "America/New_York"
+            return infer_session_basic(market, at, timezone=timezone)
         unix = int(at.timestamp())
         for key, session in (
             ("pre", TradingSession.PRE_MARKET),
@@ -611,6 +628,8 @@ class YahooFinanceAdapter:
         as_of: datetime,
         start: date | None = None,
         end: date | None = None,
+        timezone: ZoneInfo = _NY,
+        session_close: time = _SESSION_CLOSE,
     ) -> list[MarketBar]:
         timestamps = result.get("timestamp")
         if timestamps is None:
@@ -697,12 +716,16 @@ class YahooFinanceAdapter:
             # Yahoo pads gaps with null rows — skip rather than invent prices.
             if any(v is None for v in (open_raw, high_raw, low_raw, close_raw)):
                 continue
-            ts = _unix_to_aware(timestamps[idx], field=f"timestamp[{idx}]")
+            ts = _unix_to_aware(
+                timestamps[idx], field=f"timestamp[{idx}]", timezone=timezone
+            )
             if interval is USBarInterval.ONE_DAY:
-                ts = _ny_session_close(ts.astimezone(_NY).date())
+                ts = _local_session_close(
+                    ts.astimezone(timezone).date(), timezone, session_close
+                )
             if ts > as_of:
                 continue
-            local_day = ts.astimezone(_NY).date()
+            local_day = ts.astimezone(timezone).date()
             if start is not None and local_day < start:
                 continue
             if end is not None and local_day > end:
@@ -774,10 +797,11 @@ class YahooFinanceAdapter:
         *,
         expected_day: date,
         operation: str,
+        timezone: ZoneInfo = _NY,
     ) -> None:
         if not bars:
             return
-        latest_day = bars[-1].timestamp.astimezone(_NY).date()
+        latest_day = bars[-1].timestamp.astimezone(timezone).date()
         lag = (expected_day - latest_day).days
         if lag > _MAX_DAILY_STALE_NATURAL_DAYS:
             raise StaleMarketData(
@@ -799,6 +823,7 @@ class YahooFinanceAdapter:
         asset_type: AssetType,
         regular_market_at: datetime | None,
         regular_market_price: Decimal | None,
+        timezone: ZoneInfo = _NY,
     ) -> tuple[Decimal | None, bool]:
         """Return the regular-session baseline for the selected quote.
 
@@ -812,14 +837,14 @@ class YahooFinanceAdapter:
         timestamped ``regularMarketPrice`` then provides the completed regular
         close. The boolean reports that narrowly scoped recovery.
         """
-        quote_day = quote_at.astimezone(_NY).date()
+        quote_day = quote_at.astimezone(timezone).date()
         same_day_close_allowed = (
             asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
             and quote_session is TradingSession.POST_MARKET
         )
         selected_bar: MarketBar | None = None
         for bar in reversed(bars):
-            bar_day = bar.timestamp.astimezone(_NY).date()
+            bar_day = bar.timestamp.astimezone(timezone).date()
             if bar_day < quote_day or (
                 same_day_close_allowed
                 and bar_day == quote_day
@@ -844,7 +869,7 @@ class YahooFinanceAdapter:
             and regular_market_price is not None
             and regular_market_at <= quote_at
         ):
-            regular_day = regular_market_at.astimezone(_NY).date()
+            regular_day = regular_market_at.astimezone(timezone).date()
             completed_for_quote = (
                 quote_session is TradingSession.PRE_MARKET
                 and regular_day < quote_day
@@ -853,7 +878,7 @@ class YahooFinanceAdapter:
                 and regular_day == quote_day
             )
             selected_day = (
-                selected_bar.timestamp.astimezone(_NY).date()
+                selected_bar.timestamp.astimezone(timezone).date()
                 if selected_bar is not None
                 else None
             )
@@ -869,6 +894,7 @@ class YahooFinanceAdapter:
         symbol: str,
         *,
         as_of: datetime,
+        market: Market = Market.US,
     ) -> tuple[MarketBar, datetime, Mapping[str, object]]:
         """Return the latest minute bar at/before cutoff, including extended hours."""
         payload, fetched_at = await self._fetch_chart(
@@ -896,6 +922,8 @@ class YahooFinanceAdapter:
             interval=USBarInterval.ONE_MINUTE,
             adjustment=AdjustmentMethod.NONE,
             as_of=as_of,
+            timezone=_SEOUL if market is Market.KR else _NY,
+            session_close=_KR_SESSION_CLOSE if market is Market.KR else _SESSION_CLOSE,
         )
         if not bars:
             raise NoMarketData(
@@ -910,11 +938,13 @@ class YahooFinanceAdapter:
         self._require_configured()
         now = self._require_as_of(as_of)
         symbol = self._require_chart_instrument(instrument)
+        timezone = _SEOUL if instrument.market is Market.KR else _NY
+        session_close = _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
 
         # Window ends exclusive of the calendar day after as_of (NY), inclusive wire.
-        as_of_day = as_of.astimezone(_NY).date()
-        period1 = int(_ny_midnight(as_of_day - timedelta(days=30)).timestamp())
-        period2 = int(_ny_midnight(as_of_day + timedelta(days=1)).timestamp())
+        as_of_day = as_of.astimezone(timezone).date()
+        period1 = int(_local_midnight(as_of_day - timedelta(days=30), timezone).timestamp())
+        period2 = int(_local_midnight(as_of_day + timedelta(days=1), timezone).timestamp())
         payload, fetched_at = await self._fetch_chart(
             symbol,
             params={
@@ -941,12 +971,16 @@ class YahooFinanceAdapter:
             interval=USBarInterval.ONE_DAY,
             adjustment=AdjustmentMethod.NONE,
             as_of=as_of,
+            timezone=timezone,
+            session_close=session_close,
         )
 
         regular_market_at: datetime | None = None
         rmt = meta_raw.get("regularMarketTime")
         if type(rmt) is int or type(rmt) is Decimal:
-            candidate = _unix_to_aware(int(rmt), field="regularMarketTime")
+            candidate = _unix_to_aware(
+                int(rmt), field="regularMarketTime", timezone=timezone
+            )
             if candidate <= as_of:
                 regular_market_at = candidate
 
@@ -1021,8 +1055,10 @@ class YahooFinanceAdapter:
                 rule="as_of_cutoff",
             )
 
-        meta_session = self._session_from_meta(meta_raw, as_of)
+        meta_session = self._session_from_meta(meta_raw, as_of, market=instrument.market)
         additional_warnings: list[str] = []
+        if instrument.market is Market.KR:
+            additional_warnings.append("YAHOO_KR_DELAYED_QUOTE")
         current_cutoff = 0 <= (now - as_of).total_seconds() <= _CURRENT_QUOTE_CUTOFF_SECONDS
         regular_age = (as_of - quote_at).total_seconds()
         if (
@@ -1032,7 +1068,9 @@ class YahooFinanceAdapter:
         ):
             try:
                 intraday_bar, intraday_fetched_at, intraday_meta = (
-                    await self._latest_intraday_quote_bar(symbol, as_of=as_of)
+                    await self._latest_intraday_quote_bar(
+                        symbol, as_of=as_of, market=instrument.market
+                    )
                 )
             except (
                 DataContractError,
@@ -1046,7 +1084,9 @@ class YahooFinanceAdapter:
                     quote_at = intraday_bar.timestamp
                     last = intraday_bar.close
                     fetched_at = intraday_fetched_at
-                    quote_session = self._session_from_meta(intraday_meta, quote_at)
+                    quote_session = self._session_from_meta(
+                        intraday_meta, quote_at, market=instrument.market
+                    )
                     meta_session = quote_session
                     additional_warnings.append(
                         _EXTENDED_HOURS_PRICE_WARNING
@@ -1062,6 +1102,7 @@ class YahooFinanceAdapter:
             asset_type=instrument.asset_type,
             regular_market_at=regular_market_at,
             regular_market_price=regular_market_price,
+            timezone=timezone,
         )
         if previous_close_recovered:
             additional_warnings.append(_PREVIOUS_CLOSE_RECOVERY_WARNING)
@@ -1109,6 +1150,8 @@ class YahooFinanceAdapter:
         self._require_configured()
         self._require_as_of(as_of)
         symbol = self._require_chart_instrument(instrument)
+        timezone = _SEOUL if instrument.market is Market.KR else _NY
+        session_close = _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
 
         if type(start) is not date or type(end) is not date:
             raise DataContractError(
@@ -1149,11 +1192,13 @@ class YahooFinanceAdapter:
 
         wire_interval = _INTERVAL_WIRE[interval]
         # Upstream period2 is exclusive; wire end remains inclusive.
-        period1 = int(_ny_midnight(start).timestamp())
-        period2 = int(_ny_midnight(end + timedelta(days=1)).timestamp())
+        period1 = int(_local_midnight(start, timezone).timestamp())
+        period2 = int(_local_midnight(end + timedelta(days=1), timezone).timestamp())
         # Cap period2 by as_of exclusive upper bound so we never solicit future rows.
         as_of_exclusive = int(
-            _ny_midnight(as_of.astimezone(_NY).date() + timedelta(days=1)).timestamp()
+            _local_midnight(
+                as_of.astimezone(timezone).date() + timedelta(days=1), timezone
+            ).timestamp()
         )
         if period2 > as_of_exclusive:
             period2 = as_of_exclusive
@@ -1183,6 +1228,8 @@ class YahooFinanceAdapter:
             as_of=as_of,
             start=start,
             end=end,
+            timezone=timezone,
+            session_close=session_close,
         )
         if not bars:
             raise NoMarketData(
@@ -1191,9 +1238,9 @@ class YahooFinanceAdapter:
             )
 
         if interval is USBarInterval.ONE_DAY:
-            expected_day = min(end, as_of.astimezone(_NY).date())
+            expected_day = min(end, as_of.astimezone(timezone).date())
             self._assert_daily_not_stale(
-                bars, expected_day=expected_day, operation="bars"
+                bars, expected_day=expected_day, operation="bars", timezone=timezone
             )
 
         series = USBarSeries(
@@ -1208,7 +1255,12 @@ class YahooFinanceAdapter:
         # containing the last daily bar. On weekends the last bar is normally a
         # valid Friday close and should be explained as latest-known closed-session
         # data rather than a live-session stale anomaly.
-        session = self._session_from_meta(result, fetched_at)
+        result_meta = result.get("meta")
+        session = self._session_from_meta(
+            result_meta if isinstance(result_meta, Mapping) else {},
+            fetched_at,
+            market=instrument.market,
+        )
         return ProviderSuccess(
             value=series,
             meta=self._meta(

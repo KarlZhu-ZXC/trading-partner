@@ -13,6 +13,7 @@ from application.dto.provider_routing import ProviderResultMeta
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
 from application.dto.us_market import (
     MarketGetBarsInput,
+    MarketGetBatchQuotesInput,
     MarketGetContextInput,
     MarketGetSnapshotInput,
     USQuoteDTO,
@@ -22,6 +23,7 @@ from application.services.commodity_spot_service import (
     CommoditySpotQuoteResult,
 )
 from application.services.futures_curve_service import FuturesCurveResult
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
@@ -57,6 +59,16 @@ _US_EQ = Instrument(
     currency="USD",
     timezone="America/New_York",
     asset_type=AssetType.EQUITY,
+)
+_US_ETF = Instrument(
+    instrument_id="etf:US:UGL",
+    symbol="UGL",
+    name="ProShares Ultra Gold",
+    market=Market.US,
+    exchange="ARCA",
+    currency="USD",
+    timezone="America/New_York",
+    asset_type=AssetType.ETF,
 )
 _CME_FUT = Instrument(
     instrument_id="future:CME:GCZ26",
@@ -141,8 +153,9 @@ def _coordinator(
         )
     )
     data = MagicMock()
+    access = InstrumentAccessService(master, MagicMock())
     coord = MarketToolCoordinator(
-        instrument_master=master,
+        instrument_access=access,
         clock=FixedClock(AS_OF),
         id_generator=SequentialIdGenerator(),
         secret_redactor=DefaultSecretRedactor(),
@@ -174,6 +187,58 @@ async def test_snapshot_routes_cme_to_us_coordinator() -> None:
 
 
 @pytest.mark.asyncio
+async def test_batch_quotes_return_one_typed_result_per_requested_instrument() -> None:
+    coord, us = _coordinator()
+
+    envelope = await coord.get_market_snapshots(
+        MarketGetBatchQuotesInput(
+            instrument_ids=(_US_EQ.instrument_id, _CME_FUT.instrument_id),
+            as_of=AS_OF,
+        )
+    )
+
+    assert envelope.ok is True
+    assert envelope.data is not None
+    assert envelope.data.total_requested == 2
+    assert envelope.data.succeeded == 2
+    assert [item.instrument_id for item in envelope.data.items] == [
+        _US_EQ.instrument_id,
+        _CME_FUT.instrument_id,
+    ]
+    assert us.get_market_snapshot.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_quotes_propagate_successful_degraded_items() -> None:
+    coord, us = _coordinator()
+    original = _envelope_us_quote()
+    us.get_market_snapshot.return_value = ToolEnvelope.success(
+        request_id=original.request_id,
+        market=original.market,
+        as_of=original.as_of,
+        fetched_at=original.fetched_at,
+        freshness=Freshness.DELAYED,
+        sources=original.sources,
+        data=original.data,
+        degraded=True,
+        warnings=(WarningInfo(code="DELAYED_US_DATA", message="delayed"),),
+    )
+
+    envelope = await coord.get_market_snapshots(
+        MarketGetBatchQuotesInput(
+            instrument_ids=(_US_EQ.instrument_id,),
+            as_of=AS_OF,
+        )
+    )
+
+    assert envelope.ok is True
+    assert envelope.degraded is True
+    assert [warning.code for warning in envelope.warnings] == [
+        "BATCH_QUOTE_ITEMS_DEGRADED"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_snapshot_dynamic_resolves_cme_on_local_miss() -> None:
     from domain.common.errors import InvalidInstrument
 
@@ -189,6 +254,7 @@ async def test_snapshot_dynamic_resolves_cme_on_local_miss() -> None:
         return instruments[iid]
 
     master.get.side_effect = _get
+
     async def _resolve_dynamic(**kwargs: object) -> ToolEnvelope[object]:
         instruments[_CME_FUT.instrument_id] = _CME_FUT
         return ToolEnvelope.success(
@@ -208,13 +274,12 @@ async def test_snapshot_dynamic_resolves_cme_on_local_miss() -> None:
     us = MagicMock()
     us.get_market_snapshot = AsyncMock(return_value=_envelope_us_quote())
     coord = MarketToolCoordinator(
-        instrument_master=master,
+        instrument_access=InstrumentAccessService(master, resolve),
         clock=FixedClock(AS_OF),
         id_generator=SequentialIdGenerator(),
         secret_redactor=DefaultSecretRedactor(),
         us_tool_coordinator=us,
         data_service=MagicMock(),
-        instrument_resolve_service=resolve,
     )
     env = await coord.get_market_snapshot(
         MarketGetSnapshotInput(instrument_id=_CME_FUT.instrument_id, as_of=AS_OF)
@@ -222,6 +287,108 @@ async def test_snapshot_dynamic_resolves_cme_on_local_miss() -> None:
     assert env.ok is True
     resolve.resolve_dynamic.assert_awaited_once()
     us.get_market_snapshot.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dynamic_resolves_us_etf_on_local_miss() -> None:
+    from domain.common.errors import InvalidInstrument
+
+    instruments: dict[str, Instrument] = {}
+    master = MagicMock()
+
+    def _get(iid: str) -> Instrument:
+        if iid not in instruments:
+            raise InvalidInstrument("instrument not found", details={"instrument_id": iid})
+        return instruments[iid]
+
+    master.get.side_effect = _get
+
+    async def _resolve_dynamic(**kwargs: object) -> ToolEnvelope[object]:
+        instruments[_US_ETF.instrument_id] = _US_ETF
+        return ToolEnvelope.success(
+            request_id="req_resolve",
+            market=Market.US,
+            as_of=AS_OF,
+            fetched_at=AS_OF,
+            freshness=Freshness.FRESH,
+            sources=(),
+            data=MagicMock(instrument=MagicMock(instrument_id=_US_ETF.instrument_id)),
+            degraded=False,
+            warnings=(),
+        )
+
+    resolve = MagicMock()
+    resolve.resolve_dynamic = AsyncMock(side_effect=_resolve_dynamic)
+    us = MagicMock()
+    us.get_market_snapshot = AsyncMock(return_value=_envelope_us_quote())
+    coord = MarketToolCoordinator(
+        instrument_access=InstrumentAccessService(master, resolve),
+        clock=FixedClock(AS_OF),
+        id_generator=SequentialIdGenerator(),
+        secret_redactor=DefaultSecretRedactor(),
+        us_tool_coordinator=us,
+        data_service=MagicMock(),
+    )
+
+    env = await coord.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id=_US_ETF.instrument_id, as_of=AS_OF)
+    )
+
+    assert env.ok is True
+    resolve.resolve_dynamic.assert_awaited_once_with(
+        market=Market.US,
+        query=_US_ETF.instrument_id,
+        asset_type_hint=AssetType.ETF,
+        as_of=AS_OF,
+    )
+    us.get_market_snapshot.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_preserves_dynamic_directory_failure_type() -> None:
+    from application.dto.tool_envelope import ErrorInfo
+    from domain.common.errors import InvalidInstrument
+
+    master = MagicMock()
+    master.get.side_effect = InvalidInstrument("instrument not found")
+    resolve = MagicMock()
+    resolve.resolve_dynamic = AsyncMock(
+        return_value=ToolEnvelope.failure(
+            request_id="req_resolve",
+            market=Market.US,
+            as_of=AS_OF,
+            fetched_at=AS_OF,
+            freshness=Freshness.UNKNOWN,
+            sources=(),
+            errors=(
+                ErrorInfo(
+                    code="PROVIDER_UNAVAILABLE_ERROR",
+                    message="instrument directory unavailable",
+                    retryable=True,
+                    details={"vendor": "yfinance"},
+                ),
+            ),
+            degraded=True,
+        )
+    )
+    us = MagicMock()
+    coord = MarketToolCoordinator(
+        instrument_access=InstrumentAccessService(master, resolve),
+        clock=FixedClock(AS_OF),
+        id_generator=SequentialIdGenerator(),
+        secret_redactor=DefaultSecretRedactor(),
+        us_tool_coordinator=us,
+        data_service=MagicMock(),
+    )
+
+    env = await coord.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id=_US_ETF.instrument_id, as_of=AS_OF)
+    )
+
+    assert env.ok is False
+    assert env.errors[0].code == "PROVIDER_UNAVAILABLE_ERROR"
+    assert env.errors[0].retryable is True
+    us.get_market_snapshot.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -246,14 +413,10 @@ async def test_snapshot_dce_is_typed_unavailable() -> None:
     coord, us = _coordinator(instruments={dce.instrument_id: dce})
     # Patch request validation is strict; call private path via get with OTC-like
     # instrument_id not available. Use object.__setattr__ free Input construction:
-    request = MarketGetSnapshotInput.model_construct(
-        instrument_id=dce.instrument_id, as_of=AS_OF
-    )
+    request = MarketGetSnapshotInput.model_construct(instrument_id=dce.instrument_id, as_of=AS_OF)
     env = await coord.get_market_snapshot(request)
     assert env.ok is False
-    assert any(
-        err.code in {"NO_MARKET_DATA", "DATA_CONTRACT_ERROR"} for err in env.errors
-    )
+    assert any(err.code in {"NO_MARKET_DATA", "DATA_CONTRACT_ERROR"} for err in env.errors)
     us.get_market_snapshot.assert_not_awaited()
 
 
@@ -277,9 +440,7 @@ async def test_snapshot_routes_otc_to_commodity_spot() -> None:
         return_value=CommoditySpotQuoteResult(
             ok=True,
             data=spot,
-            warnings=(
-                WarningInfo(code="DUKASCOPY_SWFX_NOT_LBMA", message="not lbma"),
-            ),
+            warnings=(WarningInfo(code="DUKASCOPY_SWFX_NOT_LBMA", message="not lbma"),),
             error=None,
         )
     )
@@ -375,9 +536,7 @@ async def test_context_futures_curve_uses_curve_service() -> None:
         front_next_spread=None,
     )
     curve_svc.build_curve = AsyncMock(
-        return_value=FuturesCurveResult(
-            ok=True, data=curve_data, warnings=(), error=None
-        )
+        return_value=FuturesCurveResult(ok=True, data=curve_data, warnings=(), error=None)
     )
     coord, us = _coordinator(curve=curve_svc)
     env = await coord.get_market_context(
@@ -419,15 +578,9 @@ async def test_context_default_us_market_delegates() -> None:
 
 
 def test_snapshot_input_accepts_cme_and_otc() -> None:
-    cme = MarketGetSnapshotInput.model_validate(
-        {"instrument_id": "future:CME:GCZ26"}
-    )
-    otc = MarketGetSnapshotInput.model_validate(
-        {"instrument_id": "commodity_spot:OTC:XAUUSD"}
-    )
-    cfd = MarketGetSnapshotInput.model_validate(
-        {"instrument_id": "cfd:OTC:COPPER_CMD_USD"}
-    )
+    cme = MarketGetSnapshotInput.model_validate({"instrument_id": "future:CME:GCZ26"})
+    otc = MarketGetSnapshotInput.model_validate({"instrument_id": "commodity_spot:OTC:XAUUSD"})
+    cfd = MarketGetSnapshotInput.model_validate({"instrument_id": "cfd:OTC:COPPER_CMD_USD"})
     assert cme.instrument_id.startswith("future:CME:")
     assert otc.instrument_id.startswith("commodity_spot:OTC:")
     assert cfd.instrument_id.startswith("cfd:OTC:")

@@ -38,7 +38,9 @@ NOW = datetime(2026, 7, 29, 12, tzinfo=UTC)
 
 def _outbox_entry() -> MonitorNotificationOutboxEntry:
     return MonitorNotificationOutboxEntry(
+        notification_id="monitor_notification_00000000-0000-7000-8000-000000000001",
         source_event_id="monitor_event_00000000-0000-7000-8000-000000000001",
+        source_run_id=None,
         channel=MonitorNotificationChannel.TELEGRAM,
         title="🚨 GC=F · TRIGGERED",
         body="规则：GC_PULLBACK_ALERT_4080 < 4080",
@@ -102,7 +104,7 @@ async def test_telegram_adapter_maps_rate_limit_without_exposing_response() -> N
     await client.aclose()
 
 
-def test_monitor_notification_formats_result_before_text_rule_table() -> None:
+def test_monitor_notification_formats_price_first_mobile_rule_cards() -> None:
     body = """Gold monitor
 当前价格：4078.3
 价格时间：2026-07-29T08:51:19-04:00
@@ -121,19 +123,57 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
         body=body,
     )
 
+    assert rendered.startswith("<b>🚨 GC=F · 4078.3 · TRIGGERED</b>")
+    assert "💰 <b>当前价格：4078.3</b>" in rendered
+    assert "🕒 价格时间：2026-07-29 08:51 UTC-04:00" in rendered
     assert "<b>本轮结果</b>" in rendered
     assert "🔴 <code>GC_PULLBACK_ALERT_4080</code>" in rendered
-    assert "<b>价格与规则</b>\n<pre>" in rendered
-    assert "PRICE  4078.3" in rendered
-    assert "RULE" in rendered
-    assert "GC_STRUCTURE_FAIL_3940" in rendered
-    assert "&lt; 4080" in rendered
-    assert rendered.index("<b>本轮结果</b>") < rendered.index("<pre>")
-    assert "数据提示" not in rendered[rendered.index("<pre>") : rendered.index("</pre>")]
+    assert "<b>全部监控规则</b>" in rendered
+    assert "🔴 <b>&lt; 4080</b> · <b>TRIGGERED</b> · MEDIUM" in rendered
+    assert "已低于阈值 1.7" in rendered
+    assert "⚪️ <b>&lt; 3940</b> · <b>QUIET</b> · HIGH" in rendered
+    assert "距触发 138.3" in rendered
+    assert "规则：<code>GC_STRUCTURE_FAIL_3940</code>" in rendered
+    assert "<pre>" not in rendered
+    assert "数据提示：DELAYED_US_DATA" in rendered
+    assert rendered.index("当前价格") < rendered.index("<b>本轮结果</b>")
+
+
+def test_post_market_digest_formats_zero_change_run_as_mobile_cards() -> None:
+    body = """POST_MARKET_SUMMARY
+运行时间：2026-07-29T20:20:15+00:00
+本轮变化：0
+MONITOR
+TTWO Case 关键价位监控
+标的：TTWO
+当前价格：246.43
+价格时间：2026-07-29T16:20:00-04:00
+RULES
+RULE                       COND     VALUE   DIST   STATE      LEVEL
+-------------------------  -------  ------  -----  ---------  ------
+TTWO_FIRST_CONFIRM_233_9   > 233.9  246.43  12.53  TRIGGERED  MEDIUM
+TTWO_NO_CHASE_249_4        > 249.4  246.43  -2.97  QUIET      MEDIUM
+END_MONITOR
+数据提示：EXTENDED_HOURS_PRICE
+"""
+
+    rendered = _format_notification_html(
+        title="📊 美股盘后 Monitor · 1 标的 · 0 变化",
+        body=body,
+    )
+
+    assert "✅ 本轮无状态变化" in rendered
+    assert "<b>TTWO · 246.43</b>" in rendered
+    assert "TTWO_FIRST_CONFIRM_233_9" in rendered
+    assert "已高于阈值 12.53" in rendered
+    assert "TTWO_NO_CHASE_249_4" in rendered
+    assert "距触发 2.97" in rendered
+    assert "数据提示：EXTENDED_HOURS_PRICE" in rendered
+    assert "<pre>" not in rendered
 
 
 @pytest.mark.asyncio
-async def test_monitor_transition_is_queued_atomically_and_delivered_once(
+async def test_monitor_transition_and_post_market_digest_are_durable(
     tmp_path, fixed_clock, id_generator
 ) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'notifications.db'}")
@@ -146,19 +186,21 @@ async def test_monitor_transition_is_queued_atomically_and_delivered_once(
             name="黄金回落提醒",
             case_id=None,
             primary_instrument_id="future:US:GC=F",
-            cadence=MonitorCadence.ON_DEMAND,
+            cadence=MonitorCadence.US_POST_MARKET,
             status=MonitorStatus.ACTIVE,
             rules=(
-                MonitorRuleInput(
-                    rule_code="GC_PULLBACK_ALERT_4080",
+                    MonitorRuleInput(
+                        rule_code="GC_PULLBACK_ALERT_4080",
+                        description="黄金回落至 4080 下方提醒。",
                     rule_type=MonitorRuleType.PRICE_BELOW,
                     severity=MonitorSeverity.MEDIUM,
                     instrument_id="future:US:GC=F",
                     price_threshold=Decimal("4080"),
                     max_fact_age_seconds=3600,
                 ).to_domain(),
-                MonitorRuleInput(
-                    rule_code="GC_ABOVE_4000",
+                    MonitorRuleInput(
+                        rule_code="GC_ABOVE_4000",
+                        description="黄金保持在 4000 上方。",
                     rule_type=MonitorRuleType.PRICE_ABOVE,
                     severity=MonitorSeverity.MEDIUM,
                     instrument_id="future:US:GC=F",
@@ -222,31 +264,33 @@ async def test_monitor_transition_is_queued_atomically_and_delivered_once(
         configured=True,
     )
 
-    first_run = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
+    request = MonitorEvaluateInput(cadence=MonitorCadence.US_POST_MARKET, as_of=NOW)
+    first_run = await evaluator.evaluate(request)
     counts_before = repository.notification_counts(
         MonitorNotificationChannel.TELEGRAM
     )
     delivery = await service.flush_pending()
-    second_run = await evaluator.evaluate(MonitorEvaluateInput(as_of=NOW))
+    second_run = await evaluator.evaluate(request)
     second_delivery = await service.flush_pending()
     counts_after = repository.notification_counts(
         MonitorNotificationChannel.TELEGRAM
     )
 
     assert first_run.events_created == 2
-    assert counts_before == {MonitorNotificationStatus.PENDING: 2}
-    assert delivery.delivered == 1
+    assert counts_before == {MonitorNotificationStatus.PENDING: 3}
+    assert delivery.delivered == 2
     assert second_run.events_created == 0
-    assert second_delivery.pending_selected == 0
-    assert counts_after == {MonitorNotificationStatus.DELIVERED: 2}
-    queued = sender.send.await_args.args[0]
-    assert "GC_PULLBACK_ALERT_4080" in queued.body
-    assert "GC_ABOVE_4000" in queued.body
-    assert "当前价格：4070" in queued.body
-    assert "RULE" in queued.body
-    assert "COND" in queued.body
-    assert "VALUE" in queued.body
-    assert "STATE" in queued.body
-    assert "连续合约存在换月风险" in queued.body
-    sender.send.assert_awaited_once()
+    assert second_delivery.pending_selected == 1
+    assert second_delivery.delivered == 1
+    assert counts_after == {MonitorNotificationStatus.DELIVERED: 4}
+    messages = tuple(call.args[0] for call in sender.send.await_args_list)
+    assert any("GC_PULLBACK_ALERT_4080" in item.body for item in messages)
+    digests = tuple(
+        item for item in messages if item.body.startswith("POST_MARKET_SUMMARY")
+    )
+    assert len(digests) == 2
+    assert all(item.source_run_id is not None for item in digests)
+    assert all("当前价格：4070" in item.body for item in digests)
+    assert all("连续合约存在换月风险" in item.body for item in digests)
+    assert sender.send.await_count == 3
     engine.dispose()

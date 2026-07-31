@@ -10,7 +10,7 @@ Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex
 
 - 默认以标的为入口的持久化研究档案（Investment Case）、当前投资判断（Thesis）、
   假设、失效条件和历史研究记录；
-- 带来源、时间、新鲜度、口径和降级状态的 A 股与美股事实；
+- 带来源、时间、新鲜度、口径和降级状态的 A 股、美股、韩股与选定跨资产事实；
 - 只读账户、持仓、历史交易和跨市场组合事实；
 - 跨 Codex Thread 恢复、严格质询和五类研究工作流。
 
@@ -55,7 +55,7 @@ args = ["run", "trading-partner-mcp"]
 ```
 
 Codex 通常需要从本项目目录打开新任务或重新载入任务，才会读取新增/更新后的 MCP 配置。
-进入新任务后，先调用 `system_health`；然后分别用一只 A 股、一只美股和账户查询验证所需
+进入新任务后，先调用 `system_health`；然后分别用任务涉及的 A 股、美股、韩股或跨资产标的以及账户查询验证所需
 Provider。健康检查正常并不代表所有外部网络 Provider 都正常。
 
 ## 3. 公开能力总览
@@ -64,11 +64,18 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内；
 每个 operation 是 closed union variant，不能混用其他 variant 的字段。
 
-运行时只创建一个 FastMCP。`interfaces/mcp/tools/` 中的 capability 模块提供普通 operation
-adapters，compact 组装器直接持有 callable；不存在旧工具名 HandlerRegistry 或第二套参数
-模型注册。`tools/list` 会删除不参与验证的 schema 标题/默认值和冗余 discriminator mapping、
-共享重复属性定义，并保证 closed union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。
-服务端 Pydantic 默认值与验证行为不变。
+每个进程只构建一份 compact Capability Registry。`interfaces/mcp/tools/` 中的 capability
+模块提供普通 operation adapters，Registry 同时持有 callable、由同一 callable 生成的
+Pydantic/FastMCP 参数模型、tool annotations，以及独立的 effect/confirmation policy。
+FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成或调用，因此不存在
+两套 handler、两套请求模型或通过工具名查找的旧兼容注册表。MCP `tools/list` 会删除不参与
+验证的 schema 标题/默认值和冗余 discriminator mapping、共享重复属性定义，并保证 closed
+union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
+
+MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和 open-world 特征，
+不作为 HTTP 授权规则。Console 需要的显式确认由 Registry 的 confirmation policy 单独决定；
+例如 `instrument_resolve` 可能把唯一候选写入本地 Instrument Master 缓存，因此 MCP 标注并非
+纯只读，但解析本身不要求一次伪造的“写操作确认”。
 
 ### 3.1 健康与 Mock 验证
 
@@ -124,9 +131,14 @@ adapters，compact 组装器直接持有 callable；不存在旧工具名 Handle
 是 `user` 或明确授权的 `external_agent`。
 
 Instrument Master 是持久化注册表与缓存，不是可查询标的白名单。美股首次发现按
-Yahoo Finance → Alpha Vantage 回退，A 股代码由腾讯行情验证；例如首次解析 `KO` 后会写入
+Yahoo Finance → Alpha Vantage 回退，A 股代码由腾讯行情验证，韩股由 Yahoo 搜索验证；例如首次解析 `KO` 后会写入
 `equity:US:KO`，后续查询直接本地命中。只有唯一且市场/资产类型一致的候选才会入库；无匹配
 或歧义仍返回 `INVALID_INSTRUMENT`，目录限流或网络故障则保留对应的可重试 Provider 错误。
+全部标的型公共能力共用同一个本地优先访问入口。结构合法但尚未登记的 A 股股票/ETF/指数、
+美股股票/ETF/指数/期货、韩股股票/ETF/指数，以及 CME/DCE 期货 ID，会先验证并缓存唯一候选，再继续事实请求；
+调用者无需预先单独运行 `instrument_resolve`。例如首次请求 `etf:US:UGL` 的行情、技术面、
+新闻、情绪或 Workflow，不会因为 Master 尚无记录而提前失败。目录不可用时保留原始 Provider
+错误，不转换成 `INVALID_INSTRUMENT`。
 
 ### 3.4 A 股事实
 
@@ -180,14 +192,14 @@ CLI 会报告实际覆盖与缺失月份。当前官方在线档案不能证明�
 部分热度、筹码或情绪字段属于派生值或低/未知可靠性值；回答时必须保留来源与 warning，
 不能将当前榜单伪装成历史截面。
 
-### 3.5 美股行情与技术事实
+### 3.5 美股、韩股行情与技术事实
 
 | 工具 | 能力与边界 |
 |---|---|
-| `market_data_get` (`quote`/`composite`) | `quote` 支持美股、CME 具体/兼容连续期货和 Dukascopy OTC 金属；`composite` 仍仅限美股 |
-| `market_data_get` (`bars`) | 美股、CME 具体/兼容连续期货及 Dukascopy OTC 金属 OHLCV；期货/OTC 固定不复权 |
+| `market_data_get` (`quote`/`quotes`/`composite`) | `quote` 支持美股、韩股、CME 具体/兼容连续期货和 Dukascopy OTC 金属；`quotes` 一次读取 1–50 个唯一标的并逐项保留成功/失败；`composite` 仍仅限美股 |
+| `market_data_get` (`bars`) | 美股、韩股、CME 具体/兼容连续期货及 Dukascopy OTC 金属 OHLCV；期货/OTC 固定不复权 |
 | `market_data_get` (`us_market`/`futures_curve`/`spot_future_basis`) | `us_market`、CME/DCE 官方结算期限结构，或经过单位/时间门槛的期现基差 |
-| `technical_get_snapshot` | A 股、美股、CME 具体/兼容期货和 OTC 金属日线与周线技术事实 |
+| `technical_get_snapshot` | A 股、美股、韩股、CME 具体/兼容期货和 OTC 金属日线与周线技术事实 |
 | `technical_render_chart` | 返回可审计元数据和 PNG K线/成交量/RSI 图 |
 
 股票默认路由为 Yahoo → Alpha Vantage；兼容连续期货以 Yahoo 免费代理为主，
@@ -197,6 +209,16 @@ CLI 会报告实际覆盖与缺失月份。当前官方在线档案不能证明�
 `FUTURES_CONTRACT_NOT_SPOT` 与 `CONTINUOUS_FUTURES_ROLL_RISK`，不得把 `GC=F` 说成
 XAUUSD、把 `HG=F` 说成伦敦铜。技术指标是派生事实，不是回测结果或价格预测；必须保留
 `historically_validated=false`。
+
+韩股使用独立 `KR` 身份，不把 `.KS`/`.KQ` 伪装为美股后缀。规范 ID 示例为
+`equity:KR:005930`（三星电子）、`equity:KR:000660`（SK 海力士）、
+`index:KR:KS11`（KOSPI）、`index:KR:KQ11`（KOSDAQ）、
+`index:KR:KS200` 和 `etf:KR:069500`。Yahoo 后缀只保留在 Provider 映射中；
+quote、1 分钟至月线 bars、批量报价和日/周技术分析按 `Asia/Seoul` 归属交易日。
+Yahoo 对韩股报价标记 delayed，但响应不稳定提供声明延迟秒数，因此必须同时查看
+`data_delay_seconds` 和 `YAHOO_KR_DELAYED_QUOTE`；分钟/小时历史受 Yahoo 上游可用窗口限制。
+当前不提供 DART 基本面、韩股新闻/情绪、市场宽度、同行 Workflow、韩股账户或仓位 sizing，
+不得用美股基本面链路替代。
 
 正式 CME 金属合约使用 `future:CME:*`，合约定义/结算来自 CME 公开参考数据，具体合约
 quote/bars 使用 Yahoo active-contract symbol；不会回退为 `GC=F` 冒充。DCE 生猪使用
@@ -245,7 +267,7 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 
 | 工具 | 能力与边界 |
 |---|---|
-| `account_get` | 只读取持久化持仓，不接触券商 |
+| `account_get` (`positions`/`transactions`) | 只读取持久化持仓或标准化历史成交，不接触券商 |
 | `external_state_sync` | 仅在明确要求时刷新 `accounts`、读取 `transactions` 或刷新 active `watchlist` upstream |
 | `portfolio_analyze` | 按原生币种计算市场、币种和标的 gross exposure |
 | `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
@@ -308,7 +330,7 @@ Thesis、候选或仓位，也不会执行交易。
 
 | 工具 | 能力与边界 |
 |---|---|
-| `research_workflow_run` (`deep_dive`) | 收集跨市场 Deep Equity Research fact package |
+| `research_workflow_run` (`deep_dive`) | 按资产类型收集股票或 ETF 深度研究 fact package |
 | `research_workflow_run` (`catalyst_review`) | 收集催化剂、市场反应和预期事实 |
 | `research_workflow_run` (`a_share_market_review`) | 收集板块、行业、涨跌停、资金和热度事实 |
 | `research_workflow_run` (`us_market_review`) | 收集指数、宏观、新闻及组合影响事实 |
@@ -324,6 +346,11 @@ SHA-256 校验后与 receipt 一起保存。相同终态请求直接重放而不
 契约，最终文字仍由 Codex 生成。相关性和 beta 只是描述性统计，不能自动转化为预测、回测、
 仓位建议或订单。
 
+美股股票配方包含公司基本面、财报和公司事件。美股 ETF 配方改用 composite 行情/技术面、
+精确 ticker 新闻、ETF 社区情绪和宏观上下文，不调用股票专属的财报、SEC 或公司事件接口。
+Workflow receipt 与 Context 的 live-fact 提示只返回当前 28 工具的公共名称及 operation，
+不会再暴露已退役的内部 handler 名称。
+
 同行比较默认使用最近三个可见年报期间；不会自动发现同行、跨市场换汇、构造 TTM、评分、
 排名或生成目标价。历史 `as_of` 没有 cutoff-safe 估值时保持缺失；金额币种或期间口径不同
 时标记 `NOT_COMPARABLE`/`PARTIAL`，不得把缺失值解释为公司劣势。
@@ -334,7 +361,9 @@ SHA-256 校验后与 receipt 一起保存。相同终态请求直接重放而不
 分别要求幂等键。Trading Partner 不登录 QuantConnect、不点击 Backtest，也不调用付费
 API。导入后 `REMOTE_RUN_ATTESTATION_UNAVAILABLE` 与
 `REMOTE_DATASET_VERSION_UNAVAILABLE` 必须保留，不能把用户下载文件描述为完全可复现的
-point-in-time 数据集。完整操作见
+point-in-time 数据集。导入器以正式 `statistics` 为绩效口径、保留冲突的 runtime 展示值，
+并检查实际运行日期是否与 manifest 一致；可用的 QuantConnect Benchmark 曲线只作为明确
+标注的导出曲线对比，不冒充官方总回报指数。完整操作见
 [Phase 3C-0 QuantConnect Free bridge](../plans/phase3c-quantconnect-free-bridge.md)。
 
 ### 3.12 Watchlist Hub
@@ -346,7 +375,8 @@ point-in-time 数据集。完整操作见
 | `watchlist_manage` (`remove`) | 经明确确认和幂等键从上游移除成员；数据库保留 inactive 历史 |
 | `external_state_sync` (`watchlist`) | 显式刷新唯一激活的上游 |
 
-Watchlist 的完整同步为“精确全量”作业，不在普通 MCP 会话中即时触发。请使用
+`external_state_sync/watchlist` 是“精确全量”同步：一次刷新全部分组与成员并返回 receipt，
+不是默认分组的分页读取。也可使用
 `uv run trading-partner-watchlist-sync` 单独刷新 Watchlist；盘后账户和 Watchlist 的
 组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户，
 再执行精确组内全量刷新，并依据 XNYS 日历在真实收盘十分钟后运行，支持提前收盘、
@@ -358,6 +388,8 @@ Watchlist 上游严格二选一：Moomoo OpenD 或严格 Manual CSV。它们不�
 `fsync` 和原子替换。外部删除不会删除 Phase 1 Research WatchlistItem 或 Investment Case。
 FX 等暂不支持研究的 Moomoo 成员仍会显示，但 `instrument_id=null` 且
 `research_supported=false`，不能伪装成股票。
+Moomoo durable items 读取省略 `group_name` 时优先选择系统 `All`，不会静默退回
+`Favorites`；响应同时返回 `group_was_defaulted`、`total_count` 和 `has_more`。
 
 ### 3.13 Portfolio Risk Engine v1
 
@@ -382,15 +414,15 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 | `monitor_manage` (`update`) | 以 expected version、确认人和幂等键追加新版本，可暂停或归档 |
 | `monitor_evaluate` | 评估 ACTIVE Monitor，保存全部逐规则观察；仅状态变化时创建事件 |
 | `monitor_read` (`events`) | 读取 TRIGGERED、RECOVERED、NOT_EVALUATED 事件 |
-| `monitor_read` (`dashboard`) | 一次读取全部当前 Monitor、最近运行、下一到期时间及全部规则状态 |
-| `monitor_read` (`runs`) | 按 run_id 或 monitor_id 读取不可变运行历史和逐规则观察值 |
+| `monitor_read` (`dashboard`) | 一次读取全部当前 Monitor、紧凑最近运行摘要、下一到期时间及全部规则状态 |
+| `monitor_read` (`runs`) | 按 run_id 读取完整批次，或按 monitor_id 只读取该 Monitor 的不可变逐规则观察值 |
 | `monitor_manage` (`resolve_event`) | 经确认和幂等键确认已读或解决一个事件 |
 
 监控枚举入参允许大小写不敏感并自动去除首尾空格，例如 `active`、`paused`、
 `us_post_market` 和 `price_below` 会在 DTO 边界规范化为 uppercase。MCP schema、
 响应、领域对象和数据库仍只使用规范的 uppercase 枚举值。
 
-V1 只支持 A 股/美股价格上穿、价格下穿，以及组合 Risk 总体状态达到
+V1 只支持 A 股/美股/韩股价格上穿、价格下穿，以及组合 Risk 总体状态达到
 `WARN`/`BREACH`。每条规则都有最大事实年龄；上游失败或事实过期返回
 `NOT_EVALUATED`，不会当作安静状态。相同条件连续运行不会重复生成事件，恢复后才产生
 `RECOVERED`。Monitor 版本可设置带时区的 `valid_until`：截止时刻仍有效，之后评估器会在
@@ -401,7 +433,7 @@ V1 只支持 A 股/美股价格上穿、价格下穿，以及组合 Risk 总体�
 显式 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` 或
 `--cadence A_SHARE_POST_MARKET` 保留为诊断 force-run，本身不是 scheduler。正常调度统一使用
 `uv run trading-partner-monitor-run due`：它先在数据库中筛选到期的 `INTERVAL` 以及
-A 股/美股盘后组，未到期时不请求 Provider；每个市场组在对应交易日收盘加配置延迟后至多
+A 股/美股/韩股盘后组，未到期时不请求 Provider；韩股使用 XKRX 日历；每个市场组在对应交易日收盘加配置延迟后至多
 执行一次。Codex 的盘后/市场复盘 Automation 不再调用 Monitor 工具，也不重复发送告警。
 macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯一的每小时 launchd
 唤醒器。它直接运行确定性 CLI，不启动 Codex、不调用 LLM，因此不会产生 Codex token 用量。
@@ -414,10 +446,10 @@ macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯�
 
 | 工具 | 能力与边界 |
 |---|---|
-| `technical_get_snapshot` | 对 A 股或美股标的返回日线/周线标准指标、四类状态、结构位和近期 K 线形态 |
+| `technical_get_snapshot` | 对 A 股、美股或韩股标的返回日线/周线标准指标、四类状态、结构位和近期 K 线形态 |
 | `technical_render_chart` | 返回同一数据口径的审计 envelope，并直接附带 PNG K线、成交量与 RSI 图 |
 
-美股使用拆股与分红调整日线，A 股使用前复权日线；周线由同一批日线按 ISO 周聚合，避免
+美股与韩股使用 Yahoo 拆股与分红调整日线，A 股使用前复权日线；周线由同一批日线按 ISO 周聚合，避免
 重复请求 Provider。标准指标由 TA-Lib 计算，支撑/阻力由项目自有的五根 K 线摆动点与
 0.75 ATR 聚类生成。两种输出都保留 provider、时间、新鲜度、复权口径和算法版本，并固定
 `historically_validated=false`。它们是可复现的派生事实，不是预测、买卖信号、仓位建议、
@@ -587,24 +619,25 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0024_monitor_notification_outbox`；它包含 append-only Trade Plan
+`0026_korean_market_support`；它包含 append-only Trade Plan
 identity/version/conditions、Risk v2 policy 字段、Monitor 的精确计划版本关联，以及与
-Monitor 状态转移事件同事务写入的通知 Outbox。
+Monitor 状态转移事件或盘后 run 同事务写入的通知 Outbox。
 
 ### Monitor 手机通知（可选）
 
 Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具。配置
 `MONITOR_NOTIFICATIONS_ENABLED=true`、`TELEGRAM_BOT_TOKEN` 和
 `TELEGRAM_CHAT_ID` 后，本地小时调度与市场收盘 Monitor CLI 会投递新的
-`TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移。相同状态的重复观测只写 run，
-不重复通知。失败消息保留在 Outbox 中进行有限重试；超过事件 TTL 后转为过期，避免旧
+`TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移；A 股/美股/韩股盘后组还会在每个已评估
+交易日发送一条合并摘要，即使本轮没有状态变化。INTERVAL 相同状态的重复观测只写 run，
+不重复通知。失败消息保留在 Outbox 中进行有限重试；超过消息 TTL 后转为过期，避免旧
 报警延迟送达。`PROVIDER_PROXY_URL` 如有设置，也用于 Telegram Bot API。
 消息直接复用同一次 run 的 observations，显示标的当前观察价格/时间以及该 Monitor 的全部
 规则条件、级别、观察值、距离和状态，不会为了排版再次调用行情 Provider。同一 Monitor
 在同一 run 中出现多项状态变化时合并为一条 Telegram 消息，底层 event 仍逐条持久化。
 Telegram 不支持 Markdown 表格，因此通过 `sendMessage` 先用普通 HTML 展示本轮状态变化，
-再用经过转义的等宽 `<pre>` 表格展示当前价格、价格时间和完整规则。数据 warning 与期货
-口径说明留在表格后的普通正文中。该过程不生成或上传图片，也不调用 LLM。
+首行直接展示标的与当前价格，再用移动端纵向卡片展示价格时间、本轮变化和完整规则。数据 warning 与期货
+口径说明保留为可换行的普通正文。该过程不生成或上传图片，也不调用 LLM。
 
 ```bash
 uv run trading-partner-monitor-notifications status
@@ -642,7 +675,8 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 
 当前实现不包含：
 
-- 回测、策略引擎和历史收益验证；
+- 历史数据平台、本地/自动回测和策略执行引擎；仅提供 QuantConnect Free 的手工
+  LEAN package prepare 与用户下载结果 import，远程代码和数据版本保持未验证；
 - 下单、改单、撤单、成交、交易解锁或执行审批；
 - 自动仓位调整和自动 Thesis 确认；
 - 自动 Evidence ingestion；

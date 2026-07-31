@@ -30,6 +30,7 @@ class EntityIdPrefix(StrEnum):
     MONITOR = "monitor"
     MONITOR_EVENT = "monitor_event"
     MONITOR_RUN = "monitor_run"
+    MONITOR_NOTIFICATION = "monitor_notification"
     MONITOR_RESOLUTION = "monitor_resolution"
     TRADE_PLAN = "trade_plan"
     VALIDATION = "validation"

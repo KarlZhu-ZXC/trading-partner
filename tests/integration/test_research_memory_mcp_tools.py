@@ -319,7 +319,8 @@ def test_c5_container_wires_six_services_and_health_component(
         assert health.data is not None
         assert "research_search" in health.data.components
         search_comp = health.data.components["research_search"]
-        wire = getattr(search_comp, "value", search_comp)
+        wire = getattr(search_comp.state, "value", search_comp.state)
         assert wire == "ok"
+        assert search_comp.check_kind == "live_probe"
     finally:
         container.close()

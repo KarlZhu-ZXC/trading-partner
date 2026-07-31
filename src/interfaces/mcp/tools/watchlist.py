@@ -64,6 +64,14 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
         except Exception as exc:  # noqa: BLE001
             return unexpected_failure(container, exc)
 
+    async def watchlist_sync_all() -> dict[str, Any]:
+        """Fetch and persist every group and membership from the active source."""
+        try:
+            envelope = await container.services.watchlist.sync_all()
+            return envelope.model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001
+            return unexpected_failure(container, exc)
+
     async def watchlist_add(
         instrument_id: str,
         confirmed_by: str,
@@ -112,6 +120,7 @@ def build_watchlist_adapters(container: ApplicationContainer) -> SimpleNamespace
 
     return SimpleNamespace(
         watchlist_get=watchlist_get,
+        watchlist_sync_all=watchlist_sync_all,
         watchlist_add=watchlist_add,
         watchlist_remove=watchlist_remove,
     )

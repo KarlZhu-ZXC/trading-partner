@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -104,6 +105,98 @@ def _find_named(value: object, target: str) -> object | None:
             if found is not None:
                 return found
     return None
+
+
+def _merged_statistics(
+    statistics: Mapping[str, str], runtime: Mapping[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Keep formal statistics authoritative while retaining conflicting runtime facts."""
+    raw_statistics = dict(statistics)
+    for key, value in runtime.items():
+        if key not in raw_statistics:
+            raw_statistics[key] = value
+        elif raw_statistics[key] != value:
+            raw_statistics[f"Runtime {key}"] = value
+    return raw_statistics, {**runtime, **statistics}
+
+
+def _benchmark_curve_metrics(charts: object) -> dict[str, str]:
+    if not isinstance(charts, Mapping):
+        return {}
+    benchmark_chart = next(
+        (
+            value
+            for key, value in charts.items()
+            if isinstance(key, str) and key.casefold() == "benchmark"
+        ),
+        None,
+    )
+    if not isinstance(benchmark_chart, Mapping):
+        return {}
+    series = benchmark_chart.get("series")
+    if not isinstance(series, Mapping):
+        return {}
+    benchmark_series = next(
+        (
+            value
+            for key, value in series.items()
+            if isinstance(key, str) and key.casefold() == "benchmark"
+        ),
+        None,
+    )
+    if not isinstance(benchmark_series, Mapping):
+        return {}
+    values = benchmark_series.get("values")
+    if not isinstance(values, list):
+        return {}
+
+    points: list[tuple[float, float]] = []
+    for item in values:
+        if (
+            isinstance(item, list)
+            and len(item) >= 2
+            and isinstance(item[0], (int, float))
+            and isinstance(item[1], (int, float))
+        ):
+            points.append((float(item[0]), float(item[1])))
+    if len(points) < 2 or points[0][1] <= 0 or points[-1][0] <= points[0][0]:
+        return {}
+
+    first_value = points[0][1]
+    last_value = points[-1][1]
+    years = (points[-1][0] - points[0][0]) / (365.2425 * 24 * 60 * 60)
+    if years <= 0:
+        return {}
+    peak = first_value
+    max_drawdown = 0.0
+    for _, value in points:
+        peak = max(peak, value)
+        if peak > 0:
+            max_drawdown = max(max_drawdown, (peak - value) / peak)
+    total_return = last_value / first_value - 1
+    cagr = (last_value / first_value) ** (1 / years) - 1
+    return {
+        "benchmark_curve_total_return": f"{total_return * 100:.3f}%",
+        "benchmark_curve_cagr": f"{cagr * 100:.3f}%",
+        "benchmark_curve_max_drawdown": f"{max_drawdown * 100:.3f}%",
+    }
+
+
+def _result_period(configuration: object) -> tuple[str | None, str | None]:
+    if not isinstance(configuration, Mapping):
+        return None, None
+
+    def normalized_date(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            return None
+
+    return normalized_date(configuration.get("startDate")), normalized_date(
+        configuration.get("endDate")
+    )
 
 
 def _validate_lean_source(code: str) -> None:
@@ -260,16 +353,17 @@ class HistoricalValidationService:
             result_sha256 = hashlib.sha256(raw).hexdigest()
             statistics = _scalar_mapping(_find_named(payload, "statistics"))
             runtime = _scalar_mapping(_find_named(payload, "runtimeStatistics"))
-            raw_statistics = {**statistics, **runtime}
+            raw_statistics, normalization_statistics = _merged_statistics(statistics, runtime)
             normalized = {
                 normalized_name: value
-                for key, value in raw_statistics.items()
+                for key, value in normalization_statistics.items()
                 if (normalized_name := _NORMALIZED_METRICS.get(_metric_key(key))) is not None
             }
             charts = _find_named(payload, "charts")
-            chart_names = (
-                tuple(str(key) for key in charts) if isinstance(charts, Mapping) else ()
-            )
+            benchmark_metrics = _benchmark_curve_metrics(charts)
+            normalized.update(benchmark_metrics)
+            chart_names = tuple(str(key) for key in charts) if isinstance(charts, Mapping) else ()
+            actual_period = _result_period(_find_named(payload, "algorithmConfiguration"))
             orders = _find_named(payload, "orders")
             order_count = len(orders) if isinstance(orders, (Mapping, list)) else None
             if order_count is None and "total_orders" in normalized:
@@ -280,9 +374,11 @@ class HistoricalValidationService:
                 chart_names=chart_names,
                 order_count=order_count,
                 manifest=manifest,
+                benchmark_metrics=benchmark_metrics,
+                actual_period=actual_period,
             )
             summary: dict[str, object] = {
-                "schema_version": "historical-validation-result-summary.v1",
+                "schema_version": "historical-validation-result-summary.v2",
                 "validation_id": request.validation_id,
                 "platform": "QUANTCONNECT_FREE",
                 "imported_at": now.isoformat(),
@@ -382,9 +478,22 @@ Thesis, alter a Trade Plan, or execute a live order.
         chart_names: tuple[str, ...],
         order_count: int | None,
         manifest: Mapping[str, object],
+        benchmark_metrics: Mapping[str, str],
+        actual_period: tuple[str | None, str | None],
     ) -> tuple[HistoricalValidationCheckDTO, ...]:
         strategy = manifest.get("strategy")
         prepared_hash = strategy.get("code_sha256") if isinstance(strategy, Mapping) else None
+        data_contract = manifest.get("data_contract")
+        expected_period = (
+            (
+                str(data_contract.get("start_date")),
+                str(data_contract.get("end_date")),
+            )
+            if isinstance(data_contract, Mapping)
+            else (None, None)
+        )
+        period_available = all(expected_period) and all(actual_period)
+        period_matches = period_available and expected_period == actual_period
         return (
             HistoricalValidationCheckDTO(
                 code="RESULT_STATISTICS_PRESENT",
@@ -408,6 +517,31 @@ Thesis, alter a Trade Plan, or execute a live order.
                 code="ORDER_COUNT_AVAILABLE",
                 status="PASS" if order_count is not None else "WARN",
                 message="Checks whether orders or a total-order statistic can be counted.",
+            ),
+            HistoricalValidationCheckDTO(
+                code="BENCHMARK_SERIES_PRESENT",
+                status="PASS" if benchmark_metrics else "WARN",
+                message=(
+                    "The exported Benchmark curve was found and compared deterministically."
+                    if benchmark_metrics
+                    else "No usable exported Benchmark curve was found."
+                ),
+            ),
+            HistoricalValidationCheckDTO(
+                code="RESULT_PERIOD_MATCH",
+                status=(
+                    "PASS" if period_matches else "WARN" if period_available else "NOT_EVALUATED"
+                ),
+                message=(
+                    "The exported run period matches the prepared data contract."
+                    if period_matches
+                    else (
+                        f"Prepared period {expected_period[0]} to {expected_period[1]}; "
+                        f"exported run period {actual_period[0]} to {actual_period[1]}."
+                        if period_available
+                        else "The exported run period could not be compared with the manifest."
+                    )
+                ),
             ),
             HistoricalValidationCheckDTO(
                 code="SOURCE_CODE_MATCH",

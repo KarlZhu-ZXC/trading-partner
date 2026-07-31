@@ -231,6 +231,9 @@ class WatchlistItemsDTO(_FrozenDTO):
     group: WatchlistGroupDTO
     items: tuple[WatchlistMembershipDTO, ...]
     total_returned: int = Field(ge=0)
+    total_count: int = Field(ge=0)
+    has_more: bool
+    group_was_defaulted: bool
 
 
 class WatchlistSyncResultDTO(_FrozenDTO):

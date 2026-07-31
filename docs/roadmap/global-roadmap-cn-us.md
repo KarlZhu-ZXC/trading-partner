@@ -12,7 +12,7 @@
 
 ---
 
-# 0. 当前执行目标（2026-07-21）
+# 0. 当前执行目标（2026-07-31）
 
 以下事项记录当前优先队列、已完成基础和明确放弃项：
 
@@ -34,6 +34,18 @@
 - [x] **Phase 3B-T02 调用方指定同行的比较事实包**
   已实现为 `research_workflow_run.peer_comparison`：同市场 equity、默认年报口径、
   串行复用现有免费财报/估值 Provider，不自动选同行、排名或下估值结论。
+- [x] **Phase 3C QuantConnect Free 手工验证桥接**
+  已实现带 SHA-256 的 LEAN package prepare 和用户下载结果 import。Trading Partner 不保存
+  历史行情库、不运行本地/自动回测，也不验证远程代码或数据集版本；完整历史验证平台不再是
+  当前 Phase 3 的退出门槛。首轮用户操作的端到端 smoke 是唯一剩余运维收口项。
+- [x] **Phase 3D 判断到计划控制链**
+  版本化 Trade Plan、Position Sizing、Risk v2 与 Monitoring v2 已收口到唯一的
+  `compact_28` 公共 MCP 面，所有结果保持 `execution_effect=false`。
+- [x] **韩国交易所热门标的行情切片**
+  新增正式 `KR` 身份、Yahoo 本地优先发现、quote/批量 quote、1m–1mo bars、
+  日/周技术分析、Manual CSV Watchlist、价格 Monitor 与 XKRX 盘后调度。
+  `.KS`/`.KQ` 只作为 Provider alias；DART 基本面、韩股新闻/情绪/宽度、账户与
+  Moomoo Watchlist 写入不在本切片内。
 - **StockTwits 已退出当前路线图（2026-07-25）**：不再把正式接入作为 Phase 3
   Action Item、发布目标或退出门槛。运行时 adapter、设置和网络 allowlist 已移除；历史
   枚举与数据库值继续可读，避免破坏既有数据。
@@ -174,8 +186,8 @@ Trader 直接交易语义
 │                                                             │
 │ Instrument / Market / Fundamentals / Events / Sentiment     │
 │ Account / Portfolio / Research State / Journal              │
-│ Research Workflow / Backtest / Monitoring / Risk            │
-│ Historical Validation / Execution / Attribution / Evaluation│
+│ Research Workflow / Manual Validation / Monitoring / Risk   │
+│ Execution / Attribution / Evaluation                        │
 │                                                             │
 │ AShare Provider                 US Provider                  │
 │ a-stock-data参考                TradingAgents参考            │
@@ -183,7 +195,7 @@ Trader 直接交易语义
                 │                      │
                 ▼                      ▼
        Market & Broker APIs       Storage & Workers
-                                 SQLite / DuckDB / Parquet
+                                 SQLite / Owner-only Artifacts
                                  Scheduler / Audit Ledger
 ```
 
@@ -334,9 +346,9 @@ trading-execution-mcp
 | Phase 0 | 技术骨架 | Codex、MCP、统一模型、Provider Interface | 完整业务 |
 | Phase 1 | 只读研究伙伴 | A股、美股、账户、研究、组合、记忆 | 回测、下单 |
 | Phase 2 | Watchlist + Risk + Monitoring + Technical v2 | 自选、只读风险、条件监控、A股/美股专业日周线技术分析 | 回测和实盘 |
-| Phase 3 | 跨资产、历史验证与计划控制 | 正式期货/现货、公司财务经营、可选行业数据、历史验证、计划控制链 | 真实写入 |
-| Phase 4 | 受控交易助手 | Execution MCP、人工批准、有限实盘 | 无人自主交易 |
-| Phase 5 | 自适应投资系统 | 归因、评估、策略治理、个性化 | 默认自动实盘 |
+| Phase 3 | 跨资产、手工验证与计划控制 | 正式期货/现货、公司财务经营、可选行业数据、QuantConnect Free 手工桥接、计划控制链 | 历史数据平台、本地/自动回测、真实写入 |
+| Phase 4 | 只读归因 + 受控交易准备 | 真实业绩归因；未来 Execution MCP、人工批准、有限实盘 | 无人自主交易 |
+| Phase 5 | 自适应投资系统 | 评估、策略治理、个性化 | 默认自动实盘 |
 
 ---
 
@@ -534,7 +546,8 @@ Watchlist Hub，不复制 Candidate/Confirm 状态机。
 
 缺少 NAV、价格时间或 FX 事实时必须返回 `NOT_EVALUATED`/`INCOMPLETE`，不得通过隐式汇率
 或持仓市值替代账户净值。系统默认阈值在用户确认前保持明确 warning。该引擎只有
-`risk_policy_get`、`risk_policy_update`、`risk_check` 三个 MCP 工具，永远没有订单副作用。
+`portfolio_risk_get(request={"operation":"policy"})`、`risk_policy_update` 和
+`portfolio_risk_get(request={"operation":"check"})` 承载，永远没有订单副作用。
 
 ## 9.8 Monitoring Hub
 
@@ -559,7 +572,7 @@ envelope 与 PNG K线/量能/RSI 图。所有结果固定 `historically_validate
 
 ---
 
-# 10. Phase 3：跨资产、历史验证与计划控制
+# 10. Phase 3：跨资产、手工验证与计划控制
 
 ## 10.1 合并后的能力域
 
@@ -569,7 +582,7 @@ Phase 3 不再按零散工具或单一品种拆分，而按共享领域模型与
 |---|---|---|
 | 3A 正式期货与跨资产行情 | 连续代理、正式合约、现货、基差、期限结构 | 免费 CME/DCE/Dukascopy 主链已完成；LME discovery 延后 |
 | 3B 公司财务/经营与可选行业数据 | A股/美股财报、财务质量、公司公告经营指标、按需行业数据、Deep Dive 组合 | 财报与猪周期主链路已完成，行业长期历史 best effort |
-| 3C 历史验证平台 | QuantConnect Free 手工桥接；后续历史库、Strategy、Experiments 与 Bias Checks | 3C-0 已完成，完整平台待实施 |
+| 3C 手工历史验证桥接 | LEAN package prepare、QuantConnect Free 用户手工运行、结果 import | 当前范围已实现；完整历史平台延期且不阻塞 Phase 3 |
 | 3D 判断到计划控制链 | Monitoring v2、Trade Plan、Position Sizing、Risk v2 | 已完成（2026-07-26） |
 
 ## 10.2 Phase 3A：正式期货与跨资产行情
@@ -607,25 +620,22 @@ LME Cash/LME 3M 保留为零费用用途许可 discovery；Crypto 与普通 Fore
 
 DCE 生猪期限结构属于 3A，不在此重复列为独立 Provider。
 
-## 10.4 Phase 3C：历史验证平台
+## 10.4 Phase 3C：QuantConnect Free 手工验证桥接
 
 > 3C-0 已于 2026-07-30 实现：在保留 28 工具公共面的前提下，通过
 > `research_workflow_run.historical_validation_prepare/import` 生成带 SHA-256 的
 > LEAN 包并导入用户从 QuantConnect Free 下载的结果。网页登录、编译和点击回测仍由
 > 用户完成；远程代码一致性和数据集版本保持 `NOT_EVALUATED`。完整本地引擎与数据层
-> 仍是后续工作。
+> 不属于当前 Phase 3 范围。
 
-`historical_data`、`strategy_registry`、`backtest`、`experiments`、`metrics`、
-`bias_checks` 和 `artifact_store` 合并建设，共享同一 point-in-time 与数据版本契约。
-存储目标为 DuckDB + Parquet + dataset manifest。
+Trading Partner 只校验但不执行 LEAN Python，保存 owner-only 的代码、manifest、runbook
+和哈希，之后导入用户从 QuantConnect 下载的 Results JSON。QuantConnect/LEAN 与提交的策略
+代码负责市场规则、费用、滑点、流动性和公司行动模拟；Trading Partner 记录声明配置，但
+不证明远程运行采用了完全相同的代码或数据。
 
-A 股回测必须覆盖 T+1、100 股整数倍、涨跌停、停牌、ST、新股、板块差异、除权除息、
-流动性、佣金与印花税；美股覆盖交易时段、碎股、Cash/Margin、PDT、拆股、分红、费用、
-滑点与流动性。实验支持 Walk-forward、OOS、Event Study、Monte Carlo、Benchmark 与成本
-敏感性，并检查 Look-ahead、Survivorship、Data Snooping、Filing/News/Adjusted Price
-Leakage、样本不足和过拟合。
-
-Strategy 是版本化实验说明，不是订单或 Thesis 确认。
+DuckDB/Parquet、dataset/version registry、本地 runner、付费 QuantConnect 自动化、Strategy
+Registry、参数实验、Walk-forward/OOS/Event Study、自动 Bias Checks 与自有 A 股/美股
+市场规则模拟均为未来可选项，不阻塞 Phase 3 完成，也不授权订单或 Thesis 确认。
 
 ## 10.5 Phase 3D：判断到计划控制链
 
@@ -643,7 +653,9 @@ Current Thesis + verified facts
 
 统一覆盖技术位/成交量/财务/SEC/A 股公告/研报预期/Insider/资金筹码/宏观/Sentiment/
 Thesis 失效监控；入场、分批、退出、有效期和目标仓位计划；风险预算、ATR、波动率目标与
-相关持仓约束；以及主题上限、回撤、流动性、事件、T+1、涨跌停、停牌、数据过期和重复订单。
+相关持仓约束；以及主题上限、回撤、流动性、事件、T+1、涨跌停、停牌、数据过期和跨账户
+重复持仓。当前 Risk v2 不消费 broker open orders，待处理订单暴露与重复订单防护属于后续
+只读风险增强及 Phase 4 执行内核职责。
 
 所有结果仍是计划、区间或检查，不产生订单、成交或确认权限。
 
@@ -653,21 +665,42 @@ Phase 3 规范与 capability guide。
 ## 10.6 MCP 公共面原则
 
 能力域不等于一项能力一个 MCP 工具。Phase 3 继续使用闭合 `operation`、聚合 coordinator 和
-已有工具扩展公共面；`monitor_*`、`risk_check`、`portfolio_run_review` 不创建重复别名。
+已有工具扩展公共面；`monitor_*`、`portfolio_risk_get` 和
+`research_workflow_run(operation="portfolio_review")` 不创建重复别名。
 具体工具 schema 在各能力域设计冻结时确定，公共面保持紧凑且可审计。
 
 ## 10.7 出口门槛
 
 - 正式期货与现货不会混淆，合约、连续、期现和基差口径可追踪；
-- 回测可复现，数据版本可追踪且无明显历史泄漏；
-- A 股和美股规则、费用与滑点正确；
-- 至少 20 个基准策略验证；
+- QuantConnect 手工桥接的代码、manifest 和结果哈希可追踪，远程代码与数据版本缺口明确；
+- 首轮用户操作的 prepare -> web backtest -> import smoke 完成；
 - Risk Tests、监控重试去重和外部调度入口稳定；
-- 研究、计划和真实账户清楚区分，无 Critical 风控绕过。
+- 研究、计划和真实账户清楚区分，所有 Phase 3 能力保持无订单写入。
 
 ---
 
 # 11. Phase 4：受控实盘
+
+## 11.0 当前状态与实施前门槛
+
+> 状态：尚未实施。当前仓库和 `compact_28` 公共面保持只读；不存在独立
+> `trading-execution` 项目、订单写 Provider 或真实执行授权。
+
+Phase 4 先推进不含执行权限的真实业绩归因。首期只覆盖已持久化的美股账户事实；A 股 QMT、
+A 股账户同步与 FX 统一折算至少延后两个月，不能用临时 Provider 或当前汇率伪造完整归因。
+归因以交易/现金流/费用/快照覆盖回执为先，再推进实际损益、收益率、贡献和计划纪律复盘。
+完整切片与验收见 `plans/performance-attribution-and-console-plan.md`。
+
+Phase 4 开工前必须冻结首个 Broker/市场、可信批准通道、Risk 结果交接、Kill Switch
+所有权和重启对账协议。当前 stdio 的 `reviewed_by=user` 只是 caller-asserted 研究确认，
+不能升级为真实订单授权；Codex 聊天中的一句“确认”本身不是 Execution credential。
+
+推荐按以下切片推进：
+
+1. 独立离线执行内核：订单状态机、不可变 Preview、append-only 审计、Fake Broker；
+2. 单一 Broker 的 SIMULATE 环境：仅限价单、状态、部分成交、撤单和重启对账；
+3. 可信人工批准：完整订单指纹、一次性 token、preview expiry 和防重放；
+4. REAL 灰度：一个白名单账户、少量标的、极低额度、正常交易时段和逐笔批准。
 
 ## 11.1 独立 Execution MCP
 
@@ -807,8 +840,8 @@ Codex
 ```text
 Codex
 → trading-partner-mcp
-→ Cross-Asset Facts + Historical Validation + Plan Controls
-→ SQLite + DuckDB/Parquet
+→ Cross-Asset Facts + QuantConnect Free Manual Bridge + Plan Controls
+→ SQLite + owner-only validation artifacts
 ```
 
 ## Phase 4–5
@@ -836,7 +869,7 @@ Phase 4 前不提前拆微服务。
 |---|---|---|
 | 0–1 | SQLite | 状态、缓存、快照、日志 |
 | 2 | SQLite + Manual CSV | Watchlist 研究关联、分组和可迁移成员关系 |
-| 3 | SQLite + DuckDB + Parquet | 研究状态、历史数据、回测、实验、监控 |
+| 3 | SQLite + owner-only artifact files | 研究状态、监控、LEAN package 与导入结果 |
 | 4 | Append-only Audit Ledger | 批准、订单、成交、对账 |
 | 5 | 可选 PostgreSQL | 多进程和多账户 |
 
@@ -931,8 +964,8 @@ Phase 2 → Phase 3
 Moomoo/CSV Watchlist 可恢复、可审计，外部成员关系与研究历史边界可靠
 
 Phase 3 → Phase 4
-正式期货/现货口径可靠；回测可复现且无明显泄漏；
-Risk、Monitoring 和外部调度入口可靠
+正式期货/现货口径可靠；QuantConnect 手工桥接完成一次端到端 smoke 且明确披露远程验证缺口；
+Risk、Monitoring 和外部调度入口可靠；研究 MCP 保持无订单凭证和写入权限
 
 Phase 4 → Phase 5
 小额实盘稳定，无严重安全事件
@@ -975,9 +1008,9 @@ Phase 1 因加入：
 6. 历史研究无 Future Leakage。
 7. 精确技术数值由 Verified Snapshot 提供。
 8. Sentiment 与事实证据分离。
-9. Thesis、回测、计划和结果串联。
-10. A 股和美股规则不会混淆。
-11. 回测可复现并识别过拟合。
+9. Thesis、QuantConnect 手工验证 artifact、计划和导入结果可关联。
+10. A 股和美股事实、账户与计划口径不会混淆。
+11. 远程回测代码和数据版本无法证明时明确保持 `NOT_EVALUATED`。
 12. Risk Engine 不可被 LLM 绕过。
 13. 实盘逐笔人工批准并完整审计。
 14. 系统可以发现用户长期决策偏差。

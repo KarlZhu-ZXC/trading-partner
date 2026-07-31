@@ -211,9 +211,9 @@ class WatchlistMembership:
                     details={"provider_code": self.provider_code},
                 )
             _, market, _ = parse_instrument_id(instrument_id)
-            if market not in {Market.A_SHARE, Market.US}:
+            if market not in {Market.A_SHARE, Market.US, Market.KR}:
                 raise DataContractError(
-                    "research_supported membership requires A_SHARE or US instrument_id",
+                    "research_supported membership requires A_SHARE, US, or KR instrument_id",
                     details={
                         "provider_code": self.provider_code,
                         "instrument_id": instrument_id,

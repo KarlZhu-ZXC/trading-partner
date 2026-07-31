@@ -100,7 +100,9 @@ def test_health_search_probe_ok_component() -> None:
     assert env.ok is True
     assert env.degraded is False
     assert env.data is not None
-    assert env.data.components["research_search"] in {HealthState.OK, "ok"}
+    component = env.data.components["research_search"]
+    assert component.state in {HealthState.OK, "ok"}
+    assert component.check_kind == "live_probe"
     assert not any(w.code == "SEARCH_BACKEND_UNAVAILABLE" for w in env.warnings)
 
 
@@ -122,7 +124,7 @@ def test_health_search_probe_false_degrades_without_leaking_details() -> None:
     assert env.degraded is True
     assert env.data is not None
     assert env.data.database in {HealthState.OK, "ok"}
-    assert env.data.components["research_search"] in {
+    assert env.data.components["research_search"].state in {
         HealthState.DEGRADED,
         "degraded",
     }
@@ -150,7 +152,7 @@ def test_health_db_error_dominates_search_degraded() -> None:
     assert env.data is not None
     assert env.data.status in {HealthState.ERROR, "error"}
     assert env.data.database in {HealthState.ERROR, "error"}
-    assert env.data.components["research_search"] in {
+    assert env.data.components["research_search"].state in {
         HealthState.DEGRADED,
         "degraded",
     }
@@ -170,8 +172,12 @@ def test_health_component_capability_probes_are_source_separated() -> None:
     )
     env = service.check()
     assert env.data is not None
-    assert env.data.components["cross_asset.cme_reference"] in {HealthState.OK, "ok"}
-    assert env.data.components["cross_asset.dukascopy_spot"] in {
+    assert env.data.components["cross_asset.cme_reference"].state in {
+        HealthState.OK,
+        "ok",
+    }
+    assert env.data.components["cross_asset.cme_reference"].check_kind == "configuration"
+    assert env.data.components["cross_asset.dukascopy_spot"].state in {
         HealthState.DEGRADED,
         "degraded",
     }

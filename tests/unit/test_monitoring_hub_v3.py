@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,11 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from application.dto.monitor_dispatch import MonitorDispatchDisposition
-from application.dto.monitoring import MonitorCreateInput, MonitorRuleInput
+from application.dto.monitoring import (
+    MonitorCreateInput,
+    MonitorEvaluateInput,
+    MonitorRuleInput,
+)
 from application.dto.tool_envelope import ToolEnvelope
 from application.dto.us_market import USQuoteDTO
 from application.ports.market_session_calendar import MarketSession
@@ -79,6 +84,7 @@ def _interval_monitor() -> MonitorDefinition:
         rules=(
             MonitorRuleInput(
                 rule_code="gold_floor",
+                description="Gold fell below its configured floor.",
                 rule_type=MonitorRuleType.PRICE_BELOW,
                 severity=MonitorSeverity.HIGH,
                 instrument_id="future:US:GC=F",
@@ -105,6 +111,7 @@ def _us_post_market_monitor() -> MonitorDefinition:
         rules=(
             MonitorRuleInput(
                 rule_code="ttwo_floor",
+                description="TTWO fell below its configured floor.",
                 rule_type=MonitorRuleType.PRICE_BELOW,
                 severity=MonitorSeverity.MEDIUM,
                 instrument_id="equity:US:TTWO",
@@ -146,6 +153,7 @@ class _USCalendar:
 def test_interval_configuration_requires_whole_hours() -> None:
     rule = MonitorRuleInput(
         rule_code="gold_floor",
+        description="Gold fell below its configured floor.",
         rule_type="PRICE_BELOW",
         instrument_id="future:US:GC=F",
         price_threshold=Decimal("4080"),
@@ -276,6 +284,63 @@ async def test_unified_hourly_dispatch_runs_us_post_market_once_per_session(
     assert second.disposition is MonitorDispatchDisposition.NO_DUE_MONITORS
     assert second.next_due_at == datetime(2026, 7, 30, 20, 10, tzinfo=UTC)
     assert market.get_market_snapshot.await_count == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_monitor_scoped_run_history_never_returns_sibling_observations(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-scoped-runs.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    first = _us_post_market_monitor()
+    second_id = "monitor_00000000-0000-7000-8000-000000000101"
+    second_rule = replace(
+        first.rules[0],
+        rule_code="tsla_floor",
+        instrument_id="equity:US:TSLA",
+    )
+    second = replace(
+        first,
+        monitor_id=second_id,
+        name="TSLA post-market condition",
+        primary_instrument_id="equity:US:TSLA",
+        rules=(second_rule,),
+        idempotency_key="tsla-post-market-monitor",
+    )
+    repository.create(first)
+    repository.create(second)
+    fixed_clock.set(POST_CLOSE_NOW)
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(return_value=_quote())
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(
+            monitor_ids=(first.monitor_id, second.monitor_id),
+            as_of=POST_CLOSE_NOW,
+        )
+    )
+    scoped = repository.list_runs(first.monitor_id, 1)
+    full = repository.get_run(run.run_id)
+
+    assert len(scoped) == 1
+    assert scoped[0].selected_monitor_ids == (first.monitor_id,)
+    assert scoped[0].rules_evaluated == 1
+    assert {item.monitor_id for item in scoped[0].observations} == {first.monitor_id}
+    assert full is not None
+    assert {item.monitor_id for item in full.observations} == {
+        first.monitor_id,
+        second.monitor_id,
+    }
     engine.dispose()
 
 

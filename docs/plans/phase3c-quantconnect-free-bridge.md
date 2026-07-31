@@ -1,8 +1,9 @@
 # Phase 3C-0 — QuantConnect Free manual bridge
 
-> Status: implemented as the zero-cost entry slice of Phase 3C. It prepares and
+> Status: implemented as the complete current Phase 3C scope. It prepares and
 > imports validation artifacts; it does not run a local engine or call the paid
-> QuantConnect API.
+> QuantConnect API. One user-operated prepare -> web backtest -> import smoke
+> remains before operational closeout.
 
 ## Product decision
 
@@ -18,7 +19,7 @@ Codex writes LEAN Python
   -> user copies main.py into QuantConnect Free and clicks Backtest
   -> user downloads Overview / Download Results JSON
   -> research_workflow_run.historical_validation_import
-  -> Codex reviews metrics, bias checks, and the linked investment judgment
+  -> Codex reviews imported metrics, explicit limitations, and the linked investment judgment
 ```
 
 No QuantConnect credential or environment variable is required. All local
@@ -57,13 +58,21 @@ QuantConnect's **Overview -> Download Results** action. The operation:
 - records its SHA-256 and a bounded normalized summary;
 - extracts available Net Profit, CAGR, Sharpe/PSR, drawdown, fees, turnover,
   capacity and order metrics without inventing missing values;
-- checks for statistics, Strategy Equity and order-count availability;
+- treats the export's formal `statistics` as authoritative when a same-named
+  `runtimeStatistics` display value differs, while retaining the latter under a
+  `Runtime ...` label for audit;
+- derives total return, CAGR and maximum drawdown from a usable exported
+  QuantConnect Benchmark curve, explicitly labelled as curve metrics rather than
+  an official total-return index;
+- checks for statistics, Strategy Equity, Benchmark series and order-count
+  availability, and compares the exported run dates with the prepared manifest;
 - leaves remote code matching and point-in-time dataset version as
   `NOT_EVALUATED`.
 
 One prepared package accepts one immutable result. A materially different result
 requires a new prepare request and idempotency key so parameters and outcomes do
-not become detached.
+not become detached. The exact export remains immutable; a newer deterministic
+summary schema may be regenerated from that same hashed export.
 
 ## First-run checklist
 
@@ -84,7 +93,7 @@ The first acceptance run is SPY, hourly, 2008-07-01 through 2026-07-29,
 split-adjusted signal data, with a simple 20/100-hour moving-average rule. Passing
 this smoke proves the bridge, not that the strategy has an edge.
 
-## Deferred full Phase 3C work
+## Future optional work outside the current Phase 3 scope
 
 - paid QuantConnect API/MCP submission and polling;
 - platform-neutral Strategy Registry and experiment comparison;
@@ -94,4 +103,6 @@ this smoke proves the bridge, not that the strategy has an edge.
   automation.
 
 The prepared manifest and imported summary are intentionally versioned so these
-later capabilities can reuse them.
+later capabilities can reuse them if the product value eventually justifies the
+additional storage, data-quality, and execution complexity. None is a Phase 3 exit
+gate.

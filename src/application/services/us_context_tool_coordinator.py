@@ -20,7 +20,7 @@ from application.dto.us_context import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
-from application.services.instrument_master_service import InstrumentMasterService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_context_services import (
     USMacroService,
     USNewsService,
@@ -43,7 +43,7 @@ class USContextToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -52,7 +52,7 @@ class USContextToolCoordinator:
         sentiment_service: USSentimentService,
         prediction_service: USPredictionMarketService,
     ) -> None:
-        self._master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
@@ -64,7 +64,9 @@ class USContextToolCoordinator:
     async def get_live_news(self, request: MarketGetLiveNewsInput) -> ToolEnvelope[USNewsFeedDTO]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id) if request.instrument_id else None
+            instrument = await self._instrument_access.get_optional(
+                request.instrument_id, as_of=as_of
+            )
             result = await self._news.get_news(
                 instrument,
                 query=request.query,
@@ -112,7 +114,7 @@ class USContextToolCoordinator:
     ) -> ToolEnvelope[USSentimentSnapshotDTO]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result = await self._sentiment.get_snapshot(
                 instrument,
                 start=request.start,

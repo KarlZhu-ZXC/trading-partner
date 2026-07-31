@@ -34,10 +34,10 @@ from domain.common.ids import EntityIdPrefix
 from domain.research.models import InvestmentCase
 
 _LIVE_TOOLS = (
-    "market_get_snapshot",
-    "a_share_get_facts",
-    "us_get_fundamentals",
-    "us_get_company_research",
+    "market_data_get/quote",
+    "a_share_get_facts/snapshot",
+    "us_company_get/fundamentals_snapshot",
+    "us_company_get/company_updates",
 )
 
 
@@ -181,9 +181,7 @@ class ResearchContextBuilder:
             )
 
     @staticmethod
-    def _select_case(
-        uow: ResearchUnitOfWork, request: ResearchContextBuildInput
-    ) -> InvestmentCase:
+    def _select_case(uow: ResearchUnitOfWork, request: ResearchContextBuildInput) -> InvestmentCase:
         cases = uow.cases
         if request.case_id is not None:
             return cases.get(request.case_id)
@@ -243,9 +241,7 @@ class ResearchContextBuilder:
                 item.evidence_id,
             )
         )
-        contrary_count = sum(
-            EvidenceStance.CONTRADICTS in item.stances for item in items
-        )
+        contrary_count = sum(EvidenceStance.CONTRADICTS in item.stances for item in items)
         return tuple(items[: max(20, contrary_count)])
 
     def _positions(self) -> tuple[tuple[ContextPositionDTO, ...], tuple[str, ...]]:
@@ -349,9 +345,7 @@ class ResearchContextBuilder:
             context = package()
             estimate = (len(context.model_dump_json()) + 3) // 4
         context = context.model_copy(
-            update={
-                "budget": context.budget.model_copy(update={"estimated_tokens": estimate})
-            }
+            update={"budget": context.budget.model_copy(update={"estimated_tokens": estimate})}
         )
         warnings = ["CONTEXT_TRUNCATED"] if truncated else []
         if estimate > requested:

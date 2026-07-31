@@ -34,7 +34,7 @@ MONITORING_SCHEMA_VERSION = 2
 # futures identities, and OTC spot/CFD seeds. Evaluation remains asset-aware:
 # DCE has no quote path and stays NOT_EVALUATED without invented settlements.
 _PRICE_RULE_MARKETS = frozenset(
-    {Market.A_SHARE, Market.US, Market.CME, Market.DCE, Market.OTC}
+    {Market.A_SHARE, Market.US, Market.KR, Market.CME, Market.DCE, Market.OTC}
 )
 
 
@@ -73,6 +73,7 @@ class MonitorRule:
     price_threshold: Decimal | None
     risk_status_threshold: RiskOverallStatus | None
     max_fact_age_seconds: int
+    description: str | None = None
     fact_type: TradePlanFactType | None = None
     metric_key: str | None = None
     comparator: TradePlanComparator | None = None
@@ -87,6 +88,8 @@ class MonitorRule:
             raise DataContractError("severity is invalid")
         if type(self.max_fact_age_seconds) is not int or self.max_fact_age_seconds <= 0:
             raise DataContractError("max_fact_age_seconds must be positive int")
+        if self.description is not None:
+            _text(self.description, "description", 500)
         price_rule = self.rule_type in {
             MonitorRuleType.PRICE_ABOVE,
             MonitorRuleType.PRICE_BELOW,
@@ -97,7 +100,7 @@ class MonitorRule:
             _asset, market, _symbol = parse_instrument_id(self.instrument_id)
             if market not in _PRICE_RULE_MARKETS:
                 raise DataContractError(
-                    "price rule market must be A_SHARE, US, CME, DCE, or OTC",
+                    "price rule market must be A_SHARE, US, KR, CME, DCE, or OTC",
                     details={"market": market.value},
                 )
             _decimal(self.price_threshold, "price_threshold", positive=True)
@@ -235,6 +238,7 @@ class MonitorDefinition:
         expected_market = {
             MonitorCadence.A_SHARE_POST_MARKET: Market.A_SHARE,
             MonitorCadence.US_POST_MARKET: Market.US,
+            MonitorCadence.KR_POST_MARKET: Market.KR,
         }.get(self.cadence)
         if expected_market is not None:
             for rule in self.rules:
@@ -340,24 +344,34 @@ class MonitorEventResolution:
 
 @dataclass(frozen=True, slots=True)
 class MonitorNotificationMessage:
-    source_event_id: str
+    notification_id: str
+    source_event_id: str | None
+    source_run_id: str | None
     channel: MonitorNotificationChannel
     title: str
     body: str
     created_at: datetime
 
     def __post_init__(self) -> None:
-        _text(self.source_event_id, "source_event_id", 128)
+        _text(self.notification_id, "notification_id", 128)
+        if (self.source_event_id is None) == (self.source_run_id is None):
+            raise DataContractError("monitor notification requires exactly one event or run source")
+        if self.source_event_id is not None:
+            _text(self.source_event_id, "source_event_id", 128)
+        if self.source_run_id is not None:
+            _text(self.source_run_id, "source_run_id", 128)
         if not isinstance(self.channel, MonitorNotificationChannel):
             raise DataContractError("monitor notification channel is invalid")
         _text(self.title, "title", 200)
-        _text(self.body, "body", 2000)
+        _text(self.body, "body", 4000)
         _aware(self.created_at, "created_at")
 
 
 @dataclass(frozen=True, slots=True)
 class MonitorNotificationOutboxEntry:
-    source_event_id: str
+    notification_id: str
+    source_event_id: str | None
+    source_run_id: str | None
     channel: MonitorNotificationChannel
     title: str
     body: str
@@ -371,13 +385,19 @@ class MonitorNotificationOutboxEntry:
     last_error_code: str | None = None
 
     def __post_init__(self) -> None:
-        _text(self.source_event_id, "source_event_id", 128)
+        _text(self.notification_id, "notification_id", 128)
+        if (self.source_event_id is None) == (self.source_run_id is None):
+            raise DataContractError("monitor notification requires exactly one event or run source")
+        if self.source_event_id is not None:
+            _text(self.source_event_id, "source_event_id", 128)
+        if self.source_run_id is not None:
+            _text(self.source_run_id, "source_run_id", 128)
         if not isinstance(self.channel, MonitorNotificationChannel):
             raise DataContractError("monitor notification channel is invalid")
         if not isinstance(self.status, MonitorNotificationStatus):
             raise DataContractError("monitor notification status is invalid")
         _text(self.title, "title", 200)
-        _text(self.body, "body", 2000)
+        _text(self.body, "body", 4000)
         if type(self.attempt_count) is not int or self.attempt_count < 0:
             raise DataContractError("notification attempt_count must be nonnegative")
         _aware(self.next_attempt_at, "next_attempt_at")

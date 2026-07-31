@@ -2,9 +2,10 @@
 useDefault = true
 
 [allowlist]
-description = "Machine-local ignored secrets and generated Python bytecode"
+description = "Machine-local secrets and generated runtime/build artifacts"
 paths = [
   '''^\.env(?:\..*)?$''',
   '''^data/secrets/''',
+  '''^console/dist/''',
   '''(?:^|/)__pycache__/''',
 ]

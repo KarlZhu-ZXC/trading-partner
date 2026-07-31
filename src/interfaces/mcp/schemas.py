@@ -106,7 +106,7 @@ class MarketGetMockSnapshotInput(BaseModel):
 
     @field_validator("market", mode="before")
     @classmethod
-    def _market_exact(cls, value: object) -> object:
+    def _market_normalized(cls, value: object) -> object:
         if isinstance(value, Market):
             return value
         if isinstance(value, str):
@@ -144,9 +144,7 @@ class InvestmentCaseCreateInput(BaseModel):
         }:
             instrument = self.primary_instrument_id
             if instrument is None or not instrument.strip():
-                raise ValueError(
-                    "COMPANY/CATALYST case requires non-empty primary_instrument_id"
-                )
+                raise ValueError("COMPANY/CATALYST case requires non-empty primary_instrument_id")
         return self
 
 
@@ -236,9 +234,7 @@ class ThesisRevisionConfirmInput(BaseModel):
             self.rejection_reason is None or not self.rejection_reason.strip()
         ):
             raise ValueError("action=reject requires non-empty rejection_reason")
-        if self.action == "withdraw" and (
-            self.review_note is None or not self.review_note.strip()
-        ):
+        if self.action == "withdraw" and (self.review_note is None or not self.review_note.strip()):
             raise ValueError("action=withdraw requires non-empty review_note")
         if self.reviewed_by == "codex" and self.action in {"confirm", "reject"}:
             raise ValueError("reviewed_by=codex only allows action=withdraw")
@@ -297,27 +293,24 @@ class InstrumentResolveInput(BaseModel):
         if isinstance(value, Market):
             return value
         if isinstance(value, str):
-            # Case-sensitive exact match only (same as Phase 1A market tools).
+            normalized = value.strip().casefold()
             for member in Market:
-                if member.value == value:
+                if member.value.casefold() == normalized:
                     return member
-            raise ValueError(
-                f"market must be exactly one of {[m.value for m in Market]}"
-            )
+            raise ValueError(f"market must be one of {[m.value for m in Market]}")
         raise ValueError("market must be a string enum value")
 
     @field_validator("asset_type", mode="before")
     @classmethod
-    def _asset_type_exact(cls, value: object) -> object:
+    def _asset_type_normalized(cls, value: object) -> object:
         if value is None or isinstance(value, AssetType):
             return value
         if isinstance(value, str):
+            normalized = value.strip().casefold()
             for member in AssetType:
-                if member.value == value:
+                if member.value.casefold() == normalized:
                     return member
-            raise ValueError(
-                f"asset_type must be exactly one of {[m.value for m in AssetType]}"
-            )
+            raise ValueError(f"asset_type must be one of {[m.value for m in AssetType]}")
         raise ValueError("asset_type must be a string enum value or null")
 
 
@@ -326,9 +319,7 @@ class InstrumentResolveInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _optional_aware_datetime(
-    value: datetime | None, *, field_name: str
-) -> datetime | None:
+def _optional_aware_datetime(value: datetime | None, *, field_name: str) -> datetime | None:
     if value is None:
         return None
     try:
@@ -546,9 +537,7 @@ class JournalAppendInput(BaseModel):
     topic_tags: tuple[str, ...] = ()
     related_entity_type: JournalRelatedEntityType | None = None
     related_entity_id: str | None = None
-    supersedes_journal_id: str | None = Field(
-        default=None, pattern=JOURNAL_ID_UUID7_PATTERN
-    )
+    supersedes_journal_id: str | None = Field(default=None, pattern=JOURNAL_ID_UUID7_PATTERN)
     idempotency_key: str = Field(min_length=1, max_length=128)
 
     @field_validator("instrument_ids", "topic_tags", mode="before")
@@ -598,17 +587,13 @@ class DecisionRecordAppendInput(BaseModel):
     thesis_revision_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     report_ids: tuple[str, ...] = ()
-    supersedes_decision_id: str | None = Field(
-        default=None, pattern=DECISION_ID_UUID7_PATTERN
-    )
+    supersedes_decision_id: str | None = Field(default=None, pattern=DECISION_ID_UUID7_PATTERN)
     position_context_snapshot_id: str | None = Field(
         default=None, pattern=SNAPSHOT_ID_UUID7_PATTERN
     )
     idempotency_key: str = Field(min_length=1, max_length=128)
 
-    @field_validator(
-        "thesis_revision_ids", "evidence_ids", "report_ids", mode="before"
-    )
+    @field_validator("thesis_revision_ids", "evidence_ids", "report_ids", mode="before")
     @classmethod
     def _id_tuples(cls, value: object) -> object:
         return _coerce_tuple(value)
@@ -635,9 +620,7 @@ class DecisionRecordAppendInput(BaseModel):
         pattern = re.compile(REV_ID_UUID7_PATTERN)
         for item in value:
             if not pattern.fullmatch(item):
-                raise ValueError(
-                    f"thesis_revision_ids items must match rev_<uuid7>, got {item!r}"
-                )
+                raise ValueError(f"thesis_revision_ids items must match rev_<uuid7>, got {item!r}")
         return value
 
     @field_validator("evidence_ids")
@@ -646,9 +629,7 @@ class DecisionRecordAppendInput(BaseModel):
         pattern = re.compile(EVIDENCE_ID_UUID7_PATTERN)
         for item in value:
             if not pattern.fullmatch(item):
-                raise ValueError(
-                    f"evidence_ids items must match evidence_<uuid7>, got {item!r}"
-                )
+                raise ValueError(f"evidence_ids items must match evidence_<uuid7>, got {item!r}")
         return value
 
     @field_validator("report_ids")
@@ -657,9 +638,7 @@ class DecisionRecordAppendInput(BaseModel):
         pattern = re.compile(REPORT_ID_UUID7_PATTERN)
         for item in value:
             if not pattern.fullmatch(item):
-                raise ValueError(
-                    f"report_ids items must match report_<uuid7>, got {item!r}"
-                )
+                raise ValueError(f"report_ids items must match report_<uuid7>, got {item!r}")
         return value
 
     @field_validator("primary_instrument_id")

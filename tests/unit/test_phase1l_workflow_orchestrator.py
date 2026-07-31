@@ -241,9 +241,7 @@ def _orchestrator(
     dependencies.portfolio.get_account_positions.return_value = _success("req_positions")
     dependencies.portfolio.analyze_portfolio.return_value = _success("req_portfolio")
     dependencies.derived.build = AsyncMock(return_value=_success("req_derived"))
-    dependencies.peer_comparison.compare = AsyncMock(
-        return_value=_success("req_peer_comparison")
-    )
+    dependencies.peer_comparison.compare = AsyncMock(return_value=_success("req_peer_comparison"))
     dependencies.transactions.list_durable_transactions.return_value = _success(
         "req_durable_transactions"
     )
@@ -283,9 +281,7 @@ async def test_peer_comparison_is_one_replay_safe_workflow_step() -> None:
     assert first.ok and replay.ok
     assert first.data is not None
     assert first.data.workflow_type is WorkflowType.PEER_COMPARISON
-    assert tuple(fact.receipt.step_name for fact in first.data.facts) == (
-        "peer_comparison_facts",
-    )
+    assert tuple(fact.receipt.step_name for fact in first.data.facts) == ("peer_comparison_facts",)
     assert replay.data == first.data
     dependencies.peer_comparison.compare.assert_awaited_once_with(request)
 
@@ -298,9 +294,7 @@ async def test_peer_comparison_is_one_replay_safe_workflow_step() -> None:
             WorkflowType.DEEP_DIVE,
             "equity:US:NVDA",
             "run_deep_dive",
-            ResearchRunDeepDiveInput(
-                idempotency_key="workflow-1", case_id="case_1", as_of=NOW
-            ),
+            ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW),
         ),
         (
             WorkflowType.CATALYST_REVIEW,
@@ -320,17 +314,13 @@ async def test_peer_comparison_is_one_replay_safe_workflow_step() -> None:
             WorkflowType.US_MARKET_REVIEW,
             "equity:US:NVDA",
             "run_us_market_review",
-            USRunMarketReviewInput(
-                idempotency_key="workflow-1", as_of=NOW, prediction_topic="Fed"
-            ),
+            USRunMarketReviewInput(idempotency_key="workflow-1", as_of=NOW, prediction_topic="Fed"),
         ),
         (
             WorkflowType.PORTFOLIO_REVIEW,
             "equity:US:NVDA",
             "run_portfolio_review",
-            PortfolioRunReviewInput(
-                idempotency_key="workflow-1", refresh_accounts=True, as_of=NOW
-            ),
+            PortfolioRunReviewInput(idempotency_key="workflow-1", refresh_accounts=True, as_of=NOW),
         ),
     ),
 )
@@ -431,6 +421,34 @@ async def test_deep_dive_can_run_ad_hoc_when_instrument_has_no_case() -> None:
 
 
 @pytest.mark.asyncio
+async def test_us_etf_deep_dive_uses_asset_aware_recipe_without_company_facts() -> None:
+    service, dependencies = _orchestrator("etf:US:UGL")
+
+    result = await service.run_deep_dive(
+        ResearchRunDeepDiveInput(
+            idempotency_key="workflow-etf-1",
+            instrument_id="etf:US:UGL",
+            as_of=NOW,
+            create_case=False,
+        )
+    )
+
+    assert result.ok is True and result.data is not None
+    assert result.data.status is WorkflowRunStatus.SUCCEEDED
+    assert {fact.receipt.tool_name for fact in result.data.facts} >= {
+        "market_data_get/composite",
+        "us_company_get/live_news",
+        "us_context_get/sentiment",
+        "us_context_get/macro",
+    }
+    dependencies.us_research.get_fundamental_snapshot.assert_not_awaited()
+    dependencies.us_research.get_fundamental_statements.assert_not_awaited()
+    dependencies.us_research.get_company_updates.assert_not_awaited()
+    dependencies.us_context.get_live_news.assert_awaited_once()
+    dependencies.us_context.get_sentiment_snapshot.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() -> None:
     service, dependencies = _orchestrator()
     created_case = _CaseData(case_id="case_created", primary_instrument_id="equity:US:NVDA")
@@ -506,9 +524,10 @@ async def test_workflow_receipts_only_name_public_tools() -> None:
 
     assert result.ok is True and result.data is not None
     assert {fact.receipt.tool_name for fact in result.data.facts} == {
-        "account_get",
-        "portfolio_analyze",
-        "portfolio_run_review",
+        "account_get/positions",
+        "account_get/transactions",
+        "portfolio_analyze/exposure",
+        "research_workflow_run/portfolio_review",
     }
 
 
@@ -640,9 +659,7 @@ async def test_a_share_case_capital_metrics_follow_asset_type(
     service, dependencies = _orchestrator(instrument_id)
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(
-            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
-        )
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True and result.data is not None
@@ -657,9 +674,7 @@ async def test_a_share_equity_deep_dive_includes_structured_financial_statements
     service, dependencies = _orchestrator("equity:A_SHARE:600519.SH")
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(
-            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
-        )
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True and result.data is not None
@@ -706,9 +721,7 @@ async def test_a_share_deep_dive_does_not_infer_hog_cycle_from_instrument() -> N
     service, dependencies = _orchestrator("equity:A_SHARE:002714.SZ")
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(
-            idempotency_key="workflow-1", case_id="case_1", as_of=NOW
-        )
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True

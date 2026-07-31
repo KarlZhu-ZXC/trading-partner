@@ -10,6 +10,9 @@ from enum import StrEnum
 class Market(StrEnum):
     A_SHARE = "A_SHARE"
     US = "US"
+    # Korea Exchange (KOSPI/KOSDAQ) instruments. Yahoo symbols are provider
+    # aliases; canonical instrument IDs keep the bare exchange code.
+    KR = "KR"
     # Phase 3A append-only: futures/spot identity namespaces. CME is a
     # Provider/identity market namespace; exchange venue remains on Instrument.
     CME = "CME"

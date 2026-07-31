@@ -28,6 +28,7 @@ def test_entity_id_prefix_frozen_values() -> None:
         "monitor",
         "monitor_event",
         "monitor_run",
+        "monitor_notification",
         "monitor_resolution",
         "futures_product",
         "futures_product_version",

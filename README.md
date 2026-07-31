@@ -1,6 +1,6 @@
 # Trading Partner
 
-**A local-first investment judgment companion for A-shares, US markets, and selected cross-asset facts.**
+**A local-first investment judgment companion for A-shares, US and Korean markets, and selected cross-asset facts.**
 
 [![CI](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml/badge.svg)](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml)
 [![Release](https://img.shields.io/github/v/release/KarlZhu-ZXC/trading-partner)](https://github.com/KarlZhu-ZXC/trading-partner/releases)
@@ -9,7 +9,7 @@
 [![Buy me a coffee](https://img.shields.io/badge/Buy_me_a_coffee-PayPal-0070BA?logo=paypal&logoColor=white)](https://paypal.me/xczhu)
 
 <p align="center">
-  <img src="docs/assets/readme/hero.png" alt="Trading Partner is a local-first investment judgment companion for A-shares and US markets" width="100%" />
+  <img src="docs/assets/readme/hero.png" alt="Trading Partner is a local-first investment judgment companion for A-shares, US and Korean markets" width="100%" />
 </p>
 
 Trading Partner is a durable research and portfolio context service exposed through
@@ -38,18 +38,21 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Maintain a durable research file for an instrument or higher-level topic, including
   its current investment judgments, revision history, journals, decisions, and
   contrary-first Challenge Reviews.
-- Resolve A-share and US instruments and retrieve provider-backed market,
+- Resolve A-share, US, and selected Korea Exchange instruments and retrieve provider-backed market,
   fundamental, filing, macro, news, sentiment, and prediction-market context.
+- Resolve supported typed IDs automatically on first use and fetch up to 50 quotes
+  per bounded batch with one typed result per instrument.
 - Read positions and transactions from Schwab, Moomoo OpenD, or strict manual CSV
-  sources; account refresh is explicit and read-only.
-- Persist Moomoo or CSV Watchlists with group and membership history.
+  sources; durable reads never contact a broker, while refresh is explicit and read-only.
+- Persist Moomoo or CSV Watchlists with group and membership history; Moomoo's
+  aggregate `All` group is the default durable read scope.
 - Analyze portfolio exposure, simulate additions, and run deterministic Risk Engine v2
   checks without placing orders.
 - Propose and explicitly confirm versioned Trade Plans, calculate non-executing A-share/US
   position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
 - Create durable price, volume, technical, fundamental, company-event, macro, sentiment,
   Thesis-state, and portfolio-risk monitors with transition-only events.
-- Produce shared A-share/US daily and weekly technical analysis, including indicators,
+- Produce shared A-share/US/KR daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
 - Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
   scoped Sina quote and Eastmoney daily-derived fallbacks, and 1m–monthly
@@ -64,6 +67,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   same-market peer-comparison workflows while keeping the AI host as the synthesizer.
 - Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
   backtests and import downloaded result JSON with explicit reproducibility gaps.
+- Browse system health, all 28 MCP capabilities, Monitor runs/events, durable
+  accounts/Watchlists, and operational state in an LLM-free local web console.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -128,7 +133,8 @@ generic stdio MCP host, use the equivalent configuration:
 
 After connecting, call `system_health` first. Then verify the specific market and
 account providers you intend to use; a healthy MCP process does not imply that every
-optional external provider is configured or reachable.
+optional external provider is configured or reachable. Health output labels local
+live probes separately from configuration-only checks.
 
 ## <img src="docs/assets/readme/sections/operations.svg" alt="" width="24" /> Operational commands
 
@@ -145,12 +151,13 @@ uv run trading-partner-schwab-auth status
 # Manually force one market-close cadence (diagnostic use)
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
+uv run trading-partner-monitor-run --cadence KR_POST_MARKET
 
 # Install the token-free unified hourly dispatcher
 uv run trading-partner-monitor-scheduler install
 uv run trading-partner-monitor-scheduler status
 
-# Due-check INTERVAL plus A-share/US post-market groups
+# Due-check INTERVAL plus A-share/US/KR post-market groups
 uv run trading-partner-monitor-run due
 
 # Optional Telegram delivery: inspect, test, or retry the durable outbox
@@ -160,6 +167,15 @@ uv run trading-partner-monitor-notifications flush
 
 # Explicitly refresh free futures definitions and persist EOD statistics
 uv run trading-partner-futures-sync --product CME:GC --trade-date 2026-07-24
+
+# Start the loopback-only console API (frontend: cd console && npm run dev)
+uv sync --extra console
+uv run trading-partner-console
+
+# Inspect retention, create a backup, or preview expired-cache pruning
+uv run trading-partner-maintenance status
+uv run trading-partner-maintenance backup
+uv run trading-partner-maintenance prune-cache --retention-days 30
 ```
 
 These commands never execute an order.
@@ -170,7 +186,7 @@ and `TELEGRAM_CHAT_ID` in the gitignored `.env`. Only Monitor state-transition
 events are pushed; repeat observations remain in run history without notifying
 again. The hourly local dispatcher retries the durable outbox without opening a
 Codex task or consuming LLM tokens.
-The unified dispatcher also owns A-share and US post-market Monitor execution;
+The unified dispatcher also owns A-share, US, and KR post-market Monitor execution;
 Codex market-review Automations must not duplicate Monitor evaluation or alerts.
 
 ## <img src="docs/assets/readme/sections/architecture.svg" alt="" width="24" /> Architecture
@@ -226,6 +242,11 @@ flowchart TB
         Prediction[Polymarket<br/>current probabilities]
     end
 
+    subgraph KR[Korea Exchange market facts]
+        KRYahoo[Yahoo Finance<br/>.KS · .KQ · KOSPI/KOSDAQ indices<br/>quotes · bars]
+        XKRX[XKRX calendar<br/>holiday-aware post-market cadence]
+    end
+
     subgraph Cross[Metals, futures, and cross-asset]
         Continuous[Yahoo continuous futures<br/>→ Sina quote fallback<br/>→ Eastmoney daily-bar fallback]
         CME[CME public reference<br/>contracts · settlement · curve]
@@ -251,6 +272,8 @@ flowchart TB
     Router --> FRED
     Router --> Social
     Router --> Prediction
+    Router --> KRYahoo
+    App --> XKRX
     Router --> Continuous
     Router --> CME
     Router --> DCE
@@ -293,6 +316,9 @@ uv run ruff check .
 uv run mypy src
 uv run pytest
 uv run python scripts/smoke_isolated_wheel.py
+uv run pip-audit
+uv run cyclonedx-py environment .venv/bin/python --pyproject pyproject.toml -o /tmp/trading-partner.cdx.json
+cd console && npm ci && npm audit && npm run lint && npm test
 gitleaks git --redact --no-banner --log-opts=HEAD
 ```
 

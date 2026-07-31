@@ -26,7 +26,7 @@ from application.dto.us_research import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
-from application.services.instrument_master_service import InstrumentMasterService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_company_update_service import USCompanyUpdateService
 from application.services.us_filing_service import USFilingService
 from application.services.us_fundamental_service import USFundamentalService
@@ -47,7 +47,7 @@ class USResearchToolCoordinator:
     def __init__(
         self,
         *,
-        instrument_master: InstrumentMasterService,
+        instrument_access: InstrumentAccessService,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -55,7 +55,7 @@ class USResearchToolCoordinator:
         filing_service: USFilingService,
         company_update_service: USCompanyUpdateService,
     ) -> None:
-        self._master = instrument_master
+        self._instrument_access = instrument_access
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
@@ -68,7 +68,7 @@ class USResearchToolCoordinator:
     ) -> ToolEnvelope[USFundamentalSnapshotDTO]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             base, official, actions = await asyncio.gather(
                 self._fundamental.get_snapshot(instrument, as_of),
                 self._fundamental.get_official_snapshot(instrument, as_of),
@@ -113,7 +113,7 @@ class USResearchToolCoordinator:
     ) -> ToolEnvelope[USFinancialStatementsDTO]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result = await self._fundamental.get_statements(
                 instrument,
                 frequency=request.frequency,
@@ -137,7 +137,7 @@ class USResearchToolCoordinator:
     ) -> ToolEnvelope[tuple[USFilingDTO, ...]]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result = await self._filing.get_filings(
                 instrument,
                 forms=request.forms,
@@ -159,7 +159,7 @@ class USResearchToolCoordinator:
     ) -> ToolEnvelope[tuple[USInsiderTransactionDTO, ...]]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result = await self._filing.get_insider_activity(
                 instrument,
                 start=request.start,
@@ -179,7 +179,7 @@ class USResearchToolCoordinator:
     ) -> ToolEnvelope[USCompanyUpdateDTO]:
         request_id, as_of = self._begin(request.as_of)
         try:
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             result = await self._updates.get_update(
                 instrument,
                 since=request.since,
@@ -209,7 +209,7 @@ class USResearchToolCoordinator:
                     (),
                     extra_codes=("EVENTS_INSTRUMENT_REQUIRED_FOR_PROVIDER_SEARCH",),
                 )
-            instrument = self._master.get(request.instrument_id)
+            instrument = await self._instrument_access.get(request.instrument_id, as_of=as_of)
             zone = ZoneInfo(instrument.timezone)
             since = (
                 datetime.combine(request.start, time.min, tzinfo=zone)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from domain.common.errors import WatchlistMembershipNotFound
@@ -92,17 +92,23 @@ class SqlAlchemyWatchlistMembershipRepository:
         limit: int = 500,
         offset: int = 0,
     ) -> tuple[WatchlistMembership, ...]:
-        stmt = select(WatchlistMembershipRow).where(
-            WatchlistMembershipRow.group_id == group_id
-        )
+        stmt = select(WatchlistMembershipRow).where(WatchlistMembershipRow.group_id == group_id)
         if not include_inactive:
             stmt = stmt.where(WatchlistMembershipRow.active == 1)
         stmt = (
-            stmt.order_by(WatchlistMembershipRow.last_synced_at.desc())
-            .offset(offset)
-            .limit(limit)
+            stmt.order_by(WatchlistMembershipRow.last_synced_at.desc()).offset(offset).limit(limit)
         )
         return tuple(_to_domain(row) for row in self._session.scalars(stmt).all())
+
+    def count(self, *, group_id: str, include_inactive: bool = False) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(WatchlistMembershipRow)
+            .where(WatchlistMembershipRow.group_id == group_id)
+        )
+        if not include_inactive:
+            stmt = stmt.where(WatchlistMembershipRow.active == 1)
+        return int(self._session.scalar(stmt) or 0)
 
     def upsert(self, membership: WatchlistMembership) -> WatchlistMembership:
         row = self._session.get(
@@ -112,9 +118,7 @@ class SqlAlchemyWatchlistMembershipRepository:
             row = self._session.scalar(
                 select(WatchlistMembershipRow)
                 .where(WatchlistMembershipRow.group_id == membership.group_id)
-                .where(
-                    WatchlistMembershipRow.provider_code == membership.provider_code
-                )
+                .where(WatchlistMembershipRow.provider_code == membership.provider_code)
                 .with_for_update()
             )
             if row is not None:
@@ -177,9 +181,7 @@ class SqlAlchemyWatchlistMembershipRepository:
             WatchlistMembershipRow.active == 1,
         )
         if seen_provider_codes:
-            stmt = stmt.where(
-                WatchlistMembershipRow.provider_code.not_in(seen_provider_codes)
-            )
+            stmt = stmt.where(WatchlistMembershipRow.provider_code.not_in(seen_provider_codes))
         rows = self._session.scalars(stmt.with_for_update()).all()
         for row in rows:
             row.active = 0

@@ -55,6 +55,19 @@ def _instrument() -> Instrument:
     )
 
 
+def _etf() -> Instrument:
+    return Instrument(
+        instrument_id="etf:US:UGL",
+        symbol="UGL",
+        name="ProShares Ultra Gold",
+        market=Market.US,
+        exchange="NYSEARCA",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.ETF,
+    )
+
+
 def _adapter(transport: FunctionTransport) -> AlphaVantageResearchAdapter:
     return AlphaVantageResearchAdapter(transport, api_keys=(API_KEY,), clock=FixedClock(NOW))
 
@@ -204,3 +217,15 @@ async def test_news_maps_sentiment_and_keeps_api_key_request_only() -> None:
     assert article.relevance == Decimal("0.91")
     assert API_KEY not in repr(transport.requests[0])
     assert transport.requests[0].params["time_to"] == "20260717T2359"
+
+
+@pytest.mark.asyncio
+async def test_news_accepts_us_etf_without_opening_equity_fundamentals() -> None:
+    transport = FunctionTransport({"NEWS_SENTIMENT": {"feed": []}})
+
+    success = await _adapter(transport).get_news(
+        _etf(), query=None, start=date(2026, 7, 17), end=None, limit=10, as_of=NOW
+    )
+
+    assert success.value.instrument_id == "etf:US:UGL"
+    assert transport.requests[0].params["tickers"] == "UGL"

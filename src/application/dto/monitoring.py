@@ -55,15 +55,9 @@ MonitorStatusInput = Annotated[MonitorStatus, BeforeValidator(_normalize_enum_wi
 MonitorCadenceInput = Annotated[MonitorCadence, BeforeValidator(_normalize_enum_wire_value)]
 MonitorRuleTypeInput = Annotated[MonitorRuleType, BeforeValidator(_normalize_enum_wire_value)]
 MonitorSeverityInput = Annotated[MonitorSeverity, BeforeValidator(_normalize_enum_wire_value)]
-MonitorEventActionInput = Annotated[
-    MonitorEventAction, BeforeValidator(_normalize_enum_wire_value)
-]
-RiskOverallStatusInput = Annotated[
-    RiskOverallStatus, BeforeValidator(_normalize_enum_wire_value)
-]
-TradePlanFactTypeInput = Annotated[
-    TradePlanFactType, BeforeValidator(_normalize_enum_wire_value)
-]
+MonitorEventActionInput = Annotated[MonitorEventAction, BeforeValidator(_normalize_enum_wire_value)]
+RiskOverallStatusInput = Annotated[RiskOverallStatus, BeforeValidator(_normalize_enum_wire_value)]
+TradePlanFactTypeInput = Annotated[TradePlanFactType, BeforeValidator(_normalize_enum_wire_value)]
 TradePlanComparatorInput = Annotated[
     TradePlanComparator, BeforeValidator(_normalize_enum_wire_value)
 ]
@@ -71,6 +65,7 @@ TradePlanComparatorInput = Annotated[
 
 class MonitorRuleInput(_DTO):
     rule_code: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
     rule_type: MonitorRuleTypeInput
     severity: MonitorSeverityInput = MonitorSeverity.MEDIUM
     instrument_id: str | None = None
@@ -98,6 +93,7 @@ class MonitorRuleInput(_DTO):
     def to_domain(self) -> MonitorRule:
         return MonitorRule(
             rule_code=self.rule_code,
+            description=self.description.strip(),
             rule_type=self.rule_type,
             severity=self.severity,
             instrument_id=self.instrument_id,
@@ -234,6 +230,7 @@ class MonitorEventResolveInput(_DTO):
 
 class MonitorRuleDTO(_DTO):
     rule_code: str
+    description: str | None
     rule_type: MonitorRuleType
     severity: MonitorSeverity
     instrument_id: str | None
@@ -335,9 +332,7 @@ class MonitorEventDTO(_DTO):
         if resolution is None:
             return dto
         return dto.model_copy(
-            update={
-                "latest_resolution": MonitorEventResolutionDTO.from_domain(resolution)
-            }
+            update={"latest_resolution": MonitorEventResolutionDTO.from_domain(resolution)}
         )
 
 
@@ -397,10 +392,36 @@ class MonitorRunListDTO(_DTO):
     execution_effect: Literal[False] = False
 
 
+class MonitorLatestRunSummaryDTO(_DTO):
+    run_id: str
+    cadence: MonitorCadence | None
+    completed_at: datetime
+    status: MonitorRunStatus
+    observation_count: int = Field(ge=0)
+    warning_codes: tuple[str, ...]
+    error_codes: tuple[str, ...]
+    observation_history_complete: bool
+
+    @classmethod
+    def from_domain(cls, value: MonitorRun) -> MonitorLatestRunSummaryDTO:
+        return cls(
+            run_id=value.run_id,
+            cadence=value.cadence,
+            completed_at=value.completed_at,
+            status=value.status,
+            observation_count=len(value.observations),
+            warning_codes=value.warning_codes,
+            error_codes=value.error_codes,
+            observation_history_complete=value.observation_history_complete,
+        )
+
+
 class MonitorDashboardItemDTO(_DTO):
     monitor: MonitorDefinitionDTO
+    monitor_created_at: datetime
+    monitor_updated_at: datetime
     rule_states: tuple[MonitorRuleStateDTO, ...]
-    latest_run: MonitorRunDTO | None
+    latest_run: MonitorLatestRunSummaryDTO | None
     last_run_at: datetime | None
     next_due_at: datetime | None
     due: bool
@@ -419,9 +440,7 @@ class MonitorDashboardDTO(_DTO):
     execution_effect: Literal[False] = False
 
 
-def _validate_schedule(
-    cadence: MonitorCadence, interval_minutes: int | None
-) -> None:
+def _validate_schedule(cadence: MonitorCadence, interval_minutes: int | None) -> None:
     if cadence is MonitorCadence.INTERVAL:
         if interval_minutes is None or interval_minutes % 60 != 0:
             raise ValueError("INTERVAL cadence requires whole-hour interval_minutes")

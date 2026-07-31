@@ -62,6 +62,7 @@ def _rules_to_json(rules: tuple[MonitorRule, ...]) -> str:
         [
             {
                 "rule_code": item.rule_code,
+                "description": item.description,
                 "rule_type": item.rule_type.value,
                 "severity": item.severity.value,
                 "instrument_id": item.instrument_id,
@@ -76,13 +77,9 @@ def _rules_to_json(rules: tuple[MonitorRule, ...]) -> str:
                 "max_fact_age_seconds": item.max_fact_age_seconds,
                 "fact_type": item.fact_type.value if item.fact_type is not None else None,
                 "metric_key": item.metric_key,
-                "comparator": (
-                    item.comparator.value if item.comparator is not None else None
-                ),
+                "comparator": (item.comparator.value if item.comparator is not None else None),
                 "numeric_threshold": (
-                    str(item.numeric_threshold)
-                    if item.numeric_threshold is not None
-                    else None
+                    str(item.numeric_threshold) if item.numeric_threshold is not None else None
                 ),
                 "event_after": (
                     item.event_after.isoformat() if item.event_after is not None else None
@@ -103,6 +100,7 @@ def _rules_from_json(payload: str) -> tuple[MonitorRule, ...]:
         return tuple(
             MonitorRule(
                 rule_code=str(item["rule_code"]),
+                description=item.get("description"),
                 rule_type=MonitorRuleType(item["rule_type"]),
                 severity=MonitorSeverity(item["severity"]),
                 instrument_id=item.get("instrument_id"),
@@ -240,7 +238,9 @@ def _notification_entry(
     row: MonitorNotificationOutboxRow,
 ) -> MonitorNotificationOutboxEntry:
     return MonitorNotificationOutboxEntry(
+        notification_id=row.notification_id,
         source_event_id=row.source_event_id,
+        source_run_id=row.source_run_id,
         channel=MonitorNotificationChannel(row.channel),
         title=row.title,
         body=row.body,
@@ -258,21 +258,47 @@ def _notification_entry(
 def _run(
     row: MonitorRunRow,
     observations: tuple[MonitorRunObservation, ...],
+    *,
+    scoped_monitor_id: str | None = None,
 ) -> MonitorRun:
+    if scoped_monitor_id is None:
+        selected_monitor_ids = row.selected_monitor_ids
+        monitors_evaluated = row.monitors_evaluated
+        rules_evaluated = row.rules_evaluated
+        warning_codes = row.warning_codes
+        error_codes = row.error_codes
+        status = MonitorRunStatus(row.status)
+    else:
+        selected_monitor_ids = (scoped_monitor_id,)
+        monitors_evaluated = 1 if observations else 0
+        rules_evaluated = len(observations)
+        warning_codes = tuple(
+            dict.fromkeys(code for item in observations for code in item.warning_codes)
+        )
+        error_codes = tuple(
+            dict.fromkeys(code for item in observations for code in item.error_codes)
+        )
+        status = (
+            MonitorRunStatus.FAILED
+            if not observations
+            else MonitorRunStatus.PARTIAL
+            if error_codes
+            else MonitorRunStatus.SUCCEEDED
+        )
     return MonitorRun(
         run_id=row.run_id,
         requested_monitor_ids=row.requested_monitor_ids,
-        selected_monitor_ids=row.selected_monitor_ids,
+        selected_monitor_ids=selected_monitor_ids,
         cadence=MonitorCadence(row.cadence) if row.cadence is not None else None,
         as_of=datetime.fromisoformat(row.as_of),
         started_at=datetime.fromisoformat(row.started_at),
         completed_at=datetime.fromisoformat(row.completed_at),
-        status=MonitorRunStatus(row.status),
-        monitors_evaluated=row.monitors_evaluated,
-        rules_evaluated=row.rules_evaluated,
+        status=status,
+        monitors_evaluated=monitors_evaluated,
+        rules_evaluated=rules_evaluated,
         events_created=row.events_created,
-        warning_codes=row.warning_codes,
-        error_codes=row.error_codes,
+        warning_codes=warning_codes,
+        error_codes=error_codes,
         observation_history_complete=row.observation_history_complete,
         observations=observations,
         execution_effect=False,
@@ -335,6 +361,15 @@ class SqlAlchemyMonitorRepository:
             )
             return _definition(row) if row is not None else None
 
+    def get_created_at(self, monitor_id: str) -> datetime | None:
+        with Session(self._engine) as session:
+            value = session.scalar(
+                select(MonitorIdentityRow.created_at).where(
+                    MonitorIdentityRow.monitor_id == monitor_id
+                )
+            )
+            return datetime.fromisoformat(value) if value is not None else None
+
     def get_by_idempotency_key(self, key: str) -> MonitorDefinition | None:
         with Session(self._engine) as session:
             row = session.scalar(
@@ -342,9 +377,7 @@ class SqlAlchemyMonitorRepository:
             )
             return _definition(row) if row is not None else None
 
-    def list_current(
-        self, status: MonitorStatus | None = None
-    ) -> tuple[MonitorDefinition, ...]:
+    def list_current(self, status: MonitorStatus | None = None) -> tuple[MonitorDefinition, ...]:
         latest = (
             select(
                 MonitorVersionRow.monitor_id,
@@ -408,14 +441,10 @@ class SqlAlchemyMonitorRepository:
                         monitor_version=value.monitor_version,
                         state=value.state.value,
                         observed_value=(
-                            str(value.observed_value)
-                            if value.observed_value is not None
-                            else None
+                            str(value.observed_value) if value.observed_value is not None else None
                         ),
                         fact_as_of=(
-                            value.fact_as_of.isoformat()
-                            if value.fact_as_of is not None
-                            else None
+                            value.fact_as_of.isoformat() if value.fact_as_of is not None else None
                         ),
                         message=value.message,
                         updated_at=value.updated_at.isoformat(),
@@ -425,9 +454,7 @@ class SqlAlchemyMonitorRepository:
                     row.state = value.state.value
                     row.monitor_version = value.monitor_version
                     row.observed_value = (
-                        str(value.observed_value)
-                        if value.observed_value is not None
-                        else None
+                        str(value.observed_value) if value.observed_value is not None else None
                     )
                     row.fact_as_of = (
                         value.fact_as_of.isoformat() if value.fact_as_of is not None else None
@@ -445,9 +472,7 @@ class SqlAlchemyMonitorRepository:
                         severity=value.severity.value,
                         state=value.state.value,
                         observed_value=(
-                            str(value.observed_value)
-                            if value.observed_value is not None
-                            else None
+                            str(value.observed_value) if value.observed_value is not None else None
                         ),
                         threshold_value=(
                             str(value.threshold_value)
@@ -455,9 +480,7 @@ class SqlAlchemyMonitorRepository:
                             else None
                         ),
                         distance_value=(
-                            str(value.distance_value)
-                            if value.distance_value is not None
-                            else None
+                            str(value.distance_value) if value.distance_value is not None else None
                         ),
                         distance_percent=(
                             str(value.distance_percent)
@@ -465,9 +488,7 @@ class SqlAlchemyMonitorRepository:
                             else None
                         ),
                         fact_as_of=(
-                            value.fact_as_of.isoformat()
-                            if value.fact_as_of is not None
-                            else None
+                            value.fact_as_of.isoformat() if value.fact_as_of is not None else None
                         ),
                         fact_age_seconds=value.fact_age_seconds,
                         warning_codes=value.warning_codes,
@@ -487,9 +508,7 @@ class SqlAlchemyMonitorRepository:
                         event_type=value.event_type.value,
                         severity=value.severity.value,
                         observed_value=(
-                            str(value.observed_value)
-                            if value.observed_value is not None
-                            else None
+                            str(value.observed_value) if value.observed_value is not None else None
                         ),
                         threshold_value=(
                             str(value.threshold_value)
@@ -497,9 +516,7 @@ class SqlAlchemyMonitorRepository:
                             else None
                         ),
                         fact_as_of=(
-                            value.fact_as_of.isoformat()
-                            if value.fact_as_of is not None
-                            else None
+                            value.fact_as_of.isoformat() if value.fact_as_of is not None else None
                         ),
                         message=value.message,
                         created_at=value.created_at.isoformat(),
@@ -510,7 +527,9 @@ class SqlAlchemyMonitorRepository:
             session.add_all(
                 [
                     MonitorNotificationOutboxRow(
+                        notification_id=value.notification_id,
                         source_event_id=value.source_event_id,
+                        source_run_id=value.source_run_id,
                         channel=value.channel.value,
                         title=value.title,
                         body=value.body,
@@ -535,10 +554,8 @@ class SqlAlchemyMonitorRepository:
                 select(MonitorNotificationOutboxRow)
                 .where(
                     MonitorNotificationOutboxRow.channel == channel.value,
-                    MonitorNotificationOutboxRow.status
-                    == MonitorNotificationStatus.PENDING.value,
-                    MonitorNotificationOutboxRow.next_attempt_at
-                    <= as_of.isoformat(),
+                    MonitorNotificationOutboxRow.status == MonitorNotificationStatus.PENDING.value,
+                    MonitorNotificationOutboxRow.next_attempt_at <= as_of.isoformat(),
                 )
                 .order_by(
                     MonitorNotificationOutboxRow.next_attempt_at,
@@ -550,7 +567,7 @@ class SqlAlchemyMonitorRepository:
 
     def record_notification_attempt(
         self,
-        source_event_id: str,
+        notification_id: str,
         channel: MonitorNotificationChannel,
         *,
         status: MonitorNotificationStatus,
@@ -562,22 +579,20 @@ class SqlAlchemyMonitorRepository:
         with Session(self._engine) as session, session.begin():
             row = session.get(
                 MonitorNotificationOutboxRow,
-                (source_event_id, channel.value),
+                notification_id,
             )
-            if row is None:
+            if row is None or row.channel != channel.value:
                 raise PersistenceError(
                     "Monitor notification outbox entry was not found",
                     retryable=False,
-                    details={"source_event_id": source_event_id},
+                    details={"notification_id": notification_id},
                 )
             row.status = status.value
             row.attempt_count += 1
             row.last_attempt_at = attempted_at.isoformat()
             row.next_attempt_at = next_attempt_at.isoformat()
             row.delivered_at = (
-                attempted_at.isoformat()
-                if status is MonitorNotificationStatus.DELIVERED
-                else None
+                attempted_at.isoformat() if status is MonitorNotificationStatus.DELIVERED else None
             )
             row.provider_message_id = provider_message_id
             row.last_error_code = error_code
@@ -597,14 +612,9 @@ class SqlAlchemyMonitorRepository:
                 .where(MonitorNotificationOutboxRow.channel == channel.value)
                 .group_by(MonitorNotificationOutboxRow.status)
             )
-            return {
-                MonitorNotificationStatus(status): int(count)
-                for status, count in rows
-            }
+            return {MonitorNotificationStatus(status): int(count) for status, count in rows}
 
-    def last_notification_delivery_at(
-        self, channel: MonitorNotificationChannel
-    ) -> datetime | None:
+    def last_notification_delivery_at(self, channel: MonitorNotificationChannel) -> datetime | None:
         with Session(self._engine) as session:
             value = session.scalar(
                 select(func.max(MonitorNotificationOutboxRow.delivered_at)).where(
@@ -633,9 +643,7 @@ class SqlAlchemyMonitorRepository:
             )
             return _run(row, observations)
 
-    def list_runs(
-        self, monitor_id: str | None, limit: int
-    ) -> tuple[MonitorRun, ...]:
+    def list_runs(self, monitor_id: str | None, limit: int) -> tuple[MonitorRun, ...]:
         statement = select(MonitorRunRow)
         if monitor_id is not None:
             statement = (
@@ -651,18 +659,23 @@ class SqlAlchemyMonitorRepository:
             rows = tuple(session.scalars(statement))
             values: list[MonitorRun] = []
             for row in rows:
+                observation_statement = select(MonitorRunObservationRow).where(
+                    MonitorRunObservationRow.run_id == row.run_id
+                )
+                if monitor_id is not None:
+                    observation_statement = observation_statement.where(
+                        MonitorRunObservationRow.monitor_id == monitor_id
+                    )
                 observations = tuple(
                     _observation(item)
                     for item in session.scalars(
-                        select(MonitorRunObservationRow)
-                        .where(MonitorRunObservationRow.run_id == row.run_id)
-                        .order_by(
+                        observation_statement.order_by(
                             MonitorRunObservationRow.monitor_id,
                             MonitorRunObservationRow.rule_code,
                         )
                     )
                 )
-                values.append(_run(row, observations))
+                values.append(_run(row, observations, scoped_monitor_id=monitor_id))
             return tuple(values)
 
     def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None:
@@ -674,9 +687,7 @@ class SqlAlchemyMonitorRepository:
             row = session.get(MonitorEventRow, event_id)
             return _event(row) if row is not None else None
 
-    def list_events(
-        self, monitor_id: str | None, limit: int
-    ) -> tuple[MonitorEvent, ...]:
+    def list_events(self, monitor_id: str | None, limit: int) -> tuple[MonitorEvent, ...]:
         statement = select(MonitorEventRow)
         if monitor_id is not None:
             statement = statement.where(MonitorEventRow.monitor_id == monitor_id)
@@ -684,9 +695,7 @@ class SqlAlchemyMonitorRepository:
         with Session(self._engine) as session:
             return tuple(_event(row) for row in session.scalars(statement))
 
-    def append_resolution(
-        self, resolution: MonitorEventResolution
-    ) -> MonitorEventResolution:
+    def append_resolution(self, resolution: MonitorEventResolution) -> MonitorEventResolution:
         try:
             with Session(self._engine) as session, session.begin():
                 session.add(
@@ -704,9 +713,7 @@ class SqlAlchemyMonitorRepository:
         except IntegrityError as exc:
             raise _persistence_error(exc) from exc
 
-    def get_resolution_by_idempotency_key(
-        self, key: str
-    ) -> MonitorEventResolution | None:
+    def get_resolution_by_idempotency_key(self, key: str) -> MonitorEventResolution | None:
         with Session(self._engine) as session:
             row = session.scalar(
                 select(MonitorEventResolutionRow).where(

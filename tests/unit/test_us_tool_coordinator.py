@@ -19,6 +19,7 @@ from application.dto.us_market import (
     TechnicalGetSnapshotInput,
     USGetSnapshotInput,
 )
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_market_context_service import USMarketContextResult
 from application.services.us_tool_coordinator import USToolCoordinator
 from conftest import FixedClock, SequentialIdGenerator
@@ -213,6 +214,7 @@ def _coordinator(
     context: MagicMock | None = None,
     technical: MagicMock | None = None,
     master: MagicMock | None = None,
+    resolver: MagicMock | None = None,
     clock: FixedClock | None = None,
     ids: SequentialIdGenerator | None = None,
 ) -> tuple[USToolCoordinator, MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -245,7 +247,7 @@ def _coordinator(
     clock = clock or FixedClock(NOW)
     ids = ids or SequentialIdGenerator()
     coord = USToolCoordinator(
-        instrument_master=master,
+        instrument_access=InstrumentAccessService(master, resolver or MagicMock()),
         clock=clock,
         id_generator=ids,
         secret_redactor=DefaultSecretRedactor(),
@@ -580,7 +582,14 @@ async def test_request_id_and_effective_as_of_sampled_once() -> None:
         "instrument not found",
         details={"instrument_id": _INSTRUMENT_ID},
     )
-    coord, _m, data, _c, _t = _coordinator(master=master, clock=clock, ids=ids)
+    resolver = MagicMock()
+    resolver.resolve_dynamic = AsyncMock(
+        side_effect=InvalidInstrument(
+            "instrument not found",
+            details={"instrument_id": _INSTRUMENT_ID},
+        )
+    )
+    coord, _m, data, _c, _t = _coordinator(master=master, resolver=resolver, clock=clock, ids=ids)
 
     envelope = await coord.get_market_snapshot(
         MarketGetSnapshotInput(instrument_id=_INSTRUMENT_ID, as_of=None)

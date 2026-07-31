@@ -85,6 +85,19 @@ def _instrument() -> Instrument:
     )
 
 
+def _etf() -> Instrument:
+    return Instrument(
+        instrument_id="etf:US:UGL",
+        symbol="UGL",
+        name="ProShares Ultra Gold",
+        market=Market.US,
+        exchange="NYSEARCA",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.ETF,
+    )
+
+
 @pytest.mark.asyncio
 async def test_current_fundamentals_normalize_profile_metrics_and_request() -> None:
     transport = StubTransport({})
@@ -238,3 +251,15 @@ async def test_news_excludes_undated_and_after_as_of_rows() -> None:
 
     assert [item.article_id for item in success.value.articles] == ["yahoo:kept"]
     assert transport.requests[0].url.endswith("/v1/finance/search")
+
+
+@pytest.mark.asyncio
+async def test_news_accepts_us_etf_and_uses_exact_symbol_query() -> None:
+    transport = StubTransport({"news": []})
+
+    success = await YahooFinanceResearchAdapter(transport, clock=FixedClock(NOW)).get_news(
+        _etf(), query=None, start=date(2026, 7, 17), end=None, limit=20, as_of=NOW
+    )
+
+    assert success.value.instrument_id == "etf:US:UGL"
+    assert transport.requests[0].params["q"] == "UGL"

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from application.dto.technical import TechnicalAnalysisInput, TechnicalChartInput
 from application.dto.us_market import (
     MarketGetBarsInput,
+    MarketGetBatchQuotesInput,
     MarketGetContextInput,
     MarketGetSnapshotInput,
     USGetSnapshotInput,
@@ -37,7 +38,7 @@ def build_market_technical_adapters(
         operation: Literal["quote", "composite"] = "quote",
         lookback_sessions: int = 260,
     ) -> dict[str, Any]:
-        """Return a quote (US/CME/OTC) or the full US composite snapshot."""
+        """Return a quote (US/KR/CME/OTC) or the full US composite snapshot."""
         if operation == "composite":
             return await us_get_snapshot(instrument_id, as_of, lookback_sessions)
         if operation != "quote":
@@ -56,6 +57,22 @@ def build_market_technical_adapters(
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    async def market_get_quotes(
+        instrument_ids: tuple[str, ...],
+        as_of: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return up to 50 quotes with one typed result per requested instrument."""
+        try:
+            inp = MarketGetBatchQuotesInput.model_validate(
+                {"instrument_ids": instrument_ids, "as_of": as_of}
+            )
+            envelope = await container.services.market.get_market_snapshots(inp)
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     async def market_get_bars(
         instrument_id: str,
         start: date,
@@ -65,7 +82,7 @@ def build_market_technical_adapters(
         offer_side: str | None = None,
         as_of: datetime | None = None,
     ) -> dict[str, Any]:
-        """Return OHLCV for US/CME/OTC; futures and OTC force adjustment=none."""
+        """Return OHLCV for US/KR/CME/OTC; futures and OTC force adjustment=none."""
         try:
             inp = MarketGetBarsInput.model_validate(
                 {
@@ -129,7 +146,7 @@ def build_market_technical_adapters(
     ) -> dict[str, Any]:
         """Return daily/weekly technical facts for supported cross-market instruments.
 
-        Supported identities include A-share, US, CME, and Dukascopy OTC instruments.
+        Supported identities include A-share, US, KR, CME, and Dukascopy OTC instruments.
         """
         try:
             inp = TechnicalAnalysisInput.model_validate(
@@ -224,6 +241,7 @@ def build_market_technical_adapters(
 
     return SimpleNamespace(
         market_get_snapshot=market_get_snapshot,
+        market_get_quotes=market_get_quotes,
         market_get_bars=market_get_bars,
         market_get_context=market_get_context,
         technical_get_snapshot=technical_get_snapshot,

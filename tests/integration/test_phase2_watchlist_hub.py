@@ -331,15 +331,15 @@ async def test_watchlist_hub_full_sync_is_read_only_and_preserves_removed_histor
         *provider.groups,
         WatchlistSourceGroup(
             source=provider.source,
-            name="Theme",
-            group_type=WatchlistGroupType.CUSTOM,
+            name="All",
+            group_type=WatchlistGroupType.SYSTEM,
             writable=True,
         ),
     )
-    provider.memberships["Theme"] = [
+    provider.memberships["All"] = [
         WatchlistSourceMembership(
             source=provider.source,
-            group_name="Theme",
+            group_name="All",
             provider_code="US.NVDA",
             display_name="NVIDIA",
             instrument_id="equity:US:NVDA",
@@ -349,7 +349,7 @@ async def test_watchlist_hub_full_sync_is_read_only_and_preserves_removed_histor
         ),
         WatchlistSourceMembership(
             source=provider.source,
-            group_name="Theme",
+            group_name="All",
             provider_code="FX.XAUUSD",
             display_name="Gold",
             instrument_id=None,
@@ -371,8 +371,16 @@ async def test_watchlist_hub_full_sync_is_read_only_and_preserves_removed_histor
     assert provider.add_calls == 0
     assert provider.remove_calls == 0
 
+    default_items = await service.get_items(WatchlistGetItemsInput(limit=1))
+    assert default_items.ok is True and default_items.data is not None
+    assert default_items.data.group.name == "All"
+    assert default_items.data.group_was_defaulted is True
+    assert default_items.data.total_returned == 1
+    assert default_items.data.total_count == 2
+    assert default_items.data.has_more is True
+
     provider.groups = provider.groups[:1]
-    del provider.memberships["Theme"]
+    del provider.memberships["All"]
     second = await service.sync_all()
     assert second.ok is True
     with engine.connect() as connection:

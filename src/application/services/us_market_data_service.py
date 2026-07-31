@@ -40,7 +40,7 @@ OP_BARS = "us.bars.v1"
 _QUOTE_ASSET_TYPES = frozenset(
     {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
 )
-_QUOTE_MARKETS = frozenset({Market.US, Market.CME})
+_QUOTE_MARKETS = frozenset({Market.US, Market.KR, Market.CME})
 
 # Alpha Vantage's equity/ETF/index endpoints cannot serve continuous futures.
 # Metal futures use dedicated, asset-aware fallbacks: Sina supplies timestamped
@@ -163,7 +163,7 @@ class USMarketDataService:
             )
         if instrument.market not in _QUOTE_MARKETS:
             raise DataContractError(
-                "instrument market must be US or CME",
+                "instrument market must be US, KR, or CME",
                 details={"field": "instrument", "rule": "market"},
             )
         if instrument.asset_type not in _QUOTE_ASSET_TYPES:
@@ -179,6 +179,15 @@ class USMarketDataService:
             raise DataContractError(
                 "CME instruments must be futures",
                 details={"field": "instrument", "rule": "cme_future_only"},
+            )
+        if instrument.market is Market.KR and instrument.asset_type not in {
+            AssetType.EQUITY,
+            AssetType.ETF,
+            AssetType.INDEX,
+        }:
+            raise DataContractError(
+                "KR instruments must be equity, etf, or index",
+                details={"field": "instrument", "rule": "kr_asset_type"},
             )
 
     def _quote_bars_policy(

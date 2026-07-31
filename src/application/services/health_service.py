@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from application import __version__
-from application.dto.health import HealthStatusDTO
+from application.dto.health import HealthComponentDTO, HealthStatusDTO
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
 from application.ports.clock import Clock
 from application.ports.database import Database
@@ -63,14 +63,12 @@ class HealthService:
             warnings.append(
                 WarningInfo(
                     code="DATABASE_HEALTH_ERROR",
-                    message=self._secret_redactor.redact_text(
-                        str(exc) or type(exc).__name__
-                    ),
+                    message=self._secret_redactor.redact_text(str(exc) or type(exc).__name__),
                     details={},
                 )
             )
 
-        components: dict[str, HealthState] = {}
+        components: dict[str, HealthComponentDTO] = {}
         if self._search_backend_probe is not None:
             search_state = HealthState.OK
             try:
@@ -78,7 +76,11 @@ class HealthService:
                     search_state = HealthState.DEGRADED
             except Exception:  # noqa: BLE001 — never leak SQL/path/query
                 search_state = HealthState.DEGRADED
-            components["research_search"] = search_state
+            components["research_search"] = HealthComponentDTO(
+                state=search_state,
+                check_kind="live_probe",
+                detail="The local research-search backend was probed during this call.",
+            )
             if search_state is not HealthState.OK:
                 warnings.append(
                     WarningInfo(
@@ -95,7 +97,15 @@ class HealthService:
                     state = HealthState.DEGRADED
             except Exception:  # noqa: BLE001 — health probes never expose internals
                 state = HealthState.DEGRADED
-            components[component] = state
+            components[component] = HealthComponentDTO(
+                state=state,
+                check_kind="configuration",
+                detail=(
+                    "Configuration is present; upstream reachability was not tested."
+                    if state is HealthState.OK
+                    else "Required configuration is absent or disabled."
+                ),
+            )
             if state is not HealthState.OK:
                 warnings.append(
                     WarningInfo(
@@ -108,7 +118,7 @@ class HealthService:
         if database_state is HealthState.ERROR:
             status = HealthState.ERROR
         elif database_state is HealthState.DEGRADED or any(
-            state is not HealthState.OK for state in components.values()
+            component.state is not HealthState.OK for component in components.values()
         ):
             status = HealthState.DEGRADED
         else:

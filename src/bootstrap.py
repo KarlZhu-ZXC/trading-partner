@@ -15,6 +15,7 @@ from application.ports.industry_metric_repository import IndustryMetricRepositor
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
 from application.ports.monitor_notification_sender import MonitorNotificationSender
 from application.ports.monitor_repository import MonitorRepository
+from application.ports.operational_maintenance import OperationalMaintenancePort
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
@@ -43,6 +44,7 @@ from application.services.futures_curve_service import FuturesCurveService
 from application.services.futures_instrument_directory import FuturesInstrumentDirectory
 from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
+from application.services.instrument_access_service import InstrumentAccessService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.investment_case_service import InvestmentCaseService
@@ -102,13 +104,14 @@ from domain.company_comparison.calculator import PeerComparisonCalculator
 from infrastructure.calendars.a_share_market_session_calendar import (
     AShareMarketSessionCalendarAdapter,
 )
+from infrastructure.calendars.kr_market_session_calendar import XkrxMarketSessionCalendar
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.composition import (
     ProviderCompositionOverrides,
     build_persistence_infrastructure,
     build_provider_infrastructure,
 )
-from infrastructure.config.settings import AppSettings
+from infrastructure.config.settings import PROJECT_ROOT, AppSettings
 from infrastructure.persistence.challenge_review_repository import (
     SqlAlchemyChallengeReviewRepository,
 )
@@ -119,6 +122,7 @@ from infrastructure.persistence.instrument_unit_of_work import (
     SqlAlchemyInstrumentUnitOfWork,
 )
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
+from infrastructure.persistence.operational_maintenance import SqliteOperationalMaintenance
 from infrastructure.persistence.risk_policy_repository import (
     SqlAlchemyRiskPolicyRepository,
 )
@@ -298,6 +302,8 @@ class OperationalServices:
     monitor_notifications: MonitorNotificationService
     monitor_dispatch: MonitorDispatchService
     post_market_sync: PostMarketSyncService
+    maintenance: OperationalMaintenancePort
+    schwab_oauth: SchwabOAuthFlowManager | None
 
 
 @dataclass(slots=True)
@@ -369,7 +375,13 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-
+    maintenance_service = SqliteOperationalMaintenance(
+        engine=engine,
+        database_url=settings.database_url,
+        artifact_root=PROJECT_ROOT / "data" / "artifacts" / "historical_validation",
+        backup_root=PROJECT_ROOT / "data" / "backups",
+        clock=clock,
+    )
     health_service = HealthService(
         database=database,
         settings=settings,
@@ -378,9 +390,9 @@ def build_application(
         secret_redactor=secret_redactor,
         search_backend_probe=persistence.search_backend_probe,
         component_probes={
-            "cross_asset.cme_reference_configured": lambda: True,
-            "cross_asset.dce_eod_configured": lambda: True,
-            "cross_asset.dukascopy_spot_configured": lambda: settings.dukascopy_enabled,
+            "cross_asset.cme_reference": lambda: True,
+            "cross_asset.dce_eod": lambda: True,
+            "cross_asset.dukascopy_spot": lambda: settings.dukascopy_enabled,
         },
     )
 
@@ -469,9 +481,11 @@ def build_application(
         contract_service=futures_contract_service,
         clock=clock,
     )
-    commodity_spot_service = CommoditySpotService(
-        provider=dukascopy_adapter,
-        clock=clock,
+    commodity_spot_service = CommoditySpotService(provider=dukascopy_adapter, clock=clock)
+    yahoo_instrument_directory = YahooInstrumentDirectoryAdapter(
+        a_share_transport, clock=clock,
+        enabled=settings.yfinance_enabled,
+        timeout_seconds=market_timeout,
     )
     instrument_resolve_service = InstrumentResolveService(
         master=instrument_master_service,
@@ -488,12 +502,7 @@ def build_application(
                 ),
             ),
             Market.US: (
-                YahooInstrumentDirectoryAdapter(
-                    a_share_transport,
-                    clock=clock,
-                    enabled=settings.yfinance_enabled,
-                    timeout_seconds=market_timeout,
-                ),
+                yahoo_instrument_directory,
                 AlphaVantageInstrumentDirectoryAdapter(
                     a_share_transport,
                     api_keys=settings.alpha_vantage_api_keys,
@@ -502,6 +511,7 @@ def build_application(
                     timeout_seconds=market_timeout,
                 ),
             ),
+            Market.KR: (yahoo_instrument_directory,),
             Market.CME: (
                 FuturesInstrumentDirectory(
                     market=Market.CME,
@@ -520,7 +530,7 @@ def build_application(
             ),
         },
     )
-
+    access_service = InstrumentAccessService(instrument_master_service, instrument_resolve_service)
     # Phase 1C C5: shared research UoW factory for durable read/write entry points.
     research_archive_service = ResearchArchiveService(
         research_unit_of_work_factory,
@@ -654,7 +664,7 @@ def build_application(
         consensus_codec=consensus_cache_codec,
     )
     a_share_tool_coordinator = AShareToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -701,7 +711,7 @@ def build_application(
         clock=clock,
     )
     us_tool_coordinator = USToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -711,7 +721,7 @@ def build_application(
     )
     # Phase 3A: market MCP facade (futures services wired earlier for directories).
     market_tool_coordinator = MarketToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -719,10 +729,9 @@ def build_application(
         data_service=us_market_data_service,
         commodity_spot_service=commodity_spot_service,
         futures_curve_service=futures_curve_service,
-        instrument_resolve_service=instrument_resolve_service,
     )
     technical_tool_coordinator = TechnicalToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -754,7 +763,7 @@ def build_application(
         us_news_service,
     )
     us_research_tool_coordinator = USResearchToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -770,7 +779,7 @@ def build_application(
         provider_router, clock, us_prediction_market_context_codec()
     )
     us_context_tool_coordinator = USContextToolCoordinator(
-        instrument_master=instrument_master_service,
+        instrument_access=access_service,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
@@ -818,6 +827,7 @@ def build_application(
     monitor_schedule_service = MonitorScheduleService(
         us_calendar=us_market_calendar,
         a_share_calendar=AShareMarketSessionCalendarAdapter(a_share_calendar),
+        kr_calendar=XkrxMarketSessionCalendar(),
         post_market_delay_minutes=settings.post_market_sync_delay_minutes,
     )
     monitor_service = MonitorService(
@@ -885,6 +895,14 @@ def build_application(
             enabled="SCHWAB" in settings.holdings_sources,
         ),
     )
+    schwab_oauth_flow_manager = None
+    if settings.schwab_client_id and settings.schwab_client_secret:
+        schwab_oauth_flow_manager = SchwabOAuthFlowManager(
+            client_id=settings.schwab_client_id,
+            client_secret=settings.schwab_client_secret,
+            redirect_uri=settings.schwab_redirect_uri,
+            token_path=settings.schwab_token_path,
+        )
     post_market_sync_lock = ProcessFileLock(settings.post_market_sync_lock_path)
     research_context_builder = ResearchContextBuilder(
         research_unit_of_work_factory,
@@ -1002,6 +1020,8 @@ def build_application(
             monitor_notifications=monitor_notification_service,
             monitor_dispatch=monitor_dispatch_service,
             post_market_sync=post_market_sync_service,
+            maintenance=maintenance_service,
+            schwab_oauth=schwab_oauth_flow_manager,
         ),
     )
 

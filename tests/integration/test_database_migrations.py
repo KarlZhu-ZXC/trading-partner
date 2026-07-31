@@ -107,7 +107,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0024_monitor_notification_outbox"})
+_HEAD_REVISIONS = frozenset({"0026_korean_market_support"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -135,6 +135,8 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0022_workflow_execution_replay",
     "0023_monitoring_hub_v3",
     "0024_monitor_notification_outbox",
+    "0025_monitor_run_notification_outbox",
+    "0026_korean_market_support",
 }
 
 

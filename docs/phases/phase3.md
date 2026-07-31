@@ -1,9 +1,11 @@
-# Phase 3 — Cross-Asset Facts and Historical Validation
+# Phase 3 — Cross-Asset Facts, Manual Validation, and Plan Controls
 
 Phase 3 grows Trading Partner beyond A-share/US equity research while preserving
-the same provenance, read-only, and no-fabrication rules. Phase 3C-0 can prepare a
-QuantConnect Free package and import a user-downloaded result, but Trading Partner
-still does not run a backtest engine or execute an order.
+the same provenance, read-only, and no-fabrication rules. The current product scope
+is implemented. Phase 3C prepares a QuantConnect Free package and imports a
+user-downloaded result, but Trading Partner does not own historical datasets, run a
+backtest engine, automate QuantConnect, or execute an order. One user-operated
+prepare -> web backtest -> import smoke remains the operational closeout check.
 
 To keep ownership and dependencies clear, Phase 3 is consolidated into four tracks:
 
@@ -11,8 +13,14 @@ To keep ownership and dependencies clear, Phase 3 is consolidated into four trac
 |---|---|---|
 | Phase 3A | Formal futures and cross-asset market facts | Free CME/DCE/Dukascopy integration implemented; LME discovery deferred |
 | Phase 3B | Company financial/operating facts and optional industry datasets | Implemented, including caller-specified peer comparison |
-| Phase 3C | Historical validation platform | 3C-0 QuantConnect Free manual bridge implemented; full platform pending |
+| Phase 3C | Manual historical-validation bridge | QuantConnect Free prepare/import implemented; heavy historical platform deferred outside the current phase scope |
 | Phase 3D | Judgment-to-plan controls | Implemented: versioned Trade Plans, Position Sizing, Risk v2, and Monitoring v2 |
+
+An adjacent Korea Exchange market slice is also implemented without adding a fifth
+Phase 3 track or another public tool. It formalizes `Market.KR` identities and Yahoo
+quote/bars, shared technical analysis, Manual CSV Watchlist membership, price
+Monitoring, and XKRX post-market dispatch. It does not add DART/company research,
+KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizing.
 
 ## Phase 3A — Formal futures and cross-asset market facts
 
@@ -113,15 +121,15 @@ it is unavailable. The product does not require continuous futures ingestion,
 durable settlement read-through, or DCE live-hog monitoring.
 
 LME/LBMA licensing, DCE intraday data, expired-contract history, and back-adjusted
-continuous series are accepted boundaries. Expired-contract datasets and
-continuous-series construction may be reconsidered only inside Phase 3C.
+continuous series are accepted boundaries. They may be reconsidered only in a
+future historical-data program and do not block Phase 3 closeout.
 
 ## Phase 3B — Company financial/operating facts and optional industry datasets
 
 > Status: cross-market normalized financial statements and quality metrics,
 > generic A-share operating disclosures, the optional hog dataset, and durable hog
-> history ingestion are implemented. Peer-comparison planning is under review;
-> further hog-cycle expansion is not currently prioritized.
+> history ingestion are implemented. Caller-specified peer comparison is also
+> implemented; further hog-cycle expansion is not currently prioritized.
 
 Company fundamentals are the reusable core of this track; industry-cycle datasets
 are optional extensions for sectors where a cycle model is genuinely useful.
@@ -259,12 +267,12 @@ integration in Phase 3A.
 | `HOG-P0-004` | 长周期 `industry_cycle` 事实包过大 | **已解决** | 2026-07-25：支持 `view=compact|series`（默认 compact）、`metric_codes` 过滤及 `offset`/`limit<=200` 有界分页，并返回 coverage / `has_more` |
 | `HOG-P0-005` | 官方月度核心序列的长期覆盖有限 | **持续改进（不阻塞）** | 不再要求固定 20 年或连续覆盖；尽可能同步最长的可验证官方历史，持续显式披露真实覆盖与缺口，不插值、不伪造连续序列 |
 
-## Phase 3C — Historical validation platform
+## Phase 3C — QuantConnect Free manual validation bridge
 
-> Status: Phase 3C-0 implemented on 2026-07-30. The MCP prepares hashed LEAN
-> packages and imports user-exported QuantConnect result JSON. There is still no
-> local/automated backtest engine or durable dataset/version registry. See the
-> [QuantConnect Free bridge record](../plans/phase3c-quantconnect-free-bridge.md).
+> Status: the current Phase 3C scope was implemented on 2026-07-30. The MCP
+> prepares hashed LEAN packages and imports user-exported QuantConnect result JSON.
+> The first user-operated end-to-end smoke remains an operational acceptance item.
+> See the [QuantConnect Free bridge record](../plans/phase3c-quantconnect-free-bridge.md).
 
 The existing `research_workflow_run` tool now has
 `historical_validation_prepare` and `historical_validation_import` operations.
@@ -273,19 +281,22 @@ QuantConnect login, web compilation and the Backtest click remain user-operated.
 Imported metrics are degraded because the free export cannot attest the exact
 remote code hash or immutable dataset version.
 
-This track combines all capabilities that must share the same point-in-time data
-contract and reproducibility boundary:
+The current boundary is intentionally narrow:
 
-- DuckDB/Parquet historical storage, dataset manifests, revisions, and artifact store;
-- Strategy Registry derived from an explicitly selected Thesis without mutating it;
-- deterministic A-share/US market rules, fees, slippage, liquidity, and corporate actions;
-- backtests, parameter experiments, walk-forward/out-of-sample/event studies, and
-  benchmark/cost sensitivity;
-- look-ahead, survivorship, adjusted-price, filing/news visibility, sample-size,
-  and data-snooping checks.
+- Codex authors complete LEAN Python;
+- Trading Partner validates without executing, hashes, and writes the package;
+- the user copies the code to QuantConnect Free and runs it manually;
+- Trading Partner imports the downloaded result and reports available metrics plus
+  explicit reproducibility gaps.
 
-A Strategy is a versioned experiment specification, not an order instruction.
-Promotion of a result never confirms a Thesis or authorizes live execution.
+Historical storage, DuckDB/Parquet, dataset/version registries, a local runner,
+paid QuantConnect automation, Strategy Registry, experiment orchestration,
+walk-forward/OOS/event studies, automated bias checks, and Trading Partner-owned
+A-share/US market-rule simulation are deferred future options. QuantConnect/LEAN
+and the submitted strategy code own market, fee, slippage, liquidity, and corporate
+action simulation. Trading Partner records declared settings but does not attest
+that the remote run used them. No imported result confirms a Thesis or authorizes
+live execution.
 
 ## Phase 3D — Judgment-to-plan controls
 
@@ -305,7 +316,8 @@ Current Thesis + verified facts
 The combined scope covers technical/volume/fundamental/filing/announcement/macro/
 sentiment/Thesis-invalidating monitors; entry/scale/exit/expiry plan conditions;
 risk-budget/ATR/volatility-target sizing; and theme, drawdown, liquidity, event,
-A-share T+1/limit/suspension, stale-data, and duplicate-order checks.
+A-share T+1/limit/suspension, stale-data, and duplicate-instrument checks. Pending
+broker orders are not yet incorporated into Risk v2.
 
 All outputs remain proposals or calculations. They do not create positions, orders,
 fills, or confirmation authority.
@@ -332,5 +344,6 @@ unchanged states remain event-free. A linked Monitor cannot outlive a finite Tra
 The roadmap names capabilities, not a promise to register one MCP tool per noun.
 Phase 3 must preserve a compact public surface by consolidating related operations
 behind closed enums and existing domain coordinators. Existing `monitor_*` and
-`portfolio_risk_get` (`check`) tools are extended rather than duplicated; overlapping weekly review
-capabilities should build on `portfolio_run_review` instead of adding aliases.
+`portfolio_risk_get` (`check`) tools are extended rather than duplicated; overlapping
+weekly review capabilities should build on
+`research_workflow_run(operation="portfolio_review")` instead of adding aliases.

@@ -18,6 +18,7 @@ from domain.common.time import require_aware_datetime
 _MARKET_TIMEZONES: dict[Market, str] = {
     Market.A_SHARE: "Asia/Shanghai",
     Market.US: "America/New_York",
+    Market.KR: "Asia/Seoul",
 }
 
 # Half-open local intervals [start, end).
@@ -26,6 +27,7 @@ _A_SHARE_AFTERNOON = (time(13, 0), time(15, 0))
 _US_PRE = (time(4, 0), time(9, 30))
 _US_REGULAR = (time(9, 30), time(16, 0))
 _US_POST = (time(16, 0), time(20, 0))
+_KR_REGULAR = (time(9, 0), time(15, 30))
 
 
 def _safe_timezone_error() -> DataContractError:
@@ -49,7 +51,8 @@ def infer_session_basic(
     """Infer session from fixed weekday windows in the market local timezone.
 
     ``Market.A_SHARE`` requires ``timezone="Asia/Shanghai"``;
-    ``Market.US`` requires ``timezone="America/New_York"``.
+    ``Market.US`` requires ``timezone="America/New_York"`` and ``Market.KR``
+    requires ``timezone="Asia/Seoul"``.
     Weekend → CLOSED. Unknown market → UNKNOWN.
     """
     require_aware_datetime(at, field_name="at")
@@ -114,5 +117,12 @@ def infer_session_basic(
         if _in_half_open(local_t, *_US_POST):
             return TradingSession.POST_MARKET
         return TradingSession.CLOSED
+
+    if market is Market.KR:
+        return (
+            TradingSession.REGULAR
+            if _in_half_open(local_t, *_KR_REGULAR)
+            else TradingSession.CLOSED
+        )
 
     return TradingSession.UNKNOWN
