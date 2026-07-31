@@ -1077,7 +1077,9 @@ TradingAgents 只同步有价值的模式：
 2. 统一 Data Quality Center 第一版已完成：`system_health` 与 Console 首页现在汇总显式
    Provider probe 口径、最新账户快照年龄、估值/价格时间覆盖、账户活动 coverage receipt，
    以及 Active Monitor 最近运行和 `NOT_EVALUATED` 盲区；全程 durable-only，不触发上游。
-   Provider fallback 历史尚未持久化，当前以明确 limitation 返回，后续再补运行回执账本。
+   Provider route/fallback 历史账本也已完成：仅持久化安全路由元数据，固定保留 30 天且最多
+   5000 条，Data Quality Center 聚合最近 24 小时失败、fallback 与 cache 使用情况，不保存
+   请求指纹、Provider payload 或异常文本。
 3. composition root 第一轮拆分已完成：`bootstrap.py` 从 1049 行降至 961 行，新的回归上限
    收紧为 1000；application-only 服务目录与 infrastructure 资源生命周期已分层，跨层 wiring
    仍只有一个。A 股 domain 拆分第一刀也已完成：行业周期/公司经营模型与共享校验器已从

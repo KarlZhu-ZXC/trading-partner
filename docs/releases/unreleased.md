@@ -1,5 +1,11 @@
 # Unreleased
 
+- Persisted bounded, secret-safe Provider route receipts and surfaced their
+  24-hour failure/fallback/cache aggregates in the existing durable-only Data
+  Quality Center. The 30-day/5,000-row ledger stores only typed routing metadata;
+  request fingerprints, Provider payloads, and exception text never enter it.
+  Console overview shows recent fallback and failure totals without adding an MCP
+  tool or configuration key.
 - Added an owner-only, CLI-only Schwab Realized Gain/Loss inspection path for the
   A1 broker-statement reconciliation gate. The strict CSV parser maps recognized
   lot-detail headers by name, uses `Decimal`, preserves missing cost/date/P&L facts,

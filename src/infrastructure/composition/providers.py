@@ -11,6 +11,7 @@ from application.ports.account_provider import AccountProvider
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpTransport
 from application.ports.id_generator import IdGenerator
+from application.ports.provider_route_history_store import ProviderRouteHistoryStore
 from application.ports.secret_redactor import SecretRedactor
 from application.ports.watchlist_source_provider import WatchlistSourceProvider
 from domain.common.enums import VendorId
@@ -86,6 +87,7 @@ class ProviderInfrastructure:
     registry: VendorRegistry
     chain_config: YamlVendorChainConfig
     router_engine: ProviderRouterEngine
+    route_history_store: ProviderRouteHistoryStore
     a_share_calendar: AShareTradingCalendar
     a_share_transport: HttpTransport
     owned_a_share_transport: HttpTransport | None
@@ -447,6 +449,7 @@ def build_provider_infrastructure(
         registry=registry,
         cache_store=state_backend.cache_store,
         health_store=state_backend.health_store,
+        route_history_store=state_backend.route_history_store,
         rate_limiter=ProviderRateLimiter(state_backend.rate_limit_store, clock),
         circuit_breaker=CircuitBreaker(
             clock,
@@ -455,12 +458,14 @@ def build_provider_infrastructure(
             half_open_max_calls=settings.circuit_half_open_max_calls,
         ),
         clock=clock,
+        id_generator=id_generator,
         settings=settings,
     )
     return ProviderInfrastructure(
         registry=registry,
         chain_config=YamlVendorChainConfig.load(settings.vendor_chain_path),
         router_engine=router_engine,
+        route_history_store=state_backend.route_history_store,
         a_share_calendar=calendar,
         a_share_transport=a_share_transport,
         owned_a_share_transport=owned_a_share_transport,

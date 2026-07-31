@@ -142,8 +142,9 @@ account providers you intend to use; a healthy MCP process does not imply that e
 optional external provider is configured or reachable. Health output labels local
 live probes separately from configuration-only checks. The same response now embeds
 a durable-only Data Quality Center for account valuation/time coverage, activity
-coverage receipts, and latest Monitor blind spots; it never refreshes a broker or
-market-data Provider. Operational health and evidence quality keep separate statuses.
+coverage receipts, latest Monitor blind spots, and recent secret-safe Provider
+route/fallback outcomes; it never refreshes a broker or market-data Provider.
+Operational health and evidence quality keep separate statuses.
 The local Console renders both on its overview page.
 
 ## <img src="docs/assets/readme/sections/operations.svg" alt="" width="24" /> Operational commands

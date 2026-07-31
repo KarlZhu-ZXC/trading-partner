@@ -50,6 +50,7 @@ from infrastructure.persistence.orm.provider_state import (
     ProviderCacheRow,
     ProviderHealthRow,
     ProviderRateLimitRow,
+    ProviderRouteReceiptRow,
     RedditCooldownRow,
     RedditSampleCacheRow,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "InstrumentAliasRow",
     "ProviderCacheRow",
     "ProviderHealthRow",
+    "ProviderRouteReceiptRow",
     "ProviderRateLimitRow",
     "RedditSampleCacheRow",
     "RedditCooldownRow",

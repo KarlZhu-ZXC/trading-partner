@@ -26,8 +26,10 @@ services remain separate; compact routing belongs only to `interfaces/mcp/`.
   activity receipts, and active Monitor blind spots without contacting an upstream
   Provider. Provider checks retain their `live_probe` versus `configuration` label;
   configuration is never presented as reachability. Operational health and data
-  quality keep separate statuses. Provider fallback history is not yet persisted
-  and remains an explicit limitation.
+  quality keep separate statuses. Secret-safe Provider route receipts persist
+  market/category, vendor-chain outcomes, cache/fallback selection, and typed error
+  codes for 30 days (maximum 5,000 rows); they never persist fingerprints, payloads,
+  or exception text. The quality center aggregates the most recent 24 hours.
 - `instrument_resolve` — local-first lookup; a unique provider result may be cached.
 
 Instrument resolution is local-first, not local-only. A local miss may use the
@@ -288,6 +290,11 @@ P/L, dividends, interest, known fees, and external cash flow; every instrument c
 be traced to durable activity IDs and an ending snapshot. It never performs FX
 aggregation and remains `INCOMPLETE` when inception history, fees, corporate-action
 lot effects, ending reconciliation, or timestamped valuation is not proven.
+The owner-only `trading-partner-performance-reconciliation` CLI can inspect a strict
+Schwab Realized Gain/Loss CSV and compare one redacted statement account/month with
+the durable FIFO ledger. It writes only an immutable redacted draft, never contacts
+Schwab, adds no MCP tool, and never constitutes A1 sign-off; account and symbol-level
+residuals still require explicit human review.
 Phase 1J restores one current durable research file (`InvestmentCase`)
 context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.

@@ -16,7 +16,7 @@ import pytest
 from application.dto.provider_resilience import RateLimitDecision
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.dto.provider_state import CacheEntry
-from conftest import FixedClock
+from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
     AdjustmentMethod,
     AppEnvironment,
@@ -46,6 +46,9 @@ from domain.common.errors import (
 from domain.instruments.models import Instrument
 from domain.market.models import MarketBar, TechnicalIndicators, VerifiedMarketSnapshot
 from infrastructure.config.settings import AppSettings
+from infrastructure.persistence.provider_route_history_store import (
+    InMemoryProviderRouteHistoryStore,
+)
 from infrastructure.providers.common.circuit_breaker import CircuitBreaker
 from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
 from infrastructure.providers.registry import VendorRegistry
@@ -346,6 +349,8 @@ def _engine(
     clock: FixedClock | None = None,
     settings: AppSettings | None = None,
     circuit: CircuitBreaker | None = None,
+    route_history: Any | None = None,
+    id_generator: Any | None = None,
 ) -> tuple[ProviderRouterEngine, _MemCache, _MemHealth, FixedClock, VendorRegistry]:
     clock = clock or FixedClock(AS_OF)
     cache = cache or _MemCache()
@@ -368,6 +373,8 @@ def _engine(
         rate_limiter=rate_limiter,
         circuit_breaker=circuit,
         clock=clock,
+        route_history_store=route_history,
+        id_generator=id_generator,
         settings=settings,
     )
     return engine, cache, health, clock, registry
@@ -521,6 +528,75 @@ async def test_fallback_success_after_primary_failure() -> None:
     assert "FALLBACK_VENDOR_USED" in _codes(result)
     assert result.attempts[0].outcome is ProviderAttemptOutcome.FAILURE
     assert result.attempts[1].outcome is ProviderAttemptOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_fallback_route_persists_secret_safe_execution_receipt() -> None:
+    routes = InMemoryProviderRouteHistoryStore()
+    engine, _, _, clock, registry = _engine(
+        route_history=routes,
+        id_generator=SequentialIdGenerator(),
+    )
+
+    async def _fail() -> ProviderSuccess[VerifiedMarketSnapshot]:
+        raise ProviderUnavailableError(SECRET, details={"token": SECRET})
+
+    _register(registry, VendorId.MOCK_US, handler=_fail)
+    _register(registry, VendorId.NULL)
+    result = await _run(
+        engine,
+        chain=(VendorId.MOCK_US, VendorId.NULL),
+        cache_codec=None,
+    )
+
+    assert result.ok is True
+    receipts = routes.list_since(clock.now() - timedelta(seconds=1), limit=10)
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert receipt.selected_vendor is VendorId.NULL
+    assert receipt.used_fallback is True
+    assert tuple(item.outcome for item in receipt.attempts) == (
+        ProviderAttemptOutcome.FAILURE,
+        ProviderAttemptOutcome.SUCCESS,
+    )
+    assert SECRET not in repr(receipt)
+
+
+@pytest.mark.asyncio
+async def test_route_store_failure_adds_typed_warning_without_changing_result() -> None:
+    class _BrokenRoutes:
+        is_durable = True
+
+        def append(self, receipt: object) -> None:
+            raise RuntimeError(SECRET)
+
+    engine, _, _, _, registry = _engine(
+        route_history=_BrokenRoutes(),
+        id_generator=SequentialIdGenerator(),
+    )
+    _register(registry, VendorId.MOCK_US)
+
+    result = await _run(engine, cache_codec=None, bypass_cache=True)
+
+    assert result.ok is True
+    assert "PROVIDER_ROUTE_HISTORY_UNAVAILABLE" in _codes(result)
+    assert SECRET not in repr(result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_route_receipt_never_persists_attempt_messages() -> None:
+    routes = InMemoryProviderRouteHistoryStore()
+    engine, _, _, clock, _ = _engine(
+        route_history=routes,
+        id_generator=SequentialIdGenerator(),
+    )
+
+    result = await _run(engine, cache_codec=None, bypass_cache=True)
+
+    assert result.ok is False
+    receipt = routes.list_since(clock.now() - timedelta(seconds=1), limit=10)[0]
+    assert receipt.ok is False
+    assert receipt.attempts[0].message is None
 
 
 @pytest.mark.asyncio

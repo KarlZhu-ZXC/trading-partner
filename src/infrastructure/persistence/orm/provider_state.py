@@ -156,6 +156,43 @@ class ProviderHealthRow(Base):
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class ProviderRouteReceiptRow(Base):
+    __tablename__ = "provider_route_receipts"
+    __table_args__ = (
+        CheckConstraint("ok IN (0, 1)", name="ck_provider_route_receipts_ok"),
+        CheckConstraint(
+            "(ok = 1 AND selected_vendor IS NOT NULL AND selected_role IS NOT NULL "
+            "AND final_error_code IS NULL) OR "
+            "(ok = 0 AND selected_vendor IS NULL AND selected_role IS NULL "
+            "AND final_error_code IS NOT NULL)",
+            name="ck_provider_route_receipts_outcome",
+        ),
+        Index("ix_provider_route_receipts_recorded_at", "recorded_at"),
+        Index(
+            "ix_provider_route_receipts_scope",
+            "market",
+            "category",
+            "recorded_at",
+        ),
+    )
+
+    route_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    recorded_at: Mapped[str] = mapped_column(Text, nullable=False)
+    market: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_name: Mapped[str] = mapped_column(Text, nullable=False)
+    instrument_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    criticality: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_chain_json: Mapped[str] = mapped_column(Text, nullable=False)
+    ok: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selected_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cache_disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts_json: Mapped[str] = mapped_column(Text, nullable=False)
+    warning_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    final_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ProviderRateLimitRow(Base):
     __tablename__ = "provider_rate_limits"
 

@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from application.dto.provider_route_history import ProviderRouteReceipt
 from application.services.data_quality_service import DataQualityService
 from conftest import FixedClock, SequentialIdGenerator
-from domain.common.enums import HealthState, VendorId
+from domain.common.enums import (
+    CacheDisposition,
+    DataCategory,
+    DataCriticality,
+    HealthState,
+    Market,
+    SourceRole,
+    VendorId,
+)
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorRuleStateValue,
@@ -48,11 +57,25 @@ class _Monitors:
         return self.runs.get(monitor_id)
 
 
-def _service(snapshots=(), activity=(), monitors=(), runs=None) -> DataQualityService:
+class _Routes:
+    is_durable = True
+
+    def __init__(self, values=()) -> None:
+        self.values = values
+
+    def list_since(self, since, *, limit):
+        assert limit == 500
+        return self.values
+
+
+def _service(
+    snapshots=(), activity=(), monitors=(), runs=None, routes=()
+) -> DataQualityService:
     return DataQualityService(
         _Snapshots(snapshots),
         _Activity(activity),
         _Monitors(monitors, runs),
+        _Routes(routes),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),
@@ -68,7 +91,42 @@ def test_empty_durable_ledgers_are_healthy_not_fabricated_gaps() -> None:
     assert envelope.data.account_snapshots == ()
     assert envelope.data.account_activity == ()
     assert envelope.data.monitors == ()
+    assert envelope.data.provider_routes == ()
     assert "DURABLE_ONLY_NO_UPSTREAM_PROBE" in envelope.data.limitations
+
+
+def test_recent_provider_fallback_is_aggregated_without_request_payload() -> None:
+    now = FixedClock().now()
+    route = ProviderRouteReceipt(
+        route_id="provider_route_00000000-0000-7000-8000-000000000001",
+        recorded_at=now,
+        market=Market.US,
+        category=DataCategory.MARKET_SNAPSHOT,
+        operation_name="market.quote",
+        instrument_id="equity:US:NVDA",
+        criticality=DataCriticality.CORE,
+        requested_chain=(VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
+        ok=True,
+        selected_vendor=VendorId.ALPHA_VANTAGE,
+        selected_role=SourceRole.FALLBACK,
+        cache_disposition=CacheDisposition.MISS,
+        attempts=(),
+        warning_codes=("FALLBACK_VENDOR_USED",),
+        final_error_code=None,
+    )
+
+    envelope = _service(routes=(route,)).check()
+
+    assert envelope.data is not None
+    assert envelope.degraded is True
+    quality = envelope.data.provider_routes[0]
+    assert quality.execution_count == 1
+    assert quality.fallback_count == 1
+    assert quality.latest_selected_vendor in {VendorId.ALPHA_VANTAGE, "alpha_vantage"}
+    assert "PROVIDER_FALLBACKS_RECENT" in {
+        item.code for item in envelope.data.issues
+    }
+    assert "request_fingerprint" not in str(envelope.model_dump(mode="json"))
 
 
 def test_account_and_monitor_gaps_are_machine_readable() -> None:
@@ -163,6 +221,7 @@ def test_repository_failure_is_redacted_and_does_not_probe_upstream() -> None:
         _BrokenSnapshots(),
         _Activity(),
         _Monitors(),
+        _Routes(),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),
@@ -200,6 +259,7 @@ def test_monitor_run_read_failure_is_not_mislabeled_as_never_evaluated() -> None
         _Snapshots(),
         _Activity(),
         _BrokenMonitorRuns((monitor,)),
+        _Routes(),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),

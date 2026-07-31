@@ -35,6 +35,15 @@ export default function OverviewPage() {
   const qualityAccounts = listOf<Dict>(quality, "account_snapshots");
   const qualityActivity = listOf<Dict>(quality, "account_activity");
   const qualityMonitors = listOf<Dict>(quality, "monitors");
+  const qualityRoutes = listOf<Dict>(quality, "provider_routes");
+  const recentFallbacks = qualityRoutes.reduce(
+    (total, item) => total + Number(item.fallback_count ?? 0),
+    0,
+  );
+  const recentRouteFailures = qualityRoutes.reduce(
+    (total, item) => total + Number(item.failure_count ?? 0),
+    0,
+  );
   const blindMonitorCount = new Set(
     qualityIssues
       .filter((item) => item.scope === "monitor")
@@ -77,6 +86,8 @@ export default function OverviewPage() {
                 <div><span>活动覆盖回执</span><strong>{qualityActivity.length}</strong><small>每账户最新回执</small></div>
                 <div><span>Active Monitor</span><strong>{qualityMonitors.length}</strong><small>只读最近运行</small></div>
                 <div><span>Monitor 盲区</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>未运行 / 未评估 / 不完整</small></div>
+                <div><span>24h Provider fallback</span><strong className={recentFallbacks ? "text-amber" : ""}>{recentFallbacks}</strong><small>{qualityRoutes.length} 个 market/category</small></div>
+                <div><span>24h Provider 失败</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>安全路由回执</small></div>
               </div>
               <div className="quality-issues">
                 <div className="quality-section-heading">

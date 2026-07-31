@@ -35,6 +35,7 @@ class EntityIdPrefix(StrEnum):
     TRADE_PLAN = "trade_plan"
     VALIDATION = "validation"
     ACTIVITY_COVERAGE = "activity_coverage"
+    PROVIDER_ROUTE = "provider_route"
     # Phase 3A append-only futures definition identity prefixes.
     FUTURES_PRODUCT = "futures_product"
     FUTURES_PRODUCT_VERSION = "futures_product_version"

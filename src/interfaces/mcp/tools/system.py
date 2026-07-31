@@ -35,6 +35,8 @@ def build_system_adapters(
                         "account_snapshots": [],
                         "account_activity": [],
                         "monitors": [],
+                        "provider_routes": [],
+                        "provider_route_window_truncated": False,
                         "issues": [
                             {
                                 "code": "DATA_QUALITY_CENTER_UNAVAILABLE",
@@ -50,7 +52,7 @@ def build_system_adapters(
                         ],
                         "limitations": [
                             "DURABLE_ONLY_NO_UPSTREAM_PROBE",
-                            "PROVIDER_FALLBACK_HISTORY_NOT_PERSISTED",
+                            "PROVIDER_ROUTE_HISTORY_UNAVAILABLE",
                             "ACCOUNT_AGE_REPORTED_WITHOUT_GLOBAL_STALENESS_THRESHOLD",
                         ],
                     },
