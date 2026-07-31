@@ -105,10 +105,11 @@ _PHASE3_TABLES = {
     "trade_plan_identities",
     "trade_plan_versions",
     "trade_plan_conditions",
+    "provider_route_receipts",
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0027_account_activity_coverage"})
+_HEAD_REVISIONS = frozenset({"0028_provider_route_history"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -139,6 +140,7 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0025_monitor_run_notification_outbox",
     "0026_korean_market_support",
     "0027_account_activity_coverage",
+    "0028_provider_route_history",
 }
 
 

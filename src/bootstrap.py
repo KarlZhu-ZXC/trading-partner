@@ -748,6 +748,7 @@ def build_application(
     monitor_repository: MonitorRepository = SqlAlchemyMonitorRepository(engine)
     data_quality_service = DataQualityService(
         account_snapshot_repository, account_transaction_repository, monitor_repository,
+        provider_infrastructure.route_history_store,
         clock, id_generator, secret_redactor,
     )
     us_market_calendar = XnysMarketSessionCalendar()

@@ -4,7 +4,7 @@
 > Design version: Phase 2 v4  
 > Public MCP surface: 28 compact tools; the former 52-tool rollback profile is removed.
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
-> `0027_account_activity_coverage`.
+> `0028_provider_route_history`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
 
 ## 1. Product outcome
@@ -634,7 +634,7 @@ Current acceptance evidence (2026-07-29):
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
   operations and the current surface schema is `compact-v10`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
-  `0027_account_activity_coverage` pass
+  `0028_provider_route_history` pass
   clean upgrade/downgrade/upgrade checks;
 - focused tests cover transition deduplication, immutable observations, whole-hour
   schedule validation, due/skip behavior, compact schema, and launchd arguments;

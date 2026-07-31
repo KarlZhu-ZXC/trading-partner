@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+from application.dto.provider_route_history import ProviderRouteReceipt
 from application.dto.provider_routing import (
     ProviderAttemptRecord,
     ProviderSuccess,
@@ -23,9 +24,11 @@ from application.dto.provider_state import CacheEntry
 from application.dto.tool_envelope import WarningInfo
 from application.ports.category_provider import CategoryProvider
 from application.ports.clock import Clock
+from application.ports.id_generator import IdGenerator
 from application.ports.provider_cache import ProviderCacheStore
 from application.ports.provider_cache_codec import ProviderCacheCodec
 from application.ports.provider_health_store import ProviderHealthStore
+from application.ports.provider_route_history_store import ProviderRouteHistoryStore
 from application.ports.provider_router_settings import ProviderRouterSettings
 from domain.common.enums import (
     CacheDisposition,
@@ -48,6 +51,7 @@ from domain.common.errors import (
     StaleMarketData,
     TradingPartnerError,
 )
+from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
 from domain.instruments.models import Instrument
 from domain.market.models import VerifiedMarketSnapshot
@@ -75,6 +79,7 @@ _MSG_PARTIAL_VENDOR_CHAIN = "Vendor missing from registry"
 _MSG_RATE_LIMIT_DEGRADED = "Vendor skipped due to rate limit"
 _MSG_CIRCUIT_OPEN_SKIPPED = "Vendor skipped because circuit is open"
 _MSG_PROVIDER_HEALTH_UNAVAILABLE = "Provider health projection unavailable"
+_MSG_PROVIDER_ROUTE_HISTORY_UNAVAILABLE = "Provider route history unavailable"
 _MSG_FALLBACK_VENDOR_USED = "Fallback vendor served the request"
 _MSG_OPTIONAL_DATA_UNAVAILABLE = "Optional data category unavailable"
 
@@ -104,17 +109,21 @@ class ProviderRouterEngine:
         registry: VendorRegistry,
         cache_store: ProviderCacheStore,
         health_store: ProviderHealthStore,
+        route_history_store: ProviderRouteHistoryStore | None = None,
         rate_limiter: ProviderRateLimiter,
         circuit_breaker: CircuitBreaker,
         clock: Clock,
+        id_generator: IdGenerator | None = None,
         settings: ProviderRouterSettings,
     ) -> None:
         self._registry = registry
         self._cache_store = cache_store
         self._health_store = health_store
+        self._route_history_store = route_history_store
         self._rate_limiter = rate_limiter
         self._circuit_breaker = circuit_breaker
         self._clock = clock
+        self._id_generator = id_generator
         self._settings = settings
 
     async def execute[T](
@@ -168,10 +177,17 @@ class ProviderRouterEngine:
                 warnings=warnings,
             )
             if cache_hit is not None:
-                return cache_hit
+                return self._record_route_result(
+                    cache_hit,
+                    market=market,
+                    category=category,
+                    chain=chain,
+                    operation_name=operation_name,
+                    instrument_id=instrument_id,
+                )
 
         if not chain:
-            return self._failure_result(
+            result: RouterExecutionResult[T] = self._failure_result(
                 criticality=criticality,
                 attempts=tuple(attempts),
                 warnings=tuple(warnings),
@@ -184,6 +200,14 @@ class ProviderRouterEngine:
                 ),
                 operation_name=operation_name,
                 category=category,
+            )
+            return self._record_route_result(
+                result,
+                market=market,
+                category=category,
+                chain=chain,
+                operation_name=operation_name,
+                instrument_id=instrument_id,
             )
 
         for index, vendor_id in enumerate(chain):
@@ -215,7 +239,7 @@ class ProviderRouterEngine:
                 )
             )
             if success is not None:
-                return RouterExecutionResult(
+                result = RouterExecutionResult(
                     value=success.value,
                     ok=True,
                     criticality=criticality,
@@ -223,6 +247,14 @@ class ProviderRouterEngine:
                     attempts=tuple(attempts),
                     warnings=tuple(warnings),
                     error=None,
+                )
+                return self._record_route_result(
+                    result,
+                    market=market,
+                    category=category,
+                    chain=chain,
+                    operation_name=operation_name,
+                    instrument_id=instrument_id,
                 )
             if stop_chain:
                 break
@@ -234,7 +266,7 @@ class ProviderRouterEngine:
             chain=chain,
             instrument_id=instrument_id,
         )
-        return self._failure_result(
+        result = self._failure_result(
             criticality=criticality,
             attempts=tuple(attempts),
             warnings=tuple(warnings),
@@ -242,6 +274,65 @@ class ProviderRouterEngine:
             operation_name=operation_name,
             category=category,
         )
+        return self._record_route_result(
+            result,
+            market=market,
+            category=category,
+            chain=chain,
+            operation_name=operation_name,
+            instrument_id=instrument_id,
+        )
+
+    def _record_route_result[T](
+        self,
+        result: RouterExecutionResult[T],
+        *,
+        market: Market,
+        category: DataCategory,
+        chain: tuple[VendorId, ...],
+        operation_name: str,
+        instrument_id: str | None,
+    ) -> RouterExecutionResult[T]:
+        """Persist safe routing metadata; persistence never changes routing outcome."""
+        if self._route_history_store is None or self._id_generator is None:
+            return result
+        try:
+            recorded_at = require_aware_datetime(
+                self._clock.now(), field_name="clock.now"
+            )
+            receipt = ProviderRouteReceipt(
+                route_id=self._id_generator.new(EntityIdPrefix.PROVIDER_ROUTE),
+                recorded_at=recorded_at,
+                market=market,
+                category=category,
+                operation_name=operation_name,
+                instrument_id=instrument_id,
+                criticality=result.criticality,
+                requested_chain=chain,
+                ok=result.ok,
+                selected_vendor=result.meta.vendor if result.meta else None,
+                selected_role=result.meta.role if result.meta else None,
+                cache_disposition=(
+                    result.meta.cache_disposition if result.meta else None
+                ),
+                attempts=tuple(
+                    replace(attempt, message=None) for attempt in result.attempts
+                ),
+                warning_codes=tuple(warning.code for warning in result.warnings),
+                final_error_code=result.error.code if result.error else None,
+            )
+            self._route_history_store.append(receipt)
+            return result
+        except Exception:
+            warning_list = list(result.warnings)
+            self._add_warning_once(
+                warning_list,
+                code="PROVIDER_ROUTE_HISTORY_UNAVAILABLE",
+                message=_MSG_PROVIDER_ROUTE_HISTORY_UNAVAILABLE,
+                category=category,
+                operation_name=operation_name,
+            )
+            return replace(result, warnings=tuple(warning_list))
 
     # --- fingerprint / cache -------------------------------------------------
 

@@ -25,6 +25,10 @@ from infrastructure.persistence.provider_health_store import (
 from infrastructure.persistence.provider_rate_limit_store import (
     SqlAlchemyProviderRateLimitStore,
 )
+from infrastructure.persistence.provider_route_history_store import (
+    InMemoryProviderRouteHistoryStore,
+    SqlAlchemyProviderRouteHistoryStore,
+)
 from infrastructure.persistence.provider_state_backend import (
     ProviderStateBackend,
     build_provider_state_backend,
@@ -72,7 +76,7 @@ def test_schema_ready_false_when_only_partial_tables(tmp_path: Path) -> None:
         eng.dispose()
 
 
-def test_schema_ready_true_when_all_three_tables(tmp_path: Path) -> None:
+def test_schema_ready_true_when_all_four_tables(tmp_path: Path) -> None:
     eng = create_engine(f"sqlite:///{tmp_path / 'ready.db'}")
     try:
         Base.metadata.create_all(eng)
@@ -142,6 +146,7 @@ def test_build_backend_uses_in_memory_when_not_ready(
         assert isinstance(backend.cache_store, InMemoryProviderCacheStore)
         assert isinstance(backend.health_store, InMemoryProviderHealthStore)
         assert isinstance(backend.rate_limit_store, InMemoryProviderRateLimitStore)
+        assert isinstance(backend.route_history_store, InMemoryProviderRouteHistoryStore)
     finally:
         eng.dispose()
 
@@ -157,6 +162,7 @@ def test_build_backend_uses_sql_when_ready(
         assert isinstance(backend.cache_store, SqlAlchemyProviderCacheStore)
         assert isinstance(backend.health_store, SqlAlchemyProviderHealthStore)
         assert isinstance(backend.rate_limit_store, SqlAlchemyProviderRateLimitStore)
+        assert isinstance(backend.route_history_store, SqlAlchemyProviderRouteHistoryStore)
     finally:
         eng.dispose()
 
@@ -174,5 +180,6 @@ def test_build_backend_never_mixes_sql_and_memory(
         assert isinstance(backend.cache_store, InMemoryProviderCacheStore)
         assert isinstance(backend.health_store, InMemoryProviderHealthStore)
         assert isinstance(backend.rate_limit_store, InMemoryProviderRateLimitStore)
+        assert isinstance(backend.route_history_store, InMemoryProviderRouteHistoryStore)
     finally:
         eng.dispose()

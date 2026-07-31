@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from application.dto.market import DecimalWire
-from domain.common.enums import HealthState, VendorId
+from domain.common.enums import DataCategory, HealthState, Market, VendorId
 from domain.monitoring.enums import MonitorCadence, MonitorRunStatus
 from domain.portfolio.enums import AccountActivityCoverageStatus
 
@@ -20,7 +20,13 @@ class _DTO(BaseModel):
 class DataQualityIssueDTO(_DTO):
     code: str = Field(min_length=1, max_length=128)
     severity: HealthState
-    scope: Literal["account_snapshot", "account_activity", "monitor", "persistence"]
+    scope: Literal[
+        "account_snapshot",
+        "account_activity",
+        "monitor",
+        "provider_route",
+        "persistence",
+    ]
     subject_ref: str | None = Field(default=None, max_length=128)
     observed_at: datetime | None = None
     detail: str = Field(min_length=1, max_length=500)
@@ -78,6 +84,21 @@ class MonitorQualityDTO(_DTO):
     error_codes: tuple[str, ...]
 
 
+class ProviderRouteQualityDTO(_DTO):
+    market: Market
+    category: DataCategory
+    window_start: datetime
+    latest_at: datetime
+    execution_count: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    fallback_count: int = Field(ge=0)
+    cache_count: int = Field(ge=0)
+    latest_selected_vendor: VendorId | None
+    latest_error_code: str | None
+    warning_codes: tuple[str, ...]
+
+
 class DataQualityCenterDTO(_DTO):
     status: HealthState
     generated_at: datetime
@@ -85,5 +106,7 @@ class DataQualityCenterDTO(_DTO):
     account_snapshots: tuple[AccountSnapshotQualityDTO, ...]
     account_activity: tuple[AccountActivityQualityDTO, ...]
     monitors: tuple[MonitorQualityDTO, ...]
+    provider_routes: tuple[ProviderRouteQualityDTO, ...]
+    provider_route_window_truncated: bool
     issues: tuple[DataQualityIssueDTO, ...]
     limitations: tuple[str, ...]

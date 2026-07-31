@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from application.dto.data_quality import (
@@ -11,15 +11,18 @@ from application.dto.data_quality import (
     DataQualityCenterDTO,
     DataQualityIssueDTO,
     MonitorQualityDTO,
+    ProviderRouteQualityDTO,
 )
+from application.dto.provider_route_history import ProviderRouteReceipt
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.account_transaction_repository import AccountTransactionRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
+from application.ports.provider_route_history_store import ProviderRouteHistoryStore
 from application.ports.secret_redactor import SecretRedactor
-from domain.common.enums import Freshness, HealthState, VendorId
+from domain.common.enums import DataCategory, Freshness, HealthState, Market, VendorId
 from domain.common.ids import EntityIdPrefix
 from domain.monitoring.enums import (
     MonitorRuleStateValue,
@@ -34,17 +37,19 @@ from domain.portfolio.models import AccountActivityCoverageReceipt, AccountSnaps
 class DataQualityService:
     """Summarize persisted evidence without contacting any upstream Provider."""
 
-    _LIMITATIONS = (
+    _BASE_LIMITATIONS = (
         "DURABLE_ONLY_NO_UPSTREAM_PROBE",
-        "PROVIDER_FALLBACK_HISTORY_NOT_PERSISTED",
         "ACCOUNT_AGE_REPORTED_WITHOUT_GLOBAL_STALENESS_THRESHOLD",
     )
+    _ROUTE_WINDOW = timedelta(hours=24)
+    _ROUTE_LIMIT = 500
 
     def __init__(
         self,
         account_snapshots: AccountSnapshotRepository,
         account_transactions: AccountTransactionRepository,
         monitors: MonitorRepository,
+        provider_routes: ProviderRouteHistoryStore,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -52,6 +57,7 @@ class DataQualityService:
         self._account_snapshots = account_snapshots
         self._account_transactions = account_transactions
         self._monitors = monitors
+        self._provider_routes = provider_routes
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -85,6 +91,16 @@ class DataQualityService:
             repository_errors = True
             issues.append(self._persistence_issue("monitors", exc, now))
 
+        route_window_start = now - self._ROUTE_WINDOW
+        try:
+            route_receipts = self._provider_routes.list_since(
+                route_window_start, limit=self._ROUTE_LIMIT
+            )
+        except Exception as exc:  # noqa: BLE001 — health view must not raise or leak
+            route_receipts = ()
+            repository_errors = True
+            issues.append(self._persistence_issue("provider_routes", exc, now))
+
         account_items = tuple(
             self._account_quality(snapshot, now, issues) for snapshot in snapshots
         )
@@ -116,6 +132,15 @@ class DataQualityService:
         monitor_items = tuple(
             self._monitor_quality(monitor, now, issues) for monitor in monitor_definitions
         )
+        route_items = self._provider_route_quality(
+            route_receipts, route_window_start, issues
+        )
+        route_window_truncated = len(route_receipts) == self._ROUTE_LIMIT
+        limitations = list(self._BASE_LIMITATIONS)
+        if not self._provider_routes.is_durable:
+            limitations.append("PROVIDER_ROUTE_HISTORY_NOT_DURABLE")
+        if route_window_truncated:
+            limitations.append("PROVIDER_ROUTE_HISTORY_WINDOW_TRUNCATED")
 
         if repository_errors or any(item.severity == HealthState.ERROR for item in issues):
             status = HealthState.ERROR
@@ -148,12 +173,75 @@ class DataQualityService:
                 account_snapshots=account_items,
                 account_activity=activity_items,
                 monitors=monitor_items,
+                provider_routes=route_items,
+                provider_route_window_truncated=route_window_truncated,
                 issues=tuple(issues),
-                limitations=self._LIMITATIONS,
+                limitations=tuple(limitations),
             ),
             degraded=status is not HealthState.OK,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _provider_route_quality(
+        receipts: tuple[ProviderRouteReceipt, ...],
+        window_start: datetime,
+        issues: list[DataQualityIssueDTO],
+    ) -> tuple[ProviderRouteQualityDTO, ...]:
+        groups: dict[tuple[Market, DataCategory], list[ProviderRouteReceipt]] = {}
+        for receipt in receipts:
+            groups.setdefault((receipt.market, receipt.category), []).append(receipt)
+        output: list[ProviderRouteQualityDTO] = []
+        for (market, category), items in sorted(
+            groups.items(), key=lambda item: (item[0][0].value, item[0][1].value)
+        ):
+            items.sort(key=lambda item: (item.recorded_at, item.route_id), reverse=True)
+            latest = items[0]
+            failures = sum(not item.ok for item in items)
+            fallbacks = sum(item.used_fallback for item in items)
+            warning_codes = tuple(
+                sorted({code for item in items for code in item.warning_codes})
+            )
+            subject = f"{market.value}:{category.value}"
+            if failures:
+                issues.append(
+                    DataQualityIssueDTO(
+                        code="PROVIDER_ROUTE_FAILURES_RECENT",
+                        severity=HealthState.DEGRADED,
+                        scope="provider_route",
+                        subject_ref=subject,
+                        observed_at=latest.recorded_at,
+                        detail="One or more Provider routes failed in the last 24 hours.",
+                    )
+                )
+            if fallbacks:
+                issues.append(
+                    DataQualityIssueDTO(
+                        code="PROVIDER_FALLBACKS_RECENT",
+                        severity=HealthState.DEGRADED,
+                        scope="provider_route",
+                        subject_ref=subject,
+                        observed_at=latest.recorded_at,
+                        detail="One or more Provider routes used a fallback in the last 24 hours.",
+                    )
+                )
+            output.append(
+                ProviderRouteQualityDTO(
+                    market=market,
+                    category=category,
+                    window_start=window_start,
+                    latest_at=latest.recorded_at,
+                    execution_count=len(items),
+                    success_count=len(items) - failures,
+                    failure_count=failures,
+                    fallback_count=fallbacks,
+                    cache_count=sum(item.used_cache for item in items),
+                    latest_selected_vendor=latest.selected_vendor,
+                    latest_error_code=latest.final_error_code,
+                    warning_codes=warning_codes,
+                )
+            )
+        return tuple(output)
 
     def _account_quality(
         self,
