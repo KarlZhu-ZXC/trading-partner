@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -67,7 +67,7 @@ jobs:
         run: uv run mypy src
 
       - name: Set up Node.js for local console
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -92,7 +92,7 @@ jobs:
           --sbom-type application > ../trading-partner-console.cdx.json
 
       - name: Upload SBOMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trading-partner-sboms
           path: |
