@@ -11,6 +11,7 @@ import pytest
 
 from application.dto import a_share as a_share_dto
 from domain.a_share import enums as a_share_enums
+from domain.a_share import industry_models as a_share_industry_models
 from domain.a_share import models as a_share_models
 from domain.a_share.enums import (
     BarInterval,
@@ -904,24 +905,26 @@ def _all_domain_instances() -> dict[str, object]:
     }
 
 
+def _domain_model_classes() -> dict[str, type]:
+    modules = (a_share_models, a_share_industry_models)
+    return {
+        name: obj
+        for module in modules
+        for name, obj in vars(module).items()
+        if isinstance(obj, type) and is_dataclass(obj) and obj.__module__ == module.__name__
+    }
+
+
 def test_every_frozen_domain_model_instantiated_once() -> None:
     instances = _all_domain_instances()
-    module_classes = {
-        name: obj
-        for name, obj in vars(a_share_models).items()
-        if isinstance(obj, type) and is_dataclass(obj) and obj.__module__ == a_share_models.__name__
-    }
+    module_classes = _domain_model_classes()
     assert set(instances) == set(module_classes)
     for name, instance in instances.items():
         assert isinstance(instance, module_classes[name])
 
 
 def test_design_field_inventory_matches_dataclasses() -> None:
-    module_classes = {
-        name: obj
-        for name, obj in vars(a_share_models).items()
-        if isinstance(obj, type) and is_dataclass(obj) and obj.__module__ == a_share_models.__name__
-    }
+    module_classes = _domain_model_classes()
     assert set(DESIGN_FIELD_INVENTORY) == set(module_classes)
     for name, expected in DESIGN_FIELD_INVENTORY.items():
         actual = {f.name for f in fields(module_classes[name])}

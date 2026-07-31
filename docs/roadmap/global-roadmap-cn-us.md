@@ -1080,7 +1080,9 @@ TradingAgents 只同步有价值的模式：
    Provider fallback 历史尚未持久化，当前以明确 limitation 返回，后续再补运行回执账本。
 3. composition root 第一轮拆分已完成：`bootstrap.py` 从 1049 行降至 961 行，新的回归上限
    收紧为 1000；application-only 服务目录与 infrastructure 资源生命周期已分层，跨层 wiring
-   仍只有一个。下一步再按领域拆开 A 股超大 domain/DTO/provider 文件。
+   仍只有一个。A 股 domain 拆分第一刀也已完成：行业周期/公司经营模型与共享校验器已从
+   1837 行的 `models.py` 分离，稳定 import façade 保留并收紧到 1400 行上限；下一步继续拆
+   market / fundamentals / capital / sentiment-options，并处理 1618 行的 DTO façade。
 
 ## P1：让长期复盘真正形成闭环
 
