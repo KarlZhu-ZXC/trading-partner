@@ -36,6 +36,7 @@ from application.services.account_transaction_coordinator import AccountTransact
 from application.services.challenge_review_service import ChallengeReviewService
 from application.services.commodity_spot_service import CommoditySpotService
 from application.services.criticality_policy import CriticalityPolicy
+from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
 from application.services.futures_contract_service import FuturesContractService
 from application.services.futures_curve_service import FuturesCurveService
@@ -735,6 +736,10 @@ def build_application(
         secret_redactor,
     )
     monitor_repository: MonitorRepository = SqlAlchemyMonitorRepository(engine)
+    data_quality_service = DataQualityService(
+        account_snapshot_repository, account_transaction_repository, monitor_repository,
+        clock, id_generator, secret_redactor,
+    )
     us_market_calendar = XnysMarketSessionCalendar()
     monitor_schedule_service = MonitorScheduleService(
         us_calendar=us_market_calendar,
@@ -899,6 +904,7 @@ def build_application(
         providers=ProviderBundle(router=provider_router, registry=vendor_registry),
         services=ApplicationServices(
             health=health_service,
+            data_quality=data_quality_service,
             investment_cases=investment_case_service,
             thesis_revisions=thesis_revision_service,
             research_state=research_state_query_service,

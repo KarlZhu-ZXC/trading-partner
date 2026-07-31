@@ -20,15 +20,33 @@ from interfaces.mcp.tools.compact import ConfirmationPolicy
 
 
 class _Envelope:
+    def __init__(
+        self,
+        data: dict[str, Any] | None = None,
+        *,
+        degraded: bool = False,
+        warnings: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._data = data or {}
+        self._degraded = degraded
+        self._warnings = warnings or []
+
     def model_dump(self, *, mode: str) -> dict[str, Any]:
         assert mode == "json"
-        return {"ok": True, "request_id": "req_compact", "data": {}}
+        return {
+            "ok": True,
+            "request_id": "req_compact",
+            "degraded": self._degraded,
+            "warnings": self._warnings,
+            "data": dict(self._data),
+        }
 
 
 def _container() -> MagicMock:
     container = MagicMock()
     container.settings = SimpleNamespace(mcp_server_name="Trading Partner Test")
     container.services = MagicMock()
+    container.services.data_quality.check.return_value = _Envelope()
     return container
 
 
@@ -225,10 +243,64 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
     result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
 
     assert result["data"] == {
+        "data_quality": {
+            "component_checks": {},
+            "component_check_limitations": [
+                "CONFIGURATION_CHECK_IS_NOT_UPSTREAM_REACHABILITY",
+                "ONLY_COMPONENTS_WITH_EXPLICIT_PROBES_ARE_LISTED",
+            ],
+        },
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
         "surface_schema_version": "compact-v10",
     }
+
+
+@pytest.mark.asyncio
+async def test_system_health_keeps_operational_and_data_quality_states_separate() -> None:
+    container = _container()
+    container.services.health.check.return_value = _Envelope(
+        {"status": "ok", "components": {"provider": {"state": "ok"}}}
+    )
+    container.services.data_quality.check.return_value = _Envelope(
+        {"status": "degraded", "issues": [{"code": "MONITOR_NEVER_EVALUATED"}]},
+        degraded=True,
+        warnings=[
+            {
+                "code": "DATA_QUALITY_ISSUES",
+                "message": "Quality gap",
+                "details": {},
+            }
+        ],
+    )
+
+    result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
+
+    assert result["degraded"] is False
+    assert result["data"]["status"] == "ok"
+    assert result["data"]["data_quality"]["status"] == "degraded"
+    assert result["data"]["data_quality"]["component_checks"] == {
+        "provider": {"state": "ok"}
+    }
+    assert result["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_system_health_survives_data_quality_center_failure() -> None:
+    container = _container()
+    container.services.health.check.return_value = _Envelope({"status": "ok"})
+    container.services.data_quality.check.side_effect = RuntimeError("token=secret")
+
+    result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
+
+    assert result["ok"] is True
+    assert result["degraded"] is False
+    assert result["data"]["status"] == "ok"
+    quality = result["data"]["data_quality"]
+    assert quality["status"] == "error"
+    assert quality["account_snapshots"] == []
+    assert quality["issues"][0]["code"] == "DATA_QUALITY_CENTER_UNAVAILABLE"
+    assert "secret" not in str(result)
 
 
 @pytest.mark.asyncio

@@ -81,7 +81,7 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 
 | 工具 | 能力与边界 |
 |---|---|
-| `system_health` | 检查应用、数据库和全文检索；诊断本身可能以 degraded envelope 返回 |
+| `system_health` | 检查应用、数据库和全文检索，并嵌入 durable-only Data Quality Center：汇总最新账户快照的估值/价格时间覆盖、账户活动 coverage receipt、Active Monitor 最近运行与 `NOT_EVALUATED` 盲区；不请求券商或行情上游。运行健康与证据质量保留独立 status。Provider 检查保留 `live_probe`/`configuration` 标签，配置不等于实时连通。fallback 历史尚未持久化并作为 limitation 返回。基础诊断本身可能以 degraded envelope 返回 |
 
 ### 3.2 标的研究档案与投资判断（Investment Case / Thesis，9）
 

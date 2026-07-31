@@ -72,8 +72,9 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   same-market peer-comparison workflows while keeping the AI host as the synthesizer.
 - Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
   backtests and import downloaded result JSON with explicit reproducibility gaps.
-- Browse system health, all 28 MCP capabilities, Monitor runs/events, durable
-  accounts/Watchlists, and operational state in an LLM-free local web console.
+- Browse system health, a durable-only Data Quality Center, all 28 MCP capabilities,
+  Monitor runs/events, accounts/Watchlists, and operational state in an LLM-free
+  local web console.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -139,7 +140,11 @@ generic stdio MCP host, use the equivalent configuration:
 After connecting, call `system_health` first. Then verify the specific market and
 account providers you intend to use; a healthy MCP process does not imply that every
 optional external provider is configured or reachable. Health output labels local
-live probes separately from configuration-only checks.
+live probes separately from configuration-only checks. The same response now embeds
+a durable-only Data Quality Center for account valuation/time coverage, activity
+coverage receipts, and latest Monitor blind spots; it never refreshes a broker or
+market-data Provider. Operational health and evidence quality keep separate statuses.
+The local Console renders both on its overview page.
 
 ## <img src="docs/assets/readme/sections/operations.svg" alt="" width="24" /> Operational commands
 

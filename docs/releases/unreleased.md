@@ -1,5 +1,15 @@
 # Unreleased
 
+- Added a durable-only Data Quality Center without increasing the 28-tool MCP
+  surface. `system_health` now summarizes latest account snapshot age,
+  valuation/price-time coverage, account-activity coverage receipts, and active
+  Monitor blind spots, while preserving configuration-versus-live Provider check
+  semantics and declaring the missing fallback-history ledger. The local Console
+  renders the same evidence as mobile-safe cards; no quality check contacts a broker
+  or market-data upstream. Operational health and evidence quality retain separate
+  statuses, and a quality-ledger failure cannot hide or relabel base health.
+  Monitor coverage is definition-version-aware: a successful run for an older
+  version is not accepted as evidence that the current rules were evaluated.
 - Reduced the sole cross-layer composition root from 1,049 to 961 lines without
   creating another root. Application-only service/context bundles now live in
   `application/runtime.py`; infrastructure resource ownership and deterministic
