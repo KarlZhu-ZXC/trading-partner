@@ -371,6 +371,44 @@ def test_a_share_snapshot_validation_stays_out_of_orchestration_service() -> Non
     assert "def _validate_fundamentals(" not in service_text
 
 
+def test_a_share_dtos_stay_capability_split() -> None:
+    """A-share wire models keep one stable façade without returning to a monolith."""
+    from application.dto import (
+        a_share,
+        a_share_core_outputs,
+        a_share_inputs,
+        a_share_market_outputs,
+        a_share_product_outputs,
+        a_share_signal_outputs,
+    )
+
+    dto_root = LAYER_ROOTS["application"] / "dto"
+    caps = {
+        "a_share.py": 100,
+        "a_share_common.py": 80,
+        "a_share_inputs.py": 550,
+        "a_share_core_outputs.py": 350,
+        "a_share_market_outputs.py": 320,
+        "a_share_signal_outputs.py": 220,
+        "a_share_product_outputs.py": 400,
+    }
+    for filename, line_cap in caps.items():
+        path = dto_root / filename
+        assert path.is_file()
+        assert len(path.read_text(encoding="utf-8").splitlines()) <= line_cap
+
+    facade_text = (dto_root / "a_share.py").read_text(encoding="utf-8")
+    assert "class AShareGetSnapshotInput(" not in facade_text
+    assert "class AShareCompositeSnapshotDTO(" not in facade_text
+    assert a_share.AShareGetSnapshotInput is a_share_inputs.AShareGetSnapshotInput
+    assert a_share.AShareQuoteDTO is a_share_core_outputs.AShareQuoteDTO
+    assert a_share.ChipDistributionSnapshotDTO is (
+        a_share_market_outputs.ChipDistributionSnapshotDTO
+    )
+    assert a_share.EtfOptionSnapshotDTO is a_share_signal_outputs.EtfOptionSnapshotDTO
+    assert a_share.IndustryCycleSnapshotDTO is a_share_product_outputs.IndustryCycleSnapshotDTO
+
+
 def test_d6b1_ports_stay_in_application_without_infrastructure() -> None:
     """Cache codec / engine ports are application Protocols only."""
     for rel in (
