@@ -1,5 +1,8 @@
 # Unreleased
 
+- Upgraded the official GitHub checkout, Node setup, and artifact-upload actions
+  to their Node 24-backed v7 majors. The Console itself remains tested on Node 22;
+  the change removes the deprecated Node 20 JavaScript-action runtime warning.
 - Published `compact-v10` without adding MCP tools. The durable-only
   `portfolio_analyze/performance_summary` operation reconstructs native-currency
   FIFO lots or preserves a distinct broker-reported basis, separates realized and
