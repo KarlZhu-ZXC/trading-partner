@@ -409,27 +409,49 @@ def _all_fields(adapter: Any, *, exclude: tuple[str, ...] = ()) -> tuple[str, ..
 
 
 def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Remove non-validating noise, shorten refs, and share repeated schemas."""
+    """Render a validation-equivalent, compact JSON Schema 2020-12 contract."""
 
     def clean(value: Any) -> Any:
         if isinstance(value, dict):
             # ``oneOf`` plus each variant's required literal operation already
             # carries the dispatch contract. Pydantic's discriminator ``mapping``
             # repeats those refs and is optional JSON Schema metadata.
-            return {
+            cleaned = {
                 key: clean(item)
                 for key, item in value.items()
                 if key not in {"title", "mapping", "default"}
             }
+            # ``const`` and ``enum`` already constrain both value and JSON type.
+            # Pydantic emits a redundant string type beside them.
+            if cleaned.get("type") == "string" and (
+                "const" in cleaned or "enum" in cleaned
+            ):
+                cleaned.pop("type")
+            # JSON Schema permits nullable scalar types as a type array. Preserve
+            # every non-null constraint (format, pattern, bounds) while avoiding
+            # Pydantic's longer two-branch ``anyOf`` spelling.
+            any_of = cleaned.get("anyOf")
+            if isinstance(any_of, list) and len(any_of) == 2 and set(cleaned) == {"anyOf"}:
+                null_branch = {"type": "null"}
+                non_null = [item for item in any_of if item != null_branch]
+                if (
+                    len(non_null) == 1
+                    and isinstance(non_null[0], dict)
+                    and isinstance(non_null[0].get("type"), str)
+                ):
+                    cleaned = dict(non_null[0])
+                    cleaned["type"] = [cleaned["type"], "null"]
+            return cleaned
         if isinstance(value, list):
             return [clean(item) for item in value]
         return value
 
     minimized = cast(dict[str, Any], clean(schema))
+    _close_discriminated_request_union(minimized)
     definitions = minimized.get("$defs", {})
     if not definitions:
         return minimized
-    aliases = {name: f"V{index}" for index, name in enumerate(definitions)}
+    aliases = {name: _schema_alias(index) for index, name in enumerate(definitions)}
     minimized["$defs"] = {aliases[name]: value for name, value in definitions.items()}
 
     def rewrite_refs(value: Any) -> None:
@@ -448,6 +470,41 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
     rewrite_refs(minimized)
     _share_repeated_property_schemas(minimized)
     return minimized
+
+
+def _schema_alias(index: int) -> str:
+    """Return the shortest stable base-36 definition name for one schema."""
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if index == 0:
+        return alphabet[0]
+    parts: list[str] = []
+    while index:
+        index, remainder = divmod(index, len(alphabet))
+        parts.append(alphabet[remainder])
+    return "".join(reversed(parts))
+
+
+def _close_discriminated_request_union(schema: dict[str, Any]) -> None:
+    """Close grouped operation variants once at their request-union boundary."""
+    definitions = schema.get("$defs")
+    request = schema.get("properties", {}).get("request")
+    if not isinstance(definitions, dict) or not isinstance(request, dict):
+        return
+    variants = request.get("oneOf")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_names: list[str] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or not isinstance(variant.get("$ref"), str):
+            return
+        variant_names.append(variant["$ref"].rsplit("/", 1)[-1])
+    # JSON Schema 2020-12 applies this after the successful ``oneOf`` branch.
+    # A field owned only by another operation is therefore unevaluated and rejected.
+    request["unevaluatedProperties"] = False
+    for name in variant_names:
+        definition = definitions.get(name)
+        if isinstance(definition, dict):
+            definition.pop("additionalProperties", None)
 
 
 def _share_repeated_property_schemas(schema: dict[str, Any]) -> None:
@@ -470,12 +527,15 @@ def _share_repeated_property_schemas(schema: dict[str, Any]) -> None:
             occurrences.setdefault(canonical, []).append((properties, field_name))
             values[canonical] = field_schema
 
-    shared_index = 0
+    shared_index = len(definitions)
     for canonical in sorted(occurrences):
         locations = occurrences[canonical]
         if len(locations) < 2:
             continue
-        shared_name = f"S{shared_index}"
+        shared_name = _schema_alias(shared_index)
+        while shared_name in definitions:
+            shared_index += 1
+            shared_name = _schema_alias(shared_index)
         reference = {"$ref": f"#/$defs/{shared_name}"}
         reference_size = len(json.dumps(reference, separators=(",", ":")))
         definition_cost = len(shared_name) + len(canonical) + 6
@@ -508,7 +568,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v7",
+            surface_schema_version="compact-v8",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
