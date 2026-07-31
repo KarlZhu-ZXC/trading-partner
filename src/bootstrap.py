@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from application.ports.a_share_trading_calendar import AShareTradingCalendar
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
-from application.ports.http_transport import HttpTransport
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
@@ -19,7 +17,7 @@ from application.ports.operational_maintenance import OperationalMaintenancePort
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
-from application.ports.watchlist_source_provider import WatchlistSourceProvider
+from application.runtime import ApplicationServices, RuntimeContext
 from application.services.a_share_capital_service import AShareCapitalService
 from application.services.a_share_company_operating_metrics_service import (
     AShareCompanyOperatingMetricsService,
@@ -107,16 +105,15 @@ from infrastructure.calendars.a_share_market_session_calendar import (
 from infrastructure.calendars.kr_market_session_calendar import XkrxMarketSessionCalendar
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.composition import (
+    CompositionOverrides,
     ProviderCompositionOverrides,
+    RuntimeResources,
     build_persistence_infrastructure,
     build_provider_infrastructure,
 )
 from infrastructure.config.settings import PROJECT_ROOT, AppSettings
 from infrastructure.persistence.challenge_review_repository import (
     SqlAlchemyChallengeReviewRepository,
-)
-from infrastructure.persistence.database import (
-    SqlAlchemyDatabase,
 )
 from infrastructure.persistence.instrument_unit_of_work import (
     SqlAlchemyInstrumentUnitOfWork,
@@ -157,9 +154,6 @@ from infrastructure.providers.a_share.codecs import (
     statements_codec,
     ticks_codec,
 )
-from infrastructure.providers.a_share.eastmoney_gate import (
-    EastmoneyRequestGate,
-)
 from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthFlowManager,
     SchwabOAuthTokenInspector,
@@ -199,49 +193,7 @@ UowFactory = Callable[[], ResearchUnitOfWork]
 InstrumentUowFactory = Callable[[], InstrumentUnitOfWork]
 
 
-@dataclass(frozen=True, slots=True)
-class BootstrapOverrides:
-    """Deterministic composition-only overrides; never a production mode switch."""
-
-    clock: Clock | None = None
-    a_share_transport: HttpTransport | None = None
-    eastmoney_gate: EastmoneyRequestGate | None = None
-    a_share_calendar: AShareTradingCalendar | None = None
-    watchlist_provider: WatchlistSourceProvider | None = None
-    monitor_notification_sender: MonitorNotificationSender | None = None
-
-
-@dataclass(slots=True)
-class RuntimeResources:
-    """Own infrastructure resources and their deterministic shutdown order."""
-
-    database: SqlAlchemyDatabase
-    monitor_run_lock: ProcessFileLock
-    post_market_sync_lock: ProcessFileLock
-    a_share_transport: HttpTransport | None = None
-    cross_asset_transport: HttpTransport | None = None
-    monitor_notification_sender: MonitorNotificationSender | None = None
-    _closed: bool = field(default=False, init=False, repr=False)
-
-    async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            closed: set[int] = set()
-            for transport in (
-                self.a_share_transport,
-                self.cross_asset_transport,
-                self.monitor_notification_sender,
-            ):
-                if transport is None or id(transport) in closed:
-                    continue
-                closed.add(id(transport))
-                aclose = getattr(transport, "aclose", None)
-                if callable(aclose):
-                    await aclose()
-        finally:
-            self.database.close()
+BootstrapOverrides = CompositionOverrides
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,46 +202,6 @@ class ProviderBundle:
 
     router: ProviderRouter
     registry: VendorRegistry
-
-
-@dataclass(frozen=True, slots=True)
-class ApplicationServices:
-    """Tool-facing application graph grouped independently from infrastructure."""
-
-    health: HealthService
-    investment_cases: InvestmentCaseService
-    thesis_revisions: ThesisRevisionService
-    research_state: ResearchStateQueryService
-    research_archive: ResearchArchiveService
-    research_search: ResearchSearchService
-    research_timeline: ResearchTimelineService
-    journal: JournalService
-    decisions: DecisionRecordService
-    instruments: InstrumentResolveService
-    a_share: AShareToolCoordinator
-    us_market: USToolCoordinator
-    market: MarketToolCoordinator
-    technical: TechnicalToolCoordinator
-    us_research: USResearchToolCoordinator
-    us_context: USContextToolCoordinator
-    portfolio: PortfolioToolCoordinator
-    risk: RiskToolCoordinator
-    monitoring: MonitorToolCoordinator
-    research_context: ResearchContextBuilder
-    challenge: ChallengeReviewService
-    account_transactions: AccountTransactionCoordinator
-    workflows: ResearchWorkflowOrchestrator
-    historical_validation: HistoricalValidationService
-    watchlist: WatchlistHubService
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeContext:
-    """Cross-cutting deterministic collaborators exposed to interface adapters."""
-
-    clock: Clock
-    id_generator: IdGenerator
-    secret_redactor: SecretRedactor
 
 
 @dataclass(frozen=True, slots=True)

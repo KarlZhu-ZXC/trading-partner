@@ -195,7 +195,7 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     from bootstrap import ApplicationContainer
 
     bootstrap = SRC / "bootstrap.py"
-    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_050
+    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_000
     assert set(ApplicationContainer.__dataclass_fields__) == {
         "settings",
         "context",
