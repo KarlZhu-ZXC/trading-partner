@@ -1076,8 +1076,9 @@ TradingAgents 只同步有价值的模式：
 1. 完成 A1 真实券商报表对账，保留可解释残差；对账签收前不推进精确收益率宣称。
 2. 建设统一 Data Quality Center：把 Provider health、数据新鲜度、覆盖回执、fallback、
    估值缺口与 Monitor 盲区汇总到一个机器可读视图和 Console 页面。
-3. 拆分已触顶的 composition root（`bootstrap.py` 当前 1049/1050 行），并按领域拆开 A 股
-   超大 domain/DTO/provider 文件；不提高行数门槛来掩盖结构问题。
+3. composition root 第一轮拆分已完成：`bootstrap.py` 从 1049 行降至 961 行，新的回归上限
+   收紧为 1000；application-only 服务目录与 infrastructure 资源生命周期已分层，跨层 wiring
+   仍只有一个。下一步再按领域拆开 A 股超大 domain/DTO/provider 文件。
 
 ## P1：让长期复盘真正形成闭环
 

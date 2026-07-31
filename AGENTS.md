@@ -369,6 +369,9 @@ orders, fills, or positions.
 4. Only `src/bootstrap.py` connects application services to infrastructure.
    `infrastructure/composition/` may build infrastructure-only bundles but must
    never import `application.services`.
+   Application-only service/context bundles live in `application/runtime.py`;
+   infrastructure resource ownership and deterministic composition overrides live
+   in `infrastructure/composition/runtime.py`. Neither is a second composition root.
 5. Provider raw payloads never cross the infrastructure boundary.
 6. Precise numbers come from tool snapshots with source, time, freshness, and basis.
 7. The sole FastMCP server directly composes compact capability adapters; do not

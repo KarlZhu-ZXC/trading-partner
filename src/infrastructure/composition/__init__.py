@@ -9,11 +9,14 @@ from infrastructure.composition.providers import (
     ProviderInfrastructure,
     build_provider_infrastructure,
 )
+from infrastructure.composition.runtime import CompositionOverrides, RuntimeResources
 
 __all__ = [
     "PersistenceInfrastructure",
     "ProviderCompositionOverrides",
     "ProviderInfrastructure",
+    "CompositionOverrides",
+    "RuntimeResources",
     "build_persistence_infrastructure",
     "build_provider_infrastructure",
 ]

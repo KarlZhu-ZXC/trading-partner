@@ -217,6 +217,9 @@ resulting container exposes five explicit bundles (`context`, `resources`,
 `providers`, `services`, and `operations`) instead of a flat service locator.
 Infrastructure-owned construction lives under `infrastructure/composition/`, while
 SQLAlchemy declarations are grouped under `infrastructure/persistence/orm/`.
+The application-only service catalog is isolated in `application/runtime.py`; process
+resource ownership and deterministic bootstrap overrides live in the infrastructure
+composition package. Cross-layer construction remains exclusive to `bootstrap.py`.
 
 ## <img src="docs/assets/readme/sections/data.svg" alt="" width="24" /> Data-source routing
 

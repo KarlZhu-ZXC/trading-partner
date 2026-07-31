@@ -1,5 +1,10 @@
 # Unreleased
 
+- Reduced the sole cross-layer composition root from 1,049 to 961 lines without
+  creating another root. Application-only service/context bundles now live in
+  `application/runtime.py`; infrastructure resource ownership and deterministic
+  overrides live in `infrastructure/composition/runtime.py`. Architecture tests
+  tighten the bootstrap regression cap from 1,050 to 1,000 lines.
 - Upgraded the official GitHub checkout, Node setup, and artifact-upload actions
   to their Node 24-backed v7 majors. The Console itself remains tested on Node 22;
   the change removes the deprecated Node 20 JavaScript-action runtime warning.
