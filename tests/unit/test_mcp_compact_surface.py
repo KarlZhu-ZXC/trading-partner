@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from interfaces.mcp.server import (
     COMPACT_28_TOOL_NAMES,
@@ -173,10 +174,27 @@ async def test_compact_schema_compression_keeps_every_local_ref_resolvable() -> 
     compact = await create_mcp_server(_container()).list_tools()
 
     for tool in compact:
+        Draft202012Validator.check_schema(tool.inputSchema)
         definitions = tool.inputSchema.get("$defs", {})
         assert _local_definition_refs(tool.inputSchema) <= set(definitions), tool.name
     a_share = next(tool for tool in compact if tool.name == "a_share_get_facts")
-    assert any(name.startswith("S") for name in a_share.inputSchema["$defs"])
+    assert len(a_share.inputSchema["$defs"]) < 36
+    assert all(len(name) == 1 for name in a_share.inputSchema["$defs"])
+
+
+@pytest.mark.asyncio
+async def test_compact_public_schema_rejects_fields_from_other_operations() -> None:
+    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    schema = tools["account_get"].inputSchema
+    validator = Draft202012Validator(schema)
+
+    assert not list(validator.iter_errors({"request": {"operation": "positions"}}))
+    errors = list(
+        validator.iter_errors(
+            {"request": {"operation": "positions", "limit": 20}},
+        )
+    )
+    assert errors
 
 
 @pytest.mark.asyncio
@@ -208,7 +226,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
     assert result["data"] == {
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v7",
+        "surface_schema_version": "compact-v8",
     }
 
 

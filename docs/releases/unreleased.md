@@ -1,5 +1,11 @@
 # Unreleased
 
+- Published `compact-v8` without changing the 28-tool inventory or runtime input
+  validation. The JSON Schema 2020-12 representation now shares closed-operation
+  semantics at each discriminated request union, uses compact local definition
+  references, and removes redundant constant/enum/nullable syntax. Aggregate input
+  schema is reduced from 36,586 to 32,319 bytes, restoring 4,545 bytes of headroom
+  for performance-attribution operations.
 - Unified the Python distribution, health response, and Console API on product
   version `0.3.0`; Hatch now reads the version from `application.__version__`
   instead of maintaining a second value in `pyproject.toml`.
