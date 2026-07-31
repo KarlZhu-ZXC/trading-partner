@@ -1085,7 +1085,8 @@ TradingAgents 只同步有价值的模式：
    limit-pool/sentiment/options、fundamentals、research/disclosure 与 calendar 模型均已
    独立，稳定 import façade 保留并收紧到 100 行上限；snapshot 的
    Provider 结果校验也从 1480 行编排服务分离为 validation mixin，主服务收紧到 1100 行。
-   下一步处理 1618 行的 DTO façade。
+   1618 行的 DTO 文件也已按 input、core facts、market/capital、signal/options 与 product
+   composite 拆分，稳定 façade 收紧到 100 行；A 股首轮结构瘦身完成。
 
 ## P1：让长期复盘真正形成闭环
 

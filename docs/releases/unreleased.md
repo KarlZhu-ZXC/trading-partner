@@ -8,6 +8,11 @@
   options, and calendar windows now complete the split. The former 1,837-line file
   is a sub-100-line compatibility façade with stable type/function re-exports;
   architecture tests prevent the monolith returning.
+- Split the former 1,618-line A-share DTO file into closed input, shared validation,
+  core fact, market/capital, signal/option, and bounded product modules. The original
+  import path is now a sub-100-line compatibility façade; schema names, fields, and
+  `extra=forbid` behavior remain unchanged and file-size regression caps cover every
+  capability module.
 - Split strict A-share snapshot Provider-result validation into a dedicated mixin.
   The orchestration service keeps its established private validation entry points
   through inheritance while shrinking from 1,480 to about 1,030 lines; architecture
