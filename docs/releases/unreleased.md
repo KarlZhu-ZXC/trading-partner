@@ -4,9 +4,10 @@
   `domain.a_share.models` import façade. Industry-cycle and company-operating
   models now live in a dedicated module, shared invariant validators have one
   internal owner, and market, fundamentals, and research/disclosure models now form
-  separate capability modules. The former 1,837-line façade is reduced below 1,000
-  lines while keeping stable type/function re-exports; architecture tests prevent
-  the monolith returning.
+  separate capability modules. Market context, capital/chips, limit-pool/sentiment/
+  options, and calendar windows now complete the split. The former 1,837-line file
+  is a sub-100-line compatibility façade with stable type/function re-exports;
+  architecture tests prevent the monolith returning.
 - Split strict A-share snapshot Provider-result validation into a dedicated mixin.
   The orchestration service keeps its established private validation entry points
   through inheritance while shrinking from 1,480 to about 1,030 lines; architecture

@@ -295,33 +295,49 @@ def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
 
 
 def test_a_share_domain_models_stay_capability_split() -> None:
-    """Industry models and shared validators must not collapse into the façade."""
+    """Capability models and shared validators must not collapse into the façade."""
     from domain.a_share import (
+        calendar_models,
+        capital_models,
         fundamental_models,
         industry_models,
+        market_context_models,
         market_models,
         models,
         research_models,
+        signal_option_models,
     )
 
     domain_root = LAYER_ROOTS["domain"] / "a_share"
     facade = domain_root / "models.py"
+    calendar = domain_root / "calendar_models.py"
+    capital = domain_root / "capital_models.py"
     fundamentals = domain_root / "fundamental_models.py"
     industry = domain_root / "industry_models.py"
+    market_context = domain_root / "market_context_models.py"
     market = domain_root / "market_models.py"
     research = domain_root / "research_models.py"
+    signal_option = domain_root / "signal_option_models.py"
     validation = domain_root / "model_validation.py"
 
+    assert calendar.is_file()
+    assert capital.is_file()
     assert fundamentals.is_file()
     assert industry.is_file()
+    assert market_context.is_file()
     assert market.is_file()
     assert research.is_file()
+    assert signal_option.is_file()
     assert validation.is_file()
-    assert len(facade.read_text(encoding="utf-8").splitlines()) <= 1_050
+    assert len(facade.read_text(encoding="utf-8").splitlines()) <= 100
+    assert len(calendar.read_text(encoding="utf-8").splitlines()) <= 50
+    assert len(capital.read_text(encoding="utf-8").splitlines()) <= 450
     assert len(fundamentals.read_text(encoding="utf-8").splitlines()) <= 150
     assert len(industry.read_text(encoding="utf-8").splitlines()) <= 350
+    assert len(market_context.read_text(encoding="utf-8").splitlines()) <= 120
     assert len(market.read_text(encoding="utf-8").splitlines()) <= 250
     assert len(research.read_text(encoding="utf-8").splitlines()) <= 220
+    assert len(signal_option.read_text(encoding="utf-8").splitlines()) <= 450
     assert len(validation.read_text(encoding="utf-8").splitlines()) <= 350
     facade_text = facade.read_text(encoding="utf-8")
     assert "class IndustryMetricObservation:" not in facade_text
@@ -335,6 +351,10 @@ def test_a_share_domain_models_stay_capability_split() -> None:
     assert models.validate_order_book_levels is market_models.validate_order_book_levels
     assert models.FinancialStatementLine is fundamental_models.FinancialStatementLine
     assert models.AnalystReportItem is research_models.AnalystReportItem
+    assert models.MarketBoardSnapshot is market_context_models.MarketBoardSnapshot
+    assert models.ChipDistributionSnapshot is capital_models.ChipDistributionSnapshot
+    assert models.LimitUpContext is signal_option_models.LimitUpContext
+    assert models.TradingSessionWindow is calendar_models.TradingSessionWindow
 
 
 def test_a_share_snapshot_validation_stays_out_of_orchestration_service() -> None:
