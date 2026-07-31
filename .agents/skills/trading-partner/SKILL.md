@@ -202,7 +202,7 @@ emitted for the deduplicated latest view.
 |---|---|
 | `account_get` | Read durable `positions` or normalized `transactions`; it cannot contact a broker |
 | `external_state_sync` | Explicitly fetch/persist `accounts`, `transactions`, or the active `watchlist` upstream |
-| `portfolio_analyze` | `exposure`, durable activity `coverage`, or pure before/after `simulate_addition`; never executes |
+| `portfolio_analyze` | `exposure`, durable activity `coverage`, native-currency `performance_summary`, or pure before/after `simulate_addition`; never executes |
 
 For ordinary holdings, exposure, portfolio-review, and risk questions, read the
 latest durable snapshots first. Do **not** call
@@ -283,6 +283,11 @@ gaps, result truncation, mapping version, duplicate counts, and snapshot density
 An absent/incomplete receipt forbids precise P/L claims; refresh explicitly with
 `external_state_sync(request={"operation":"transactions",...})` only when the user
 asks for upstream synchronization.
+For actual account P/L, call
+`portfolio_analyze(request={"operation":"performance_summary",...})`. Its FIFO and
+broker-reported modes are distinct; never relabel broker cumulative/position P/L as
+period realized P/L. Preserve native currencies and every returned coverage,
+reconciliation, fee, corporate-action, and valuation warning.
 
 | Tool | Purpose |
 |---|---|

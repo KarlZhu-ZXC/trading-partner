@@ -632,7 +632,7 @@ market-specific due calendars.
 Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
-  operations and the surface schema is `compact-v9`;
+  operations and the current surface schema is `compact-v10`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
   `0027_account_activity_coverage` pass
   clean upgrade/downgrade/upgrade checks;

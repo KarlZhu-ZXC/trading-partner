@@ -130,7 +130,7 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
         "investment_case_read": 2,
         "market_data_get": 7,
         "external_state_sync": 3,
-        "portfolio_analyze": 3,
+        "portfolio_analyze": 4,
         "research_workflow_run": 8,
         "monitor_read": 4,
         "monitor_manage": 3,
@@ -227,8 +227,31 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
     assert result["data"] == {
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v9",
+        "surface_schema_version": "compact-v10",
     }
+
+
+@pytest.mark.asyncio
+async def test_performance_summary_routes_through_durable_attribution_service() -> None:
+    container = _container()
+    container.services.account_transactions.get_performance_attribution.return_value = (
+        _Envelope()
+    )
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "performance_summary",
+                "start": "2026-01-01T00:00:00Z",
+                "end": "2026-08-01T00:00:00Z",
+                "cost_basis_method": "FIFO",
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    container.services.account_transactions.get_performance_attribution.assert_called_once()
 
 
 @pytest.mark.asyncio

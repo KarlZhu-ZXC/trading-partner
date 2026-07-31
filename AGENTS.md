@@ -148,7 +148,7 @@ credentials for it.
 - `account_get` (`positions`, `transactions`) — durable only; never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
-- `portfolio_analyze` (`exposure`, `coverage`, `simulate_addition`)
+- `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `simulate_addition`)
 - `challenge_review_get`
 - `challenge_review_manage` (`start`, `resolve`)
 - `research_workflow_run` (`deep_dive`, `catalyst_review`,
@@ -276,6 +276,12 @@ Each sync stores an append-only coverage receipt with event deduplication counts
 effective window, snapshot density, mapping version, missing categories, and a
 machine-readable `COMPLETE`/`INCOMPLETE` status. `portfolio_analyze/coverage` is a
 durable-only read; it never refreshes a broker or computes P/L.
+`portfolio_analyze/performance_summary` deterministically reconstructs native-currency
+FIFO lots or reports broker snapshot cost basis. It separates realized/unrealized
+P/L, dividends, interest, known fees, and external cash flow; every instrument can
+be traced to durable activity IDs and an ending snapshot. It never performs FX
+aggregation and remains `INCOMPLETE` when inception history, fees, corporate-action
+lot effects, ending reconciliation, or timestamped valuation is not proven.
 Phase 1J restores one current durable research file (`InvestmentCase`)
 context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.

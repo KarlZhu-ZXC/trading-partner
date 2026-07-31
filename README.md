@@ -50,6 +50,9 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   aggregate `All` group is the default durable read scope.
 - Analyze portfolio exposure, simulate additions, and run deterministic Risk Engine v2
   checks without placing orders.
+- Calculate durable native-currency FIFO or broker-basis performance summaries with
+  realized/unrealized P/L, dividends, interest, fees, cash flows, event drill-down,
+  and explicit `INCOMPLETE` status when history or valuation evidence is insufficient.
 - Propose and explicitly confirm versioned Trade Plans, calculate non-executing A-share/US
   position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
 - Create durable price, volume, technical, fundamental, company-event, macro, sentiment,

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Card, DataBoundary, Empty, RefreshButton, displayJson, formatDate, formatDecimal, shortId } from "../components/ui";
+import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, displayJson, formatDate, formatDecimal, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -75,12 +75,27 @@ function positionSummaries(positions: Dict[]): Array<{ currency: string; marketV
   return [...summaries.values()];
 }
 
+function dateInput(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function yearStart(): string {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-01-01`;
+}
+
 export default function PortfolioPage() {
   const accountsResult = useApi<Dict>("/api/accounts");
   const [syncing, setSyncing] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<unknown>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [positionSorts, setPositionSorts] = useState<Record<string, PositionSort>>({});
+  const [performanceStart, setPerformanceStart] = useState(yearStart);
+  const [performanceEnd, setPerformanceEnd] = useState(() => dateInput(new Date()));
+  const [costBasisMethod, setCostBasisMethod] = useState<"FIFO" | "BROKER_REPORTED">("FIFO");
+  const [performanceResult, setPerformanceResult] = useState<Dict | null>(null);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
   const accounts = listOf<Dict>(envelopeData<Dict>(accountsResult.data), "accounts");
   const loading = accountsResult.loading;
   const error = accountsResult.error;
@@ -118,12 +133,55 @@ export default function PortfolioPage() {
     }
   }
 
+  async function calculatePerformance() {
+    setPerformanceLoading(true);
+    setPerformanceError(null);
+    try {
+      const value = await postApi<Dict>("/api/tools/invoke", {
+        tool_name: "portfolio_analyze",
+        arguments: {
+          request: {
+            operation: "performance_summary",
+            start: `${performanceStart}T00:00:00Z`,
+            end: `${performanceEnd}T23:59:59.999999Z`,
+            cost_basis_method: costBasisMethod,
+          },
+        },
+      });
+      setPerformanceResult(value);
+    } catch (cause) {
+      setPerformanceError(cause instanceof Error ? cause.message : "业绩归因失败");
+    } finally {
+      setPerformanceLoading(false);
+    }
+  }
+
+  const performance = envelopeData<Dict>(performanceResult);
+  const performanceAccounts = listOf<Dict>(performance, "accounts");
+  const performanceWarnings = Array.isArray(performanceResult?.warnings) ? performanceResult.warnings as Dict[] : [];
+
   return (
     <ConsoleShell active="portfolio" eyebrow="Durable state only" title="账户">
       <DataBoundary loading={loading} error={error}>
         <div className="toolbar"><p>页面加载仍只读持久化账户快照；只有点击下方同步按钮才会连接已配置的美股账户。A 股 QMT 不在当前同步范围。</p><div className="toolbar-actions"><ActionButton onClick={() => sync("accounts")} busy={syncing === "accounts"}>同步账户</ActionButton><ActionButton onClick={() => sync("transactions")} busy={syncing === "transactions"}>同步交易</ActionButton><RefreshButton onClick={accountsResult.refresh} loading={loading} /></div></div>
         {syncError && <div className="inline-error">{syncError}</div>}
         {syncResult !== null && <details className="run-receipt"><summary>查看最近同步回执</summary><pre>{displayJson(syncResult)}</pre></details>}
+        <Card kicker="A1 · DURABLE ATTRIBUTION" title="实际损益账本" action={performance ? <Badge value={String(performance.status ?? "UNKNOWN")} /> : undefined}>
+          <p className="card-note">只使用已持久化的活动与账户快照，按账户和原币种计算。不会联网刷新、隐式换汇或把券商累计 P/L 冒充区间收益。</p>
+          <div className="performance-controls">
+            <label><span>开始日期（UTC）</span><input type="date" value={performanceStart} onChange={(event) => setPerformanceStart(event.target.value)} /></label>
+            <label><span>结束日期（UTC）</span><input type="date" value={performanceEnd} onChange={(event) => setPerformanceEnd(event.target.value)} /></label>
+            <label><span>成本口径</span><select value={costBasisMethod} onChange={(event) => setCostBasisMethod(event.target.value as "FIFO" | "BROKER_REPORTED")}><option value="FIFO">FIFO 事件重建</option><option value="BROKER_REPORTED">券商快照口径</option></select></label>
+            <ActionButton onClick={calculatePerformance} busy={performanceLoading}>计算归因</ActionButton>
+          </div>
+          {performanceError && <div className="inline-error">{performanceError}</div>}
+          {performanceWarnings.length > 0 && <details className="run-receipt"><summary>为什么结果不完整（{performanceWarnings.length}）</summary><ul className="warning-list">{performanceWarnings.map((warning) => <li key={String(warning.code)}><strong>{String(warning.code)}</strong><span>{String(warning.message ?? "")}</span></li>)}</ul></details>}
+          {performance && performanceAccounts.length === 0 && <Empty>当前区间没有可归因的持久化账户事实。</Empty>}
+          {performanceAccounts.length > 0 && <div className="performance-results">{performanceAccounts.map((account, index) => {
+            const instruments = listOf<Dict>(account, "instruments");
+            return <article className="performance-account" key={`${String(account.account_ref)}-${String(account.currency)}`}><header><div><strong>{accountLabel(account, index)}</strong><span>{String(account.currency ?? "—")} · {String(account.cost_basis_method ?? "—")}</span></div><Badge value={String(account.status ?? "UNKNOWN")} /></header><div className="account-summary"><article><span>已实现 P/L（费后）</span><strong>{formatDecimal(account.realized_pnl_after_fees)}</strong><small>费前 {formatDecimal(account.realized_pnl_before_fees)}</small></article><article><span>未实现 P/L</span><strong>{formatDecimal(account.unrealized_pnl_before_fees)}</strong><small>估值快照 {formatDate(account.snapshot_as_of)}</small></article><article><span>股息 / 利息</span><strong>{formatDecimal(account.dividends)} / {formatDecimal(account.interest)}</strong><small>已知费用 {formatDecimal(account.known_fees)}</small></article><article><span>外部净现金流</span><strong>{formatDecimal(account.net_external_cash_flow)}</strong><small>{instruments.length} 个标的事实</small></article></div><details><summary>下钻标的与事件</summary><div className="table-wrap"><table><thead><tr><th>标的</th><th>已实现费前</th><th>已实现费后</th><th>未实现</th><th>期末数量</th><th>事件</th><th>Warning</th></tr></thead><tbody>{instruments.map((instrument) => <tr key={String(instrument.instrument_id)}><td><strong>{shortId(instrument.instrument_id)}</strong><small className="table-sub mono">{String(instrument.instrument_id)}</small></td><td>{formatDecimal(instrument.realized_pnl_before_fees)}</td><td>{formatDecimal(instrument.realized_pnl_after_fees)}</td><td>{formatDecimal(instrument.unrealized_pnl_before_fees)}</td><td>{formatDecimal(instrument.ending_quantity, 4)}</td><td>{Array.isArray(instrument.activity_ids) ? instrument.activity_ids.length : 0}</td><td>{Array.isArray(instrument.warning_codes) ? instrument.warning_codes.join(", ") || "—" : "—"}</td></tr>)}</tbody></table></div></details></article>;
+          })}</div>}
+        </Card>
         <div className="stack">
           {accounts.length === 0 ? <Empty>没有持久化账户快照。</Empty> : accounts.map((account, accountIndex) => {
             const positions = listOf<Dict>(account, "positions");
