@@ -1,5 +1,9 @@
 # Unreleased
 
+- Froze the Catalyst Agenda and Judgment Scorecard implementation plan: planned
+  items remain separate from occurred Research Events, queries are durable-only,
+  explicit free-provider refresh belongs to a deterministic CLI, source coverage
+  and date certainty stay visible, and the public MCP inventory remains 28 tools.
 - Persisted bounded, secret-safe Provider route receipts and surfaced their
   24-hour failure/fallback/cache aggregates in the existing durable-only Data
   Quality Center. The 30-day/5,000-row ledger stores only typed routing metadata;

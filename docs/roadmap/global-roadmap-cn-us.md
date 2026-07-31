@@ -1097,7 +1097,9 @@ TradingAgents 只同步有价值的模式：
 2. A3 贡献：账户、标的与研究主题贡献先行；总贡献与账户损益必须勾稽，残差单列。行业与
    基准事实缺失时不做伪 Brinson 分解。
 3. Catalyst Agenda：把持仓/Watchlist/Case 的财报、公告、宏观与已知事件排成未来议程，
-   复用现有事件事实和 Monitor，不新增运行时 LLM。
+   复用现有事件事实和 Monitor，不新增运行时 LLM。数据契约、免费源顺序、MCP/CLI 形态与
+   精简 TDD 已冻结在 `docs/plans/catalyst-agenda-and-scorecard-plan.md`；下一步先做 C0–C1，
+   不把已发生 `ResearchEvent` 冒充未来事项。
 4. Judgment Scorecard：按当时版本复盘假设命中、失效触发、证据更新和计划纪律，只展示
    可追溯事实与校准结果，不自动给用户或策略下“好/坏”结论。
 
