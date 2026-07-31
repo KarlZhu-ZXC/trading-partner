@@ -1,5 +1,10 @@
 # Unreleased
 
+- Started the bounded A-share model modularization while preserving the stable
+  `domain.a_share.models` import façade. Industry-cycle and company-operating
+  models now live in a dedicated module, shared invariant validators have one
+  internal owner, and the former 1,837-line façade is reduced to about 1,360 lines.
+  Architecture tests cap all three modules to prevent the monolith from returning.
 - Added a durable-only Data Quality Center without increasing the 28-tool MCP
   surface. `system_health` now summarizes latest account snapshot age,
   valuation/price-time coverage, account-activity coverage receipts, and active

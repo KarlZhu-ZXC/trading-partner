@@ -294,6 +294,23 @@ def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
         assert "codecs.typed import" not in text
 
 
+def test_a_share_domain_models_stay_capability_split() -> None:
+    """Industry models and shared validators must not collapse into the façade."""
+    domain_root = LAYER_ROOTS["domain"] / "a_share"
+    facade = domain_root / "models.py"
+    industry = domain_root / "industry_models.py"
+    validation = domain_root / "model_validation.py"
+
+    assert industry.is_file()
+    assert validation.is_file()
+    assert len(facade.read_text(encoding="utf-8").splitlines()) <= 1_400
+    assert len(industry.read_text(encoding="utf-8").splitlines()) <= 350
+    assert len(validation.read_text(encoding="utf-8").splitlines()) <= 350
+    facade_text = facade.read_text(encoding="utf-8")
+    assert "from domain.a_share.industry_models import" in facade_text
+    assert "class IndustryMetricObservation:" not in facade_text
+
+
 def test_d6b1_ports_stay_in_application_without_infrastructure() -> None:
     """Cache codec / engine ports are application Protocols only."""
     for rel in (
