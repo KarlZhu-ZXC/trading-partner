@@ -5,6 +5,10 @@
   models now live in a dedicated module, shared invariant validators have one
   internal owner, and the former 1,837-line façade is reduced to about 1,360 lines.
   Architecture tests cap all three modules to prevent the monolith from returning.
+- Split strict A-share snapshot Provider-result validation into a dedicated mixin.
+  The orchestration service keeps its established private validation entry points
+  through inheritance while shrinking from 1,480 to about 1,030 lines; architecture
+  tests cap both files so routing and validation cannot silently collapse together.
 - Added a durable-only Data Quality Center without increasing the 28-tool MCP
   surface. `system_health` now summarizes latest account snapshot age,
   valuation/price-time coverage, account-activity coverage receipts, and active
