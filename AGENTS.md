@@ -148,7 +148,7 @@ credentials for it.
 - `account_get` (`positions`, `transactions`) — durable only; never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
-- `portfolio_analyze` (`exposure`, `simulate_addition`)
+- `portfolio_analyze` (`exposure`, `coverage`, `simulate_addition`)
 - `challenge_review_get`
 - `challenge_review_manage` (`start`, `resolve`)
 - `research_workflow_run` (`deep_dive`, `catalyst_review`,
@@ -266,6 +266,16 @@ Ordinary holdings, portfolio, and risk questions read the latest durable account
 snapshots. Broker refresh is explicit: only
 `external_state_sync(request={"operation":"accounts"})` may fetch and persist new account facts.
 Snapshot staleness is disclosed, not an implicit trigger.
+Transaction sync persists canonical native-currency account activities. Security
+trades, dividends, interest, fees, transfers, corporate actions, and other cash
+events share stable Provider event IDs; cash-only activities may omit
+`instrument_id`, and unavailable fees remain null rather than zero. Schwab long
+requests are accumulated through bounded 60-day windows. Moomoo history deals are
+trade-only and explicitly mark fees and other activity categories unavailable.
+Each sync stores an append-only coverage receipt with event deduplication counts,
+effective window, snapshot density, mapping version, missing categories, and a
+machine-readable `COMPLETE`/`INCOMPLETE` status. `portfolio_analyze/coverage` is a
+durable-only read; it never refreshes a broker or computes P/L.
 Phase 1J restores one current durable research file (`InvestmentCase`)
 context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.

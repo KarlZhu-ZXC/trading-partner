@@ -27,9 +27,12 @@ from domain.common.enums import (
 )
 from domain.common.errors import DataContractError
 from domain.portfolio.enums import AccountTransactionKind, AccountTransactionSide
-from domain.portfolio.models import AccountTransaction
+from domain.portfolio.models import AccountActivityBatch, AccountTransaction
 from domain.workflow.enums import WorkflowRunStatus, WorkflowType
 from domain.workflow.models import WorkflowRun, WorkflowStepReceipt
+from infrastructure.persistence.account_snapshot_repository import (
+    SqlAlchemyAccountSnapshotRepository,
+)
 from infrastructure.persistence.account_transaction_repository import (
     SqlAlchemyAccountTransactionRepository,
 )
@@ -202,9 +205,9 @@ async def test_account_transaction_coordinator_propagates_provider_warnings(
 
         async def get_account_transactions(
             self, **_kwargs: object
-        ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+        ) -> ProviderSuccess[AccountActivityBatch]:
             return ProviderSuccess(
-                (),
+                AccountActivityBatch((), ()),
                 ProviderResultMeta(
                     vendor=VendorId.SCHWAB,
                     category=DataCategory.ACCOUNT,
@@ -224,9 +227,11 @@ async def test_account_transaction_coordinator_propagates_provider_warnings(
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     repository = SqlAlchemyAccountTransactionRepository(engine)
+    snapshot_repository = SqlAlchemyAccountSnapshotRepository(engine)
     coordinator = AccountTransactionCoordinator(
         {VendorId.SCHWAB: _WarningProvider()},  # type: ignore[dict-item]
         repository,
+        snapshot_repository,
         fixed_clock,  # type: ignore[arg-type]
         id_generator,  # type: ignore[arg-type]
         secret_redactor,  # type: ignore[arg-type]

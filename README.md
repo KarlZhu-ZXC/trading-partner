@@ -42,7 +42,9 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   fundamental, filing, macro, news, sentiment, and prediction-market context.
 - Resolve supported typed IDs automatically on first use and fetch up to 50 quotes
   per bounded batch with one typed result per instrument.
-- Read positions and transactions from Schwab, Moomoo OpenD, or strict manual CSV
+- Read positions and a deduplicated native-currency activity ledger from Schwab or
+  Moomoo OpenD, with machine-readable history/snapshot coverage before P/L claims;
+  strict manual CSV remains available for holdings
   sources; durable reads never contact a broker, while refresh is explicit and read-only.
 - Persist Moomoo or CSV Watchlists with group and membership history; Moomoo's
   aggregate `All` group is the default durable read scope.

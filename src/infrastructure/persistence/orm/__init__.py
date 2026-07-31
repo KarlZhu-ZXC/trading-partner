@@ -80,6 +80,7 @@ from infrastructure.persistence.orm.system import (
     SystemAuditLogRow,
 )
 from infrastructure.persistence.orm.transactions import (
+    AccountActivityCoverageReceiptRow,
     AccountTransactionRow,
 )
 
@@ -136,6 +137,7 @@ __all__ = [
     "WorkflowRunRow",
     "WorkflowRunStepRow",
     "WorkflowRunFactArtifactRow",
+    "AccountActivityCoverageReceiptRow",
     "AccountTransactionRow",
     "FuturesProductRow",
     "FuturesProductVersionRow",

@@ -1,5 +1,12 @@
 # Unreleased
 
+- Published `compact-v9` without adding MCP tools. `portfolio_analyze/coverage`
+  exposes durable, machine-readable account-activity coverage before any P/L claim.
+  A0 now preserves instrument-less cash activities, signed native-currency cash
+  amounts, explicitly unavailable fees, source event types, and mapping versions;
+  repeated syncs report inserted/duplicate counts instead of duplicating ledger
+  rows. Schwab long history requests page through bounded 60-day windows, while
+  Moomoo trade-only/category/fee gaps remain typed `INCOMPLETE` coverage.
 - Published `compact-v8` without changing the 28-tool inventory or runtime input
   validation. The JSON Schema 2020-12 representation now shares closed-operation
   semantics at each discriminated request union, uses compact local definition

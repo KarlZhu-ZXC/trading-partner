@@ -269,8 +269,18 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 |---|---|
 | `account_get` (`positions`/`transactions`) | 只读取持久化持仓或标准化历史成交，不接触券商 |
 | `external_state_sync` | 仅在明确要求时刷新 `accounts`、读取 `transactions` 或刷新 active `watchlist` upstream |
-| `portfolio_analyze` | 按原生币种计算市场、币种和标的 gross exposure |
+| `portfolio_analyze` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
+| `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
 | `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
+
+历史补齐也可走确定性 CLI；单日用 `--date`，长区间用 inclusive
+`--start-date/--end-date`。Schwab 会在 Provider 内部拆成最多 60 天的窗口，CLI 不会启动
+Codex 或 LLM：
+
+```bash
+uv run trading-partner-account-transactions \
+  --start-date 2026-01-01 --end-date 2026-07-31 --provider schwab
+```
 
 券商账户和交易标识会变成稳定哈希。系统不隐含假设 FX 汇率，不把不同币种直接相加，也不
 把持仓市值称为账户 NAV。Schwab 首个版本不读取 open orders，并返回明确 warning；MCP 不
@@ -619,7 +629,7 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0026_korean_market_support`；它包含 append-only Trade Plan
+`0027_account_activity_coverage`；它包含 append-only Trade Plan
 identity/version/conditions、Risk v2 policy 字段、Monitor 的精确计划版本关联，以及与
 Monitor 状态转移事件或盘后 run 同事务写入的通知 Outbox。
 

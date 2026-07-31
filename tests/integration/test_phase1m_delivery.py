@@ -11,7 +11,7 @@ from infrastructure.persistence.sqlite_backup import SQLiteBackupService
 from interfaces.mcp.server import PUBLIC_TOOL_NAMES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_HEAD_REVISIONS = frozenset({"0026_korean_market_support"})
+_HEAD_REVISIONS = frozenset({"0027_account_activity_coverage"})
 
 
 def _migrate(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,5 +66,5 @@ def test_compact_phase1_delivery_audit_passes() -> None:
     receipt = audit_delivery(PROJECT_ROOT, PUBLIC_TOOL_NAMES)
 
     assert receipt.public_tool_count == 28
-    assert receipt.migration_head == "0026_korean_market_support"
+    assert receipt.migration_head == "0027_account_activity_coverage"
     assert receipt.dialogue_count == 89

@@ -926,8 +926,7 @@ def build_application(
             VendorId.SCHWAB: schwab_account_provider,
             VendorId.MOOMOO: moomoo_account_provider,
         },
-        account_transaction_repository,
-        clock,
+        account_transaction_repository, account_snapshot_repository, clock,
         id_generator,
         secret_redactor,
     )

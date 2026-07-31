@@ -75,3 +75,21 @@ async def test_cli_honors_provider_filter(
     assert request is not None
     assert request.providers == (VendorId.SCHWAB,)
     assert request.limit == 25
+
+
+async def test_cli_supports_bounded_backfill_window(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    container = _Container()
+    monkeypatch.setattr(cli, "build_default_application", lambda: container)
+
+    code = await cli._run(
+        ["--start-date", "2026-01-01", "--end-date", "2026-07-31"]
+    )
+
+    capsys.readouterr()
+    request = container.services.account_transactions.request
+    assert code == 0
+    assert request is not None
+    assert request.start.date() == date(2026, 1, 1)
+    assert request.end.date() == date(2026, 7, 31)

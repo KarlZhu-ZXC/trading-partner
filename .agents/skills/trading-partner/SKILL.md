@@ -202,7 +202,7 @@ emitted for the deduplicated latest view.
 |---|---|
 | `account_get` | Read durable `positions` or normalized `transactions`; it cannot contact a broker |
 | `external_state_sync` | Explicitly fetch/persist `accounts`, `transactions`, or the active `watchlist` upstream |
-| `portfolio_analyze` | `exposure` or pure before/after `simulate_addition`; never executes |
+| `portfolio_analyze` | `exposure`, durable activity `coverage`, or pure before/after `simulate_addition`; never executes |
 
 For ordinary holdings, exposure, portfolio-review, and risk questions, read the
 latest durable snapshots first. Do **not** call
@@ -275,6 +275,14 @@ position directly. Only `user` or an explicitly authorized `external_agent` may
 resolve a review.
 
 ### Research workflows and transactions (Phase 1L)
+
+Before claiming realized performance or a complete transaction history, call
+`portfolio_analyze(request={"operation":"coverage"})`. Coverage is durable-only and
+reports each account/window as `COMPLETE` or `INCOMPLETE`, including broker category
+gaps, result truncation, mapping version, duplicate counts, and snapshot density.
+An absent/incomplete receipt forbids precise P/L claims; refresh explicitly with
+`external_state_sync(request={"operation":"transactions",...})` only when the user
+asks for upstream synchronization.
 
 | Tool | Purpose |
 |---|---|

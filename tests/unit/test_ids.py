@@ -35,6 +35,7 @@ def test_entity_id_prefix_frozen_values() -> None:
         "futures_contract_version",
         "trade_plan",
         "validation",
+        "activity_coverage",
         "snapshot",
         "run",
         "audit",

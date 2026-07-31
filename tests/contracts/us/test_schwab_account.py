@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -225,7 +225,7 @@ async def test_schwab_collective_investment_etf_is_preserved(
 
 
 @pytest.mark.asyncio
-async def test_schwab_transactions_use_instruction_and_clamp_vendor_window(
+async def test_schwab_transactions_use_instruction_and_page_vendor_windows(
     id_generator: object, fixed_clock: object
 ) -> None:
     client = _Client()
@@ -235,19 +235,24 @@ async def test_schwab_transactions_use_instruction_and_clamp_vendor_window(
         limit=10,
     )
 
-    assert [item.side for item in result.value] == [
+    assert [item.side for item in result.value.transactions] == [
         AccountTransactionSide.SELL,
         AccountTransactionSide.BUY,
     ]
-    assert result.value[1].fees == Decimal("1.25")
+    assert result.value.transactions[1].fees == Decimal("1.25")
     assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" in result.meta.warnings
-    assert client.transaction_windows == [(datetime(2026, 5, 19, 12, tzinfo=UTC), _NOW)]
-    assert "SCHWAB_TRANSACTION_WINDOW_CLAMPED" in result.meta.warnings
+    assert client.transaction_windows[0][0] == datetime(2026, 1, 1, tzinfo=UTC)
+    assert client.transaction_windows[-1][1] == _NOW
+    assert len(client.transaction_windows) == 4
+    assert all(
+        end - start <= timedelta(days=60) for start, end in client.transaction_windows
+    )
+    assert "SCHWAB_TRANSACTION_WINDOW_PAGED" in result.meta.warnings
     assert "101" not in repr(result) and _ACCOUNT_HASH not in repr(result)
 
 
 @pytest.mark.asyncio
-async def test_schwab_cash_journal_items_are_not_reported_as_security_omissions(
+async def test_schwab_cash_journal_items_are_preserved_as_instrumentless_activities(
     id_generator: object, fixed_clock: object
 ) -> None:
     client = _Client()
@@ -274,8 +279,11 @@ async def test_schwab_cash_journal_items_are_not_reported_as_security_omissions(
         limit=10,
     )
 
-    assert result.value == ()
-    assert "SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED" in result.meta.warnings
+    assert len(result.value.transactions) == 1
+    activity = result.value.transactions[0]
+    assert activity.instrument_id is None
+    assert activity.cash_amount == Decimal("1770")
+    assert activity.currency == "USD"
     assert "SCHWAB_TRANSACTION_ITEM_OMITTED" not in result.meta.warnings
 
 
@@ -316,10 +324,9 @@ async def test_schwab_trade_cash_legs_are_non_blocking_and_security_leg_is_prese
         limit=10,
     )
 
-    assert len(result.value) == 1
-    assert result.value[0].instrument_id == "etf:US:SOXL"
-    assert result.value[0].side is AccountTransactionSide.SELL
-    assert "SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED" in result.meta.warnings
+    assert len(result.value.transactions) == 1
+    assert result.value.transactions[0].instrument_id == "etf:US:SOXL"
+    assert result.value.transactions[0].side is AccountTransactionSide.SELL
     assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" in result.meta.warnings
     assert "SCHWAB_TRANSACTION_ITEM_OMITTED" not in result.meta.warnings
 

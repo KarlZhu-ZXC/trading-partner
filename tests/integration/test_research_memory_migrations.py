@@ -1,7 +1,7 @@
 """Phase 1C C2a Alembic 0004 migration round-trip tests.
 
 Phase 1C scope is pinned to explicit revision targets (0004 / 0003) so later
-heads (currently 0026_korean_market_support) do
+heads (currently 0027_account_activity_coverage) do
 not change downgrade meaning.
 """
 
@@ -18,7 +18,7 @@ from sqlalchemy import create_engine, inspect, text
 
 _PHASE1C_REVISION = "0004_phase1c_research_memory"
 _PHASE1D_REVISION = "0003_phase1d_instrument_provider"
-_HEAD_REVISIONS = frozenset({"0026_korean_market_support"})
+_HEAD_REVISIONS = frozenset({"0027_account_activity_coverage"})
 
 _PHASE1C_BUSINESS_TABLES = {
     "research_evidence",

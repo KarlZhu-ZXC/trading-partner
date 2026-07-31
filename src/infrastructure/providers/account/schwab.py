@@ -44,7 +44,13 @@ from domain.portfolio.enums import (
     AccountTransactionKind,
     AccountTransactionSide,
 )
-from domain.portfolio.models import AccountPosition, AccountSnapshot, AccountTransaction
+from domain.portfolio.models import (
+    AccountActivityBatch,
+    AccountPosition,
+    AccountSnapshot,
+    AccountTransaction,
+    ProviderAccountActivityCoverage,
+)
 from infrastructure.system.clock import SystemClock
 
 _BASE_URL = "https://api.schwabapi.com"
@@ -248,7 +254,7 @@ class SchwabAccountAdapter:
         start: datetime | None,
         end: datetime | None,
         limit: int,
-    ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+    ) -> ProviderSuccess[AccountActivityBatch]:
         for name, value in (("start", start), ("end", end)):
             if value is not None:
                 require_aware_datetime(value, field_name=name)
@@ -258,15 +264,13 @@ class SchwabAccountAdapter:
             raise DataContractError("transaction limit must be in [1,1000]")
         self._require_configured()
         effective_end = end or self._clock.now()
-        earliest = effective_end - timedelta(days=60)
-        effective_start = max(start, earliest) if start is not None else earliest
+        effective_start = start or effective_end - timedelta(days=60)
         return await asyncio.to_thread(
             self._read_transactions,
             effective_start,
             effective_end,
             limit,
             start is None,
-            start is not None and start < earliest,
         )
 
     def _require_configured(self) -> None:
@@ -397,47 +401,203 @@ class SchwabAccountAdapter:
         end: datetime,
         limit: int,
         defaulted_window: bool,
-        clamped_window: bool,
-    ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+    ) -> ProviderSuccess[AccountActivityBatch]:
         client = self._client()
         warnings: set[str] = set()
         if defaulted_window:
             warnings.add("SCHWAB_TRANSACTION_WINDOW_DEFAULTED")
-        if clamped_window:
-            warnings.add("SCHWAB_TRANSACTION_WINDOW_CLAMPED")
+        windows = self._transaction_windows(start, end)
+        if len(windows) > 1:
+            warnings.add("SCHWAB_TRANSACTION_WINDOW_PAGED")
         values: list[AccountTransaction] = []
+        account_refs: list[str] = []
         for account_hash in sorted(self._account_hashes):
-            rows = _sequence(client.transactions(account_hash, start, end), "transactions")
-            for raw in rows:
-                transaction = _mapping(raw, "transaction")
-                occurred_at = _aware_datetime(transaction.get("time"), "transaction time")
-                if occurred_at < start or occurred_at > end:
-                    continue
-                items = _sequence(transaction.get("transferItems") or [], "transfer items")
-                for index, raw_item in enumerate(items):
-                    item = _mapping(raw_item, "transfer item")
-                    instrument = _mapping(item.get("instrument"), "transaction instrument")
-                    instrument_id = _instrument_id(instrument)
-                    if instrument_id is None:
-                        asset_type = (_text(instrument.get("assetType")) or "").upper()
-                        if asset_type == "CURRENCY":
-                            warnings.add("SCHWAB_NON_SECURITY_TRANSACTION_ITEM_SKIPPED")
+            account_ref = _stable_ref("account", account_hash, prefix="schwab_")
+            account_refs.append(account_ref)
+            for window_start, window_end in windows:
+                rows = _sequence(
+                    client.transactions(account_hash, window_start, window_end),
+                    "transactions",
+                )
+                for raw in rows:
+                    transaction = _mapping(raw, "transaction")
+                    occurred_at = _aware_datetime(transaction.get("time"), "transaction time")
+                    if occurred_at < window_start or occurred_at > window_end:
+                        continue
+                    raw_kind = (_text(transaction.get("type")) or "").upper()
+                    description = (_text(transaction.get("description")) or "").upper()
+                    if raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
+                        warnings.add("SCHWAB_CORPORATE_ACTION_DETAILS_PARTIAL")
+                    if "REVERS" in description or "CANCEL" in description:
+                        warnings.add("SCHWAB_REVERSAL_LINK_UNAVAILABLE")
+                    items = _sequence(transaction.get("transferItems") or [], "transfer items")
+                    transaction_value_count = len(values)
+                    for index, raw_item in enumerate(items):
+                        item = _mapping(raw_item, "transfer item")
+                        instrument = _mapping(item.get("instrument"), "transaction instrument")
+                        instrument_id = _instrument_id(instrument)
+                        if instrument_id is None:
+                            asset_type = (_text(instrument.get("assetType")) or "").upper()
+                            if asset_type == "CURRENCY":
+                                normalized = self._cash_transaction(
+                                    account_hash,
+                                    transaction,
+                                    item,
+                                    index,
+                                    occurred_at,
+                                )
+                                if normalized is not None:
+                                    values.append(normalized)
+                            else:
+                                warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
+                            continue
+                        normalized, side_inferred = self._transaction(
+                            account_hash,
+                            transaction,
+                            item,
+                            index,
+                            instrument_id,
+                            occurred_at,
+                        )
+                        if side_inferred:
+                            warnings.add("SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN")
+                        if normalized is not None:
+                            values.append(normalized)
                         else:
                             warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
-                        continue
-                    normalized, side_inferred = self._transaction(
-                        account_hash, transaction, item, index, instrument_id, occurred_at
-                    )
-                    if side_inferred:
-                        warnings.add("SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN")
-                    if normalized is not None:
-                        values.append(normalized)
-                    else:
-                        warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
+                    if len(values) == transaction_value_count and _decimal(
+                        transaction.get("netAmount")
+                    ) is not None:
+                        synthetic_cash_item: Mapping[str, object] = {
+                            "amount": transaction.get("netAmount"),
+                            "instrument": {
+                                "assetType": "CURRENCY",
+                                "symbol": "CURRENCY_USD",
+                            },
+                        }
+                        cash = self._cash_transaction(
+                            account_hash,
+                            transaction,
+                            synthetic_cash_item,
+                            0,
+                            occurred_at,
+                        )
+                        if cash is not None:
+                            values.append(cash)
         values.sort(key=lambda item: (item.occurred_at, item.provider_transaction_id), reverse=True)
+        truncated = len(values) > limit
+        if truncated:
+            warnings.add("PROVIDER_RESULT_TRUNCATED")
         fetched_at = self._clock.now()
+        gap_codes = tuple(
+            sorted(
+                warnings
+                - {
+                    "SCHWAB_TRANSACTION_WINDOW_DEFAULTED",
+                    "SCHWAB_TRANSACTION_WINDOW_PAGED",
+                }
+            )
+        )
+        coverage = tuple(
+            ProviderAccountActivityCoverage(
+                account_ref=account_ref,
+                requested_start=start,
+                requested_end=end,
+                effective_start=start,
+                effective_end=end,
+                mapping_version="schwab_activity_v1",
+                supported_kinds=tuple(AccountTransactionKind),
+                unavailable_kinds=(),
+                gap_codes=gap_codes,
+                truncated=truncated,
+            )
+            for account_ref in account_refs
+        )
         return ProviderSuccess(
-            tuple(values[:limit]), self._meta(fetched_at, tuple(sorted(warnings)))
+            AccountActivityBatch(tuple(values[:limit]), coverage),
+            self._meta(fetched_at, tuple(sorted(warnings))),
+        )
+
+    @staticmethod
+    def _transaction_windows(
+        start: datetime, end: datetime
+    ) -> tuple[tuple[datetime, datetime], ...]:
+        windows: list[tuple[datetime, datetime]] = []
+        cursor = start
+        while cursor <= end:
+            window_end = min(cursor + timedelta(days=60), end)
+            windows.append((cursor, window_end))
+            if window_end == end:
+                break
+            cursor = window_end + timedelta(microseconds=1)
+        return tuple(windows)
+
+    @staticmethod
+    def _cash_transaction(
+        account_hash: str,
+        transaction: Mapping[str, object],
+        item: Mapping[str, object],
+        index: int,
+        occurred_at: datetime,
+    ) -> AccountTransaction | None:
+        raw_id_value = transaction.get("activityId")
+        raw_id = str(raw_id_value) if isinstance(raw_id_value, int) else _text(raw_id_value)
+        if raw_id is None:
+            raise DataContractError("Schwab transaction id is missing")
+        raw_kind = (_text(transaction.get("type")) or "UNKNOWN").upper()
+        # A trade's currency transfer item is a settlement leg of the same broker
+        # activity, not an external cash flow. The security leg carries netAmount
+        # when Schwab supplies it, so do not double-book the currency item.
+        if raw_kind == "TRADE":
+            return None
+        description = (_text(transaction.get("description")) or "").upper()
+        if raw_kind == "DIVIDEND_OR_INTEREST":
+            kind = (
+                AccountTransactionKind.DIVIDEND
+                if "DIVIDEND" in description
+                else AccountTransactionKind.INTEREST
+            )
+        elif raw_kind in {
+            "ACH_RECEIPT",
+            "ACH_DISBURSEMENT",
+            "ELECTRONIC_FUND",
+            "WIRE_IN",
+            "WIRE_OUT",
+            "JOURNAL",
+        }:
+            kind = AccountTransactionKind.TRANSFER
+        elif "FEE" in raw_kind or "FEE" in description or "COMMISSION" in description:
+            kind = AccountTransactionKind.FEE
+        elif raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
+            kind = AccountTransactionKind.CORPORATE_ACTION
+        else:
+            kind = AccountTransactionKind.OTHER
+        amount = _decimal(item.get("amount"))
+        if amount is None:
+            amount = _decimal(transaction.get("netAmount"))
+        if amount is None:
+            return None
+        instrument = _mapping(item.get("instrument"), "transaction instrument")
+        symbol = _text(instrument.get("symbol")) or ""
+        currency = symbol.removeprefix("CURRENCY_").upper() or "USD"
+        fees = SchwabAccountAdapter._fees(transaction)
+        return AccountTransaction(
+            provider_transaction_id=_stable_ref(
+                "transaction", f"{account_hash}:{raw_id}:{index}:cash:{currency}"
+            ),
+            account_ref=_stable_ref("account", account_hash, prefix="schwab_"),
+            provider=VendorId.SCHWAB,
+            instrument_id=None,
+            kind=kind,
+            side=None,
+            quantity=None,
+            price=None,
+            fees=fees,
+            currency=currency,
+            occurred_at=occurred_at,
+            cash_amount=amount,
+            source_type=raw_kind,
+            mapping_version="schwab_activity_v1",
         )
 
     @staticmethod
@@ -510,16 +670,18 @@ class SchwabAccountAdapter:
         }:
             kind, side = AccountTransactionKind.TRANSFER, None
             side_inferred = False
+        elif raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
+            kind, side = AccountTransactionKind.CORPORATE_ACTION, None
+            side_inferred = False
+        elif "FEE" in raw_kind or "FEE" in (
+            _text(transaction.get("description")) or ""
+        ).upper():
+            kind, side = AccountTransactionKind.FEE, None
+            side_inferred = False
         else:
             kind, side = AccountTransactionKind.OTHER, None
             side_inferred = False
-        fees = Decimal(0)
-        raw_fees = transaction.get("fees")
-        if isinstance(raw_fees, Mapping):
-            for value in raw_fees.values():
-                parsed = _decimal(value)
-                if parsed is not None:
-                    fees += abs(parsed)
+        fees = SchwabAccountAdapter._fees(transaction) if index == 0 else Decimal(0)
         return (
             AccountTransaction(
                 provider_transaction_id=_stable_ref(
@@ -535,9 +697,23 @@ class SchwabAccountAdapter:
                 fees=fees,
                 currency="USD",
                 occurred_at=occurred_at,
+                cash_amount=_decimal(transaction.get("netAmount")) if index == 0 else None,
+                source_type=raw_kind or "UNKNOWN",
+                mapping_version="schwab_activity_v1",
             ),
             side_inferred,
         )
+
+    @staticmethod
+    def _fees(transaction: Mapping[str, object]) -> Decimal:
+        fees = Decimal(0)
+        raw_fees = transaction.get("fees")
+        if isinstance(raw_fees, Mapping):
+            for value in raw_fees.values():
+                parsed = _decimal(value)
+                if parsed is not None:
+                    fees += abs(parsed)
+        return fees
 
     @staticmethod
     def _meta(fetched_at: datetime, warnings: tuple[str, ...]) -> ProviderResultMeta:

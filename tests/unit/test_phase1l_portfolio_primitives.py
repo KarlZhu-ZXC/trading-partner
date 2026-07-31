@@ -93,10 +93,11 @@ async def test_transaction_requires_aware_time_and_moomoo_history_is_normalized(
     result = await adapter.get_account_transactions(
         start=datetime(2026, 7, 1, tzinfo=UTC), end=None, limit=10
     )
-    transaction = result.value[0]
+    transaction = result.value.transactions[0]
     assert transaction.provider_transaction_id != "raw-deal"
     assert transaction.occurred_at.tzinfo is not None
-    assert transaction.fees == 0
+    assert transaction.fees is None
+    assert result.value.coverage[0].mapping_version == "moomoo_deals_v1"
     assert context.closed is True
 
 

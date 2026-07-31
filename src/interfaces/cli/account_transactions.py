@@ -22,15 +22,37 @@ def _parser() -> argparse.ArgumentParser:
             "through Trading Partner providers."
         )
     )
-    parser.add_argument("--date", required=True, help="US trade date (YYYY-MM-DD).")
+    window = parser.add_mutually_exclusive_group(required=True)
+    window.add_argument("--date", help="One US trade date (YYYY-MM-DD).")
+    window.add_argument("--start-date", help="Inclusive US start date (YYYY-MM-DD).")
+    parser.add_argument(
+        "--end-date",
+        help="Inclusive US end date; valid only with --start-date (defaults to start).",
+    )
     parser.add_argument(
         "--provider",
         action="append",
         choices=(VendorId.SCHWAB.value, VendorId.MOOMOO.value),
         help="Provider to include; repeat for multiple. Defaults to Schwab and Moomoo.",
     )
-    parser.add_argument("--limit", type=int, default=1_000, choices=range(1, 1_001))
+    parser.add_argument(
+        "--limit",
+        type=_bounded_limit,
+        default=1_000,
+        metavar="1..1000",
+        help="Maximum normalized activities returned and persisted (default: 1000).",
+    )
     return parser
+
+
+def _bounded_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("limit must be an integer") from exc
+    if not 1 <= parsed <= 1_000:
+        raise argparse.ArgumentTypeError("limit must be in [1,1000]")
+    return parsed
 
 
 def _window(day: date) -> tuple[datetime, datetime]:
@@ -42,12 +64,19 @@ def _window(day: date) -> tuple[datetime, datetime]:
 
 
 async def _run(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     try:
-        day = date.fromisoformat(args.date)
+        start_day = date.fromisoformat(args.date or args.start_date)
+        end_day = date.fromisoformat(args.end_date) if args.end_date else start_day
     except ValueError as exc:
-        raise SystemExit("--date must be YYYY-MM-DD") from exc
-    start, end = _window(day)
+        raise SystemExit("transaction dates must be YYYY-MM-DD") from exc
+    if args.date and args.end_date:
+        parser.error("--end-date requires --start-date")
+    if start_day > end_day:
+        parser.error("--start-date must be <= --end-date")
+    start, _ = _window(start_day)
+    _, end = _window(end_day)
     providers = tuple(
         VendorId(value)
         for value in (args.provider or (VendorId.SCHWAB.value, VendorId.MOOMOO.value))

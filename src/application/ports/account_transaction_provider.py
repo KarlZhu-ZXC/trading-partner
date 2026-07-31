@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from application.dto.provider_routing import ProviderSuccess
-from domain.portfolio.models import AccountTransaction
+from domain.portfolio.models import AccountActivityBatch
 
 
 @runtime_checkable
@@ -19,4 +19,4 @@ class AccountTransactionProvider(Protocol):
         start: datetime | None,
         end: datetime | None,
         limit: int,
-    ) -> ProviderSuccess[tuple[AccountTransaction, ...]]: ...
+    ) -> ProviderSuccess[AccountActivityBatch]: ...

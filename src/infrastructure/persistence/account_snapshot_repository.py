@@ -203,6 +203,24 @@ class SqlAlchemyAccountSnapshotRepository:
                     latest[row.account_ref] = self._account(session, row)
             return tuple(latest.values())
 
+    def list_account_history(
+        self,
+        *,
+        account_ref: str,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[AccountSnapshot, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(AccountSnapshotRow)
+                .where(AccountSnapshotRow.account_ref == account_ref)
+                .order_by(AccountSnapshotRow.account_as_of)
+            )
+            values = [self._account(session, row) for row in rows]
+        return tuple(
+            item for item in values if start <= item.account_as_of <= end
+        )
+
     def append_portfolio(self, snapshot: PortfolioSnapshot) -> PortfolioSnapshot:
         payload = self._portfolio_payload(snapshot)
         fingerprint = _fingerprint(payload)

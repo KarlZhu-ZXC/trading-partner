@@ -9,7 +9,10 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from application.dto.account_transactions import AccountGetTransactionsInput
+from application.dto.account_transactions import (
+    AccountGetActivityCoverageInput,
+    AccountGetTransactionsInput,
+)
 from application.dto.portfolio import (
     AccountGetPositionsInput,
     AccountGetSnapshotInput,
@@ -106,6 +109,28 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def portfolio_get_coverage(
+        providers: tuple[str, ...] = (),
+        account_refs: tuple[str, ...] = (),
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read durable activity and account-snapshot attribution coverage."""
+        try:
+            inp = AccountGetActivityCoverageInput.model_validate(
+                {
+                    "providers": providers,
+                    "account_refs": account_refs,
+                    "limit": limit,
+                }
+            )
+            return container.services.account_transactions.get_coverage(inp).model_dump(
+                mode="json"
+            )
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     # ------------------------------------------- Phase 1L transactions/workflows
 
     async def account_get_transactions(
@@ -151,4 +176,5 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         account_list_transactions=account_list_transactions,
         portfolio_analyze=portfolio_analyze,
         portfolio_simulate_addition=portfolio_simulate_addition,
+        portfolio_get_coverage=portfolio_get_coverage,
     )
