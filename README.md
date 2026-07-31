@@ -158,6 +158,10 @@ uv run trading-partner-post-market-sync
 # Diagnose Schwab token age without opening a browser
 uv run trading-partner-schwab-auth status
 
+# Inspect one owner-only Schwab Realized Gain/Loss CSV for A1 reconciliation
+uv run trading-partner-performance-reconciliation inspect-schwab-realized \
+  --realized-csv schwab-realized-2026-06.csv
+
 # Manually force one market-close cadence (diagnostic use)
 uv run trading-partner-monitor-run --cadence US_POST_MARKET
 uv run trading-partner-monitor-run --cadence A_SHARE_POST_MARKET
@@ -189,6 +193,11 @@ uv run trading-partner-maintenance prune-cache --retention-days 30
 ```
 
 These commands never execute an order.
+
+Broker-statement inspection only accepts a relative CSV path below the gitignored
+`data/artifacts/reconciliation/` directory. It restricts the file to owner-only
+permissions and emits hashes and redacted account summaries—not raw rows or account
+labels. It prepares independent A1 reconciliation but does not constitute sign-off.
 
 Telegram delivery is opt-in. Create a bot with Telegram's `@BotFather`, send the
 bot one message, then set `MONITOR_NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`,

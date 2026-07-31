@@ -85,7 +85,20 @@
 个人报表只放在 gitignored、owner-only 的 `data/artifacts/reconciliation/`，不得加入 fixture、
 日志、聊天内容或 Git 历史。签收至少记录：账户哈希标识、区间、币种、basis、系统结果、
 报表结果、绝对残差、可解释残差类别、未解释残差和签收时间；原始账户号不得进入签收摘要。
-本步骤目前是人工验收门，不新增公开 MCP 工具，也不让运行时自动读取任意 PDF/CSV。
+本步骤目前是人工验收门，不新增公开 MCP 工具，也不让 MCP runtime 自动读取任意 PDF/CSV。
+CLI 已提供一个严格的准备入口：
+
+```bash
+uv run trading-partner-performance-reconciliation inspect-schwab-realized \
+  --realized-csv schwab-realized-2026-06.csv
+```
+
+该命令只接受 `data/artifacts/reconciliation/` 下的相对路径，拒绝绝对路径、目录穿越与
+symlink，并把目录/文件权限收紧到 `0700/0600`。解析按 Schwab Realized Gain/Loss
+lot-details 表头名称而非固定列序完成；账户标题在 Provider 内转为稳定哈希，raw row、账户
+标签与文件路径不进入 application DTO。成本、开仓日期或 realized P/L 缺失保持 `None` 和
+typed warning，重复 lot 或无法识别的表头直接失败。当前输出只是报表侧可核验摘要；在真实
+PDF/CSV 与同期 durable ledger 完成逐项残差签收前，A1 仍保持“未签收”。
 
 ### A2 — 收益率
 

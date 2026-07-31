@@ -1,5 +1,11 @@
 # Unreleased
 
+- Added an owner-only, CLI-only Schwab Realized Gain/Loss inspection path for the
+  A1 broker-statement reconciliation gate. The strict CSV parser maps recognized
+  lot-detail headers by name, uses `Decimal`, preserves missing cost/date/P&L facts,
+  rejects traversal/symlinks/duplicate lots, restricts artifacts to `0700/0600`,
+  and exposes only file hashes plus redacted account summaries. It adds no MCP tool
+  and does not claim that real-statement reconciliation has been signed off.
 - Started the bounded A-share model modularization while preserving the stable
   `domain.a_share.models` import façade. Industry-cycle and company-operating
   models now live in a dedicated module, shared invariant validators have one

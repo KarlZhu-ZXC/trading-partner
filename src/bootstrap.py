@@ -57,6 +57,9 @@ from application.services.monitor_schedule_service import MonitorScheduleService
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.peer_comparison_service import PeerComparisonService
+from application.services.performance_reconciliation_service import (
+    PerformanceReconciliationService,
+)
 from application.services.portfolio_enrichment_calculator import PortfolioEnrichmentCalculator
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_risk_calculator import PortfolioRiskCalculator
@@ -159,6 +162,9 @@ from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthFlowManager,
     SchwabOAuthTokenInspector,
 )
+from infrastructure.providers.account.schwab_statement_csv import (
+    SchwabRealizedGainLossCsvParser,
+)
 from infrastructure.providers.instrument_directory import (
     AlphaVantageInstrumentDirectoryAdapter,
     TencentInstrumentDirectoryAdapter,
@@ -216,6 +222,7 @@ class OperationalServices:
     monitor_dispatch: MonitorDispatchService
     post_market_sync: PostMarketSyncService
     maintenance: OperationalMaintenancePort
+    performance_reconciliation: PerformanceReconciliationService
     schwab_oauth: SchwabOAuthFlowManager | None
 
 
@@ -294,6 +301,11 @@ def build_application(
         artifact_root=PROJECT_ROOT / "data" / "artifacts" / "historical_validation",
         backup_root=PROJECT_ROOT / "data" / "backups",
         clock=clock,
+    )
+    performance_reconciliation_service = PerformanceReconciliationService(
+        SchwabRealizedGainLossCsvParser(
+            PROJECT_ROOT / "data" / "artifacts" / "reconciliation"
+        )
     )
     health_service = HealthService(
         database=database,
@@ -938,6 +950,7 @@ def build_application(
             monitor_dispatch=monitor_dispatch_service,
             post_market_sync=post_market_sync_service,
             maintenance=maintenance_service,
+            performance_reconciliation=performance_reconciliation_service,
             schwab_oauth=schwab_oauth_flow_manager,
         ),
     )
