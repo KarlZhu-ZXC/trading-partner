@@ -64,7 +64,7 @@ class SqlAlchemyAccountTransactionRepository:
         providers: tuple[VendorId, ...],
         start: datetime | None,
         end: datetime | None,
-        limit: int,
+        limit: int | None,
     ) -> tuple[AccountTransaction, ...]:
         statement = select(AccountTransactionRow)
         if providers:
@@ -82,7 +82,7 @@ class SqlAlchemyAccountTransactionRepository:
             values = [item for item in values if item.occurred_at <= end]
         values.sort(key=lambda item: item.provider_transaction_id)
         values.sort(key=lambda item: item.occurred_at, reverse=True)
-        return tuple(values[:limit])
+        return tuple(values if limit is None else values[:limit])
 
     def append_coverage(
         self, receipts: tuple[AccountActivityCoverageReceipt, ...]

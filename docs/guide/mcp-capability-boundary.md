@@ -271,6 +271,7 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 | `external_state_sync` | 仅在明确要求时刷新 `accounts`、读取 `transactions` 或刷新 active `watchlist` upstream |
 | `portfolio_analyze` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
 | `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
+| `portfolio_analyze` (`performance_summary`) | 按账户与原币种重建 FIFO 或展示券商成本口径，分列已实现/未实现损益、股息、利息、费用和外部现金流，并可下钻到活动 ID 与期末快照 |
 | `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
 
 历史补齐也可走确定性 CLI；单日用 `--date`，长区间用 inclusive
@@ -285,6 +286,9 @@ uv run trading-partner-account-transactions \
 券商账户和交易标识会变成稳定哈希。系统不隐含假设 FX 汇率，不把不同币种直接相加，也不
 把持仓市值称为账户 NAV。Schwab 首个版本不读取 open orders，并返回明确 warning；MCP 不
 读取或保存交易解锁凭据。
+`performance_summary` 也不会隐式刷新券商或执行 FX 汇总；起始 lot 历史、公司行动变换、
+手续费、期末持仓勾稽或带时间估值任一未被持久化事实证明时，结果保持 `INCOMPLETE`，而不
+补造一个精确收益。
 
 普通的持仓、暴露、Portfolio Review 和 Risk 问题优先读取数据库中的最新持久化快照；快照
 过期只会显示时间与 warning，不会自动触发券商刷新。只有用户明确要求“刷新/同步/从券商重新

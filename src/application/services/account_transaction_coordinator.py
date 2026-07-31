@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from application.dto.account_transactions import (
     AccountActivityCoverageDTO,
@@ -13,6 +14,10 @@ from application.dto.account_transactions import (
     AccountTransactionsDTO,
 )
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
+from application.dto.performance_attribution import (
+    PerformanceAttributionDTO,
+    PerformanceAttributionInput,
+)
 from application.dto.tool_envelope import SourceReference, ToolEnvelope, WarningInfo
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.account_transaction_provider import AccountTransactionProvider
@@ -20,6 +25,11 @@ from application.ports.account_transaction_repository import AccountTransactionR
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services.performance_attribution_calculator import (
+    PerformanceAttributionCalculator,
+)
+from domain.attribution.enums import AttributionStatus
+from domain.attribution.models import PerformanceAttribution
 from domain.common.enums import Freshness, SourceRole, VendorId
 from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
@@ -62,6 +72,39 @@ _PROVIDER_WARNING_MESSAGES = {
     ),
 }
 
+_ATTRIBUTION_WARNING_MESSAGES = {
+    "ATTRIBUTION_INPUTS_UNAVAILABLE": (
+        "No durable account activities or account snapshots matched the request."
+    ),
+    "ATTRIBUTION_COVERAGE_UNAVAILABLE": (
+        "No durable activity receipt proves coverage of the attribution window."
+    ),
+    "ATTRIBUTION_COVERAGE_INCOMPLETE": (
+        "The durable activity receipt reports one or more coverage gaps."
+    ),
+    "FIFO_OPENING_HISTORY_UNVERIFIED": (
+        "The activity ledger does not prove full account-inception history for FIFO lots."
+    ),
+    "CORPORATE_ACTION_LOT_EFFECT_UNSUPPORTED": (
+        "A corporate action exists but its lot transformation is not yet modeled."
+    ),
+    "TRANSACTION_FEES_UNAVAILABLE": (
+        "Net realized performance is unavailable because at least one fee is missing."
+    ),
+    "VALUATION_SNAPSHOT_UNAVAILABLE": (
+        "No durable account snapshot at or before the requested end time is available."
+    ),
+    "TIMESTAMPED_VALUATION_UNAVAILABLE": (
+        "A timestamped end valuation is unavailable for an open lot."
+    ),
+    "ENDING_POSITION_MISMATCH": (
+        "Reconstructed activity lots do not reconcile to the durable ending position."
+    ),
+    "BROKER_REPORTED_REALIZED_PERIOD_UNVERIFIED": (
+        "Broker-reported position P&L is not presented as realized P&L for this period."
+    ),
+}
+
 
 class AccountTransactionCoordinator:
     def __init__(
@@ -79,6 +122,7 @@ class AccountTransactionCoordinator:
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
+        self._attribution = PerformanceAttributionCalculator()
 
     async def get_transactions(
         self, request: AccountGetTransactionsInput
@@ -329,6 +373,152 @@ class AccountTransactionCoordinator:
                 request_id=request_id,
                 market=None,
                 as_of=now,
+                fetched_at=now,
+                errors=(error,),
+            )
+
+    def get_performance_attribution(
+        self, request: PerformanceAttributionInput
+    ) -> ToolEnvelope[PerformanceAttributionDTO]:
+        """Calculate native-currency attribution from durable activities/snapshots."""
+        request_id = self._ids.new(EntityIdPrefix.REQ)
+        now = self._clock.now()
+        try:
+            transactions = self._repository.list(
+                providers=request.providers,
+                start=None,
+                end=request.end,
+                limit=None,
+            )
+            coverage = self._repository.list_coverage(
+                providers=request.providers,
+                account_refs=request.account_refs,
+                limit=500,
+            )
+            latest_snapshots = tuple(
+                item
+                for item in self._snapshots.latest_accounts()
+                if (not request.providers or item.provider in request.providers)
+                and (not request.account_refs or item.account_ref in request.account_refs)
+            )
+            account_keys = {
+                (item.provider, item.account_ref) for item in transactions
+            } | {(item.provider, item.account_ref) for item in latest_snapshots}
+            if request.account_refs:
+                account_keys = {
+                    item for item in account_keys if item[1] in request.account_refs
+                }
+            accounts = []
+            all_warnings: set[str] = set()
+            epoch = datetime.min.replace(tzinfo=UTC)
+            for provider, account_ref in sorted(
+                account_keys, key=lambda item: (item[0].value, item[1])
+            ):
+                history = self._snapshots.list_account_history(
+                    account_ref=account_ref,
+                    start=epoch,
+                    end=request.end,
+                )
+                snapshot = next(
+                    (
+                        item
+                        for item in reversed(history)
+                        if item.provider is provider
+                    ),
+                    None,
+                )
+                account_transactions = tuple(
+                    item
+                    for item in transactions
+                    if item.provider is provider and item.account_ref == account_ref
+                )
+                receipts = tuple(
+                    item
+                    for item in coverage
+                    if item.provider is provider and item.account_ref == account_ref
+                )
+                covering = next(
+                    (
+                        item
+                        for item in receipts
+                        if item.effective_start <= request.start
+                        and item.effective_end >= request.end
+                    ),
+                    None,
+                )
+                coverage_warnings: set[str] = set()
+                if covering is None:
+                    coverage_warnings.add("ATTRIBUTION_COVERAGE_UNAVAILABLE")
+                elif covering.status is AccountActivityCoverageStatus.INCOMPLETE:
+                    coverage_warnings.add("ATTRIBUTION_COVERAGE_INCOMPLETE")
+                    coverage_warnings.update(covering.gap_codes)
+                if snapshot is None:
+                    coverage_warnings.add("VALUATION_SNAPSHOT_UNAVAILABLE")
+                currencies = {item.currency for item in account_transactions}
+                if snapshot is not None:
+                    currencies.add(snapshot.base_currency)
+                    currencies.update(item.currency for item in snapshot.positions)
+                for currency in sorted(currencies):
+                    account_result = self._attribution.calculate_account(
+                        account_ref=account_ref,
+                        provider=provider,
+                        currency=currency,
+                        transactions=account_transactions,
+                        snapshot=snapshot,
+                        start=request.start,
+                        end=request.end,
+                        method=request.cost_basis_method,
+                        opening_history_verified=False,
+                        coverage_warning_codes=tuple(sorted(coverage_warnings)),
+                    )
+                    accounts.append(account_result)
+                    all_warnings.update(account_result.warning_codes)
+            if not accounts:
+                all_warnings.add("ATTRIBUTION_INPUTS_UNAVAILABLE")
+            status = (
+                AttributionStatus.INCOMPLETE
+                if all_warnings
+                else AttributionStatus.COMPLETE
+            )
+            attribution = PerformanceAttribution(
+                start=request.start,
+                end=request.end,
+                cost_basis_method=request.cost_basis_method,
+                accounts=tuple(accounts),
+                status=status,
+                warning_codes=tuple(sorted(all_warnings)),
+            )
+            warnings = tuple(
+                WarningInfo(
+                    code=code,
+                    message=_ATTRIBUTION_WARNING_MESSAGES.get(
+                        code, "Performance attribution is incomplete."
+                    ),
+                    details={},
+                )
+                for code in attribution.warning_codes
+            )
+            return ToolEnvelope.success(
+                request_id=request_id,
+                market=None,
+                as_of=request.end,
+                fetched_at=now,
+                freshness=Freshness.UNKNOWN,
+                sources=(),
+                data=PerformanceAttributionDTO.from_domain(attribution),
+                degraded=status is AttributionStatus.INCOMPLETE,
+                warnings=warnings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                to_error_info(exc, self._redactor)
+                if isinstance(exc, TradingPartnerError)
+                else to_error_info_from_exception(exc, self._redactor)
+            )
+            return ToolEnvelope.failure(
+                request_id=request_id,
+                market=None,
+                as_of=request.end,
                 fetched_at=now,
                 errors=(error,),
             )

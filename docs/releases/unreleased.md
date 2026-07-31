@@ -1,5 +1,14 @@
 # Unreleased
 
+- Published `compact-v10` without adding MCP tools. The durable-only
+  `portfolio_analyze/performance_summary` operation reconstructs native-currency
+  FIFO lots or preserves a distinct broker-reported basis, separates realized and
+  unrealized P/L, dividends, interest, fees, and external cash flow, and links each
+  instrument result to activity IDs and an ending snapshot. Coverage, fee,
+  corporate-action, lot-reconciliation, and timestamped-valuation gaps remain
+  explicit `INCOMPLETE` results. The local Console exposes the same calculation
+  with date/basis controls and drill-down; A1 still requires one broker-statement
+  reconciliation before final acceptance.
 - Published `compact-v9` without adding MCP tools. `portfolio_analyze/coverage`
   exposes durable, machine-readable account-activity coverage before any P/L claim.
   A0 now preserves instrument-less cash activities, signed native-currency cash

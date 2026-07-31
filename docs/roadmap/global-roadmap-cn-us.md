@@ -1062,3 +1062,42 @@ TradingAgents 只同步有价值的模式：
 - Checkpoint
 
 不机械同步整个项目。
+
+---
+
+# 21. 2026-08-01 近期提升顺序
+
+本轮参考了 Portfolio Performance、Ghostfolio、Wealthfolio、OpenBB 与 QuantConnect/LEAN。
+借鉴的是产品与数据契约，不复制其代码或许可证受限实现。Trading Partner 继续以“长期挑战
+投资判断”为主轴，不扩成通用个人财务、行情终端或自动交易系统。
+
+## P0：先提高可信度和可维护性
+
+1. 完成 A1 真实券商报表对账，保留可解释残差；对账签收前不推进精确收益率宣称。
+2. 建设统一 Data Quality Center：把 Provider health、数据新鲜度、覆盖回执、fallback、
+   估值缺口与 Monitor 盲区汇总到一个机器可读视图和 Console 页面。
+3. 拆分已触顶的 composition root（`bootstrap.py` 当前 1049/1050 行），并按领域拆开 A 股
+   超大 domain/DTO/provider 文件；不提高行数门槛来掩盖结构问题。
+
+## P1：让长期复盘真正形成闭环
+
+1. A2 收益率：快照充分时 TWR，不足时 Modified Dietz；MWR 仅在端点和外部现金流完整时
+   计算。每种公式保留版本、现金流时点口径与 `COMPLETE/INCOMPLETE`。
+2. A3 贡献：账户、标的与研究主题贡献先行；总贡献与账户损益必须勾稽，残差单列。行业与
+   基准事实缺失时不做伪 Brinson 分解。
+3. Catalyst Agenda：把持仓/Watchlist/Case 的财报、公告、宏观与已知事件排成未来议程，
+   复用现有事件事实和 Monitor，不新增运行时 LLM。
+4. Judgment Scorecard：按当时版本复盘假设命中、失效触发、证据更新和计划纪律，只展示
+   可追溯事实与校准结果，不自动给用户或策略下“好/坏”结论。
+
+## P2：改善交互与扩展方式
+
+1. Console 增加业绩时间序列、贡献瀑布、月度热力图和移动端摘要；每张卡均可下钻到公式、
+   活动与快照。
+2. 继续强化标准 Provider contract 与 capability matrix，但不引入运行时动态插件系统；
+   新数据源必须先证明能填补已有事实缺口，而不是只增加 source 数量。
+3. QuantConnect 继续保持用户操作的 Free bridge；只有免费、稳定且可证明远程代码/结果绑定
+   的 API 出现后，才重新评估自动提交。
+
+明确不做：为了“像竞品”增加 MCP 工具数量、无边界行情源、个人收支/FIRE 模块、自动订单
+或本地全市场历史数据库。

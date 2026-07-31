@@ -13,6 +13,7 @@ from application.dto.account_transactions import (
     AccountGetActivityCoverageInput,
     AccountGetTransactionsInput,
 )
+from application.dto.performance_attribution import PerformanceAttributionInput
 from application.dto.portfolio import (
     AccountGetPositionsInput,
     AccountGetSnapshotInput,
@@ -131,6 +132,32 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def portfolio_get_performance_summary(
+        start: datetime,
+        end: datetime,
+        cost_basis_method: Literal["FIFO", "BROKER_REPORTED"] = "FIFO",
+        providers: tuple[str, ...] = (),
+        account_refs: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Attribute durable account activity in native currency without implicit FX."""
+        try:
+            inp = PerformanceAttributionInput.model_validate(
+                {
+                    "start": start,
+                    "end": end,
+                    "cost_basis_method": cost_basis_method,
+                    "providers": providers,
+                    "account_refs": account_refs,
+                }
+            )
+            return container.services.account_transactions.get_performance_attribution(
+                inp
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     # ------------------------------------------- Phase 1L transactions/workflows
 
     async def account_get_transactions(
@@ -177,4 +204,5 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         portfolio_analyze=portfolio_analyze,
         portfolio_simulate_addition=portfolio_simulate_addition,
         portfolio_get_coverage=portfolio_get_coverage,
+        portfolio_get_performance_summary=portfolio_get_performance_summary,
     )

@@ -18,7 +18,7 @@ class AccountTransactionRepository(Protocol):
         providers: tuple[VendorId, ...],
         start: datetime | None,
         end: datetime | None,
-        limit: int,
+        limit: int | None,
     ) -> tuple[AccountTransaction, ...]: ...
 
     def append_coverage(
