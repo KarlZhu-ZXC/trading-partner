@@ -91,14 +91,25 @@ CLI 已提供一个严格的准备入口：
 ```bash
 uv run trading-partner-performance-reconciliation inspect-schwab-realized \
   --realized-csv schwab-realized-2026-06.csv
+
+uv run trading-partner-performance-reconciliation compare-schwab-realized \
+  --realized-csv schwab-realized-2026-06.csv \
+  --account-ref schwab_STABLE_ACCOUNT_REF \
+  --statement-account-ref schwab_statement_HASH_FROM_INSPECT \
+  --month 2026-06
 ```
 
 该命令只接受 `data/artifacts/reconciliation/` 下的相对路径，拒绝绝对路径、目录穿越与
 symlink，并把目录/文件权限收紧到 `0700/0600`。解析按 Schwab Realized Gain/Loss
 lot-details 表头名称而非固定列序完成；账户标题在 Provider 内转为稳定哈希，raw row、账户
 标签与文件路径不进入 application DTO。成本、开仓日期或 realized P/L 缺失保持 `None` 和
-typed warning，重复 lot 或无法识别的表头直接失败。当前输出只是报表侧可核验摘要；在真实
-PDF/CSV 与同期 durable ledger 完成逐项残差签收前，A1 仍保持“未签收”。
+typed warning，重复 lot 或无法识别的表头直接失败。`compare-schwab-realized` 不接触券商，
+只读取 durable ledger；它按美东自然月和 symbol 比较 Schwab statement realized P/L 与
+FIFO after-fee P/L，显式列出 wash-sale、缺费用、覆盖不足、statement-only/system-only symbol
+和超容差残差；即使账户总残差为零，symbol 残差相互抵消也保持 `REVIEW_REQUIRED`。结果写入
+owner-only `receipts/` JSON 草稿，原始 row、文件路径和账户标题均不
+进入草稿。该草稿不会自动签收；真实 PDF/CSV 与同期 durable ledger 完成人工残差确认前，
+A1 仍保持“未签收”。
 
 ### A2 — 收益率
 

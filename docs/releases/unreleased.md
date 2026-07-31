@@ -4,8 +4,11 @@
   A1 broker-statement reconciliation gate. The strict CSV parser maps recognized
   lot-detail headers by name, uses `Decimal`, preserves missing cost/date/P&L facts,
   rejects traversal/symlinks/duplicate lots, restricts artifacts to `0700/0600`,
-  and exposes only file hashes plus redacted account summaries. It adds no MCP tool
-  and does not claim that real-statement reconciliation has been signed off.
+  and exposes only file hashes plus redacted account summaries. A durable-only
+  comparison command now reconciles one US/Eastern natural month at symbol and
+  account level against FIFO after-fee attribution, emits typed residual causes,
+  and writes an immutable owner-only JSON draft. It adds no MCP tool, never refreshes
+  Schwab, and does not claim that real-statement reconciliation has been signed off.
 - Started the bounded A-share model modularization while preserving the stable
   `domain.a_share.models` import façade. Industry-cycle and company-operating
   models now live in a dedicated module, shared invariant validators have one

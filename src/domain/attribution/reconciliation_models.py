@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
+from domain.attribution.enums import AttributionStatus, CostBasisMethod
 from domain.common.errors import DataContractError
+from domain.common.time import require_aware_datetime
 
 
 def _text(value: object, field: str, *, max_length: int = 128) -> str:
@@ -42,6 +44,7 @@ class BrokerRealizedLot:
     long_term_pnl: Decimal | None
     short_term_pnl: Decimal | None
     term: str | None
+    cost_basis_method: str | None
     wash_sale_disallowed: Decimal | None
 
     def __post_init__(self) -> None:
@@ -65,6 +68,8 @@ class BrokerRealizedLot:
             _decimal(getattr(self, field), field)
         if self.term is not None:
             _text(self.term, "term", max_length=64)
+        if self.cost_basis_method is not None:
+            _text(self.cost_basis_method, "cost_basis_method", max_length=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,3 +134,112 @@ class BrokerRealizedStatement:
             raise DataContractError("account lot counts do not reconcile")
         _codes(self.warning_codes, "warning_codes")
         _text(self.parser_version, "parser_version")
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerRealizedInstrumentReconciliation:
+    """One symbol-level comparison between the statement and durable FIFO ledger."""
+
+    symbol: str
+    instrument_id: str | None
+    statement_lot_count: int
+    statement_proceeds: Decimal
+    statement_cost_basis: Decimal | None
+    statement_realized_pnl: Decimal | None
+    system_realized_pnl_before_fees: Decimal | None
+    system_realized_pnl_after_fees: Decimal | None
+    residual: Decimal | None
+    absolute_residual: Decimal | None
+    residual_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _text(self.symbol, "symbol", max_length=64)
+        if self.instrument_id is not None:
+            _text(self.instrument_id, "instrument_id", max_length=128)
+        if type(self.statement_lot_count) is not int or self.statement_lot_count < 0:
+            raise DataContractError("statement_lot_count must be nonnegative")
+        for field in (
+            "statement_proceeds",
+            "statement_cost_basis",
+            "statement_realized_pnl",
+            "system_realized_pnl_before_fees",
+            "system_realized_pnl_after_fees",
+            "residual",
+            "absolute_residual",
+        ):
+            _decimal(getattr(self, field), field)
+        if self.absolute_residual is not None and self.absolute_residual < 0:
+            raise DataContractError("absolute_residual must be nonnegative")
+        _codes(self.residual_codes, "residual_codes")
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerRealizedReconciliation:
+    """Immutable owner-only draft; it never constitutes automatic sign-off."""
+
+    source_sha256: str
+    statement_account_ref: str
+    durable_account_ref: str
+    period_start: date
+    period_end: date
+    currency: str
+    cost_basis_method: CostBasisMethod
+    tolerance: Decimal
+    statement_lot_count: int
+    statement_total_proceeds: Decimal
+    statement_total_cost_basis: Decimal | None
+    statement_total_realized_pnl: Decimal | None
+    system_total_realized_pnl_before_fees: Decimal | None
+    system_total_realized_pnl_after_fees: Decimal | None
+    residual: Decimal | None
+    absolute_residual: Decimal | None
+    attribution_status: AttributionStatus
+    reconciliation_status: str
+    comparisons: tuple[BrokerRealizedInstrumentReconciliation, ...]
+    residual_codes: tuple[str, ...]
+    attribution_warning_codes: tuple[str, ...]
+    generated_at: datetime
+    algorithm_version: str = "schwab_realized_reconciliation_v1"
+
+    def __post_init__(self) -> None:
+        if (
+            len(self.source_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in self.source_sha256)
+        ):
+            raise DataContractError("source_sha256 is invalid")
+        _text(self.statement_account_ref, "statement_account_ref")
+        _text(self.durable_account_ref, "durable_account_ref")
+        if type(self.period_start) is not date or type(self.period_end) is not date:
+            raise DataContractError("reconciliation period must use dates")
+        if self.period_start > self.period_end:
+            raise DataContractError("reconciliation period is invalid")
+        _text(self.currency, "currency", max_length=3)
+        if not isinstance(self.cost_basis_method, CostBasisMethod):
+            raise DataContractError("cost_basis_method is invalid")
+        _decimal(self.tolerance, "tolerance")
+        if self.tolerance < 0:
+            raise DataContractError("tolerance must be nonnegative")
+        if type(self.statement_lot_count) is not int or self.statement_lot_count < 1:
+            raise DataContractError("statement_lot_count must be positive")
+        for field in (
+            "statement_total_proceeds",
+            "statement_total_cost_basis",
+            "statement_total_realized_pnl",
+            "system_total_realized_pnl_before_fees",
+            "system_total_realized_pnl_after_fees",
+            "residual",
+            "absolute_residual",
+        ):
+            _decimal(getattr(self, field), field)
+        if self.absolute_residual is not None and self.absolute_residual < 0:
+            raise DataContractError("absolute_residual must be nonnegative")
+        if not isinstance(self.attribution_status, AttributionStatus):
+            raise DataContractError("attribution_status is invalid")
+        if self.reconciliation_status not in {"INCOMPLETE", "MATCHED", "REVIEW_REQUIRED"}:
+            raise DataContractError("reconciliation_status is invalid")
+        if not self.comparisons:
+            raise DataContractError("reconciliation comparisons are empty")
+        _codes(self.residual_codes, "residual_codes")
+        _codes(self.attribution_warning_codes, "attribution_warning_codes")
+        require_aware_datetime(self.generated_at, field_name="generated_at")
+        _text(self.algorithm_version, "algorithm_version")
