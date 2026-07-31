@@ -296,6 +296,8 @@ def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
 
 def test_a_share_domain_models_stay_capability_split() -> None:
     """Industry models and shared validators must not collapse into the façade."""
+    from domain.a_share import industry_models, models
+
     domain_root = LAYER_ROOTS["domain"] / "a_share"
     facade = domain_root / "models.py"
     industry = domain_root / "industry_models.py"
@@ -307,8 +309,26 @@ def test_a_share_domain_models_stay_capability_split() -> None:
     assert len(industry.read_text(encoding="utf-8").splitlines()) <= 350
     assert len(validation.read_text(encoding="utf-8").splitlines()) <= 350
     facade_text = facade.read_text(encoding="utf-8")
-    assert "from domain.a_share.industry_models import" in facade_text
     assert "class IndustryMetricObservation:" not in facade_text
+    assert models.IndustryMetricObservation is industry_models.IndustryMetricObservation
+    assert (
+        models.CompanyOperatingMetricsSnapshot
+        is industry_models.CompanyOperatingMetricsSnapshot
+    )
+
+
+def test_a_share_snapshot_validation_stays_out_of_orchestration_service() -> None:
+    """Snapshot orchestration must not re-absorb strict Provider validation."""
+    services = LAYER_ROOTS["application"] / "services"
+    service = services / "a_share_snapshot_service.py"
+    validation = services / "a_share_snapshot_validation.py"
+
+    assert validation.is_file()
+    assert len(service.read_text(encoding="utf-8").splitlines()) <= 1_100
+    assert len(validation.read_text(encoding="utf-8").splitlines()) <= 550
+    service_text = service.read_text(encoding="utf-8")
+    assert "class AShareSnapshotService(AShareSnapshotValidationMixin):" in service_text
+    assert "def _validate_fundamentals(" not in service_text
 
 
 def test_d6b1_ports_stay_in_application_without_infrastructure() -> None:
