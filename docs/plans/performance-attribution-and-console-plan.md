@@ -69,6 +69,24 @@
 手续费、期末仓位勾稽或带时间估值不足，会给出可下钻数字并保持 `INCOMPLETE`。在完成一份
 券商同期报表人工对账前，A1 不宣称最终验收。
 
+#### A1 人工对账输入与签收
+
+首份签收优先使用 Schwab 同一账户、同一自然月的两类官方导出：
+
+1. 月结单 PDF，作为期末现金、持仓、已实现/未实现损益及账户口径的正式记录；
+2. `Accounts > History > Realized Gain/Loss` 的 CSV，提供 symbol、开仓/平仓日期、cost、
+   cost-basis method、proceeds 与 realized gain/loss 等可逐项匹配字段。
+
+若 CSV 未覆盖股息、利息、费用、转账或公司行动，再补同区间 Account History CSV；不要用
+截图或手工改写数字替代原始导出。Schwab 明确说明 statement/confirmation 才是正式记录，
+且成本基础可能因缺失 lot、费用或公司行动而显示不完整，所以 Trading Partner 必须保留
+`INCOMPLETE` 与残差原因，而不是强行调平。
+
+个人报表只放在 gitignored、owner-only 的 `data/artifacts/reconciliation/`，不得加入 fixture、
+日志、聊天内容或 Git 历史。签收至少记录：账户哈希标识、区间、币种、basis、系统结果、
+报表结果、绝对残差、可解释残差类别、未解释残差和签收时间；原始账户号不得进入签收摘要。
+本步骤目前是人工验收门，不新增公开 MCP 工具，也不让运行时自动读取任意 PDF/CSV。
+
 ### A2 — 收益率
 
 - 快照密度足够时计算 time-weighted return；
