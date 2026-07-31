@@ -568,7 +568,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v8",
+            surface_schema_version="compact-v9",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -1057,14 +1057,19 @@ def _register_portfolio_challenge_workflows(
         registry,
         name="portfolio_analyze",
         description=(
-            "Analyze durable portfolio exposure or simulate one calculation-only "
-            "hypothetical addition."
+            "Analyze durable portfolio exposure, inspect attribution coverage, or "
+            "simulate one calculation-only hypothetical addition."
         ),
         variants=(
             _spec(
                 "exposure",
                 portfolio.portfolio_analyze,
                 _all_fields(portfolio.portfolio_analyze),
+            ),
+            _spec(
+                "coverage",
+                portfolio.portfolio_get_coverage,
+                _all_fields(portfolio.portfolio_get_coverage),
             ),
             _spec(
                 "simulate_addition",

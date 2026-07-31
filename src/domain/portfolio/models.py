@@ -11,6 +11,7 @@ from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
 from domain.common.values import parse_instrument_id
 from domain.portfolio.enums import (
+    AccountActivityCoverageStatus,
     AccountEnvironment,
     AccountOpenOrderSide,
     AccountOpenOrderStatus,
@@ -112,24 +113,35 @@ class AccountOpenOrder:
 
 @dataclass(frozen=True, slots=True)
 class AccountTransaction:
+    """One normalized broker activity leg in its native currency.
+
+    The historical class name is retained for API compatibility. Instrument-less
+    cash activities and explicitly unavailable fees make this the canonical A0
+    activity ledger record rather than a security-trade-only model.
+    """
+
     provider_transaction_id: str
     account_ref: str
     provider: VendorId
-    instrument_id: str
+    instrument_id: str | None
     kind: AccountTransactionKind
     side: AccountTransactionSide | None
-    quantity: Decimal
+    quantity: Decimal | None
     price: Decimal | None
-    fees: Decimal
+    fees: Decimal | None
     currency: str
     occurred_at: datetime
+    cash_amount: Decimal | None = None
+    source_type: str = "legacy"
+    mapping_version: str = "account_activity_v1"
 
     def __post_init__(self) -> None:
         _text(self.provider_transaction_id, "provider_transaction_id", 256)
         _text(self.account_ref, "account_ref", 128)
         if not isinstance(self.provider, VendorId):
             raise DataContractError("transaction provider is invalid")
-        parse_instrument_id(self.instrument_id)
+        if self.instrument_id is not None:
+            parse_instrument_id(self.instrument_id)
         if not isinstance(self.kind, AccountTransactionKind):
             raise DataContractError("transaction kind is invalid")
         if self.side is not None and not isinstance(self.side, AccountTransactionSide):
@@ -141,10 +153,149 @@ class AccountTransaction:
         _decimal(self.quantity, "quantity", nonnegative=True)
         _decimal(self.price, "price", nonnegative=True)
         _decimal(self.fees, "fees", nonnegative=True)
-        if self.kind is AccountTransactionKind.TRADE and self.quantity == 0:
-            raise DataContractError("trade transaction quantity must be positive")
+        _decimal(self.cash_amount, "cash_amount")
+        if self.kind is AccountTransactionKind.TRADE:
+            if self.instrument_id is None:
+                raise DataContractError("trade transaction requires instrument_id")
+            if self.quantity is None or self.quantity == 0:
+                raise DataContractError("trade transaction quantity must be positive")
+        if self.instrument_id is None and self.cash_amount is None:
+            raise DataContractError("cash activity requires cash_amount")
         _text(self.currency, "currency", 16)
         require_aware_datetime(self.occurred_at, field_name="occurred_at")
+        _text(self.source_type, "source_type", 128)
+        _text(self.mapping_version, "mapping_version", 64)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountActivityCoverageReceipt:
+    receipt_id: str
+    provider: VendorId
+    account_ref: str
+    requested_start: datetime
+    requested_end: datetime
+    effective_start: datetime
+    effective_end: datetime
+    earliest_event_at: datetime | None
+    latest_event_at: datetime | None
+    event_count: int
+    inserted_count: int
+    duplicate_count: int
+    snapshot_count: int
+    earliest_snapshot_at: datetime | None
+    latest_snapshot_at: datetime | None
+    mapping_version: str
+    supported_kinds: tuple[AccountTransactionKind, ...]
+    unavailable_kinds: tuple[AccountTransactionKind, ...]
+    status: AccountActivityCoverageStatus
+    gap_codes: tuple[str, ...]
+    fetched_at: datetime
+
+    def __post_init__(self) -> None:
+        _text(self.receipt_id, "receipt_id", 128)
+        if not isinstance(self.provider, VendorId):
+            raise DataContractError("coverage provider is invalid")
+        _text(self.account_ref, "account_ref", 128)
+        for field_name in (
+            "requested_start",
+            "requested_end",
+            "effective_start",
+            "effective_end",
+            "fetched_at",
+        ):
+            require_aware_datetime(getattr(self, field_name), field_name=field_name)
+        for field_name in (
+            "earliest_event_at",
+            "latest_event_at",
+            "earliest_snapshot_at",
+            "latest_snapshot_at",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                require_aware_datetime(value, field_name=field_name)
+        if self.requested_start > self.requested_end:
+            raise DataContractError("coverage requested window is invalid")
+        if self.effective_start > self.effective_end:
+            raise DataContractError("coverage effective window is invalid")
+        if self.effective_start < self.requested_start or self.effective_end > self.requested_end:
+            raise DataContractError("coverage effective window exceeds requested window")
+        for field_name in ("event_count", "inserted_count", "duplicate_count", "snapshot_count"):
+            if getattr(self, field_name) < 0:
+                raise DataContractError(f"{field_name} must be nonnegative")
+        if self.inserted_count + self.duplicate_count != self.event_count:
+            raise DataContractError("coverage event counts do not reconcile")
+        if self.event_count == 0 and (
+            self.earliest_event_at is not None or self.latest_event_at is not None
+        ):
+            raise DataContractError("empty coverage must not have event bounds")
+        if self.event_count > 0 and (
+            self.earliest_event_at is None or self.latest_event_at is None
+        ):
+            raise DataContractError("non-empty coverage requires event bounds")
+        if self.snapshot_count == 0 and (
+            self.earliest_snapshot_at is not None or self.latest_snapshot_at is not None
+        ):
+            raise DataContractError("empty snapshot coverage must not have bounds")
+        if self.snapshot_count > 0 and (
+            self.earliest_snapshot_at is None or self.latest_snapshot_at is None
+        ):
+            raise DataContractError("snapshot coverage requires bounds")
+        _text(self.mapping_version, "mapping_version", 64)
+        if len(self.supported_kinds) != len(set(self.supported_kinds)):
+            raise DataContractError("supported_kinds must be unique")
+        if len(self.unavailable_kinds) != len(set(self.unavailable_kinds)):
+            raise DataContractError("unavailable_kinds must be unique")
+        if set(self.supported_kinds) & set(self.unavailable_kinds):
+            raise DataContractError("coverage kind sets must be disjoint")
+        if not isinstance(self.status, AccountActivityCoverageStatus):
+            raise DataContractError("coverage status is invalid")
+        _warnings(self.gap_codes)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAccountActivityCoverage:
+    account_ref: str
+    requested_start: datetime
+    requested_end: datetime
+    effective_start: datetime
+    effective_end: datetime
+    mapping_version: str
+    supported_kinds: tuple[AccountTransactionKind, ...]
+    unavailable_kinds: tuple[AccountTransactionKind, ...]
+    gap_codes: tuple[str, ...]
+    truncated: bool
+
+    def __post_init__(self) -> None:
+        _text(self.account_ref, "account_ref", 128)
+        for field_name in (
+            "requested_start",
+            "requested_end",
+            "effective_start",
+            "effective_end",
+        ):
+            require_aware_datetime(getattr(self, field_name), field_name=field_name)
+        if self.requested_start > self.requested_end:
+            raise DataContractError("provider coverage requested window is invalid")
+        if self.effective_start > self.effective_end:
+            raise DataContractError("provider coverage effective window is invalid")
+        if self.effective_start < self.requested_start or self.effective_end > self.requested_end:
+            raise DataContractError("provider coverage exceeds requested window")
+        _text(self.mapping_version, "mapping_version", 64)
+        if set(self.supported_kinds) & set(self.unavailable_kinds):
+            raise DataContractError("provider coverage kind sets must be disjoint")
+        _warnings(self.gap_codes)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountActivityBatch:
+    transactions: tuple[AccountTransaction, ...]
+    coverage: tuple[ProviderAccountActivityCoverage, ...]
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, AccountTransaction) for item in self.transactions):
+            raise DataContractError("activity batch transactions are invalid")
+        if any(not isinstance(item, ProviderAccountActivityCoverage) for item in self.coverage):
+            raise DataContractError("activity batch coverage is invalid")
 
 
 @dataclass(frozen=True, slots=True)

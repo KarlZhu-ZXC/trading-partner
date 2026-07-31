@@ -35,4 +35,10 @@ class AccountTransactionKind(StrEnum):
     INTEREST = "interest"
     FEE = "fee"
     TRANSFER = "transfer"
+    CORPORATE_ACTION = "corporate_action"
     OTHER = "other"
+
+
+class AccountActivityCoverageStatus(StrEnum):
+    COMPLETE = "COMPLETE"
+    INCOMPLETE = "INCOMPLETE"

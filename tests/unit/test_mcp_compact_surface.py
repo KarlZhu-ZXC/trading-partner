@@ -130,6 +130,7 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
         "investment_case_read": 2,
         "market_data_get": 7,
         "external_state_sync": 3,
+        "portfolio_analyze": 3,
         "research_workflow_run": 8,
         "monitor_read": 4,
         "monitor_manage": 3,
@@ -226,7 +227,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
     assert result["data"] == {
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v8",
+        "surface_schema_version": "compact-v9",
     }
 
 

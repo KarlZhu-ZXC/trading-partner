@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
 from zoneinfo import ZoneInfo
@@ -36,10 +36,12 @@ from domain.portfolio.enums import (
     AccountTransactionSide,
 )
 from domain.portfolio.models import (
+    AccountActivityBatch,
     AccountOpenOrder,
     AccountPosition,
     AccountSnapshot,
     AccountTransaction,
+    ProviderAccountActivityCoverage,
 )
 from infrastructure.providers.moomoo_rate_limiter import (
     MoomooOpenDOperation,
@@ -173,7 +175,7 @@ class MoomooAccountAdapter:
         start: datetime | None,
         end: datetime | None,
         limit: int,
-    ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+    ) -> ProviderSuccess[AccountActivityBatch]:
         if not self._enabled:
             raise ProviderNotConfigured("Moomoo account provider is disabled")
         for name, value in (("start", start), ("end", end)):
@@ -187,7 +189,9 @@ class MoomooAccountAdapter:
 
     def _read_transactions(
         self, start: datetime | None, end: datetime | None, limit: int
-    ) -> ProviderSuccess[tuple[AccountTransaction, ...]]:
+    ) -> ProviderSuccess[AccountActivityBatch]:
+        requested_end = end or self._clock.now()
+        requested_start = start or requested_end - timedelta(days=60)
         try:
             context = self._factory(self._host, self._port)
         except ProviderNotConfigured:
@@ -197,6 +201,7 @@ class MoomooAccountAdapter:
         try:
             accounts = self._query(context.get_acc_list())
             items: list[AccountTransaction] = []
+            account_refs: list[str] = []
             for account in accounts:
                 raw_id = account.get("acc_id")
                 if (
@@ -205,11 +210,10 @@ class MoomooAccountAdapter:
                     or (self._account_ids and str(raw_id) not in self._account_ids)
                 ):
                     continue
+                account_refs.append(_account_ref(raw_id))
                 kwargs: dict[str, object] = {"trd_env": "REAL", "acc_id": raw_id}
-                if start is not None:
-                    kwargs["start"] = start.date().isoformat()
-                if end is not None:
-                    kwargs["end"] = end.date().isoformat()
+                kwargs["start"] = requested_start.date().isoformat()
+                kwargs["end"] = requested_end.date().isoformat()
                 self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_HISTORY_DEALS, raw_id)
                 rows = self._query(context.history_deal_list_query(**kwargs))
                 items.extend(self._transaction(raw_id, row) for row in rows)
@@ -217,6 +221,34 @@ class MoomooAccountAdapter:
             context.close()
         items.sort(key=lambda item: (item.occurred_at, item.provider_transaction_id), reverse=True)
         fetched_at = self._clock.now()
+        truncated = len(items) > limit
+        gap_codes = [
+            "TRANSACTION_FEES_UNAVAILABLE",
+            "MOOMOO_ACTIVITY_TYPES_UNAVAILABLE",
+        ]
+        if truncated:
+            gap_codes.append("PROVIDER_RESULT_TRUNCATED")
+        warnings = list(gap_codes)
+        if start is None:
+            warnings.append("TRANSACTION_WINDOW_DEFAULTED")
+        unavailable_kinds = tuple(
+            kind for kind in AccountTransactionKind if kind is not AccountTransactionKind.TRADE
+        )
+        coverage = tuple(
+            ProviderAccountActivityCoverage(
+                account_ref=account_ref,
+                requested_start=requested_start,
+                requested_end=requested_end,
+                effective_start=requested_start,
+                effective_end=requested_end,
+                mapping_version="moomoo_deals_v1",
+                supported_kinds=(AccountTransactionKind.TRADE,),
+                unavailable_kinds=unavailable_kinds,
+                gap_codes=tuple(gap_codes),
+                truncated=truncated,
+            )
+            for account_ref in account_refs
+        )
         meta = ProviderResultMeta(
             self.vendor_id,
             DataCategory.ACCOUNT,
@@ -229,9 +261,9 @@ class MoomooAccountAdapter:
             CacheDisposition.MISS,
             None,
             0,
-            ("TRANSACTION_FEES_UNAVAILABLE",),
+            tuple(warnings),
         )
-        return ProviderSuccess(tuple(items[:limit]), meta)
+        return ProviderSuccess(AccountActivityBatch(tuple(items[:limit]), coverage), meta)
 
     def _read_current(self) -> ProviderSuccess[tuple[AccountSnapshot, ...]]:
         try:
@@ -447,7 +479,10 @@ class MoomooAccountAdapter:
             side=side,
             quantity=quantity,
             price=price,
-            fees=Decimal(0),
+            fees=None,
             currency="USD" if market == Market.US.value else "CNY",
             occurred_at=occurred_at,
+            cash_amount=None,
+            source_type="HISTORY_DEAL",
+            mapping_version="moomoo_deals_v1",
         )

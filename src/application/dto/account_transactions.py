@@ -8,8 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from application.dto.market import DecimalWire
 from domain.common.enums import VendorId
-from domain.portfolio.enums import AccountTransactionKind, AccountTransactionSide
-from domain.portfolio.models import AccountTransaction
+from domain.portfolio.enums import (
+    AccountActivityCoverageStatus,
+    AccountTransactionKind,
+    AccountTransactionSide,
+)
+from domain.portfolio.models import AccountActivityCoverageReceipt, AccountTransaction
 
 
 class _DTO(BaseModel):
@@ -43,24 +47,76 @@ class AccountGetTransactionsInput(_DTO):
         return self
 
 
+class AccountGetActivityCoverageInput(_DTO):
+    providers: tuple[VendorId, ...] = ()
+    account_refs: tuple[str, ...] = ()
+    limit: int = Field(default=50, ge=1, le=500)
+
+    @field_validator("providers", "account_refs")
+    @classmethod
+    def unique_values(cls, value: tuple[object, ...]) -> tuple[object, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("coverage filters must be unique")
+        return value
+
+
 class AccountTransactionDTO(_DTO):
     provider_transaction_id: str
     account_ref: str
     provider: VendorId
-    instrument_id: str
+    instrument_id: str | None
     kind: AccountTransactionKind
     side: AccountTransactionSide | None
-    quantity: DecimalWire
+    quantity: DecimalWire | None
     price: DecimalWire | None
-    fees: DecimalWire
+    fees: DecimalWire | None
     currency: str
     occurred_at: datetime
+    cash_amount: DecimalWire | None
+    source_type: str
+    mapping_version: str
 
     @classmethod
     def from_domain(cls, value: AccountTransaction) -> AccountTransactionDTO:
         return cls.model_validate(value)
 
 
+class AccountActivityCoverageReceiptDTO(_DTO):
+    receipt_id: str
+    provider: VendorId
+    account_ref: str
+    requested_start: datetime
+    requested_end: datetime
+    effective_start: datetime
+    effective_end: datetime
+    earliest_event_at: datetime | None
+    latest_event_at: datetime | None
+    event_count: int
+    inserted_count: int
+    duplicate_count: int
+    snapshot_count: int
+    earliest_snapshot_at: datetime | None
+    latest_snapshot_at: datetime | None
+    mapping_version: str
+    supported_kinds: tuple[AccountTransactionKind, ...]
+    unavailable_kinds: tuple[AccountTransactionKind, ...]
+    status: AccountActivityCoverageStatus
+    gap_codes: tuple[str, ...]
+    fetched_at: datetime
+
+    @classmethod
+    def from_domain(
+        cls, value: AccountActivityCoverageReceipt
+    ) -> AccountActivityCoverageReceiptDTO:
+        return cls.model_validate(value)
+
+
 class AccountTransactionsDTO(_DTO):
     transactions: tuple[AccountTransactionDTO, ...]
     unavailable_providers: tuple[VendorId, ...] = ()
+    coverage_receipts: tuple[AccountActivityCoverageReceiptDTO, ...] = ()
+
+
+class AccountActivityCoverageDTO(_DTO):
+    receipts: tuple[AccountActivityCoverageReceiptDTO, ...]
+    overall_status: AccountActivityCoverageStatus

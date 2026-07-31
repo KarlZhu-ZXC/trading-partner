@@ -93,6 +93,7 @@ _HARDENING_TABLES = {
 }
 
 _PHASE3_TABLES = {
+    "account_activity_coverage_receipts",
     "industry_metric_observations",
     "futures_products",
     "futures_product_versions",
@@ -107,7 +108,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0026_korean_market_support"})
+_HEAD_REVISIONS = frozenset({"0027_account_activity_coverage"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -137,6 +138,7 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0024_monitor_notification_outbox",
     "0025_monitor_run_notification_outbox",
     "0026_korean_market_support",
+    "0027_account_activity_coverage",
 }
 
 
