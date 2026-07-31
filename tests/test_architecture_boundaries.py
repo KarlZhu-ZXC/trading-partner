@@ -296,17 +296,20 @@ def test_large_a_share_adapters_and_codecs_have_stable_facades() -> None:
 
 def test_a_share_domain_models_stay_capability_split() -> None:
     """Industry models and shared validators must not collapse into the façade."""
-    from domain.a_share import industry_models, models
+    from domain.a_share import industry_models, market_models, models
 
     domain_root = LAYER_ROOTS["domain"] / "a_share"
     facade = domain_root / "models.py"
     industry = domain_root / "industry_models.py"
+    market = domain_root / "market_models.py"
     validation = domain_root / "model_validation.py"
 
     assert industry.is_file()
+    assert market.is_file()
     assert validation.is_file()
-    assert len(facade.read_text(encoding="utf-8").splitlines()) <= 1_400
+    assert len(facade.read_text(encoding="utf-8").splitlines()) <= 1_250
     assert len(industry.read_text(encoding="utf-8").splitlines()) <= 350
+    assert len(market.read_text(encoding="utf-8").splitlines()) <= 250
     assert len(validation.read_text(encoding="utf-8").splitlines()) <= 350
     facade_text = facade.read_text(encoding="utf-8")
     assert "class IndustryMetricObservation:" not in facade_text
@@ -315,6 +318,9 @@ def test_a_share_domain_models_stay_capability_split() -> None:
         models.CompanyOperatingMetricsSnapshot
         is industry_models.CompanyOperatingMetricsSnapshot
     )
+    assert models.AShareQuote is market_models.AShareQuote
+    assert models.AShareBar is market_models.AShareBar
+    assert models.validate_order_book_levels is market_models.validate_order_book_levels
 
 
 def test_a_share_snapshot_validation_stays_out_of_orchestration_service() -> None:

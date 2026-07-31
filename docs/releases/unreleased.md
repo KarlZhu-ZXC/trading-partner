@@ -3,8 +3,9 @@
 - Started the bounded A-share model modularization while preserving the stable
   `domain.a_share.models` import façade. Industry-cycle and company-operating
   models now live in a dedicated module, shared invariant validators have one
-  internal owner, and the former 1,837-line façade is reduced to about 1,360 lines.
-  Architecture tests cap all three modules to prevent the monolith from returning.
+  internal owner, and quote/order-book/tick/bar models now form a separate market
+  module. The former 1,837-line façade is reduced to about 1,180 lines while keeping
+  stable type/function re-exports; architecture tests prevent the monolith returning.
 - Split strict A-share snapshot Provider-result validation into a dedicated mixin.
   The orchestration service keeps its established private validation entry points
   through inheritance while shrinking from 1,480 to about 1,030 lines; architecture

@@ -12,6 +12,7 @@ import pytest
 from application.dto import a_share as a_share_dto
 from domain.a_share import enums as a_share_enums
 from domain.a_share import industry_models as a_share_industry_models
+from domain.a_share import market_models as a_share_market_models
 from domain.a_share import models as a_share_models
 from domain.a_share.enums import (
     BarInterval,
@@ -906,7 +907,7 @@ def _all_domain_instances() -> dict[str, object]:
 
 
 def _domain_model_classes() -> dict[str, type]:
-    modules = (a_share_models, a_share_industry_models)
+    modules = (a_share_models, a_share_industry_models, a_share_market_models)
     return {
         name: obj
         for module in modules
