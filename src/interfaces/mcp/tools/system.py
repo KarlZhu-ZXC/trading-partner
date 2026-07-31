@@ -24,8 +24,47 @@ def build_system_adapters(
         try:
             envelope = container.services.health.check()
             result = envelope.model_dump(mode="json")
+            try:
+                quality_result = container.services.data_quality.check().model_dump(mode="json")
+            except Exception:  # noqa: BLE001 — base health must survive quality-ledger failure
+                quality_result = {
+                    "data": {
+                        "status": "error",
+                        "generated_at": result.get("fetched_at"),
+                        "mode": "durable_only",
+                        "account_snapshots": [],
+                        "account_activity": [],
+                        "monitors": [],
+                        "issues": [
+                            {
+                                "code": "DATA_QUALITY_CENTER_UNAVAILABLE",
+                                "severity": "error",
+                                "scope": "persistence",
+                                "subject_ref": None,
+                                "observed_at": result.get("fetched_at"),
+                                "detail": (
+                                    "The quality center failed closed; base health "
+                                    "remains available."
+                                ),
+                            }
+                        ],
+                        "limitations": [
+                            "DURABLE_ONLY_NO_UPSTREAM_PROBE",
+                            "PROVIDER_FALLBACK_HISTORY_NOT_PERSISTED",
+                            "ACCOUNT_AGE_REPORTED_WITHOUT_GLOBAL_STALENESS_THRESHOLD",
+                        ],
+                    },
+                }
             data = result.get("data")
             if isinstance(data, dict):
+                quality_data = quality_result.get("data")
+                if isinstance(quality_data, dict):
+                    quality_data["component_checks"] = data.get("components", {})
+                    quality_data["component_check_limitations"] = [
+                        "CONFIGURATION_CHECK_IS_NOT_UPSTREAM_REACHABILITY",
+                        "ONLY_COMPONENTS_WITH_EXPLICIT_PROBES_ARE_LISTED",
+                    ]
+                    data["data_quality"] = quality_data
                 data.update(
                     {
                         "mcp_surface_profile": surface_profile,

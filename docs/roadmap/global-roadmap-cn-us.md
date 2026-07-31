@@ -1074,8 +1074,10 @@ TradingAgents 只同步有价值的模式：
 ## P0：先提高可信度和可维护性
 
 1. 完成 A1 真实券商报表对账，保留可解释残差；对账签收前不推进精确收益率宣称。
-2. 建设统一 Data Quality Center：把 Provider health、数据新鲜度、覆盖回执、fallback、
-   估值缺口与 Monitor 盲区汇总到一个机器可读视图和 Console 页面。
+2. 统一 Data Quality Center 第一版已完成：`system_health` 与 Console 首页现在汇总显式
+   Provider probe 口径、最新账户快照年龄、估值/价格时间覆盖、账户活动 coverage receipt，
+   以及 Active Monitor 最近运行和 `NOT_EVALUATED` 盲区；全程 durable-only，不触发上游。
+   Provider fallback 历史尚未持久化，当前以明确 limitation 返回，后续再补运行回执账本。
 3. composition root 第一轮拆分已完成：`bootstrap.py` 从 1049 行降至 961 行，新的回归上限
    收紧为 1000；application-only 服务目录与 infrastructure 资源生命周期已分层，跨层 wiring
    仍只有一个。下一步再按领域拆开 A 股超大 domain/DTO/provider 文件。

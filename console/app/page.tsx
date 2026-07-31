@@ -30,6 +30,16 @@ export default function OverviewPage() {
   const maintenance = result.data?.maintenance as Dict | undefined;
   const notifications = result.data?.notifications as Dict | undefined;
   const sync = result.data?.post_market_sync as Dict | undefined;
+  const quality = health?.data_quality as Dict | undefined;
+  const qualityIssues = listOf<Dict>(quality, "issues");
+  const qualityAccounts = listOf<Dict>(quality, "account_snapshots");
+  const qualityActivity = listOf<Dict>(quality, "account_activity");
+  const qualityMonitors = listOf<Dict>(quality, "monitors");
+  const blindMonitorCount = new Set(
+    qualityIssues
+      .filter((item) => item.scope === "monitor")
+      .map((item) => String(item.subject_ref)),
+  ).size;
 
   return (
     <ConsoleShell active="overview" eyebrow="System overview" title="投资研究控制台">
@@ -55,6 +65,44 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
+          <Card
+            className="span-12"
+            kicker="DATA QUALITY"
+            title="数据质量中心"
+            action={<Badge value={String(quality?.status ?? "UNKNOWN")} />}
+          >
+            <div className="quality-center-grid">
+              <div className="metric-pairs quality-metrics">
+                <div><span>账户快照</span><strong>{qualityAccounts.length}</strong><small>持久化最新版本</small></div>
+                <div><span>活动覆盖回执</span><strong>{qualityActivity.length}</strong><small>每账户最新回执</small></div>
+                <div><span>Active Monitor</span><strong>{qualityMonitors.length}</strong><small>只读最近运行</small></div>
+                <div><span>Monitor 盲区</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>未运行 / 未评估 / 不完整</small></div>
+              </div>
+              <div className="quality-issues">
+                <div className="quality-section-heading">
+                  <span>当前缺口</span>
+                  <small>{qualityIssues.length} 项 · 不触发上游请求</small>
+                </div>
+                {qualityIssues.length === 0 ? (
+                  <Empty>持久化证据未发现质量缺口。</Empty>
+                ) : (
+                  <div className="quality-issue-list">
+                    {qualityIssues.slice(0, 6).map((issue, index) => (
+                      <article key={`${String(issue.code)}-${String(issue.subject_ref)}-${index}`}>
+                        <Badge value={String(issue.severity ?? "DEGRADED")} />
+                        <div>
+                          <strong>{String(issue.code)}</strong>
+                          <span>{String(issue.subject_ref ?? issue.scope ?? "system")} · {String(issue.detail ?? "—")}</span>
+                        </div>
+                      </article>
+                    ))}
+                    {qualityIssues.length > 6 ? <small>另有 {qualityIssues.length - 6} 项，可通过 system_health 读取完整机器视图。</small> : null}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+
           <Card
             className="span-8"
             kicker="MONITOR PULSE"

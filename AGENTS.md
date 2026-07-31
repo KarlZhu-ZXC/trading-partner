@@ -20,8 +20,14 @@ services remain separate; compact routing belongs only to `interfaces/mcp/`.
 
 **System and identity**
 
-- `system_health` — health plus `mcp_surface_profile`, `public_tool_count`, and
-  `surface_schema_version`.
+- `system_health` — health plus `mcp_surface_profile`, `public_tool_count`,
+  `surface_schema_version`, and the durable-only Data Quality Center. The quality
+  view summarizes latest account snapshot valuation/timestamp coverage, account
+  activity receipts, and active Monitor blind spots without contacting an upstream
+  Provider. Provider checks retain their `live_probe` versus `configuration` label;
+  configuration is never presented as reachability. Operational health and data
+  quality keep separate statuses. Provider fallback history is not yet persisted
+  and remains an explicit limitation.
 - `instrument_resolve` — local-first lookup; a unique provider result may be cached.
 
 Instrument resolution is local-first, not local-only. A local miss may use the

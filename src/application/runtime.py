@@ -10,6 +10,7 @@ from application.ports.secret_redactor import SecretRedactor
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.challenge_review_service import ChallengeReviewService
+from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
 from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
@@ -39,6 +40,7 @@ class ApplicationServices:
     """Tool-facing application graph with no infrastructure dependencies."""
 
     health: HealthService
+    data_quality: DataQualityService
     investment_cases: InvestmentCaseService
     thesis_revisions: ThesisRevisionService
     research_state: ResearchStateQueryService
