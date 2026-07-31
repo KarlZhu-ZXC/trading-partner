@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 
+from domain.a_share import fundamental_models as _fundamental_models
 from domain.a_share import industry_models as _industry_models
 from domain.a_share import market_models as _market_models
+from domain.a_share import research_models as _research_models
 from domain.a_share.enums import (
     BarInterval,
-    FinancialStatementType,
     LimitPoolType,
     OptionType,
     SentimentSourceType,
@@ -24,31 +25,21 @@ from domain.a_share.enums import (
 from domain.a_share.model_validation import (
     _BRANCH_MAX,
     _CHANNEL_MAX,
-    _CONSENSUS_METRICS,
     _DAYS_BOARDS_MAX,
     _DISCLOSURE_NOTE_MAX,
     _DRAGON_TIGER_SIDES,
     _EQUITY_ONLY,
     _ETF_ONLY,
-    _F10_BODY_MAX,
     _INDUSTRY_MAX,
-    _ITEM_CODE_MAX,
-    _ITEM_NAME_MAX,
-    _KEY_MAX,
     _LABEL_MAX,
-    _METRIC_NAME_MAX,
     _NAME_MAX,
     _NORTHBOUND_CHANNELS,
     _OPTION_ONLY,
     _PLAN_STATUS_MAX,
     _QUOTE_ASSET_TYPES,
     _REASON_MAX,
-    _SECTION_MAX,
     _TAG_MAX,
-    _TITLE_MAX,
-    _UNIT_MAX,
     _UNLOCK_TYPE_MAX,
-    _URL_MAX,
     _require_a_share_instrument_id,
     _require_bool,
     _require_date,
@@ -94,225 +85,15 @@ OrderBookLevel = _market_models.OrderBookLevel
 TradeTick = _market_models.TradeTick
 validate_order_book_levels = _market_models.validate_order_book_levels
 
-# ---------------------------------------------------------------------------
-# §4.2 Fundamentals
-# ---------------------------------------------------------------------------
+F10Section = _fundamental_models.F10Section
+FinancialStatementLine = _fundamental_models.FinancialStatementLine
+FundamentalMetric = _fundamental_models.FundamentalMetric
 
-
-@dataclass(frozen=True, slots=True)
-class FundamentalMetric:
-    name: str
-    value: Decimal | str | int | None
-    unit: str | None
-    period_end: date | None
-    published_at: datetime | None
-
-    def __post_init__(self) -> None:
-        _require_str(self.name, field="name", max_len=_METRIC_NAME_MAX)
-        if self.value is not None:
-            if isinstance(self.value, float):
-                raise DataContractError(
-                    "value must not be float",
-                    details={"field": "value", "rule": "no_float"},
-                )
-            if type(self.value) is Decimal:
-                _require_decimal(self.value, field="value")
-            elif type(self.value) is int:
-                pass
-            elif isinstance(self.value, str):
-                _require_str(self.value, field="value", max_len=200, allow_blank=True)
-            else:
-                raise DataContractError(
-                    "value must be Decimal, str, int, or None",
-                    details={
-                        "field": "value",
-                        "rule": "value_type",
-                        "type": type(self.value).__name__,
-                    },
-                )
-        _require_optional_str(self.unit, field="unit", max_len=_UNIT_MAX)
-        _require_optional_date(self.period_end, field="period_end")
-        if self.published_at is not None:
-            require_aware_datetime(self.published_at, field_name="published_at")
-
-
-@dataclass(frozen=True, slots=True)
-class FinancialStatementLine:
-    statement_type: FinancialStatementType
-    period_end: date
-    published_at: datetime | None
-    item_code: str
-    item_name: str
-    value: Decimal | None
-    unit: str
-
-    def __post_init__(self) -> None:
-        _require_enum(self.statement_type, FinancialStatementType, field="statement_type")
-        _require_date(self.period_end, field="period_end")
-        if self.published_at is not None:
-            require_aware_datetime(self.published_at, field_name="published_at")
-        _require_str(self.item_code, field="item_code", max_len=_ITEM_CODE_MAX)
-        _require_str(self.item_name, field="item_name", max_len=_ITEM_NAME_MAX)
-        _require_optional_decimal(self.value, field="value")
-        _require_str(self.unit, field="unit", max_len=_UNIT_MAX)
-
-
-@dataclass(frozen=True, slots=True)
-class F10Section:
-    section: str
-    title: str
-    body: str
-    as_of: datetime
-
-    def __post_init__(self) -> None:
-        _require_str(self.section, field="section", max_len=_SECTION_MAX)
-        _require_str(self.title, field="title", max_len=_TITLE_MAX)
-        _require_str(self.body, field="body", max_len=_F10_BODY_MAX, allow_blank=True)
-        require_aware_datetime(self.as_of, field_name="as_of")
-
-
-# ---------------------------------------------------------------------------
-# §4.3 Research / disclosure / news
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ConsensusEstimate:
-    fiscal_year: int
-    metric: str
-    mean: Decimal | None
-    high: Decimal | None
-    low: Decimal | None
-    institution_count: int | None
-
-    def __post_init__(self) -> None:
-        year = _require_int(self.fiscal_year, field="fiscal_year")
-        if year < 1990 or year > 2100:
-            raise DataContractError(
-                "fiscal_year out of range",
-                details={"field": "fiscal_year", "rule": "year_range"},
-            )
-        metric = _require_str(self.metric, field="metric", max_len=_METRIC_NAME_MAX)
-        if metric not in _CONSENSUS_METRICS:
-            raise DataContractError(
-                "metric must be eps|revenue|net_income",
-                details={"field": "metric", "rule": "consensus_metric"},
-            )
-        mean = _require_optional_decimal(self.mean, field="mean")
-        high = _require_optional_decimal(self.high, field="high")
-        low = _require_optional_decimal(self.low, field="low")
-        if high is not None and low is not None and high < low:
-            raise DataContractError(
-                "high must be >= low",
-                details={"field": "high", "rule": "range_order"},
-            )
-        if mean is not None and high is not None and mean > high:
-            raise DataContractError(
-                "mean must be <= high",
-                details={"field": "mean", "rule": "range_order"},
-            )
-        if mean is not None and low is not None and mean < low:
-            raise DataContractError(
-                "mean must be >= low",
-                details={"field": "mean", "rule": "range_order"},
-            )
-        _require_optional_nonnegative_int(self.institution_count, field="institution_count")
-
-
-@dataclass(frozen=True, slots=True)
-class AnalystReportItem:
-    report_key: str
-    title: str
-    institution: str | None
-    analyst_names: tuple[str, ...]
-    published_at: datetime
-    rating: str | None
-    target_price: Decimal | None
-    eps_forecasts: tuple[ConsensusEstimate, ...]
-    source_url: str | None
-    pdf_url: str | None
-
-    def __post_init__(self) -> None:
-        _require_str(self.report_key, field="report_key", max_len=_KEY_MAX)
-        _require_str(self.title, field="title", max_len=_TITLE_MAX)
-        _require_optional_str(self.institution, field="institution", max_len=_NAME_MAX)
-        names = _require_str_tuple(
-            self.analyst_names, field="analyst_names", max_item_len=_NAME_MAX
-        )
-        object.__setattr__(self, "analyst_names", names)
-        require_aware_datetime(self.published_at, field_name="published_at")
-        _require_optional_str(self.rating, field="rating", max_len=64)
-        _require_optional_decimal(self.target_price, field="target_price")
-        forecasts = _require_tuple(self.eps_forecasts, field="eps_forecasts")
-        for idx, item in enumerate(forecasts):
-            if not isinstance(item, ConsensusEstimate):
-                raise DataContractError(
-                    "eps_forecasts elements must be ConsensusEstimate",
-                    details={"field": "eps_forecasts", "index": idx, "rule": "type"},
-                )
-        _require_optional_str(self.source_url, field="source_url", max_len=_URL_MAX)
-        _require_optional_str(self.pdf_url, field="pdf_url", max_len=_URL_MAX)
-
-
-@dataclass(frozen=True, slots=True)
-class AnnouncementItem:
-    announcement_key: str
-    title: str
-    published_at: datetime
-    category: str | None
-    source_url: str
-    pdf_url: str | None
-
-    def __post_init__(self) -> None:
-        _require_str(self.announcement_key, field="announcement_key", max_len=_KEY_MAX)
-        _require_str(self.title, field="title", max_len=_TITLE_MAX)
-        require_aware_datetime(self.published_at, field_name="published_at")
-        _require_optional_str(self.category, field="category", max_len=100)
-        _require_str(self.source_url, field="source_url", max_len=_URL_MAX)
-        _require_optional_str(self.pdf_url, field="pdf_url", max_len=_URL_MAX)
-
-
-@dataclass(frozen=True, slots=True)
-class NewsItem:
-    news_key: str
-    title: str
-    summary: str | None
-    published_at: datetime
-    source_name: str
-    source_url: str | None
-
-    def __post_init__(self) -> None:
-        _require_str(self.news_key, field="news_key", max_len=_KEY_MAX)
-        _require_str(self.title, field="title", max_len=_TITLE_MAX)
-        _require_optional_str(self.summary, field="summary", max_len=4_000)
-        require_aware_datetime(self.published_at, field_name="published_at")
-        _require_str(self.source_name, field="source_name", max_len=_NAME_MAX)
-        _require_optional_str(self.source_url, field="source_url", max_len=_URL_MAX)
-
-
-@dataclass(frozen=True, slots=True)
-class InteractiveQAItem:
-    qa_key: str
-    question: str
-    asked_at: datetime | None
-    answer: str
-    answered_at: datetime
-    source_url: str | None
-
-    def __post_init__(self) -> None:
-        _require_str(self.qa_key, field="qa_key", max_len=_KEY_MAX)
-        _require_str(self.question, field="question", max_len=8_000)
-        if self.asked_at is not None:
-            require_aware_datetime(self.asked_at, field_name="asked_at")
-        _require_str(self.answer, field="answer", max_len=20_000, allow_blank=True)
-        require_aware_datetime(self.answered_at, field_name="answered_at")
-        if self.asked_at is not None and self.answered_at < self.asked_at:
-            raise DataContractError(
-                "answered_at must be >= asked_at",
-                details={"field": "answered_at", "rule": "range_order"},
-            )
-        _require_optional_str(self.source_url, field="source_url", max_len=_URL_MAX)
-
+AnalystReportItem = _research_models.AnalystReportItem
+AnnouncementItem = _research_models.AnnouncementItem
+ConsensusEstimate = _research_models.ConsensusEstimate
+InteractiveQAItem = _research_models.InteractiveQAItem
+NewsItem = _research_models.NewsItem
 
 # ---------------------------------------------------------------------------
 # §17.1 Market board / industry
