@@ -1114,3 +1114,33 @@ TradingAgents 只同步有价值的模式：
 
 明确不做：为了“像竞品”增加 MCP 工具数量、无边界行情源、个人收支/FIRE 模块、自动订单
 或本地全市场历史数据库。
+
+## 当前中断点：转入缺陷修复（2026-08-01）
+
+当前公开基线为 `054e839`，工作树干净，累计代码已通过最新 GitHub `quality` 工作流；最近一次
+完整本地验收为 Ruff、mypy、Console lint/test/build、wheel、Alembic、Gitleaks 与
+`1922 passed`。
+
+已完成并保留的能力：
+
+1. A1 已具备 Schwab Realized Gain/Loss CSV 的 owner-only 检查与确定性月度对账草稿，能够把
+   账户级和标的级残差、费用、wash sale、成本法与 coverage 缺口显式化；它不刷新券商、不新增
+   MCP 工具，也不自动完成 A1 签收。
+2. Data Quality Center 已纳入安全的 Provider route/fallback 历史账本；只保存路由元数据，按
+   30 天/5000 条保留，并聚合最近 24 小时的失败、fallback 与 cache 使用情况。
+3. composition root、A 股 domain、DTO 与 snapshot 校验的首轮模块化已经完成，现有架构边界和
+   `compact_28` 公共面继续作为后续修复的约束。
+4. Catalyst Agenda / Judgment Scorecard 只完成了设计冻结；runtime 尚未实施，因此不存在需要
+   兼容的半成品数据或公开操作。
+
+尚未完成和当前门槛：
+
+1. A1 真实签收仍等待同月 Schwab statement PDF、Realized Gain/Loss CSV，以及一次明确授权的
+   transaction sync；在此之前不宣称精确收益率已验真。
+2. A2 收益率与 A3 贡献继续等待 A1 签收，不在缺陷修复期间穿插推进。
+3. Catalyst Agenda 的恢复点固定为 C0–C1：先落地实体、迁移、repository 与 compact operation，
+   再接免费事件源；目前没有开始 runtime 编码。
+
+从此中断点开始，优先逐项复现和修复用户实际使用缺陷，按影响范围做比例化测试，并及时更新
+相关规格、能力边界与 release note。缺陷队列清空后，从 Catalyst Agenda C0–C1 恢复，不重做
+上述已完成工作。
