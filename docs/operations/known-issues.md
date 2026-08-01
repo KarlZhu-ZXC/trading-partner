@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-07-31
+> Updated: 2026-08-01
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -58,6 +58,7 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Watchlist reads/sync | Omitted Moomoo scope selects durable `All`; public sync refreshes every group and membership; pagination is explicit |
 | Monitor read scope | Monitor-filtered runs contain only that Monitor's observations; Dashboard uses compact run summaries |
 | ETF research | US ETF workflow uses ETF quote/technical/news/sentiment/macro facts without equity-only company calls |
+| OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD intervals skip known weekend/daily closures before Provider access and expose the next observation window |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
 [Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the

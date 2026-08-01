@@ -456,6 +456,12 @@ macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯�
 `0023` 之前的旧运行回执会明确标记 `observation_history_complete=false`，系统不会反推或
 伪造当时未保存的逐规则观察。
 
+Dukascopy `XAUUSD`/`XAGUSD` 的 `INTERVAL` Monitor 会在 Provider 公布的周五收盘至周日
+重开区间，以及每日维护休市时段，在访问行情前返回调度状态 `MARKET_CLOSED` 并把
+`next_due_at` 指向下一观察窗口。休市不是数据故障，因此不会再每小时制造新的
+`NOT_EVALUATED` run/event。IG Weekend Gold 等由经纪商独立形成的周末 CFD 报价不是
+Dukascopy XAUUSD，不能无披露替换现货 Monitor 的观察值。
+
 ### 3.15 Technical Engine v2（1 个新增工具，1 个升级工具）
 
 | 工具 | 能力与边界 |

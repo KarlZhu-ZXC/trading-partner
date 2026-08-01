@@ -125,6 +125,21 @@ def _us_post_market_monitor() -> MonitorDefinition:
     )
 
 
+def _xauusd_interval_monitor() -> MonitorDefinition:
+    monitor = _interval_monitor()
+    rule = replace(
+        monitor.rules[0],
+        instrument_id="commodity_spot:OTC:XAUUSD",
+    )
+    return replace(
+        monitor,
+        name="XAUUSD two-hour conditions",
+        primary_instrument_id="commodity_spot:OTC:XAUUSD",
+        interval_minutes=120,
+        rules=(rule,),
+    )
+
+
 class _USCalendar:
     def session_at(self, moment: datetime) -> MarketSession | None:
         if moment.date() == date(2026, 7, 29):
@@ -223,6 +238,68 @@ async def test_hourly_dispatch_skips_until_due_and_keeps_full_observations(
     assert skipped.next_due_at == NOW + timedelta(hours=4)
     assert market.get_market_snapshot.await_count == 1
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_xauusd_interval_waits_for_dukascopy_weekend_reopen_without_provider_call(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    saturday = datetime(2026, 8, 1, 11, 0, tzinfo=UTC)
+    sunday_reopen = datetime(2026, 8, 2, 22, 0, tzinfo=UTC)
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-weekend.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    repository.create(_xauusd_interval_monitor())
+    fixed_clock.set(saturday)
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock()
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+    notifications = MonitorNotificationService(
+        repository,
+        None,
+        fixed_clock,
+        enabled=False,
+        configured=False,
+    )
+    schedule = MonitorScheduleService()
+    dispatcher = MonitorDispatchService(
+        repository,
+        evaluator,
+        notifications,
+        schedule,
+        fixed_clock,
+    )
+
+    result = await dispatcher.run_due_intervals()
+    status = schedule.status(_xauusd_interval_monitor(), None, saturday)
+
+    assert result.disposition is MonitorDispatchDisposition.NO_DUE_MONITORS
+    assert result.next_due_at == sunday_reopen
+    assert status.health == "MARKET_CLOSED"
+    assert status.next_due_at == sunday_reopen
+    assert status.due is False
+    market.get_market_snapshot.assert_not_awaited()
+    engine.dispose()
+
+
+def test_xauusd_interval_waits_through_daily_dukascopy_break() -> None:
+    daily_break = datetime(2026, 8, 3, 21, 30, tzinfo=UTC)
+    status = MonitorScheduleService().status(
+        _xauusd_interval_monitor(),
+        None,
+        daily_break,
+    )
+
+    assert status.health == "MARKET_CLOSED"
+    assert status.next_due_at == datetime(2026, 8, 3, 22, 0, tzinfo=UTC)
+    assert status.due is False
 
 
 @pytest.mark.asyncio

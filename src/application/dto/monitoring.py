@@ -428,6 +428,7 @@ class MonitorDashboardItemDTO(_DTO):
     schedule_health: Literal[
         "ON_DEMAND",
         "MARKET_SCHEDULED",
+        "MARKET_CLOSED",
         "NEVER_RUN",
         "ON_SCHEDULE",
         "OVERDUE",

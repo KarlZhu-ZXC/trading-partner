@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from application.ports.market_session_calendar import MarketSessionCalendar
-from domain.monitoring.enums import MonitorCadence, MonitorRunStatus
+from domain.monitoring.enums import MonitorCadence, MonitorRuleType, MonitorRunStatus
 from domain.monitoring.models import MonitorDefinition, MonitorRun
+from domain.trade_plan.enums import TradePlanFactType
 
 MonitorScheduleHealth = Literal[
     "ON_DEMAND",
     "MARKET_SCHEDULED",
+    "MARKET_CLOSED",
     "NEVER_RUN",
     "ON_SCHEDULE",
     "OVERDUE",
@@ -66,6 +69,9 @@ class MonitorScheduleService:
         now: datetime,
     ) -> MonitorSchedule:
         assert monitor.interval_minutes is not None
+        reopens_at = _interval_market_reopens_at(monitor, now)
+        if reopens_at is not None:
+            return MonitorSchedule(reopens_at, False, "MARKET_CLOSED")
         if latest_run is None:
             next_due = monitor.created_at
             return MonitorSchedule(
@@ -112,3 +118,62 @@ class MonitorScheduleService:
             False,
             "ON_SCHEDULE",
         )
+
+
+_NEW_YORK = ZoneInfo("America/New_York")
+_DUKASCOPY_PRECIOUS_METALS = frozenset(
+    {
+        "commodity_spot:OTC:XAUUSD",
+        "commodity_spot:OTC:XAGUSD",
+    }
+)
+
+
+def _interval_market_reopens_at(
+    monitor: MonitorDefinition,
+    now: datetime,
+) -> datetime | None:
+    """Return the next known observation window for venue-scoped intervals.
+
+    Dukascopy publishes XAU/USD and XAG/USD on a New-York-aligned 24/5
+    schedule with a daily 17:00-18:00 ET break.  A closed venue is a scheduling
+    fact, not a failed market-data observation, so the dispatcher waits for the
+    next window instead of manufacturing recurring NOT_EVALUATED runs.
+    """
+    if any(
+        rule.rule_type
+        not in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
+        and rule.fact_type is not TradePlanFactType.PRICE
+        for rule in monitor.rules
+    ):
+        return None
+    instrument_ids = {
+        item
+        for item in (
+            monitor.primary_instrument_id,
+            *(rule.instrument_id for rule in monitor.rules),
+        )
+        if item is not None
+    }
+    if not instrument_ids or not instrument_ids.issubset(_DUKASCOPY_PRECIOUS_METALS):
+        return None
+
+    local = now.astimezone(_NEW_YORK)
+    weekday = local.weekday()
+    local_time = local.timetz().replace(tzinfo=None)
+    close = time(17)
+    reopen = time(18)
+
+    if weekday == 4 and local_time >= close:  # Friday close through Sunday reopen.
+        reopen_date = local.date() + timedelta(days=2)
+    elif weekday == 5:
+        reopen_date = local.date() + timedelta(days=1)
+    elif (weekday == 6 and local_time < reopen) or (
+        weekday in {0, 1, 2, 3} and close <= local_time < reopen
+    ):
+        reopen_date = local.date()
+    else:
+        return None
+    return datetime.combine(reopen_date, reopen, tzinfo=_NEW_YORK).astimezone(
+        now.tzinfo
+    )
