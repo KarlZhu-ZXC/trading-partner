@@ -24,6 +24,7 @@ docs/
 │   ├── phase3a-formal-futures-cross-asset-plan.md
 │   ├── phase3c-quantconnect-free-bridge.md
 │   ├── catalyst-agenda-and-scorecard-plan.md
+│   ├── product-capability-and-market-gap-review.md
 │   └── performance-attribution-and-console-plan.md
 ├── operations/
 │   ├── known-issues.md
@@ -63,6 +64,7 @@ docs/
 | [plans/phase3c-quantconnect-free-bridge.md](plans/phase3c-quantconnect-free-bridge.md) | Implemented zero-cost LEAN package/result-import bridge for user-operated QuantConnect Free backtests |
 | [plans/performance-attribution-and-console-plan.md](plans/performance-attribution-and-console-plan.md) | Staged real-performance attribution plan, QMT/FX deferral, and implemented local-console boundary |
 | [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Frozen durable Catalyst Agenda contract, free-source sequence, lean TDD, and Judgment Scorecard prerequisites |
+| [plans/product-capability-and-market-gap-review.md](plans/product-capability-and-market-gap-review.md) | Current user-facing capability inventory, comparable-product research, and bounded product-gap priorities |
 | [plans/mcp-surface-reduction-plan.md](plans/mcp-surface-reduction-plan.md) | Implemented compact v2 reduction from 52 legacy tools to the sole 28-tool runtime surface, with discriminated schemas and permission separation; the compatibility profile was removed |
 
 ## Operations

@@ -1,5 +1,10 @@
 # Unreleased
 
+- Published `compact-v11` without adding tools. Dukascopy XAUUSD/XAGUSD INTERVAL
+  Monitors now recognize the venue's New-York-aligned weekend closure and daily
+  maintenance break before Provider access, expose `MARKET_CLOSED` plus the next
+  observation window, and stop manufacturing recurring `NOT_EVALUATED` runs while
+  the venue is closed. Separately formed weekend CFD prices are not substituted.
 - Froze the Catalyst Agenda and Judgment Scorecard implementation plan: planned
   items remain separate from occurred Research Events, queries are durable-only,
   explicit free-provider refresh belongs to a deterministic CLI, source coverage

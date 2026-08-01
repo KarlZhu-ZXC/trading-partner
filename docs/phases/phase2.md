@@ -629,10 +629,17 @@ Deferred Monitoring extensions include announcement/filing deltas, earnings
 windows, technical-cross rules, capital-flow rules, snooze/cooldown policy, and
 market-specific due calendars.
 
+Dukascopy precious-metal INTERVAL schedules are the first venue-specific closed
+window exception. XAUUSD/XAGUSD skip the New-York-aligned weekend closure and daily
+17:00–18:00 ET maintenance break before Provider access. The dashboard reports
+`MARKET_CLOSED` with the next observation window; it does not persist a false
+`NOT_EVALUATED` transition merely because the venue is closed. Weekend CFDs remain
+separate instruments and cannot fill these spot observations.
+
 Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
-  operations and the current surface schema is `compact-v10`;
+  operations and the current surface schema is `compact-v11`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
   `0028_provider_route_history` pass
   clean upgrade/downgrade/upgrade checks;

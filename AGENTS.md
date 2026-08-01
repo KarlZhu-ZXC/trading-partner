@@ -210,6 +210,10 @@ and never invokes Codex or an LLM. A market group runs at most once per exchange
 session after close plus the configured delay. Every evaluated rule is stored as an
 immutable run observation, while events remain state-transition-only. Codex
 market-review Automations must not duplicate Monitor evaluation or alerts.
+Dukascopy XAUUSD/XAGUSD INTERVAL schedules are venue-aware: the dispatcher skips
+the published Friday-to-Sunday closure and daily maintenance break before Provider
+access, reports `MARKET_CLOSED`, and resumes at the next observation window. A
+separately formed weekend CFD quote must never be substituted for these spot IDs.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
 market-close run. Event alerts remain transition-only, while every evaluated
 A-share/US/KR post-market group emits one consolidated run summary even when no state

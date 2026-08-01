@@ -14,7 +14,7 @@ def build_system_adapters(
     *,
     surface_profile: str,
     public_tool_count: int,
-    surface_schema_version: str = "compact-v10",
+    surface_schema_version: str = "compact-v11",
 ) -> SimpleNamespace:
     """Build the compact system adapter."""
 

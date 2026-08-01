@@ -568,7 +568,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v10",
+            surface_schema_version="compact-v11",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),

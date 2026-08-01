@@ -57,6 +57,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
 - Create durable price, volume, technical, fundamental, company-event, macro, sentiment,
   Thesis-state, and portfolio-risk monitors with transition-only events.
+- Run venue-aware XAUUSD/XAGUSD interval monitoring that sleeps through known
+  Dukascopy weekend and maintenance closures instead of treating closure as a data failure.
 - Produce shared A-share/US/KR daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
 - Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
