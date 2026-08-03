@@ -11,6 +11,7 @@ from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthTokenInspector,
 )
 from infrastructure.system.process_file_lock import ProcessFileLock
+from interfaces.cli.schwab_oauth import _next_action
 
 
 def _token(path: Path, created_at: datetime) -> None:
@@ -153,3 +154,41 @@ def test_login_flow_raw_oauth_output_is_not_forwarded(
 
     assert result.state is SchwabOAuthFlowState.SUCCEEDED
     assert "must-not-leak" not in capsys.readouterr().out
+
+
+def test_next_action_uses_current_health_for_status_and_command_for_renew() -> None:
+    assert (
+        _next_action("status", "SUCCEEDED", SchwabOAuthHealthState.VALID)
+        == "NO_ACTION_TOKEN_VALID"
+    )
+    assert (
+        _next_action("status", "SUCCEEDED", SchwabOAuthHealthState.EXPIRING)
+        == "PLAN_ONE_RENEW_FLOW_BEFORE_DUE"
+    )
+    assert (
+        _next_action("status", "SUCCEEDED", SchwabOAuthHealthState.REAUTH_REQUIRED)
+        == "START_ONE_RENEW_FLOW"
+    )
+    assert (
+        _next_action("renew", "SUCCEEDED", SchwabOAuthHealthState.VALID)
+        == "RETRY_ACCOUNT_SYNC_ONCE"
+    )
+
+
+def test_next_action_keeps_flow_safety_and_no_retry_diagnostics() -> None:
+    assert (
+        _next_action("status", "ACTIVE", SchwabOAuthHealthState.VALID)
+        == "COMPLETE_EXISTING_BROWSER_TAB_DO_NOT_RERUN"
+    )
+    assert (
+        _next_action("status", "FAILED", SchwabOAuthHealthState.VALID)
+        == "CLOSE_OLD_TAB_THEN_EXPLICITLY_CONFIRM_NEW_FLOW"
+    )
+    assert (
+        _next_action("status", "SUCCEEDED", SchwabOAuthHealthState.DISABLED)
+        == "NO_RETRY_OAUTH_DISABLED"
+    )
+    assert (
+        _next_action("status", "SUCCEEDED", SchwabOAuthHealthState.UNAVAILABLE)
+        == "NO_RETRY_TOKEN_STATUS_UNAVAILABLE"
+    )

@@ -7,8 +7,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
-from application.dto.technical import TechnicalAnalysisDTO
+from application.dto.technical import (
+    TechnicalAnalysisDTO,
+    TechnicalAnalysisInput,
+    TechnicalChartInput,
+)
 from domain.common.enums import Market
 from domain.common.errors import ProviderNotConfigured
 from domain.market.models import MarketBar
@@ -95,4 +100,38 @@ def test_png_renderer_reports_missing_optional_chart_extra(
             instrument_id="equity:US:TEST",
             bars=bars,
             analysis=analysis,
+        )
+
+
+def test_technical_inputs_normalize_interval_aliases_and_publish_wire_enum() -> None:
+    analysis = TechnicalAnalysisInput(
+        instrument_id="equity:US:TEST",
+        intervals=(" DAILY ", "1Wk"),
+    )
+    chart = TechnicalChartInput(
+        instrument_id="equity:US:TEST",
+        interval=" weekly ",
+    )
+
+    assert analysis.intervals == ("1d", "1w")
+    assert chart.interval == "1w"
+    assert TechnicalAnalysisInput.model_json_schema()["properties"]["intervals"]["items"][
+        "enum"
+    ] == ["1d", "1w"]
+    assert TechnicalChartInput.model_json_schema()["properties"]["interval"]["enum"] == [
+        "1d",
+        "1w",
+    ]
+
+
+def test_technical_inputs_reject_unknown_or_duplicate_normalized_intervals() -> None:
+    with pytest.raises(ValidationError):
+        TechnicalAnalysisInput(
+            instrument_id="equity:US:TEST",
+            intervals=("daily", "1d"),
+        )
+    with pytest.raises(ValidationError):
+        TechnicalChartInput(
+            instrument_id="equity:US:TEST",
+            interval="2d",
         )

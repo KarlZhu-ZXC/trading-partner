@@ -1,10 +1,39 @@
 # Unreleased
 
+- Published `compact-v12` without adding tools. Technical snapshot/chart inputs now
+  publish the canonical `1d`/`1w` interval enum while accepting the conversational
+  aliases `daily`, `1wk`, `1week`, and `weekly` at the DTO boundary. Yahoo
+  current-quote recovery no longer combines a pre/post-market last price with stale
+  regular-session open/high/low/volume; those unsupported fields are null and carry
+  `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`. Schwab OAuth `status` now derives its
+  `next_action` from current token health, so an old successful authorization receipt
+  no longer tells the user to retry account sync.
+- Fixed Risk v2 for margin accounts: a legitimate negative cash ratio is now a
+  signed observed value and produces a `MINIMUM_CASH_PERCENT` breach instead of a
+  whole-result `DATA_CONTRACT_ERROR`; configured limits remain non-negative.
+- Compressed Telegram Monitor delivery for phone screens: price/time/source appear
+  once, each configured point keeps only state, condition, and a short human meaning,
+  shared unavailable-fact causes are deduplicated, and common Dukascopy provenance
+  codes collapse to one OTC/non-LBMA basis line. Full values and distances remain in
+  immutable Monitor Runs.
 - Published `compact-v11` without adding tools. Dukascopy XAUUSD/XAGUSD INTERVAL
   Monitors now recognize the venue's New-York-aligned weekend closure and daily
   maintenance break before Provider access, expose `MARKET_CLOSED` plus the next
   observation window, and stop manufacturing recurring `NOT_EVALUATED` runs while
-  the venue is closed. Separately formed weekend CFD prices are not substituted.
+  the venue is closed. An explicitly enabled, current-only Apify browser fallback
+  may evaluate XAUUSD price rules during IG's published Weekend Gold window. It is
+  labelled `ig_weekend_cfd`, never spot/LBMA, and supplies no bars or historical data.
+  Live Monitor freshness is now judged after the Provider request completes, so an
+  honest scrape timestamp no longer appears to be in the future relative to the run
+  start. Telegram transition cards include the prior observed price, price change,
+  the exact Provider source from the run receipt, every configured level, an explicit
+  weekend-proxy note, and a prominent red/green Unicode alert band when a rule newly
+  triggers or recovers.
+  The hourly due dispatcher no longer freezes a live Provider request to its
+  pre-fetch selection timestamp, which had made fresh IG scrape times appear to be
+  in the future. Whole-hour INTERVAL schedules are anchored to the run-start hour,
+  preventing Provider latency from turning a two-hour definition into a three-hour
+  effective cycle.
 - Froze the Catalyst Agenda and Judgment Scorecard implementation plan: planned
   items remain separate from occurred Research Events, queries are durable-only,
   explicit free-provider refresh belongs to a deterministic CLI, source coverage
@@ -157,7 +186,8 @@
   Monitor card hierarchy.
 - Reworked Telegram Monitor alerts for mobile screens: the symbol and observed
   price now lead the message, while complete rules render as vertical cards rather
-  than a fixed-width pseudo-table.
+  than a fixed-width pseudo-table. Transition cards also show the prior observed
+  price and change, and visually emphasize newly triggered or recovered levels.
 - Added durable run-linked A-share/US post-market Telegram summaries. Each evaluated
   market-close group now sends one consolidated heartbeat even when no rule changes;
   interval monitoring remains transition-only.

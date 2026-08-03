@@ -49,6 +49,28 @@ _CFD_WARNING = WarningInfo(
         "Identity remains cfd:OTC:COPPER_CMD_USD."
     ),
 )
+_IG_WEEKEND_WARNINGS = (
+    WarningInfo(
+        code="IG_WEEKEND_GOLD_CFD_FALLBACK",
+        message="Current quote uses IG Weekend Gold as the weekend fallback.",
+    ),
+    WarningInfo(
+        code="WEEKEND_PROXY_NOT_SPOT",
+        message="IG Weekend Gold is a separately formed CFD price, not XAUUSD spot.",
+    ),
+    WarningInfo(
+        code="IG_BROWSER_SCRAPE",
+        message="The quote was extracted deterministically from IG's public webpage.",
+    ),
+    WarningInfo(
+        code="PRICE_TIME_IS_SCRAPE_TIME",
+        message="The page exposes no authoritative quote timestamp; quote_at is scrape time.",
+    ),
+    WarningInfo(
+        code="IG_WEEKEND_PRICE_SEPARATE_FROM_WEEKDAY_SPOT",
+        message="IG forms weekend prices separately from its weekday gold market.",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +95,15 @@ def _warnings_for(instrument: Instrument) -> tuple[WarningInfo, ...]:
     if instrument.asset_type is AssetType.CFD:
         return _BASE_WARNINGS + (_CFD_WARNING,)
     return _BASE_WARNINGS
+
+
+def _quote_warnings(
+    instrument: Instrument,
+    observation: SpotObservationDTO,
+) -> tuple[WarningInfo, ...]:
+    if observation.venue_basis.value == "ig_weekend_cfd":
+        return _IG_WEEKEND_WARNINGS
+    return _warnings_for(instrument)
 
 
 def _require_otc_instrument(instrument: Instrument) -> None:
@@ -139,7 +170,8 @@ class CommoditySpotService:
             _require_otc_instrument(instrument)
             resolved = self._resolve_as_of(as_of)
             result = await self._provider.get_quote(instrument, resolved)
-            warnings = _warnings_for(instrument)
+            observation = SpotObservationDTO.from_domain(result.value)
+            warnings = _quote_warnings(instrument, observation)
             # Merge provider meta warning codes as structured WarningInfo if present.
             extra = tuple(
                 WarningInfo(code=code, message=code.replace("_", " ").lower())
@@ -148,7 +180,7 @@ class CommoditySpotService:
             )
             return CommoditySpotQuoteResult(
                 ok=True,
-                data=SpotObservationDTO.from_domain(result.value),
+                data=observation,
                 warnings=warnings + extra,
                 error=None,
                 meta=result.meta,

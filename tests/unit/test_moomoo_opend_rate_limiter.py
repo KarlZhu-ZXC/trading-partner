@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from infrastructure.providers.moomoo_rate_limiter import (
+    DEFAULT_MOOMOO_POLICIES,
     MoomooOpenDOperation,
     MoomooOpenDRateLimiter,
     SlidingWindowPolicy,
@@ -59,6 +60,13 @@ def test_operation_buckets_are_independent(tmp_path: Path) -> None:
     limiter.wait(MoomooOpenDOperation.WATCHLIST_MEMBERS)
 
     assert now[0] == 100.0
+
+
+def test_watchlist_member_policy_includes_opend_arrival_margin() -> None:
+    policy = DEFAULT_MOOMOO_POLICIES[MoomooOpenDOperation.WATCHLIST_MEMBERS]
+
+    assert policy.limit_count == 10
+    assert policy.window_seconds == 31.0
 
 
 def test_account_scopes_are_independent_and_required(tmp_path: Path) -> None:

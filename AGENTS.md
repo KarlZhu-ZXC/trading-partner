@@ -210,10 +210,17 @@ and never invokes Codex or an LLM. A market group runs at most once per exchange
 session after close plus the configured delay. Every evaluated rule is stored as an
 immutable run observation, while events remain state-transition-only. Codex
 market-review Automations must not duplicate Monitor evaluation or alerts.
+Successful whole-hour INTERVAL schedules are anchored to the run-start hour so
+Provider latency cannot turn a two-hour definition into a three-hour effective
+cycle. Due dispatch uses live evaluation time, not a pre-fetch historical cutoff.
 Dukascopy XAUUSD/XAGUSD INTERVAL schedules are venue-aware: the dispatcher skips
 the published Friday-to-Sunday closure and daily maintenance break before Provider
-access, reports `MARKET_CLOSED`, and resumes at the next observation window. A
-separately formed weekend CFD quote must never be substituted for these spot IDs.
+access, reports `MARKET_CLOSED`, and resumes at the next observation window. When
+explicitly enabled, current XAUUSD price rules may use a bounded Apify browser
+fallback during the published IG Weekend Gold window. The observation keeps the
+requested Monitor identity but must disclose `ig_weekend_cfd`, scrape time, and
+proxy/not-spot warnings; it never supplies bars, technicals, XAGUSD, or historical
+`as_of` facts and must never be presented as XAUUSD spot or LBMA gold.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
 market-close run. Event alerts remain transition-only, while every evaluated
 A-share/US/KR post-market group emits one consolidated run summary even when no state
@@ -221,13 +228,21 @@ changes; INTERVAL runs remain transition-only. Source and Outbox are committed
 atomically, retry is bounded, and expired messages are not delivered late.
 `trading-partner-monitor-notifications` provides
 secret-safe `status`, `test`, and `flush` operations without adding an MCP tool.
-Messages reuse the same run observations to include current price/time and every
-rule's condition, value, distance, severity, and state. Multiple same-Monitor
+Messages reuse the same run observations to include current price/time/source once,
+then every rule's state, condition, and bounded human meaning. Repeated values and
+distances remain available in the durable Run instead of being repeated on a phone
+screen; one shared unavailable-fact cause is rendered once. Multiple same-Monitor
 transitions in one run are delivered as one Telegram message without collapsing
 their durable Monitor events. Telegram does not support responsive tables, so the
 sender places symbol/current price in the first line, followed by the transition
-summary and mobile-first vertical rule cards. It does not generate or upload an
-image.
+summary and mobile-first vertical rule lines. Transition alerts include the prior
+observed price, price change, and the exact Provider source from the run receipt.
+Prominent red/green Unicode alert bands distinguish a newly triggered or recovered
+level because Telegram HTML cannot set text background colors. Common provenance
+warnings are condensed to a human-readable basis line without hiding typed errors.
+IG Weekend Gold cards
+explicitly describe the value as an XAUUSD weekend-volatility proxy rather than
+spot/LBMA. It does not generate or upload an image.
 
 **Phase 3D judgment-to-plan controls**
 
@@ -256,6 +271,8 @@ presented as official exchange common-stock breadth, and unavailable high/low or
 moving-average participation is never fabricated. For near-current non-closed
 requests, a stale Yahoo regular quote may be replaced only by a newer timestamped
 one-minute `includePrePost` bar with an explicit recovery/extended-hours warning;
+pre/post-market recovery establishes only the latest price/time, so
+open/high/low/volume stay null with `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`;
 historical `as_of` remains cutoff-safe and Yahoo is not presented as complete
 overnight equity coverage. Phase 1G combines current
 Yahoo/Alpha facts with separately based SEC reported facts and preserves filing
@@ -431,6 +448,14 @@ user guides, and historical archives.
 - Python 3.13, `uv`, hatchling, `src/` layout.
 - Codex owns architecture, naming, boundaries, and acceptance; delegate code
   implementation to grok Build when external implementation help is useful.
+- The project-scoped `deterministic_coder` custom subagent (`gpt-5.6-luna`,
+  `max`) is the preferred local executor for bounded deterministic code changes
+  after Codex has fixed architecture, file/module ownership, public contracts,
+  naming, and acceptance criteria. Assign it concrete files/responsibilities and
+  remind it that other agents and user edits share the worktree. It must not make
+  product or architecture decisions, broaden scope, commit, push, or perform
+  external side effects unless that exact action is explicitly delegated. Codex
+  reviews its diff and owns final verification and acceptance.
 - Do not assign code implementation to Claude Code / MiniMax.
 - Typed settings via `AppSettings`; project `.env` keys have no global prefix.
 - Entity IDs: `<prefix>_<uuid7>` via `uuid6.uuid7()`.

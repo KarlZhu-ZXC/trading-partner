@@ -404,7 +404,8 @@ async def test_quote_selects_latest_premarket_minute_bar() -> None:
             datetime(2026, 7, 24, 5, 7, tzinfo=NY),
             datetime(2026, 7, 24, 5, 14, tzinfo=NY),
         ],
-        closes=[230.33, 232.0],
+        # The recovered extended-hours price is above the stale regular high.
+        closes=[230.33, 234.0],
         regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
         regular_market_price=230.25,
         trading_period_at=as_of,
@@ -421,11 +422,16 @@ async def test_quote_selects_latest_premarket_minute_bar() -> None:
 
     assert len(transport.requests) == 2
     assert transport.requests[1].params["interval"] == "1m"
-    assert result.value.last == Decimal("232.0")
+    assert result.value.last == Decimal("234.0")
     assert result.value.quote_at == datetime(2026, 7, 24, 5, 14, tzinfo=NY)
     assert result.value.session.value == "pre_market"
     assert result.value.previous_close == Decimal("230.25")
     assert "EXTENDED_HOURS_PRICE" in result.meta.warnings
+    assert "EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE" in result.meta.warnings
+    assert result.value.open is None
+    assert result.value.high is None
+    assert result.value.low is None
+    assert result.value.volume is None
 
 
 @pytest.mark.asyncio
@@ -486,7 +492,7 @@ async def test_quote_uses_same_day_regular_close_as_postmarket_previous_close() 
     )
     intraday = _intraday_body(
         timestamps=[datetime(2026, 7, 23, 17, 5, tzinfo=NY)],
-        closes=[231.5],
+        closes=[234.0],
         regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
         regular_market_price=230.25,
         trading_period_at=as_of,
@@ -501,10 +507,15 @@ async def test_quote_uses_same_day_regular_close_as_postmarket_previous_close() 
 
     result = await adapter.get_quote(_instrument(), as_of)
 
-    assert result.value.last == Decimal("231.5")
+    assert result.value.last == Decimal("234.0")
     assert result.value.session.value == "post_market"
     assert result.value.previous_close == Decimal("230.25")
     assert "EXTENDED_HOURS_PRICE" in result.meta.warnings
+    assert "EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE" in result.meta.warnings
+    assert result.value.open is None
+    assert result.value.high is None
+    assert result.value.low is None
+    assert result.value.volume is None
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,11 @@ def _position(symbol: str, value: str, *, price_time: datetime | None = NOW) -> 
     )
 
 
-def _account(*positions: AccountPosition, currency: str = "USD") -> AccountSnapshot:
+def _account(
+    *positions: AccountPosition,
+    currency: str = "USD",
+    cash: Decimal = Decimal("100"),
+) -> AccountSnapshot:
     return AccountSnapshot(
         snapshot_id="snapshot_00000000-0000-7000-8000-000000000001",
         account_ref="acct_test",
@@ -65,7 +69,7 @@ def _account(*positions: AccountPosition, currency: str = "USD") -> AccountSnaps
         base_currency=currency,
         account_as_of=NOW - timedelta(minutes=5),
         fetched_at=NOW,
-        cash=Decimal("100"),
+        cash=cash,
         buying_power=Decimal("100"),
         net_assets=Decimal("1000"),
         margin_used=Decimal("0"),
@@ -130,6 +134,21 @@ async def test_missing_price_time_is_incomplete_not_pass() -> None:
     assert price_check.status is RiskCheckStatus.NOT_EVALUATED
     assert result.overall_status is RiskOverallStatus.INCOMPLETE
     assert "PRICE_TIME_UNAVAILABLE" in result.data_quality_codes
+
+
+@pytest.mark.asyncio
+async def test_negative_cash_ratio_is_a_breach_not_a_contract_error() -> None:
+    account = _account(_position("TTWO", "250"), cash=Decimal("-185.25"))
+    service = RiskEngineService(
+        _Accounts((account,)), _Policies(_policy(system_default=False))  # type: ignore[arg-type]
+    )
+
+    result, _ = await service.check(RiskCheckInput(), effective_as_of=NOW)
+
+    cash_check = next(item for item in result.checks if item.rule_code == "MINIMUM_CASH_PERCENT")
+    assert cash_check.actual == Decimal("-18.52500")
+    assert cash_check.status is RiskCheckStatus.BREACH
+    assert result.overall_status is RiskOverallStatus.BREACH
 
 
 def test_policy_update_is_versioned_and_idempotent(fixed_clock, id_generator) -> None:

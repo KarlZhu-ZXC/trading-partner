@@ -8,6 +8,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from application.ports.market_session_calendar import MarketSessionCalendar
+from domain.cross_asset.weekend_gold_hours import ig_weekend_gold_window
 from domain.monitoring.enums import MonitorCadence, MonitorRuleType, MonitorRunStatus
 from domain.monitoring.models import MonitorDefinition, MonitorRun
 from domain.trade_plan.enums import TradePlanFactType
@@ -37,11 +38,13 @@ class MonitorScheduleService:
         a_share_calendar: MarketSessionCalendar | None = None,
         kr_calendar: MarketSessionCalendar | None = None,
         post_market_delay_minutes: int = 10,
+        ig_weekend_gold_enabled: bool = False,
     ) -> None:
         self._us_calendar = us_calendar
         self._a_share_calendar = a_share_calendar
         self._kr_calendar = kr_calendar
         self._post_market_delay = timedelta(minutes=post_market_delay_minutes)
+        self._ig_weekend_gold_enabled = bool(ig_weekend_gold_enabled)
 
     def status(
         self,
@@ -62,14 +65,18 @@ class MonitorScheduleService:
             return MonitorSchedule(None, False, "MARKET_SCHEDULED")
         return self._market_status(monitor, latest_run, now, calendar)
 
-    @staticmethod
     def _interval_status(
+        self,
         monitor: MonitorDefinition,
         latest_run: MonitorRun | None,
         now: datetime,
     ) -> MonitorSchedule:
         assert monitor.interval_minutes is not None
-        reopens_at = _interval_market_reopens_at(monitor, now)
+        reopens_at = _interval_market_reopens_at(
+            monitor,
+            now,
+            ig_weekend_gold_enabled=self._ig_weekend_gold_enabled,
+        )
         if reopens_at is not None:
             return MonitorSchedule(reopens_at, False, "MARKET_CLOSED")
         if latest_run is None:
@@ -84,7 +91,15 @@ class MonitorScheduleService:
             if latest_run.status in {MonitorRunStatus.PARTIAL, MonitorRunStatus.FAILED}
             else monitor.interval_minutes
         )
-        next_due = latest_run.completed_at + timedelta(minutes=retry_minutes)
+        # INTERVAL definitions are whole-hour schedules and launchd wakes hourly.
+        # Anchor to the run-start hour so Provider latency (or an on-demand run at
+        # another minute) cannot slide a two-hour Monitor into a three-hour cycle.
+        interval_anchor = latest_run.started_at.replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        next_due = interval_anchor + timedelta(minutes=retry_minutes)
         due = now >= next_due
         return MonitorSchedule(next_due, due, "OVERDUE" if due else "ON_SCHEDULE")
 
@@ -132,6 +147,8 @@ _DUKASCOPY_PRECIOUS_METALS = frozenset(
 def _interval_market_reopens_at(
     monitor: MonitorDefinition,
     now: datetime,
+    *,
+    ig_weekend_gold_enabled: bool = False,
 ) -> datetime | None:
     """Return the next known observation window for venue-scoped intervals.
 
@@ -174,6 +191,17 @@ def _interval_market_reopens_at(
         reopen_date = local.date()
     else:
         return None
-    return datetime.combine(reopen_date, reopen, tzinfo=_NEW_YORK).astimezone(
+    dukascopy_reopens_at = datetime.combine(
+        reopen_date, reopen, tzinfo=_NEW_YORK
+    ).astimezone(
         now.tzinfo
     )
+    if (
+        ig_weekend_gold_enabled
+        and instrument_ids == {"commodity_spot:OTC:XAUUSD"}
+    ):
+        ig_window = ig_weekend_gold_window(now)
+        if ig_window.is_open:
+            return None
+        return min(dukascopy_reopens_at, ig_window.next_open_at)
+    return dukascopy_reopens_at

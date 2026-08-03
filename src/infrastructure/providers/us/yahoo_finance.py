@@ -74,6 +74,7 @@ _SESSION_CLOSE = time(16, 0)
 _KR_SESSION_CLOSE = time(15, 30)
 _CURRENT_QUOTE_CUTOFF_SECONDS = 300
 _EXTENDED_HOURS_PRICE_WARNING = "EXTENDED_HOURS_PRICE"
+_EXTENDED_HOURS_SESSION_RANGE_WARNING = "EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE"
 _INTRADAY_QUOTE_RECOVERY_WARNING = "INTRADAY_QUOTE_RECOVERY"
 _INTRADAY_QUOTE_UNAVAILABLE_WARNING = "INTRADAY_QUOTE_UNAVAILABLE"
 _PREVIOUS_CLOSE_RECOVERY_WARNING = "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY"
@@ -1088,12 +1089,26 @@ class YahooFinanceAdapter:
                         intraday_meta, quote_at, market=instrument.market
                     )
                     meta_session = quote_session
-                    additional_warnings.append(
-                        _EXTENDED_HOURS_PRICE_WARNING
-                        if quote_session
-                        in {TradingSession.PRE_MARKET, TradingSession.POST_MARKET}
-                        else _INTRADAY_QUOTE_RECOVERY_WARNING
-                    )
+                    if quote_session in {
+                        TradingSession.PRE_MARKET,
+                        TradingSession.POST_MARKET,
+                    }:
+                        # A single recovered minute only establishes the latest
+                        # extended-hours price/time.  The regular-session range
+                        # and volume are not valid for this quote, and the minute
+                        # bar itself cannot establish an extended-session range.
+                        open_ = None
+                        high = None
+                        low = None
+                        volume = None
+                        additional_warnings.extend(
+                            (
+                                _EXTENDED_HOURS_PRICE_WARNING,
+                                _EXTENDED_HOURS_SESSION_RANGE_WARNING,
+                            )
+                        )
+                    else:
+                        additional_warnings.append(_INTRADAY_QUOTE_RECOVERY_WARNING)
 
         previous_close, previous_close_recovered = self._previous_session_close(
             bars,

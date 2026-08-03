@@ -17,6 +17,11 @@ from domain.monitoring.models import MonitorNotificationOutboxEntry
 _MAX_RESPONSE_BYTES = 64_000
 _RULE_ROW_PATTERN = re.compile(r"\s{2,}")
 _CHANGE_PATTERN = re.compile(r"^\u2022 \[(?P<severity>[^]]+)] (?P<rule>.+?) \u2192 (?P<event>\S+)$")
+_COMPACT_CARD_PATTERN = re.compile(
+    r"^\u2022\s*状态：(?P<state>\S+)\s*·\s*"
+    r"条件：(?P<condition>.*?)\s*·\s*"
+    r"含义：(?P<meaning>.*?)(?:\s*·\s*级别：(?P<level>\S+))?$"
+)
 
 
 class TelegramMonitorNotificationAdapter:
@@ -146,31 +151,62 @@ def _format_notification_html(title: str, body: str) -> str:
         return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
 
     monitor_name = lines[0].strip() if lines else ""
+    symbol = _prefixed_value(lines, "标的：")
     price = _prefixed_value(lines, "当前价格：")
+    previous_valid_price = _prefixed_value(lines, "上一有效价格：")
+    price_basis = _prefixed_value(lines, "价格口径：")
     price_time = _prefixed_value(lines, "价格时间：")
+    data_source = _prefixed_value(lines, "数据来源：")
+    previous_price = _prefixed_value(lines, "上次价格：")
+    price_change = _prefixed_value(lines, "价格变化：")
     changes_start = lines.index("CHANGES") + 1 if "CHANGES" in lines else rules_index
     changes = lines[changes_start:rules_index]
-    rows, notes = _parse_rule_rows(lines[rules_index + 3 :])
+    rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
     if not rows:
         return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
+    compact_cards = any(len(row) >= 7 and not row[0] for row in rows)
 
-    sections = [f"<b>{html.escape(_headline_with_price(title, price))}</b>"]
-    if monitor_name:
+    display_price = price
+    if display_price in {None, "不可用", "N/A", "—"} and previous_valid_price is not None:
+        display_price = previous_valid_price
+        price_basis = price_basis or "上一有效价格（当前不可用）"
+    sections = [
+        f"<b>{html.escape(_headline_with_symbol_price(title, symbol, display_price))}</b>"
+    ]
+    if monitor_name and monitor_name != symbol and len(monitor_name) <= 48:
         sections.append(f"<i>{html.escape(monitor_name)}</i>")
-
-    price_lines: list[str] = []
-    if price is not None:
-        price_lines.append(f"💰 <b>当前价格：{html.escape(price)}</b>")
-    if price_time is not None:
-        price_lines.append(f"🕒 价格时间：{html.escape(_format_price_time(price_time))}")
-    if price_lines:
-        sections.append("\n".join(price_lines))
 
     formatted_changes = tuple(
         formatted for line in changes if (formatted := _format_change(line)) is not None
     )
     if formatted_changes:
-        sections.append("<b>本轮结果</b>\n" + "\n".join(formatted_changes))
+        sections.append(
+            _change_banner(changes)
+            + "\n"
+            + "\n".join(formatted_changes)
+            + "\n"
+            + _change_footer(changes)
+        )
+
+    price_lines: list[str] = []
+    # New compact messages already put the price in the first line. Keep the
+    # legacy duplicate for historical outbox bodies whose tests/users expect it.
+    if display_price is not None and not compact_cards:
+        price_lines.append(f"💰 <b>当前价格：{html.escape(display_price)}</b>")
+    if price_basis is not None:
+        price_lines.append(f"⚠️ 价格口径：{html.escape(price_basis)}")
+    if price_time is not None:
+        price_lines.append(f"🕒 价格时间：{html.escape(_format_price_time(price_time))}")
+    if data_source is not None:
+        price_lines.append(
+            f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>"
+        )
+    if previous_price is not None:
+        price_lines.append(f"↩️ 上次价格：{html.escape(previous_price)}")
+    if price_change is not None:
+        price_lines.append(f"📈 较上次：<b>{html.escape(price_change)}</b>")
+    if price_lines:
+        sections.append("\n".join(price_lines))
 
     sections.append("<b>全部监控规则</b>\n\n" + _format_rule_cards(rows))
     if notes:
@@ -188,7 +224,9 @@ def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
     if change_count == "0":
         summary.append("✅ 本轮无状态变化")
     elif change_count is not None:
-        summary.append(f"🔔 本轮状态变化：{html.escape(change_count)}")
+        summary.append(
+            f"🚨 <b>本轮出现 {html.escape(change_count)} 项新状态变化</b>"
+        )
     if summary:
         sections.append("\n".join(summary))
 
@@ -196,7 +234,16 @@ def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
     notes: list[str] = []
     while index < len(lines):
         if lines[index] != "MONITOR":
-            if lines[index].startswith(("数据提示：", "运行错误：", "期货价格")):
+            if lines[index].startswith(
+                (
+                    "数据提示：",
+                    "数据原因：",
+                    "运行错误：",
+                    "口径：",
+                    "期货价格",
+                    "周末口径：",
+                )
+            ):
                 notes.append(lines[index])
             index += 1
             continue
@@ -219,37 +266,81 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     name = lines[0].strip()
     symbol = _prefixed_value(lines, "标的：")
     price = _prefixed_value(lines, "当前价格：")
+    previous_valid_price = _prefixed_value(lines, "上一有效价格：")
+    price_basis = _prefixed_value(lines, "价格口径：")
     price_time = _prefixed_value(lines, "价格时间：")
+    data_source = _prefixed_value(lines, "数据来源：")
     try:
         rules_index = lines.index("RULES")
     except ValueError:
         return None
-    rows, _notes = _parse_rule_rows(lines[rules_index + 3 :])
+    rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
     if not rows:
         return None
     heading = symbol or name
-    if price is not None:
-        heading = f"{heading} · {price}"
+    display_price = price
+    if display_price in {None, "不可用", "N/A", "—"} and previous_valid_price is not None:
+        display_price = previous_valid_price
+        price_basis = price_basis or "上一有效价格（当前不可用）"
+    if display_price is not None:
+        heading = f"{heading} · {display_price}"
     parts = [f"<b>{html.escape(heading)}</b>"]
-    if name and name != symbol:
+    if name and name != symbol and len(name) <= 48:
         parts.append(f"<i>{html.escape(name)}</i>")
     if price_time is not None:
         parts.append(f"🕒 {html.escape(_format_price_time(price_time))}")
+    if data_source is not None:
+        parts.append(
+            f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>"
+        )
+    if price_basis is not None:
+        parts.append(f"⚠️ {html.escape(price_basis)}")
+    for note in notes:
+        if note not in {price_basis}:
+            parts.append(f"<i>{html.escape(note)}</i>")
     parts.append(_format_rule_cards(rows))
     return "\n".join(parts)
 
 
 def _parse_rule_rows(
     lines: list[str],
-) -> tuple[tuple[tuple[str, str, str, str, str, str], ...], tuple[str, ...]]:
-    rows: list[tuple[str, str, str, str, str, str]] = []
+) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]:
+    rows: list[tuple[str, ...]] = []
     notes: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped.startswith("数据提示：") or stripped.startswith("期货价格"):
+        compact_match = _COMPACT_CARD_PATTERN.fullmatch(stripped)
+        if compact_match is not None:
+            rows.append(
+                (
+                    "",
+                    compact_match.group("condition").strip(),
+                    "",
+                    "",
+                    compact_match.group("state").strip(),
+                    (compact_match.group("level") or "INFO").strip(),
+                    compact_match.group("meaning").strip(),
+                )
+            )
+            continue
+        if stripped.startswith(
+            (
+                "数据提示：",
+                "数据原因：",
+                "运行错误：",
+                "口径：",
+                "期货价格",
+                "周末口径：",
+                "价格口径：",
+            )
+        ):
             notes.append(stripped)
+            continue
+        if stripped == "RULES" or set(stripped) <= {"-", " "}:
+            continue
+        if stripped.startswith("RULE "):
             continue
         parts = tuple(_RULE_ROW_PATTERN.split(stripped, maxsplit=5))
         if len(parts) == 6:
@@ -263,25 +354,79 @@ def _format_change(line: str) -> str | None:
         return html.escape(line.strip()) if line.strip() else None
     event = match.group("event")
     emoji = _state_emoji(event)
+    rule = match.group("rule").strip()
+    if rule in {"状态变化", ""}:
+        return f"{emoji} <b>{html.escape(_state_label(event))}</b>"
     return (
-        f"{emoji} <code>{html.escape(match.group('rule'))}</code>"
+        f"{emoji} <code>{html.escape(rule)}</code>"
         f" · {html.escape(match.group('severity'))} · <b>{html.escape(event)}</b>"
     )
 
 
+def _change_banner(changes: list[str]) -> str:
+    event_types = {
+        match.group("event")
+        for line in changes
+        if (match := _CHANGE_PATTERN.fullmatch(line.strip())) is not None
+    }
+    if "TRIGGERED" in event_types:
+        return "🟥🟥🟥 <b>新触发点位</b> 🟥🟥🟥\n<b>状态较上次发生变化</b>"
+    if "RECOVERED" in event_types:
+        return "🟩🟩🟩 <b>触发点位已恢复</b> 🟩🟩🟩\n<b>状态较上次发生变化</b>"
+    return "🟨🟨🟨 <b>监控状态变化</b> 🟨🟨🟨"
+
+
+def _change_footer(changes: list[str]) -> str:
+    event_types = {
+        match.group("event")
+        for line in changes
+        if (match := _CHANGE_PATTERN.fullmatch(line.strip())) is not None
+    }
+    if "TRIGGERED" in event_types:
+        return "🟥🟥🟥🟥🟥🟥🟥🟥🟥"
+    if "RECOVERED" in event_types:
+        return "🟩🟩🟩🟩🟩🟩🟩🟩🟩"
+    return "🟨🟨🟨🟨🟨🟨🟨🟨🟨"
+
+
+def _display_source_names(value: str) -> str:
+    labels = {
+        "ig_weekend_gold": "IG Weekend Gold（Apify）",
+        "yfinance": "yfinance",
+    }
+    return ", ".join(labels.get(item.strip(), item.strip()) for item in value.split(","))
+
+
 def _format_rule_cards(
-    rows: tuple[tuple[str, str, str, str, str, str], ...],
+    rows: tuple[tuple[str, ...], ...],
 ) -> str:
     cards: list[str] = []
-    for rule, condition, value, distance, state, level in rows:
+    for row in rows:
+        rule, condition, value, distance, state, level = row[:6]
+        meaning = row[6] if len(row) >= 7 else None
+        header = (
+            f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
+            f" · <b>{html.escape(state)}</b>"
+        )
+        if level != "INFO":
+            header += f" · {html.escape(level)}"
+        if not rule and meaning is not None:
+            header = (
+                f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
+                f" · <b>{html.escape(_state_label(state))}</b>"
+            )
+            if level != "INFO":
+                header += f" · {html.escape(level)}"
+            cards.append(f"{header}\n含义：{html.escape(meaning)}")
+            continue
         cards.append(
             "\n".join(
                 (
-                    f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
-                    f" · <b>{html.escape(state)}</b> · {html.escape(level)}",
+                    header,
                     f"当前 <code>{html.escape(value)}</code>"
                     f" · {html.escape(_distance_label(condition, distance, state))}",
                     f"规则：<code>{html.escape(rule)}</code>",
+                    *(() if meaning is None else (f"含义：{html.escape(meaning)}",)),
                 )
             )
         )
@@ -295,6 +440,22 @@ def _headline_with_price(title: str, price: str | None) -> str:
     if not separator:
         return f"{title} · {price}"
     return f"{prefix} · {price} · {event}"
+
+
+def _headline_with_symbol_price(
+    title: str,
+    symbol: str | None,
+    price: str | None,
+) -> str:
+    headline = title
+    if symbol is not None and symbol.strip() and symbol.strip() not in title:
+        prefix, separator, event = title.rpartition(" · ")
+        headline = (
+            f"{prefix} · {symbol.strip()} · {event}"
+            if separator
+            else f"{title} · {symbol.strip()}"
+        )
+    return _headline_with_price(headline, price)
 
 
 def _format_price_time(value: str) -> str:
@@ -344,6 +505,15 @@ def _state_emoji(state: str) -> str:
         "RECOVERED": "🟢",
         "QUIET": "⚪️",
     }.get(state, "🔹")
+
+
+def _state_label(state: str) -> str:
+    return {
+        "TRIGGERED": "已触发",
+        "NOT_EVALUATED": "数据不可用",
+        "RECOVERED": "已恢复",
+        "QUIET": "未触发",
+    }.get(state, state)
 
 
 def _prefixed_value(lines: list[str], prefix: str) -> str | None:

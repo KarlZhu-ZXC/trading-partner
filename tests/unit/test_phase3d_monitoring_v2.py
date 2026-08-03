@@ -142,6 +142,7 @@ async def test_all_monitor_fact_categories_transition_and_deduplicate(tmp_path) 
         return_value=SimpleNamespace(
             ok=True,
             data=SimpleNamespace(last=Decimal("10"), quote_at=NOW),
+            sources=(),
             warnings=(),
             errors=(),
         )

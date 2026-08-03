@@ -163,6 +163,24 @@ def _require_amount(
     return value
 
 
+def _require_signed_amount(value: object, *, field: str) -> Decimal | int:
+    """Validate a finite numeric observation that may legitimately be negative."""
+
+    if type(value) is int:
+        return value
+    if type(value) is not Decimal:
+        raise DataContractError(
+            f"{field} must be Decimal or int",
+            details={"field": field, "type": type(value).__name__},
+        )
+    if not value.is_finite():
+        raise DataContractError(
+            f"{field} must be finite",
+            details={"field": field},
+        )
+    return value
+
+
 def _require_positive_decimal(value: object, *, field: str) -> Decimal:
     if type(value) is not Decimal:
         raise DataContractError(
@@ -323,7 +341,7 @@ class RiskCheck:
         if not isinstance(self.severity, RiskSeverity):
             raise DataContractError("severity must be RiskSeverity")
         if self.actual is not None:
-            _require_amount(self.actual, field="actual")
+            _require_signed_amount(self.actual, field="actual")
         if self.limit is not None:
             _require_amount(self.limit, field="limit")
         _require_text(self.unit, field="unit", maximum=64)

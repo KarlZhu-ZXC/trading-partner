@@ -49,7 +49,12 @@ class SlidingWindowPolicy:
 
 DEFAULT_MOOMOO_POLICIES: Mapping[MoomooOpenDOperation, SlidingWindowPolicy] = {
     MoomooOpenDOperation.WATCHLIST_GROUPS: SlidingWindowPolicy(10, 30.0),
-    MoomooOpenDOperation.WATCHLIST_MEMBERS: SlidingWindowPolicy(10, 30.0),
+    # Admission is recorded immediately before the SDK call, while OpenD starts
+    # its server-side window only after the request arrives. Full Watchlist
+    # refreshes fan out across many groups, so keep one second of release margin
+    # instead of reopening the next ten-call batch a few hundred milliseconds
+    # before OpenD's 30-second window has actually expired.
+    MoomooOpenDOperation.WATCHLIST_MEMBERS: SlidingWindowPolicy(10, 31.0),
     MoomooOpenDOperation.WATCHLIST_MODIFY: SlidingWindowPolicy(10, 30.0),
     MoomooOpenDOperation.ACCOUNT_FUNDS: SlidingWindowPolicy(10, 30.0, scoped=True),
     MoomooOpenDOperation.ACCOUNT_POSITIONS: SlidingWindowPolicy(10, 30.0, scoped=True),

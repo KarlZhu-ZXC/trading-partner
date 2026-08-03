@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -52,6 +53,18 @@ class _Fact:
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
     closed_session_last_known: bool = False
+    source_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _NotificationPriceContext:
+    instrument_id: str | None
+    symbol: str
+    price: str
+    price_time: str
+    current_available: bool
+    previous_price: Decimal | None = None
+    previous_price_time: datetime | None = None
 
 
 _RISK_RANK = {
@@ -59,6 +72,15 @@ _RISK_RANK = {
     RiskOverallStatus.WARN: 1,
     RiskOverallStatus.BREACH: 2,
 }
+
+_DUKASCOPY_PROVENANCE_WARNINGS = frozenset(
+    {
+        "DUKASCOPY_SWFX_NOT_LBMA",
+        "OTC_BROKER_FEED",
+        "VOLUME_BEST_BID_ASK_NOT_EXCHANGE",
+        "DUKASCOPY_MINUTE_CLOSE_QUOTE_PROXY",
+    }
+)
 
 
 class MonitorEvaluationService:
@@ -97,14 +119,18 @@ class MonitorEvaluationService:
         warnings = list(selection_warnings)
         errors: list[str] = []
         rules_evaluated = 0
+        previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] = {}
+        monitor_sources_by_monitor: dict[str, tuple[str, ...]] = {}
 
         for monitor in monitors:
             monitor_events: list[MonitorEvent] = []
             monitor_observations: list[MonitorRunObservation] = []
+            monitor_sources: list[str] = []
             previous = {
                 item.rule_code: item
                 for item in self._repository.get_rule_states(monitor.monitor_id)
             }
+            previous_states_by_monitor[monitor.monitor_id] = previous
             for rule in monitor.rules:
                 rules_evaluated += 1
                 if rule.rule_type in {
@@ -158,7 +184,12 @@ class MonitorEvaluationService:
                         generic_cache[cache_key] = fact
                 warnings.extend(fact.warning_codes)
                 errors.extend(fact.error_codes)
-                state = self._evaluate_rule(monitor, rule, fact, as_of)
+                monitor_sources.extend(fact.source_names)
+                # A live Provider request can finish after the run's request
+                # timestamp. Judge freshness at the actual evaluation moment;
+                # explicit historical ``as_of`` requests remain strict cutoffs.
+                evaluated_at = as_of if request.as_of is not None else self._clock.now()
+                state = self._evaluate_rule(monitor, rule, fact, evaluated_at)
                 states.append(state)
                 observation = _run_observation(
                     run_id=run_id,
@@ -166,7 +197,7 @@ class MonitorEvaluationService:
                     rule=rule,
                     fact=fact,
                     state=state,
-                    as_of=as_of,
+                    as_of=evaluated_at,
                 )
                 observations.append(observation)
                 monitor_observations.append(observation)
@@ -175,19 +206,28 @@ class MonitorEvaluationService:
                     rule,
                     previous.get(rule.rule_code),
                     state,
-                    as_of,
+                    evaluated_at,
                 )
                 if event is not None:
                     events.append(event)
                     monitor_events.append(event)
             if monitor_events:
+                monitor_sources_by_monitor[monitor.monitor_id] = tuple(
+                    dict.fromkeys(monitor_sources)
+                )
                 notifications.extend(
                     _notification_messages(
                         monitor,
                         tuple(monitor_events),
                         tuple(monitor_observations),
+                        previous,
+                        tuple(dict.fromkeys(monitor_sources)),
                         self._ids,
                     )
+                )
+            else:
+                monitor_sources_by_monitor[monitor.monitor_id] = tuple(
+                    dict.fromkeys(monitor_sources)
                 )
 
         warning_codes = tuple(dict.fromkeys(warnings))
@@ -228,7 +268,15 @@ class MonitorEvaluationService:
             }
             and monitors
         ):
-            notifications.append(_post_market_summary_message(run, monitors, self._ids))
+            notifications.append(
+                _post_market_summary_message(
+                    run,
+                    monitors,
+                    self._ids,
+                    previous_states_by_monitor=previous_states_by_monitor,
+                    monitor_sources_by_monitor=monitor_sources_by_monitor,
+                )
+            )
         return self._repository.record_evaluation(
             run,
             tuple(states),
@@ -288,6 +336,7 @@ class MonitorEvaluationService:
                         "CLOSED_SESSION_LAST_KNOWN"
                         in {item.code for item in a_share_envelope.warnings}
                     ),
+                    source_names=tuple(item.name for item in a_share_envelope.sources),
                 )
             return _Fact(
                 None,
@@ -320,6 +369,7 @@ class MonitorEvaluationService:
                             "CLOSED_SESSION_LAST_KNOWN"
                             in {item.code for item in market_envelope.warnings}
                         ),
+                        source_names=tuple(item.name for item in market_envelope.sources),
                     )
             return _Fact(
                 None,
@@ -532,6 +582,8 @@ def _notification_messages(
     monitor: MonitorDefinition,
     events: tuple[MonitorEvent, ...],
     observations: tuple[MonitorRunObservation, ...],
+    previous_states: dict[str, MonitorRuleState],
+    data_sources: tuple[str, ...],
     id_generator: IdGenerator,
 ) -> tuple[MonitorNotificationMessage, ...]:
     event_types = {event.event_type for event in events}
@@ -542,71 +594,70 @@ def _notification_messages(
         if MonitorEventType.NOT_EVALUATED in event_types
         else "✅"
     )
-    instrument_id = monitor.primary_instrument_id or next(
-        (item.instrument_id for item in observations if item.instrument_id is not None),
-        None,
-    )
-    symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id is not None else monitor.name
+    context = _notification_price_context(monitor, observations, previous_states)
     rules_by_code = {item.rule_code: item for item in monitor.rules}
-    price_observation = next(
-        (
-            item
-            for item in observations
-            if item.instrument_id == instrument_id
-            and item.observed_value is not None
-            and (
-                rules_by_code[item.rule_code].rule_type
-                in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
-                or rules_by_code[item.rule_code].fact_type is TradePlanFactType.PRICE
+    lines = [monitor.name, f"标的：{context.symbol}", f"当前价格：{context.price}"]
+    if not context.current_available and context.previous_price is not None:
+        lines.append("价格口径：上一有效价格（当前不可用）")
+    lines.append(f"价格时间：{context.price_time}")
+    if (
+        context.current_available and context.previous_price is not None
+    ):
+        current_price = Decimal(context.price)
+        price_change = current_price - context.previous_price
+        change_percent = (
+            price_change / context.previous_price * Decimal("100")
+            if context.previous_price != 0
+            else None
+        )
+        rendered_change = _signed_decimal(price_change)
+        if change_percent is not None:
+            rendered_change = f"{rendered_change} ({_signed_decimal(change_percent)}%)"
+        lines.extend(
+            (
+                f"上次价格：{context.previous_price}",
+                f"价格变化：{rendered_change}",
             )
-        ),
-        None,
-    )
-    current_price = (
-        str(price_observation.observed_value) if price_observation is not None else "不可用"
-    )
-    price_time = (
-        price_observation.fact_as_of.isoformat()
-        if price_observation is not None and price_observation.fact_as_of is not None
-        else "不可用"
-    )
-    lines = [monitor.name]
-    if price_observation is not None:
-        lines.extend((f"当前价格：{current_price}", f"价格时间：{price_time}"))
+        )
+    if data_sources:
+        lines.append(f"数据来源：{', '.join(data_sources)}")
     lines.append("CHANGES")
     lines.extend(
-        f"• [{event.severity.value}] {event.rule_code} → {event.event_type.value}"
+        f"• [{event.severity.value}] 状态变化 → {event.event_type.value}"
         for event in events
     )
-    table_rows: list[tuple[str, ...]] = []
+    lines.append("RULES")
     for observation in observations:
         rule = rules_by_code[observation.rule_code]
-        observed = (
-            str(observation.observed_value) if observation.observed_value is not None else "不可用"
-        )
-        distance = (
-            str(observation.distance_value) if observation.distance_value is not None else "不可用"
-        )
-        table_rows.append(
-            (
-                observation.rule_code,
-                _rule_condition(rule),
-                observed,
-                distance,
-                observation.state.value,
-                observation.severity.value,
-            )
-        )
-    lines.extend(("RULES", _format_rule_table(tuple(table_rows))))
+        lines.append(_format_notification_rule_card(rule, observation))
     warning_codes = tuple(
         dict.fromkeys(code for observation in observations for code in observation.warning_codes)
     )
-    if warning_codes:
-        lines.append(f"数据提示：{', '.join(warning_codes)}")
-    if instrument_id is not None and instrument_id.startswith("future:"):
+    error_codes = tuple(
+        dict.fromkeys(code for observation in observations for code in observation.error_codes)
+    )
+    not_evaluated = tuple(
+        item for item in observations if item.state is MonitorRuleStateValue.NOT_EVALUATED
+    )
+    if error_codes:
+        lines.append(f"数据原因：{', '.join(error_codes)}")
+    elif not_evaluated:
+        causes = tuple(dict.fromkeys(item.message for item in not_evaluated))
+        lines.append(f"数据原因：{'; '.join(_notification_text(item, 160) for item in causes)}")
+    provenance_line, remaining_warning_codes = _notification_warning_lines(warning_codes)
+    if provenance_line:
+        lines.append(provenance_line)
+    if remaining_warning_codes:
+        lines.append(f"数据提示：{', '.join(remaining_warning_codes)}")
+    if "IG_WEEKEND_GOLD_CFD_FALLBACK" in warning_codes:
+        lines.append(
+            "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；"
+            "不是现货黄金或 LBMA 基准价。"
+        )
+    if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
-    event_label = events[0].event_type.value if len(events) == 1 else f"{len(events)} 项状态变化"
-    title = f"{emoji} {symbol} · {event_label}"
+    event_label = _notification_event_label(events)
+    title = f"{emoji} {context.symbol} · {event_label}"
     body = "\n".join(lines)
     return tuple(
         MonitorNotificationMessage(
@@ -622,10 +673,178 @@ def _notification_messages(
     )
 
 
+def _signed_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return f"+{rendered}" if value > 0 else rendered
+
+
+def _notification_event_label(events: tuple[MonitorEvent, ...]) -> str:
+    if len(events) != 1:
+        return f"{len(events)}项变化"
+    return {
+        MonitorEventType.TRIGGERED: "新触发",
+        MonitorEventType.RECOVERED: "已恢复",
+        MonitorEventType.NOT_EVALUATED: "数据不可用",
+    }[events[0].event_type]
+
+
+def _notification_text(value: str, maximum: int) -> str:
+    """Keep human-authored/provider text single-line and bounded in notices."""
+    compact = " ".join(value.split())
+    compact = compact.replace("·", "/").replace("｜", "/")
+    if len(compact) <= maximum:
+        return compact
+    return compact[: maximum - 1].rstrip() + "…"
+
+
+def _notification_warning_lines(
+    warning_codes: tuple[str, ...],
+) -> tuple[str | None, tuple[str, ...]]:
+    provenance = _DUKASCOPY_PROVENANCE_WARNINGS.intersection(warning_codes)
+    remaining = tuple(code for code in warning_codes if code not in provenance)
+    return (
+        "口径：Dukascopy OTC，非 LBMA" if provenance else None,
+        remaining,
+    )
+
+
+def _rule_meaning(description: str | None) -> str:
+    """Use the first human-readable clause as the compact card meaning."""
+    if description is None or not description.strip():
+        return "未提供规则说明"
+    compact = " ".join(description.split())
+    first_clause = re.split(r"[。！？!?；;]", compact, maxsplit=1)[0].strip()
+    return _notification_text(first_clause or compact, 32)
+
+
+def _format_notification_rule_card(
+    rule: MonitorRule,
+    observation: MonitorRunObservation,
+) -> str:
+    # A compact, delimiter-based line is intentionally not a Markdown/fixed-width
+    # table. The Telegram adapter parses this shape while retaining the legacy
+    # table parser for already persisted outbox bodies.
+    parts = [
+        f"• 状态：{observation.state.value}",
+        f"条件：{_notification_text(_rule_condition(rule), 96)}",
+        f"含义：{_rule_meaning(rule.description)}",
+    ]
+    if observation.severity.value != "INFO":
+        parts.append(f"级别：{_short_severity(observation.severity.value)}")
+    return " · ".join(parts)
+
+
+def _short_severity(value: str) -> str:
+    return {"MEDIUM": "M", "HIGH": "H"}.get(value, value)
+
+
+def _notification_price_context(
+    monitor: MonitorDefinition,
+    observations: tuple[MonitorRunObservation, ...],
+    previous_states: dict[str, MonitorRuleState] | None = None,
+) -> _NotificationPriceContext:
+    rules_by_code = {item.rule_code: item for item in monitor.rules}
+
+    def is_price_rule(observation: MonitorRunObservation) -> bool:
+        rule = rules_by_code.get(observation.rule_code)
+        return bool(
+            rule is not None
+            and (
+                rule.rule_type in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
+                or rule.fact_type is TradePlanFactType.PRICE
+            )
+        )
+
+    instrument_id = monitor.primary_instrument_id or next(
+        (item.instrument_id for item in observations if is_price_rule(item)),
+        None,
+    )
+    if instrument_id is None:
+        instrument_id = next(
+            (item.instrument_id for item in observations if item.instrument_id is not None),
+            None,
+        )
+    symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id else monitor.name
+    candidates = tuple(
+        item
+        for item in observations
+        if is_price_rule(item) and item.instrument_id == instrument_id
+    )
+    current = next((item for item in candidates if item.observed_value is not None), None)
+    previous: MonitorRuleState | None = None
+    if previous_states:
+        previous = next(
+            (
+                previous_states.get(item.rule_code)
+                for item in candidates
+                if previous_states.get(item.rule_code) is not None
+                and previous_states[item.rule_code].observed_value is not None
+            ),
+            None,
+        )
+        if previous is None:
+            previous = next(
+                (
+                    state
+                    for code, state in previous_states.items()
+                    if state.observed_value is not None
+                    and rules_by_code.get(code) is not None
+                    and (
+                        rules_by_code[code].rule_type
+                        in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
+                        or rules_by_code[code].fact_type is TradePlanFactType.PRICE
+                    )
+                ),
+                None,
+            )
+    if current is not None:
+        return _NotificationPriceContext(
+            instrument_id=instrument_id,
+            symbol=symbol,
+            price=str(current.observed_value),
+            price_time=(
+                current.fact_as_of.isoformat() if current.fact_as_of is not None else "不可用"
+            ),
+            current_available=True,
+            previous_price=(previous.observed_value if previous is not None else None),
+            previous_price_time=(previous.fact_as_of if previous is not None else None),
+        )
+    if previous is not None:
+        return _NotificationPriceContext(
+            instrument_id=instrument_id,
+            symbol=symbol,
+            price=str(previous.observed_value),
+            price_time=(
+                previous.fact_as_of.isoformat()
+                if previous.fact_as_of is not None
+                else "不可用"
+            ),
+            current_available=False,
+            previous_price=previous.observed_value,
+            previous_price_time=previous.fact_as_of,
+        )
+    return _NotificationPriceContext(
+        instrument_id=instrument_id,
+        symbol=symbol,
+        price="不可用",
+        price_time=(
+            candidates[0].fact_as_of.isoformat()
+            if candidates and candidates[0].fact_as_of is not None
+            else "不可用"
+        ),
+        current_available=False,
+    )
+
+
 def _post_market_summary_message(
     run: MonitorRun,
     monitors: tuple[MonitorDefinition, ...],
     id_generator: IdGenerator,
+    *,
+    previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] | None = None,
+    monitor_sources_by_monitor: dict[str, tuple[str, ...]] | None = None,
 ) -> MonitorNotificationMessage:
     if run.cadence is MonitorCadence.A_SHARE_POST_MARKET:
         market_label = "A股"
@@ -648,28 +867,81 @@ def _post_market_summary_message(
     }
     for monitor in monitors:
         observations = observations_by_monitor[monitor.monitor_id]
-        instrument_id, symbol, price, price_time = _monitor_price_context(
+        context = _notification_price_context(
             monitor,
             observations,
+            (previous_states_by_monitor or {}).get(monitor.monitor_id),
         )
         lines.extend(
             (
                 "MONITOR",
                 monitor.name,
-                f"标的：{symbol}",
-                f"当前价格：{price}",
-                f"价格时间：{price_time}",
+                f"标的：{context.symbol}",
+                f"当前价格：{context.price}",
+                *(() if context.current_available else ("价格口径：上一有效价格（当前不可用）",)),
+                f"价格时间：{context.price_time}",
+                *(
+                    (
+                        "数据来源："
+                        + ", ".join(
+                            (monitor_sources_by_monitor or {}).get(monitor.monitor_id, ())
+                        ),
+                    )
+                    if (monitor_sources_by_monitor or {}).get(monitor.monitor_id)
+                    else ()
+                ),
                 "RULES",
-                _format_rule_table(_notification_rule_rows(monitor, observations)),
-                "END_MONITOR",
             )
         )
-        if instrument_id is not None and instrument_id.startswith("future:"):
+        lines.extend(
+            _format_notification_rule_card(
+                {item.rule_code: item for item in monitor.rules}[observation.rule_code],
+                observation,
+            )
+            for observation in observations
+        )
+        lines.append("END_MONITOR")
+        if context.instrument_id is not None and context.instrument_id.startswith("future:"):
             lines.append("期货价格并非现货；连续合约存在换月风险。")
-    if run.warning_codes:
-        lines.append(f"数据提示：{', '.join(run.warning_codes)}")
-    if run.error_codes:
-        lines.append(f"运行错误：{', '.join(run.error_codes)}")
+    all_not_evaluated = tuple(
+        item
+        for item in run.observations
+        if item.state is MonitorRuleStateValue.NOT_EVALUATED
+    )
+    causes = tuple(
+        dict.fromkeys(
+            code
+            for item in all_not_evaluated
+            for code in (
+                *item.error_codes,
+                *tuple(
+                    warning
+                    for warning in item.warning_codes
+                    if warning not in _DUKASCOPY_PROVENANCE_WARNINGS
+                ),
+            )
+        )
+    )
+    if causes:
+        lines.append(f"数据原因：{', '.join(causes)}")
+    elif all_not_evaluated:
+        lines.append(
+            "数据原因："
+            + "; ".join(
+                _notification_text(message, 160)
+                for message in dict.fromkeys(item.message for item in all_not_evaluated)
+            )
+        )
+    cause_codes = set(causes)
+    provenance_line, remaining_warning_codes = _notification_warning_lines(run.warning_codes)
+    if provenance_line:
+        lines.append(provenance_line)
+    warning_codes = tuple(code for code in remaining_warning_codes if code not in cause_codes)
+    error_codes = tuple(code for code in run.error_codes if code not in cause_codes)
+    if warning_codes:
+        lines.append(f"数据提示：{', '.join(warning_codes)}")
+    if error_codes:
+        lines.append(f"运行错误：{', '.join(error_codes)}")
     return MonitorNotificationMessage(
         notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
         source_event_id=None,
@@ -684,34 +956,10 @@ def _post_market_summary_message(
 def _monitor_price_context(
     monitor: MonitorDefinition,
     observations: tuple[MonitorRunObservation, ...],
+    previous_states: dict[str, MonitorRuleState] | None = None,
 ) -> tuple[str | None, str, str, str]:
-    instrument_id = monitor.primary_instrument_id or next(
-        (item.instrument_id for item in observations if item.instrument_id is not None),
-        None,
-    )
-    symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id else monitor.name
-    rules_by_code = {item.rule_code: item for item in monitor.rules}
-    price_observation = next(
-        (
-            item
-            for item in observations
-            if item.instrument_id == instrument_id
-            and item.observed_value is not None
-            and (
-                rules_by_code[item.rule_code].rule_type
-                in {MonitorRuleType.PRICE_ABOVE, MonitorRuleType.PRICE_BELOW}
-                or rules_by_code[item.rule_code].fact_type is TradePlanFactType.PRICE
-            )
-        ),
-        None,
-    )
-    price = str(price_observation.observed_value) if price_observation is not None else "不可用"
-    price_time = (
-        price_observation.fact_as_of.isoformat()
-        if price_observation is not None and price_observation.fact_as_of is not None
-        else "不可用"
-    )
-    return instrument_id, symbol, price, price_time
+    context = _notification_price_context(monitor, observations, previous_states)
+    return context.instrument_id, context.symbol, context.price, context.price_time
 
 
 def _notification_rule_rows(

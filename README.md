@@ -58,7 +58,9 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Create durable price, volume, technical, fundamental, company-event, macro, sentiment,
   Thesis-state, and portfolio-risk monitors with transition-only events.
 - Run venue-aware XAUUSD/XAGUSD interval monitoring that sleeps through known
-  Dukascopy weekend and maintenance closures instead of treating closure as a data failure.
+  Dukascopy closures. An optional Apify browser fallback may evaluate current
+  XAUUSD rules during the published IG Weekend Gold window, always labelled as
+  a separately formed weekend CFD proxy rather than spot or LBMA gold.
 - Produce shared A-share/US/KR daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
 - Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
@@ -287,8 +289,10 @@ flowchart TB
         CME[CME public reference<br/>contracts · settlement · curve]
         DCE[DCE public EOD<br/>live-hog contracts · settlement]
         Jetta[Dukascopy Jetta keyless<br/>XAUUSD · XAGUSD · rolling copper CFD]
+        IGWeekend[IG Weekend Gold via Apify browser<br/>current XAUUSD fallback · CFD proxy label]
         Legacy[optional legacy Dukascopy key API]
         Jetta -. failure with configured key .-> Legacy
+        Jetta -. published weekend window .-> IGWeekend
     end
 
     subgraph Personal[Personal read-only context]
@@ -313,6 +317,7 @@ flowchart TB
     Router --> CME
     Router --> DCE
     Router --> Jetta
+    Router --> IGWeekend
     App --> Accounts
     App --> Watchlists
     Router --> Hot

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 from domain.common.enums import Market
 from domain.common.time import require_aware_datetime
@@ -17,11 +17,31 @@ class _FrozenForbid(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
 
 
+def _normalize_interval(value: object) -> object:
+    """Normalize conversational technical intervals to the wire values."""
+    if isinstance(value, str):
+        return {
+            "1d": "1d",
+            "daily": "1d",
+            "1w": "1w",
+            "1wk": "1w",
+            "1week": "1w",
+            "weekly": "1w",
+        }.get(value.strip().casefold(), value.strip().casefold())
+    return value
+
+
+TechnicalIntervalInput = Annotated[
+    Literal["1d", "1w"],
+    BeforeValidator(_normalize_interval),
+]
+
+
 class TechnicalAnalysisInput(_FrozenForbid):
     instrument_id: str = Field(min_length=1, max_length=160)
     as_of: datetime | None = None
     lookback_sessions: int = Field(default=260, ge=60, le=1000)
-    intervals: tuple[str, ...] = ("1d", "1w")
+    intervals: tuple[TechnicalIntervalInput, ...] = ("1d", "1w")
 
     @field_validator("as_of")
     @classmethod
@@ -32,18 +52,18 @@ class TechnicalAnalysisInput(_FrozenForbid):
 
     @field_validator("intervals")
     @classmethod
-    def _intervals(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def _intervals(
+        cls, value: tuple[TechnicalIntervalInput, ...]
+    ) -> tuple[TechnicalIntervalInput, ...]:
         if not value or len(value) > 2 or len(set(value)) != len(value):
             raise ValueError("intervals must contain one or two unique values")
-        if any(item not in {"1d", "1w"} for item in value):
-            raise ValueError("intervals values must be 1d or 1w")
         return value
 
 
 class TechnicalChartInput(_FrozenForbid):
     instrument_id: str = Field(min_length=1, max_length=160)
     as_of: datetime | None = None
-    interval: str = "1d"
+    interval: TechnicalIntervalInput = "1d"
     lookback_sessions: int = Field(default=160, ge=60, le=500)
 
     @field_validator("as_of")
@@ -55,9 +75,7 @@ class TechnicalChartInput(_FrozenForbid):
 
     @field_validator("interval")
     @classmethod
-    def _interval(cls, value: str) -> str:
-        if value not in {"1d", "1w"}:
-            raise ValueError("interval must be 1d or 1w")
+    def _interval(cls, value: TechnicalIntervalInput) -> TechnicalIntervalInput:
         return value
 
 

@@ -12,11 +12,14 @@ from sqlalchemy import create_engine
 
 from application.dto.monitor_notifications import NotificationSendReceipt
 from application.dto.monitoring import MonitorEvaluateInput, MonitorRuleInput
-from application.dto.tool_envelope import ToolEnvelope
+from application.dto.tool_envelope import SourceReference, ToolEnvelope
 from application.dto.us_market import USQuoteDTO
-from application.services.monitor_evaluation_service import MonitorEvaluationService
+from application.services.monitor_evaluation_service import (
+    MonitorEvaluationService,
+    _rule_meaning,
+)
 from application.services.monitor_notification_service import MonitorNotificationService
-from domain.common.enums import Freshness, TradingSession
+from domain.common.enums import Freshness, SourceRole, TradingSession
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorNotificationChannel,
@@ -108,6 +111,9 @@ def test_monitor_notification_formats_price_first_mobile_rule_cards() -> None:
     body = """Gold monitor
 当前价格：4078.3
 价格时间：2026-07-29T08:51:19-04:00
+上次价格：4081.2
+价格变化：-2.9 (-0.07%)
+数据来源：ig_weekend_gold
 CHANGES
 • [MEDIUM] GC_PULLBACK_ALERT_4080 → TRIGGERED
 RULES
@@ -116,6 +122,7 @@ RULE                      COND    VALUE   DIST   STATE      LEVEL
 GC_PULLBACK_ALERT_4080    < 4080  4078.3  -1.7   TRIGGERED  MEDIUM
 GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
 数据提示：DELAYED_US_DATA, FUTURES_CONTRACT_NOT_SPOT
+周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；不是现货黄金或 LBMA 基准价。
 """
 
     rendered = _format_notification_html(
@@ -126,7 +133,12 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
     assert rendered.startswith("<b>🚨 GC=F · 4078.3 · TRIGGERED</b>")
     assert "💰 <b>当前价格：4078.3</b>" in rendered
     assert "🕒 价格时间：2026-07-29 08:51 UTC-04:00" in rendered
-    assert "<b>本轮结果</b>" in rendered
+    assert "↩️ 上次价格：4081.2" in rendered
+    assert "📈 较上次：<b>-2.9 (-0.07%)</b>" in rendered
+    assert "🟥🟥🟥 <b>新触发点位</b> 🟥🟥🟥" in rendered
+    assert "<b>状态较上次发生变化</b>" in rendered
+    assert "🟥🟥🟥🟥🟥🟥🟥🟥🟥" in rendered
+    assert "📡 数据来源：<b>IG Weekend Gold（Apify）</b>" in rendered
     assert "🔴 <code>GC_PULLBACK_ALERT_4080</code>" in rendered
     assert "<b>全部监控规则</b>" in rendered
     assert "🔴 <b>&lt; 4080</b> · <b>TRIGGERED</b> · MEDIUM" in rendered
@@ -136,7 +148,8 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
     assert "规则：<code>GC_STRUCTURE_FAIL_3940</code>" in rendered
     assert "<pre>" not in rendered
     assert "数据提示：DELAYED_US_DATA" in rendered
-    assert rendered.index("当前价格") < rendered.index("<b>本轮结果</b>")
+    assert "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理" in rendered
+    assert rendered.index("新触发点位") < rendered.index("当前价格")
 
 
 def test_post_market_digest_formats_zero_change_run_as_mobile_cards() -> None:
@@ -170,6 +183,59 @@ END_MONITOR
     assert "距触发 2.97" in rendered
     assert "数据提示：EXTENDED_HOURS_PRICE" in rendered
     assert "<pre>" not in rendered
+
+
+def test_compact_notification_cards_escape_text_and_share_data_cause() -> None:
+    body = """Long <monitor>
+标的：GC=F
+当前价格：不可用
+上一有效价格：4081.2
+价格口径：上一有效价格（当前不可用）
+价格时间：2026-07-29T08:51:19-04:00
+CHANGES
+• [HIGH] 状态变化 → NOT_EVALUATED
+RULES
+• 状态：NOT_EVALUATED · 条件：< 4080 · 含义：<script>alert(1)</script> · 级别：HIGH
+• 状态：NOT_EVALUATED · 条件：> 4000 · 含义：另一个规则 · 级别：MEDIUM
+数据原因：QUOTE_MISSING
+"""
+
+    rendered = _format_notification_html(
+        title="⚠️ GC=F · NOT_EVALUATED",
+        body=body,
+    )
+
+    assert rendered.startswith("<b>⚠️ GC=F · 4081.2 · NOT_EVALUATED</b>")
+    assert "⚠️ 价格口径：上一有效价格（当前不可用）" in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "QUOTE_MISSING" in rendered
+    assert rendered.count("QUOTE_MISSING") == 1
+    assert "💰 <b>当前价格：4081.2</b>" not in rendered
+    assert "<b>数据不可用</b>" in rendered
+    assert "GC_PULLBACK" not in rendered
+    assert "<pre>" not in rendered
+
+
+def test_rule_meaning_and_dukascopy_provenance_are_bounded() -> None:
+    meaning = _rule_meaning(
+        "黄金价格回落至关键支撑区域并触发风控提醒，后续观察确认且风险敞口仍然升高。"
+    )
+    assert len(meaning) <= 32
+    assert meaning.endswith("…")
+
+    body = """Monitor
+标的：XAUUSD
+当前价格：2400
+价格时间：2026-08-03T12:00:00+00:00
+CHANGES
+• [MEDIUM] 状态变化 → TRIGGERED
+RULES
+• 状态：TRIGGERED · 条件：< 2500 · 含义：观察黄金回落 · 级别：M
+口径：Dukascopy OTC，非 LBMA
+"""
+    rendered = _format_notification_html("🚨 XAUUSD · TRIGGERED", body)
+    assert "口径：Dukascopy OTC，非 LBMA" in rendered
+    assert "DUKASCOPY_SWFX_NOT_LBMA" not in rendered
 
 
 @pytest.mark.asyncio
@@ -220,7 +286,7 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
         as_of=NOW,
         fetched_at=NOW,
         freshness=Freshness.FRESH,
-        sources=(),
+        sources=(SourceReference(name="yfinance", role=SourceRole.PRIMARY),),
         data=USQuoteDTO(
             instrument_id="future:US:GC=F",
             quote_at=NOW,
@@ -269,6 +335,11 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     counts_before = repository.notification_counts(
         MonitorNotificationChannel.TELEGRAM
     )
+    pending = repository.list_due_notifications(
+        MonitorNotificationChannel.TELEGRAM, NOW, 20
+    )
+    transition = next(item for item in pending if item.source_event_id is not None)
+    assert "数据来源：yfinance" in transition.body
     delivery = await service.flush_pending()
     second_run = await evaluator.evaluate(request)
     second_delivery = await service.flush_pending()
@@ -284,7 +355,8 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     assert second_delivery.delivered == 1
     assert counts_after == {MonitorNotificationStatus.DELIVERED: 4}
     messages = tuple(call.args[0] for call in sender.send.await_args_list)
-    assert any("GC_PULLBACK_ALERT_4080" in item.body for item in messages)
+    assert any("含义：黄金回落至 4080 下方提醒" in item.body for item in messages)
+    assert any("2项变化" in item.title for item in messages)
     digests = tuple(
         item for item in messages if item.body.startswith("POST_MARKET_SUMMARY")
     )

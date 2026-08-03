@@ -30,6 +30,7 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorRuleStateValue,
     MonitorRuleType,
+    MonitorRunStatus,
     MonitorSeverity,
     MonitorStatus,
 )
@@ -235,8 +236,81 @@ async def test_hourly_dispatch_skips_until_due_and_keeps_full_observations(
     assert persisted is not None
     assert persisted.observations[0].rule_code == "gold_floor"
     assert skipped.disposition is MonitorDispatchDisposition.NO_DUE_MONITORS
-    assert skipped.next_due_at == NOW + timedelta(hours=4)
+    assert skipped.next_due_at == NOW.replace(minute=0) + timedelta(hours=4)
     assert market.get_market_snapshot.await_count == 1
+    engine.dispose()
+
+
+def test_interval_schedule_does_not_drift_past_hourly_wake() -> None:
+    monitor = _interval_monitor()
+    latest = MagicMock()
+    latest.status = MonitorRunStatus.SUCCEEDED
+    latest.started_at = NOW + timedelta(seconds=20)
+
+    status = MonitorScheduleService().status(
+        monitor,
+        latest,
+        NOW + timedelta(hours=4, seconds=10),
+    )
+
+    assert status.next_due_at == NOW.replace(minute=0) + timedelta(hours=4)
+    assert status.due is True
+    assert status.health == "OVERDUE"
+
+
+@pytest.mark.asyncio
+async def test_due_dispatch_uses_live_evaluation_time_after_provider_returns(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-live-time.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    repository.create(_interval_monitor())
+    fixed_clock.set(NOW)
+
+    async def live_quote(_request):
+        observed_at = NOW + timedelta(seconds=1)
+        fixed_clock.set(observed_at)
+        quote = _quote()
+        assert quote.data is not None
+        return quote.model_copy(
+            update={
+                "as_of": observed_at,
+                "fetched_at": observed_at,
+                "data": quote.data.model_copy(update={"quote_at": observed_at}),
+            }
+        )
+
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(side_effect=live_quote)
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+    dispatcher = MonitorDispatchService(
+        repository,
+        evaluator,
+        MonitorNotificationService(
+            repository,
+            None,
+            fixed_clock,
+            enabled=False,
+            configured=False,
+        ),
+        MonitorScheduleService(),
+        fixed_clock,
+    )
+
+    result = await dispatcher.run_due_intervals()
+
+    assert result.run is not None
+    assert result.run.status is MonitorRunStatus.SUCCEEDED
+    assert result.run.observations[0].state is MonitorRuleStateValue.TRIGGERED
+    assert result.run.observations[0].fact_age_seconds == 0
     engine.dispose()
 
 
@@ -299,6 +373,31 @@ def test_xauusd_interval_waits_through_daily_dukascopy_break() -> None:
 
     assert status.health == "MARKET_CLOSED"
     assert status.next_due_at == datetime(2026, 8, 3, 22, 0, tzinfo=UTC)
+    assert status.due is False
+
+
+def test_xauusd_interval_is_due_during_enabled_ig_weekend_window() -> None:
+    saturday = datetime(2026, 8, 1, 11, 0, tzinfo=UTC)
+    status = MonitorScheduleService(ig_weekend_gold_enabled=True).status(
+        _xauusd_interval_monitor(),
+        None,
+        saturday,
+    )
+
+    assert status.health == "OVERDUE"
+    assert status.due is True
+
+
+def test_xauusd_interval_waits_for_ig_open_after_friday_close() -> None:
+    friday = datetime(2026, 7, 31, 22, 0, tzinfo=UTC)
+    status = MonitorScheduleService(ig_weekend_gold_enabled=True).status(
+        _xauusd_interval_monitor(),
+        None,
+        friday,
+    )
+
+    assert status.health == "MARKET_CLOSED"
+    assert status.next_due_at == datetime(2026, 8, 1, 7, 0, tzinfo=UTC)
     assert status.due is False
 
 

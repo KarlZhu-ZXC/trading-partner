@@ -286,6 +286,8 @@ class VendorId(StrEnum):
     DCE_OFFICIAL = "dce_official"
     # Phase 3A Dukascopy Jetta (OTC metals / rolling CFDs); old key API is fallback-only.
     DUKASCOPY = "dukascopy"
+    # IG Weekend Gold browser observation obtained through a bounded Apify Actor.
+    IG_WEEKEND_GOLD = "ig_weekend_gold"
     ALPHA_VANTAGE = "alpha_vantage"
     SEC_EDGAR = "sec_edgar"
     FRED = "fred"
