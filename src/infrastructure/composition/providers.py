@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from application.ports.a_share_trading_calendar import AShareTradingCalendar
 from application.ports.account_provider import AccountProvider
 from application.ports.clock import Clock
+from application.ports.commodity_spot_provider import CommoditySpotProvider
 from application.ports.http_transport import HttpTransport
 from application.ports.id_generator import IdGenerator
 from application.ports.provider_route_history_store import ProviderRouteHistoryStore
@@ -50,6 +51,10 @@ from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
 from infrastructure.providers.cross_asset.cme_public_client import CmePublicAdapter
 from infrastructure.providers.cross_asset.dce_official_client import DceOfficialAdapter
 from infrastructure.providers.cross_asset.dukascopy_client import DukascopySpotAdapter
+from infrastructure.providers.cross_asset.ig_weekend_gold import (
+    IGWeekendGoldApifyAdapter,
+    WeekendGoldFallbackSpotAdapter,
+)
 from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDRateLimiter
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.router_engine import ProviderRouterEngine
@@ -95,6 +100,7 @@ class ProviderInfrastructure:
     cme_public: CmePublicAdapter
     dce_official: DceOfficialAdapter
     dukascopy: DukascopySpotAdapter
+    commodity_spot: CommoditySpotProvider
     schwab_account: SchwabAccountAdapter
     moomoo_account: MoomooAccountAdapter
     manual_account: ManualCsvAccountAdapter
@@ -306,9 +312,25 @@ def build_provider_infrastructure(
         timeout_seconds=market_timeout,
         proxy_configured=settings.provider_proxy_url is not None,
     )
+    ig_weekend_gold = IGWeekendGoldApifyAdapter(
+        a_share_transport,
+        clock=clock,
+        enabled=settings.ig_weekend_gold_enabled,
+        api_token=settings.apify_api_token,
+        actor_id=settings.ig_weekend_gold_actor_id,
+        cache_ttl_seconds=settings.ig_weekend_gold_cache_ttl_seconds,
+        max_charge_usd=settings.ig_weekend_gold_max_charge_usd,
+        timeout_seconds=settings.ig_weekend_gold_timeout_seconds,
+    )
+    commodity_spot = WeekendGoldFallbackSpotAdapter(
+        dukascopy,
+        ig_weekend_gold,
+        clock=clock,
+    )
     registry.register(VendorId.CME_PUBLIC, cme_public)
     registry.register(VendorId.DCE_OFFICIAL, dce_official)
     registry.register(VendorId.DUKASCOPY, dukascopy)
+    registry.register(VendorId.IG_WEEKEND_GOLD, ig_weekend_gold)
     registry.register(
         VendorId.ALPHA_VANTAGE,
         AlphaVantageResearchAdapter(
@@ -473,6 +495,7 @@ def build_provider_infrastructure(
         cme_public=cme_public,
         dce_official=dce_official,
         dukascopy=dukascopy,
+        commodity_spot=commodity_spot,
         schwab_account=schwab_account,
         moomoo_account=moomoo_account,
         manual_account=manual_account,

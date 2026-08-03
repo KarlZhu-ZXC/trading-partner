@@ -532,6 +532,11 @@ def test_d5b_resilience_defaults() -> None:
     }
     assert s.reddit_apify_max_charge_usd == Decimal("0.20")
     assert s.apify_api_token is None
+    assert s.ig_weekend_gold_enabled is False
+    assert s.ig_weekend_gold_actor_id == "apify/web-scraper"
+    assert s.ig_weekend_gold_cache_ttl_seconds == 600
+    assert s.ig_weekend_gold_max_charge_usd == Decimal("0.03")
+    assert s.ig_weekend_gold_timeout_seconds == 120.0
     assert s.moomoo_sentiment_enabled is True
 
 

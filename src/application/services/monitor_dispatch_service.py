@@ -77,7 +77,6 @@ class MonitorDispatchService:
                 MonitorEvaluateInput(
                     monitor_ids=monitor_ids,
                     cadence=cadence,
-                    as_of=now,
                 )
             )
             runs.append(MonitorRunDTO.from_domain(run))

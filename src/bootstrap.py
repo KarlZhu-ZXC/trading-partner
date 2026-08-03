@@ -316,6 +316,10 @@ def build_application(
             "cross_asset.cme_reference": lambda: True,
             "cross_asset.dce_eod": lambda: True,
             "cross_asset.dukascopy_spot": lambda: settings.dukascopy_enabled,
+            "cross_asset.ig_weekend_gold": lambda: (
+                not settings.ig_weekend_gold_enabled
+                or settings.apify_api_token is not None
+            ),
         },
     )
 
@@ -339,7 +343,7 @@ def build_application(
     market_timeout = settings.provider_timeout_market_seconds
     cme_public_adapter = provider_infrastructure.cme_public
     dce_official_adapter = provider_infrastructure.dce_official
-    dukascopy_adapter = provider_infrastructure.dukascopy
+    commodity_spot_adapter = provider_infrastructure.commodity_spot
     schwab_account_provider = provider_infrastructure.schwab_account
     moomoo_account_provider = provider_infrastructure.moomoo_account
     watchlist_source_provider = provider_infrastructure.watchlist_source
@@ -404,7 +408,10 @@ def build_application(
         contract_service=futures_contract_service,
         clock=clock,
     )
-    commodity_spot_service = CommoditySpotService(provider=dukascopy_adapter, clock=clock)
+    commodity_spot_service = CommoditySpotService(
+        provider=commodity_spot_adapter,
+        clock=clock,
+    )
     yahoo_instrument_directory = YahooInstrumentDirectoryAdapter(
         a_share_transport, clock=clock,
         enabled=settings.yfinance_enabled,
@@ -757,6 +764,9 @@ def build_application(
         a_share_calendar=AShareMarketSessionCalendarAdapter(a_share_calendar),
         kr_calendar=XkrxMarketSessionCalendar(),
         post_market_delay_minutes=settings.post_market_sync_delay_minutes,
+        ig_weekend_gold_enabled=(
+            settings.ig_weekend_gold_enabled and settings.apify_api_token is not None
+        ),
     )
     monitor_service = MonitorService(
         monitor_repository,

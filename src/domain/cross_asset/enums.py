@@ -62,6 +62,7 @@ class SpotVenueBasis(StrEnum):
     """How a spot observation is sourced; never re-label broker feed as LBMA."""
 
     DUKASCOPY_SWFX = "dukascopy_swfx"
+    IG_WEEKEND_CFD = "ig_weekend_cfd"
     AGGREGATED_OTC = "aggregated_otc"
     EXCHANGE_REFERENCE = "exchange_reference"
     UNKNOWN = "unknown"

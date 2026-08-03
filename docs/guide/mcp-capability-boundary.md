@@ -451,6 +451,9 @@ A 股/美股/韩股盘后组，未到期时不请求 Provider；韩股使用 XKR
 执行一次。Codex 的盘后/市场复盘 Automation 不再调用 Monitor 工具，也不重复发送告警。
 macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯一的每小时 launchd
 唤醒器。它直接运行确定性 CLI，不启动 Codex、不调用 LLM，因此不会产生 Codex token 用量。
+`INTERVAL` 是整小时槽位：成功 run 以启动小时为锚点计算下一次到期，避免 Provider 的几十秒
+耗时让两小时定义错过 `:05` 唤醒而滑成三小时；partial/failed run 在下一小时槽重试。
+`due` 发起的是实时评估，不把 Provider 请求前的筛选时刻冒充历史 `as_of` cutoff。
 每次实际评估都会持久化所有规则的观察值、阈值、距离、事实时间/年龄和错误；事件仍只在
 状态迁移时创建，二者不再混为一谈。
 `0023` 之前的旧运行回执会明确标记 `observation_history_complete=false`，系统不会反推或
@@ -459,8 +462,11 @@ macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯�
 Dukascopy `XAUUSD`/`XAGUSD` 的 `INTERVAL` Monitor 会在 Provider 公布的周五收盘至周日
 重开区间，以及每日维护休市时段，在访问行情前返回调度状态 `MARKET_CLOSED` 并把
 `next_due_at` 指向下一观察窗口。休市不是数据故障，因此不会再每小时制造新的
-`NOT_EVALUATED` run/event。IG Weekend Gold 等由经纪商独立形成的周末 CFD 报价不是
-Dukascopy XAUUSD，不能无披露替换现货 Monitor 的观察值。
+`NOT_EVALUATED` run/event。若显式启用 `IG_WEEKEND_GOLD_ENABLED` 且配置 Apify，XAUUSD
+价格规则可在 IG 公布的 Weekend Gold 时段使用一次受限浏览器抓取；结果强制标记
+`ig_weekend_cfd`、抓取时间、`WEEKEND_PROXY_NOT_SPOT`，不能称为 XAUUSD 现货或 LBMA
+黄金。该 fallback 不支持 XAGUSD、历史 `as_of`、K 线或技术指标；抓取失败仍回到
+Dukascopy 最近观察并由原有 freshness 规则决定是否 `NOT_EVALUATED`。
 
 ### 3.15 Technical Engine v2（1 个新增工具，1 个升级工具）
 
@@ -468,6 +474,9 @@ Dukascopy XAUUSD，不能无披露替换现货 Monitor 的观察值。
 |---|---|
 | `technical_get_snapshot` | 对 A 股、美股或韩股标的返回日线/周线标准指标、四类状态、结构位和近期 K 线形态 |
 | `technical_render_chart` | 返回同一数据口径的审计 envelope，并直接附带 PNG K线、成交量与 RSI 图 |
+
+公开 schema 使用规范周期 `1d`/`1w`；对话输入中的 `daily`、`1wk`、`1week`、`weekly`
+会在 DTO 边界归一化，输出仍只返回规范值。
 
 美股与韩股使用 Yahoo 拆股与分红调整日线，A 股使用前复权日线；周线由同一批日线按 ISO 周聚合，避免
 重复请求 Provider。标准指标由 TA-Lib 计算，支撑/阻力由项目自有的五根 K 线摆动点与
@@ -533,8 +542,10 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`。
 - 对接近当前时刻且 Yahoo 常规报价字段已经过时的请求，项目只在非闭市时补查带
   `includePrePost` 的 1 分钟线，并按时间戳选更新观察值。盘前/盘后价格明确附带
-  `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`；补查
-  失败则附带 `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近已知常规值。历史 `as_of` 不走这条
+  `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`。补查
+  得到盘前/盘后最新价时，只能证明该价格和时间；`open/high/low/volume` 返回空值并附带
+  `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`，不会再混入日盘区间。补查失败则附带
+  `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近已知常规值。历史 `as_of` 不走这条
   current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。
 - Yahoo 的本地 admission control 允许有界的 KO + SPY/QQQ/IWM 组合并发；这只是防止
   Router 自己误拒绝请求，不代表对 Yahoo 上游额度的声明。闭市时保留真实 timestamp-based
@@ -611,6 +622,8 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
 
 - `uv run trading-partner-schwab-auth status` 只读取安全的 token 年龄和 OAuth
   会话状态，不刷新 token、不打印 token/path/client ID，也不打开浏览器。
+  `next_action` 以当前 token 健康状态为准；历史 `flow.state=SUCCEEDED` 不再让普通
+  `status` 错误提示重新同步账户。只有本次 `renew` 成功后才提示重试一次同步。
 - 重新授权只运行一次 `uv run trading-partner-schwab-auth renew`。该命令持有跨进程锁，
   并保存不含凭据的 OAuth 会话状态。若已有授权在进行，后续调用只返回同一活动会话，
   不会再创建 OAuth state 或标签页。用户只操作该命令刚刚打开的新标签，关闭或忽略更早
@@ -653,18 +666,23 @@ Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具�
 交易日发送一条合并摘要，即使本轮没有状态变化。INTERVAL 相同状态的重复观测只写 run，
 不重复通知。失败消息保留在 Outbox 中进行有限重试；超过消息 TTL 后转为过期，避免旧
 报警延迟送达。`PROVIDER_PROXY_URL` 如有设置，也用于 Telegram Bot API。
-消息直接复用同一次 run 的 observations，显示标的当前观察价格/时间以及该 Monitor 的全部
-规则条件、级别、观察值、距离和状态，不会为了排版再次调用行情 Provider。同一 Monitor
-在同一 run 中出现多项状态变化时合并为一条 Telegram 消息，底层 event 仍逐条持久化。
-Telegram 不支持 Markdown 表格，因此通过 `sendMessage` 先用普通 HTML 展示本轮状态变化，
-首行直接展示标的与当前价格，再用移动端纵向卡片展示价格时间、本轮变化和完整规则。数据 warning 与期货
-口径说明保留为可换行的普通正文。该过程不生成或上传图片，也不调用 LLM。
+消息直接复用同一次 run 的 observations，不会为了排版再次调用行情 Provider。首行展示
+标的与当前价格；价格时间与来源只显示一次。每个监控点位只保留状态、条件和有界的人类
+可读含义，逐规则观察值与距离仍可在 immutable Monitor Run 中审计，不在手机屏幕重复。
+共同的不可评估原因只解释一次，常见 Provider 口径 warning 可压缩成人话，但 typed error
+不得隐藏。同一 Monitor 在同一 run 中出现多项状态变化时合并为一条 Telegram 消息，底层
+event 仍逐条持久化。Telegram 不支持响应式表格，因此使用可换行的普通 HTML；新触发或
+恢复会显示醒目的红色/绿色 Unicode 警报条，且不伪造 CSS 红底。IG Weekend Gold 仍明确
+标为 XAUUSD 周末波动代理。该过程不生成或上传图片，也不调用 LLM。
 
 ```bash
 uv run trading-partner-monitor-notifications status
 uv run trading-partner-monitor-notifications test
 uv run trading-partner-monitor-notifications flush
 ```
+
+`test` 会发送一张明确标注“非真实监控事件”的完整移动端样式预览，便于检查数据来源、
+状态变化警报条和规则卡片的 Telegram 实际渲染；它不写 Monitor event 或 Outbox。
 
 命令与回执不会显示 Bot Token、Chat ID、代理凭据或完整 Telegram 请求 URL。Telegram
 送达不等于 Monitor event 已确认或解决，也没有任何交易执行效果。

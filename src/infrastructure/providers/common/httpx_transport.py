@@ -238,6 +238,12 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
     ),
     _AllowEntry(
         "api.apify.com",
+        "/v2/acts/apify~web-scraper/runs",
+        _MatchMode.EXACT,
+        frozenset({"POST"}),
+    ),
+    _AllowEntry(
+        "api.apify.com",
         "/v2/actor-runs/",
         _MatchMode.PREFIX,
         frozenset({"GET"}),
@@ -771,6 +777,7 @@ class HttpxTransport:
             lower = key.lower().strip()
             apify_auth_path = (
                 path == "/v2/acts/harshmaur~reddit-scraper/runs"
+                or path == "/v2/acts/apify~web-scraper/runs"
                 or path.startswith("/v2/actor-runs/")
                 or path.startswith("/v2/datasets/")
             )

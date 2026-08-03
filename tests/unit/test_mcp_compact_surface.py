@@ -91,6 +91,17 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_technical_tools_publish_canonical_interval_enums() -> None:
+    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+
+    snapshot = tools["technical_get_snapshot"].inputSchema["properties"]
+    chart = tools["technical_render_chart"].inputSchema["properties"]
+
+    assert snapshot["intervals"]["items"]["enum"] == ["1d", "1w"]
+    assert chart["interval"]["enum"] == ["1d", "1w"]
+
+
+@pytest.mark.asyncio
 async def test_registry_and_mcp_transport_publish_identical_contracts() -> None:
     container = _container()
     registry_tools = {
@@ -252,7 +263,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v11",
+        "surface_schema_version": "compact-v12",
     }
 
 

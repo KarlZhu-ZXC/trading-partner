@@ -580,7 +580,10 @@ database schedule and latest run for INTERVAL plus A-share/US/KR post-market gro
 an early wake does not fetch facts, each market group runs at most once after that
 exchange session's close plus the configured delay, and no Codex Automation needs
 to evaluate Monitor rules. Partial/failed interval runs retry on the next hourly
-wake; successful interval runs wait for their configured whole-hour interval. The
+wake; successful interval runs wait for their configured whole-hour interval,
+anchored to the run-start hour so Provider latency cannot cause an extra-hour drift.
+Due dispatch uses live evaluation time rather than treating the pre-fetch selection
+time as an explicit historical cutoff. The
 launchd job wakes at minute 5 of each hour and invokes only this local deterministic
 path, so it consumes no Codex/LLM tokens. Monitor definitions, complete per-rule run observations, latest
 states, transition events, and resolutions are durable; all runs have
@@ -595,16 +598,23 @@ Monitor event. Delivery is deterministic and local—no
 Codex task or LLM is involved. Failed deliveries use bounded retry, Telegram `429`
 respects `retry_after`, and events older than the configured TTL expire instead of
 arriving as misleading late alerts.
-Each message reuses the exact same run observations to show the instrument's
-current observed price/time and the Monitor's complete rule table: condition,
-severity, observed value, distance, and state. It never performs a second quote
-request for presentation. Multiple transitions for one Monitor in one run are
-batched into one Telegram message; the underlying events remain separate and
-auditable.
+Each message reuses the exact same run observations and never performs a second
+quote request for presentation. Price, fact time, and Provider source are shown
+once at the top. Every configured point remains visible as a compact state,
+condition, and bounded human meaning; repeated observed values and distances stay
+in the durable Run rather than being repeated on a phone screen. A shared
+`NOT_EVALUATED` cause is shown once. Multiple transitions for one Monitor in one
+run are batched into one Telegram message; the underlying events remain separate
+and auditable.
 Telegram does not support responsive tables, so the sender uses a price-first
-headline and mobile-first vertical rule cards. Current price/time, complete rules,
-warnings, and basis notes remain normal wrapping text. It does not generate or
-upload an image and does not invoke an LLM.
+headline and mobile-first vertical rule lines. Transition alerts include the prior
+observed price, price change, and exact Provider source from the run receipt. They
+show a prominent red/green Unicode alert band when a monitored level newly triggers
+or recovers because Telegram HTML cannot set a text background color. Common source
+provenance warnings are condensed into a human-readable basis line; true errors are
+not hidden. IG Weekend Gold fallback messages explicitly say
+that the value is an XAUUSD weekend-volatility proxy rather than spot/LBMA. It does
+not generate or upload an image and does not invoke an LLM.
 
 ```bash
 uv run trading-partner-monitor-notifications status
@@ -633,13 +643,15 @@ Dukascopy precious-metal INTERVAL schedules are the first venue-specific closed
 window exception. XAUUSD/XAGUSD skip the New-York-aligned weekend closure and daily
 17:00–18:00 ET maintenance break before Provider access. The dashboard reports
 `MARKET_CLOSED` with the next observation window; it does not persist a false
-`NOT_EVALUATED` transition merely because the venue is closed. Weekend CFDs remain
-separate instruments and cannot fill these spot observations.
+`NOT_EVALUATED` transition merely because the venue is closed. An optional,
+current-only IG Weekend Gold browser fallback can evaluate XAUUSD price rules inside
+IG's own weekend window, but the observation remains explicitly labelled as a
+separate CFD proxy and never supplies spot bars, technicals, or historical facts.
 
 Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
-  operations and the current surface schema is `compact-v11`;
+  operations and the current surface schema is `compact-v12`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
   `0028_provider_route_history` pass
   clean upgrade/downgrade/upgrade checks;

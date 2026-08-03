@@ -115,7 +115,10 @@ For near-current non-closed US requests, a stale Yahoo regular quote may be
 replaced only by a newer timestamped one-minute `includePrePost` bar. Preserve
 `EXTENDED_HOURS_PRICE`, `INTRADAY_QUOTE_RECOVERY`, or
 `INTRADAY_QUOTE_UNAVAILABLE`; do not describe Yahoo extended-hours coverage as a
-complete overnight equity market. Historical `as_of` requests stay cutoff-safe.
+complete overnight equity market. When the replacement is pre/post-market, only
+its latest price/time is established: open/high/low/volume remain null and
+`EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE` is preserved. Historical `as_of`
+requests stay cutoff-safe.
 Treat the returned `previous_close` as the session-aware previous completed regular
 session close. The adapter never maps Yahoo `chartPreviousClose` or
 `regularMarketPreviousClose` directly to this field; when a temporarily null daily
@@ -246,6 +249,10 @@ request, follow this fixed foreground protocol:
    confirms that may you run
    `uv run trading-partner-schwab-auth renew --confirm-new-flow` once.
 5. After `SUCCEEDED`, retry the failed account sync once.
+
+For a plain `status` command, follow its current `token_health` and `next_action`.
+An old `flow.state=SUCCEEDED` is historical context and does not by itself authorize
+or require another account refresh.
 
 The legacy `uv run python scripts/setup_schwab_oauth.py --replace` delegates to
 the same coordinator. Its process lock prevents concurrent tabs, while its
@@ -440,14 +447,15 @@ Monitor evaluation is due; market-cadence runs flush after evaluation. INTERVAL
 alerts remain limited to `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED` transitions.
 Every evaluated market-close group also emits one consolidated run summary, including
 an explicit zero-change heartbeat; it does not create a fake Monitor event. Each
-Telegram message reuses the same run observations to
-show the instrument's current observed price/time and every rule's condition,
-severity, observed value, distance, and state without another provider request.
-Telegram does not implement responsive tables. The sender therefore places the
-symbol/current price in the first line, then renders the transition summary and
-every rule as a mobile-first vertical HTML card without `<pre>` spacing. Warnings
-and basis notes stay after the rule cards. The sender does not generate or upload
-an image. Do not place unescaped monitor text into `parse_mode=HTML`.
+Telegram message reuses the same run observations without another Provider request.
+The symbol/current price leads the message; price time and source appear once, and
+each configured point is reduced to state, condition, and a bounded human meaning.
+Repeated observed values and distances remain in the immutable Monitor Run rather
+than being repeated on a phone screen. A shared unavailable-fact cause appears once,
+and common Provider provenance warnings may collapse to one human-readable basis
+line without hiding typed errors. Telegram does not implement responsive tables;
+the sender uses wrapping mobile-first HTML lines without `<pre>` spacing, images, or
+an LLM. Do not place unescaped monitor text into `parse_mode=HTML`.
 Multiple transitions for one Monitor in one run are batched into one message while
 their durable events remain separate. Use `uv run trading-partner-monitor-notifications status`,
 `test`, or `flush` for operations. Never request or echo the Bot Token in chat;
@@ -460,6 +468,9 @@ resolve a source event/run and has no execution effect.
   provider-backed adjusted equity bars or unadjusted futures bars, TA-Lib standard
   indicators, project-owned
   structure clustering, and recent candlestick recognition.
+- The public schema uses canonical `1d`/`1w`. Conversational `daily`, `1wk`,
+  `1week`, and `weekly` inputs are normalized at the DTO boundary; return and store
+  only the canonical value.
 - `technical_render_chart` returns a JSON Tool Envelope, a local
   `chart_artifact` reference, and a PNG image block when analysis succeeds.
   Some MCP clients do not automatically promote an in-memory image block into the

@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-01
+> Updated: 2026-08-03
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -58,7 +58,11 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Watchlist reads/sync | Omitted Moomoo scope selects durable `All`; public sync refreshes every group and membership; pagination is explicit |
 | Monitor read scope | Monitor-filtered runs contain only that Monitor's observations; Dashboard uses compact run summaries |
 | ETF research | US ETF workflow uses ETF quote/technical/news/sentiment/macro facts without equity-only company calls |
-| OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD intervals skip known weekend/daily closures before Provider access and expose the next observation window |
+| OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD intervals skip known closures; optional IG Weekend Gold browser fallback is current-only, XAUUSD-only, and explicitly CFD/not-spot |
+| Margin-account risk checks | A negative cash balance is retained as a signed cash ratio and evaluated as a policy breach instead of failing the complete risk result with `DATA_CONTRACT_ERROR` |
+| Yahoo extended-hours quotes | A recovered pre/post-market last price clears unsupported regular-session range/volume fields and emits `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE` |
+| Technical interval input | MCP schemas advertise `1d`/`1w`; common daily/weekly aliases normalize at the DTO boundary instead of failing conversational calls |
+| Schwab OAuth status | `next_action` follows current token health; only the successful `renew` command asks for one account-sync retry |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
 [Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the

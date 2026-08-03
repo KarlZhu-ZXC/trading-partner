@@ -213,6 +213,11 @@ class AppSettings(BaseSettings):
     )
     reddit_apify_max_charge_usd: Decimal = Field(default=Decimal("0.20"), gt=0)
     apify_api_token: str | None = None
+    ig_weekend_gold_enabled: bool = False
+    ig_weekend_gold_actor_id: str = Field(default="apify/web-scraper", min_length=1)
+    ig_weekend_gold_cache_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    ig_weekend_gold_max_charge_usd: Decimal = Field(default=Decimal("0.03"), gt=0)
+    ig_weekend_gold_timeout_seconds: float = Field(default=120.0, ge=30, le=300)
     polymarket_enabled: bool = True
     reddit_user_agent: str = Field(default="TradingPartner/1.0", min_length=1)
     reddit_min_interval_seconds: float = Field(default=6.0, ge=0)

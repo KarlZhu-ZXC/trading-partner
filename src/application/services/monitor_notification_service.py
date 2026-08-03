@@ -151,11 +151,30 @@ class MonitorNotificationService:
                 source_event_id="monitor_event_notification_test",
                 source_run_id=None,
                 channel=MonitorNotificationChannel.TELEGRAM,
-                title="✅ Trading Partner Telegram 测试",
+                title="🧪 XAUUSD · TRIGGERED 样式预览",
                 body=(
-                    "Telegram 通知链路已连接。\n"
-                    "实际 Monitor 只在 TRIGGERED、RECOVERED 或 NOT_EVALUATED "
-                    "状态迁移时推送。"
+                    "通知样式预览（非真实监控事件）\n"
+                    "当前价格：4044.9\n"
+                    "价格时间：2026-08-01T15:53:36+00:00\n"
+                    "上次价格：4046.57\n"
+                    "价格变化：-1.67 (-0.04%)\n"
+                    "数据来源：ig_weekend_gold\n"
+                    "CHANGES\n"
+                    "• [MEDIUM] XAU_PULLBACK_ALERT_4080 → TRIGGERED\n"
+                    "RULES\n"
+                    "RULE                               COND    VALUE   DIST    STATE      LEVEL\n"
+                    "---------------------------------  ------  ------  ------  ---------  ------\n"
+                    "XAU_BREAKOUT_TEST_4116             > 4116  4044.9  -71.1   QUIET      MEDIUM\n"
+                    "XAU_DAILY_BREAKOUT_CONFIRM_4146    > 4146  4044.9  -101.1  QUIET      HIGH\n"
+                    "XAU_TREND_REPAIR_4248              > 4248  4044.9  -203.1  QUIET      HIGH\n"
+                    "XAU_PULLBACK_ALERT_4080             "
+                    "< 4080  4044.9  -35.1   TRIGGERED  MEDIUM\n"
+                    "XAU_SUPPORT_FAIL_4024               "
+                    "< 4024  4044.9  20.9    QUIET      MEDIUM\n"
+                    "XAU_WEEKLY_STRUCTURE_FAIL_3914      < 3914  4044.9  130.9   QUIET      HIGH\n"
+                    "数据提示：IG_WEEKEND_GOLD_CFD_FALLBACK, WEEKEND_PROXY_NOT_SPOT\n"
+                    "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；"
+                    "不是现货黄金或 LBMA 基准价。"
                 ),
                 status=MonitorNotificationStatus.PENDING,
                 attempt_count=0,

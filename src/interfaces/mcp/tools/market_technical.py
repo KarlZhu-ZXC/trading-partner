@@ -12,7 +12,11 @@ from mcp.server.fastmcp import Image
 from mcp.types import ImageContent, TextContent
 from pydantic import ValidationError
 
-from application.dto.technical import TechnicalAnalysisInput, TechnicalChartInput
+from application.dto.technical import (
+    TechnicalAnalysisInput,
+    TechnicalChartInput,
+    TechnicalIntervalInput,
+)
 from application.dto.us_market import (
     MarketGetBarsInput,
     MarketGetBatchQuotesInput,
@@ -142,7 +146,7 @@ def build_market_technical_adapters(
         instrument_id: str,
         as_of: datetime | None = None,
         lookback_sessions: int = 260,
-        intervals: list[str] | None = None,
+        intervals: list[TechnicalIntervalInput] | None = None,
     ) -> dict[str, Any]:
         """Return daily/weekly technical facts for supported cross-market instruments.
 
@@ -167,7 +171,7 @@ def build_market_technical_adapters(
     async def technical_render_chart(
         instrument_id: str,
         as_of: datetime | None = None,
-        interval: str = "1d",
+        interval: TechnicalIntervalInput = "1d",
         lookback_sessions: int = 160,
     ) -> list[TextContent | ImageContent]:
         """Return an auditable technical-analysis envelope followed by a PNG chart."""
