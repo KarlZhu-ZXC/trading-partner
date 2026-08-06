@@ -175,6 +175,31 @@ class InvestmentCaseArchiveInput(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
+class InvestmentCaseUpdateInput(BaseModel):
+    """Confirmed partial metadata update for one durable research file."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_id: str = Field(pattern=CASE_ID_UUID7_PATTERN)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, min_length=1, max_length=4000)
+    topic_tags: tuple[str, ...] | None = None
+    linked_case_ids: tuple[str, ...] | None = None
+    reviewed_by: Literal["user", "external_agent"]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def _requires_update_field(self) -> Self:
+        if (
+            self.title is None
+            and self.summary is None
+            and self.topic_tags is None
+            and self.linked_case_ids is None
+        ):
+            raise ValueError("investment case update requires at least one field")
+        return self
+
+
 class ResearchStateGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

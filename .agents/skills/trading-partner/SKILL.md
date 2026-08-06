@@ -34,6 +34,12 @@ Even when the database or search backend is unhealthy, `ok` on the envelope rema
 `true` so diagnostics remain available; expect `degraded=true` and warnings such as
 `DATABASE_HEALTH_ERROR` or `SEARCH_BACKEND_UNAVAILABLE`.
 
+When Provider routing reports admission state, preserve its distinction:
+`PROVIDER_ADMISSION_QUEUED` means a bounded local wait succeeded,
+`PROVIDER_ADMISSION_TIMEOUT` means the local queue budget expired, and
+`PROVIDER_RATE_LIMIT_ERROR` / `UPSTREAM_RATE_LIMITED` means the upstream Provider
+actually rate-limited a request. Do not describe the first two as an upstream 429.
+
 ### Research file / investment judgment (Phase 1B)
 
 Use the user-facing terms **research file** for `InvestmentCase` and **current
@@ -44,7 +50,7 @@ judgment inside a file. Do not imply that creating a Draft Case confirms a Thesi
 or starts long-term tracking.
 
 - `investment_case_read`: `query` or bounded durable `context`
-- `investment_case_manage`: confirmed/idempotent `create` or `archive`
+- `investment_case_manage`: confirmed/idempotent `create`, metadata `update`, or `archive`
 - `research_judgment_get`: current `state` or `thesis_history`
 - `research_judgment_propose`: `research_state` or `thesis_revision`
 - `research_judgment_confirm`: explicit confirm/reject/withdraw gate
@@ -146,6 +152,9 @@ Formal contracts use `future:CME:*` and `future:DCE:LH*`. CME public facts are
 reference/delayed and Yahoo active-contract bars have no SLA. DCE is official EOD
 only. `commodity_spot:OTC:XAUUSD` and `XAGUSD` are Dukascopy broker/SWFX observations,
 not LBMA benchmarks; `cfd:OTC:COPPER_CMD_USD` is a rolling CFD, not copper spot.
+`cfd:OTC:LIGHT_CMD_USD` maps to Dukascopy `LIGHT.CMD-USD`; `USOIL` is only a
+lookup alias. It is an OTC rolling light-oil CFD, not WTI spot, NYMEX `CL`, a
+specific futures contract, or a continuous futures series.
 The default route is the keyless Jetta bucket API used by current `dukascopy-node`;
 `DUKASCOPY_API_KEY` only enables the legacy compatibility fallback.
 Preserve basis comparability, offer side, volume-basis, delay, and warning fields.
@@ -203,7 +212,7 @@ emitted for the deduplicated latest view.
 
 | Tool | Purpose |
 |---|---|
-| `account_get` | Read durable `positions` or normalized `transactions`; it cannot contact a broker |
+| `account_get` | Read durable account snapshot/`positions` context or normalized `transactions`; it preserves native-currency balances, timestamps, open orders, and quality warnings and cannot contact a broker |
 | `external_state_sync` | Explicitly fetch/persist `accounts`, `transactions`, or the active `watchlist` upstream |
 | `portfolio_analyze` | `exposure`, durable activity `coverage`, native-currency `performance_summary`, or pure before/after `simulate_addition`; never executes |
 
@@ -441,15 +450,24 @@ install` installs one hourly launchd wake that runs `trading-partner-monitor-run
 due`; this deterministic path does not open a Codex task and consumes no LLM tokens.
 Do not duplicate Monitor evaluation inside Codex market-review Automations.
 When Telegram notifications are enabled, the notification Outbox is linked to
-either a transition event or an A-share/US/KR post-market run and committed atomically
-with that source. The hourly due dispatcher flushes pending messages even when no
-Monitor evaluation is due; market-cadence runs flush after evaluation. INTERVAL
-alerts remain limited to `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED` transitions.
-Every evaluated market-close group also emits one consolidated run summary, including
-an explicit zero-change heartbeat; it does not create a fake Monitor event. Each
+either an INTERVAL transition event or an A-share/US/KR post-market run and committed
+atomically with that source. The hourly due dispatcher flushes pending messages even
+when no Monitor evaluation is due; market-cadence runs flush after evaluation.
+INTERVAL alerts remain limited to `TRIGGERED`, `RECOVERED`, and `NOT_EVALUATED`
+transitions. Post-market runs still persist ordinary transition events, but they do
+not enqueue separate event-linked Telegram cards. Every evaluated market-close group
+emits exactly one consolidated run summary, including an explicit zero-change
+heartbeat and the exact details of every changed point; it does not create a fake
+Monitor event. Each
 Telegram message reuses the same run observations without another Provider request.
 The symbol/current price leads the message; price time and source appear once, and
 each configured point is reduced to state, condition, and a bounded human meaning.
+The prominent transition section must name each changed point with its exact
+condition/threshold, bounded meaning, severity, and human state label; a bare
+`TRIGGERED`/`RECOVERED` is insufficient. Preserve compatibility with historical
+generic and rule-code Outbox bodies. A single-transition headline includes the
+bounded condition; multi-transition headlines retain a compact count and detail the
+points below.
 Repeated observed values and distances remain in the immutable Monitor Run rather
 than being repeated on a phone screen. A shared unavailable-fact cause appears once,
 and common Provider provenance warnings may collapse to one human-readable basis
@@ -457,7 +475,9 @@ line without hiding typed errors. Telegram does not implement responsive tables;
 the sender uses wrapping mobile-first HTML lines without `<pre>` spacing, images, or
 an LLM. Do not place unescaped monitor text into `parse_mode=HTML`.
 Multiple transitions for one Monitor in one run are batched into one message while
-their durable events remain separate. Use `uv run trading-partner-monitor-notifications status`,
+their durable events remain separate. Prior/current price changes use a signed
+absolute delta and a percentage rounded half-up to exactly two decimal places. Use
+`uv run trading-partner-monitor-notifications status`,
 `test`, or `flush` for operations. Never request or echo the Bot Token in chat;
 the user must place it in the project `.env`. Delivery does not acknowledge or
 resolve a source event/run and has no execution effect.

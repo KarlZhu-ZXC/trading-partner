@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from application.dto.a_share import AShareGetSnapshotInput
@@ -79,6 +79,14 @@ _DUKASCOPY_PROVENANCE_WARNINGS = frozenset(
         "OTC_BROKER_FEED",
         "VOLUME_BEST_BID_ASK_NOT_EXCHANGE",
         "DUKASCOPY_MINUTE_CLOSE_QUOTE_PROXY",
+    }
+)
+
+_POST_MARKET_CADENCES = frozenset(
+    {
+        MonitorCadence.A_SHARE_POST_MARKET,
+        MonitorCadence.US_POST_MARKET,
+        MonitorCadence.KR_POST_MARKET,
     }
 )
 
@@ -211,7 +219,11 @@ class MonitorEvaluationService:
                 if event is not None:
                     events.append(event)
                     monitor_events.append(event)
-            if monitor_events:
+            # Post-market runs persist each transition event for the durable
+            # event history, but their Telegram delivery is consolidated into
+            # one run-linked digest below. Other cadences retain one
+            # event-linked notification per transition event.
+            if monitor_events and request.cadence not in _POST_MARKET_CADENCES:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
                 )
@@ -273,6 +285,7 @@ class MonitorEvaluationService:
                     run,
                     monitors,
                     self._ids,
+                    events=tuple(events),
                     previous_states_by_monitor=previous_states_by_monitor,
                     monitor_sources_by_monitor=monitor_sources_by_monitor,
                 )
@@ -600,30 +613,15 @@ def _notification_messages(
     if not context.current_available and context.previous_price is not None:
         lines.append("价格口径：上一有效价格（当前不可用）")
     lines.append(f"价格时间：{context.price_time}")
-    if (
-        context.current_available and context.previous_price is not None
-    ):
-        current_price = Decimal(context.price)
-        price_change = current_price - context.previous_price
-        change_percent = (
-            price_change / context.previous_price * Decimal("100")
-            if context.previous_price != 0
-            else None
-        )
-        rendered_change = _signed_decimal(price_change)
-        if change_percent is not None:
-            rendered_change = f"{rendered_change} ({_signed_decimal(change_percent)}%)"
-        lines.extend(
-            (
-                f"上次价格：{context.previous_price}",
-                f"价格变化：{rendered_change}",
-            )
-        )
+    lines.extend(_notification_price_change_lines(context))
     if data_sources:
         lines.append(f"数据来源：{', '.join(data_sources)}")
     lines.append("CHANGES")
     lines.extend(
-        f"• [{event.severity.value}] 状态变化 → {event.event_type.value}"
+        _format_notification_change(
+            event,
+            rules_by_code[event.rule_code],
+        )
         for event in events
     )
     lines.append("RULES")
@@ -656,8 +654,8 @@ def _notification_messages(
         )
     if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
-    event_label = _notification_event_label(events)
-    title = f"{emoji} {context.symbol} · {event_label}"
+    event_label = _notification_event_label(events, rules_by_code)
+    title = _notification_title(emoji, context.symbol, event_label)
     body = "\n".join(lines)
     return tuple(
         MonitorNotificationMessage(
@@ -673,21 +671,74 @@ def _notification_messages(
     )
 
 
-def _signed_decimal(value: Decimal) -> str:
-    rendered = format(value, "f")
-    if "." in rendered:
+def _signed_decimal(value: Decimal, *, decimal_places: int | None = None) -> str:
+    if decimal_places is not None:
+        quantum = Decimal(1).scaleb(-decimal_places)
+        value = value.quantize(quantum, rounding=ROUND_HALF_UP)
+        # Decimal preserves a negative sign on a rounded zero (for example,
+        # -0.004 quantizes to -0.00). A zero change has no direction.
+        if value == 0:
+            value = abs(value)
+        rendered = format(value, f".{decimal_places}f")
+    else:
+        rendered = format(value, "f")
+        if rendered == "-0":
+            rendered = "0"
+    if "." in rendered and decimal_places is None:
         rendered = rendered.rstrip("0").rstrip(".")
     return f"+{rendered}" if value > 0 else rendered
 
 
-def _notification_event_label(events: tuple[MonitorEvent, ...]) -> str:
+def _notification_price_change_lines(
+    context: _NotificationPriceContext,
+) -> tuple[str, ...]:
+    """Render a current-vs-previous price delta for a notification block.
+
+    The raw price delta keeps its natural Decimal precision. Percentages are
+    deliberately quantized half-up to two decimal places because they are the
+    compact, human-facing value shown in Telegram.
+    """
+    if not context.current_available or context.previous_price is None:
+        return ()
+    current_price = Decimal(context.price)
+    price_change = current_price - context.previous_price
+    change_percent = (
+        price_change / context.previous_price * Decimal("100")
+        if context.previous_price != 0
+        else None
+    )
+    rendered_change = _signed_decimal(price_change)
+    if change_percent is not None:
+        rendered_change = (
+            f"{rendered_change} ({_signed_decimal(change_percent, decimal_places=2)}%)"
+        )
+    return (
+        f"上次价格：{context.previous_price}",
+        f"价格变化：{rendered_change}",
+    )
+
+
+def _notification_event_label(
+    events: tuple[MonitorEvent, ...],
+    rules_by_code: dict[str, MonitorRule] | None = None,
+) -> str:
     if len(events) != 1:
         return f"{len(events)}项变化"
-    return {
+    event_label = {
         MonitorEventType.TRIGGERED: "新触发",
         MonitorEventType.RECOVERED: "已恢复",
         MonitorEventType.NOT_EVALUATED: "数据不可用",
     }[events[0].event_type]
+    rule = (rules_by_code or {}).get(events[0].rule_code)
+    if rule is None:
+        return event_label
+    return f"{_notification_text(_rule_condition(rule), 48)} {event_label}"
+
+
+def _notification_title(emoji: str, symbol: str, event_label: str) -> str:
+    suffix = f" · {event_label}"
+    available_symbol_chars = max(1, 200 - len(emoji) - 1 - len(suffix))
+    return f"{emoji} {_notification_text(symbol, available_symbol_chars)}{suffix}"
 
 
 def _notification_text(value: str, maximum: int) -> str:
@@ -738,6 +789,20 @@ def _format_notification_rule_card(
 
 def _short_severity(value: str) -> str:
     return {"MEDIUM": "M", "HIGH": "H"}.get(value, value)
+
+
+def _format_notification_change(event: MonitorEvent, rule: MonitorRule) -> str:
+    """Serialize one transition with the exact rule context needed by Telegram.
+
+    Transition messages are persisted before delivery, so this line intentionally
+    carries the bounded condition and human meaning instead of requiring the
+    notification adapter to look up a Monitor definition later.
+    """
+    return (
+        f"• [{event.severity.value}] {rule.rule_code} · "
+        f"条件：{_notification_text(_rule_condition(rule), 96)} · "
+        f"含义：{_rule_meaning(rule.description)} → {event.event_type.value}"
+    )
 
 
 def _notification_price_context(
@@ -843,6 +908,7 @@ def _post_market_summary_message(
     monitors: tuple[MonitorDefinition, ...],
     id_generator: IdGenerator,
     *,
+    events: tuple[MonitorEvent, ...] = (),
     previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] | None = None,
     monitor_sources_by_monitor: dict[str, tuple[str, ...]] | None = None,
 ) -> MonitorNotificationMessage:
@@ -865,8 +931,13 @@ def _post_market_summary_message(
         )
         for monitor in monitors
     }
+    events_by_monitor = {
+        monitor.monitor_id: tuple(item for item in events if item.monitor_id == monitor.monitor_id)
+        for monitor in monitors
+    }
     for monitor in monitors:
         observations = observations_by_monitor[monitor.monitor_id]
+        monitor_events = events_by_monitor[monitor.monitor_id]
         context = _notification_price_context(
             monitor,
             observations,
@@ -880,6 +951,7 @@ def _post_market_summary_message(
                 f"当前价格：{context.price}",
                 *(() if context.current_available else ("价格口径：上一有效价格（当前不可用）",)),
                 f"价格时间：{context.price_time}",
+                *_notification_price_change_lines(context),
                 *(
                     (
                         "数据来源："
@@ -889,6 +961,20 @@ def _post_market_summary_message(
                     )
                     if (monitor_sources_by_monitor or {}).get(monitor.monitor_id)
                     else ()
+                ),
+                *(
+                    ("CHANGES",)
+                    if monitor_events
+                    else ()
+                ),
+                *(
+                    tuple(
+                        _format_notification_change(
+                            event,
+                            {item.rule_code: item for item in monitor.rules}[event.rule_code],
+                        )
+                        for event in monitor_events
+                    )
                 ),
                 "RULES",
             )

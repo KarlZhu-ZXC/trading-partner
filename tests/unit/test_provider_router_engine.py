@@ -36,6 +36,7 @@ from domain.common.enums import (
 from domain.common.errors import (
     DataContractError,
     NoMarketData,
+    ProviderAdmissionTimeoutError,
     ProviderAuthenticationError,
     ProviderNotConfigured,
     ProviderRateLimitError,
@@ -135,9 +136,9 @@ class _MemHealth:
 
 @dataclass
 class _MemRateStore:
-    counts: dict[tuple[VendorId, DataCategory], int] = field(default_factory=dict)
+    counts: dict[tuple[VendorId, DataCategory, datetime], int] = field(default_factory=dict)
 
-    def consume(
+    def try_reserve(
         self,
         *,
         vendor: VendorId,
@@ -149,8 +150,11 @@ class _MemRateStore:
     ) -> Any:
         from application.dto.provider_state import ProviderRateLimitSnapshot
 
-        key = (vendor, category)
-        self.counts[key] = self.counts.get(key, 0) + 1
+        key = (vendor, category, window_start)
+        current = self.counts.get(key, 0)
+        if current >= limit_count:
+            return None
+        self.counts[key] = current + 1
         return ProviderRateLimitSnapshot(
             vendor=vendor,
             category=category,
@@ -165,12 +169,37 @@ class _MemRateStore:
 class _DenyRateLimiter:
     """Always deny without requiring a store."""
 
-    def check_and_consume(self, vendor: VendorId, category: DataCategory) -> RateLimitDecision:
+    async def acquire(
+        self,
+        vendor: VendorId,
+        category: DataCategory,
+        max_wait_seconds: float,
+    ) -> RateLimitDecision:
+        del vendor, category, max_wait_seconds
         return RateLimitDecision(
             allowed=False,
             remaining=0,
             reset_at=AS_OF + timedelta(seconds=1),
             limit_per_window=1,
+        )
+
+
+class _QueuedRateLimiter:
+    async def acquire(
+        self,
+        vendor: VendorId,
+        category: DataCategory,
+        max_wait_seconds: float,
+    ) -> RateLimitDecision:
+        del vendor, category, max_wait_seconds
+        return RateLimitDecision(
+            allowed=True,
+            remaining=9,
+            reset_at=AS_OF + timedelta(seconds=1),
+            limit_per_window=10,
+            scheduled_at=AS_OF,
+            wait_seconds=0.01,
+            queued=True,
         )
 
 
@@ -1095,10 +1124,13 @@ async def test_rate_limit_paths_are_skips() -> None:
     adapter = _register(registry, VendorId.MOCK_US)
     result = await _run(engine, cache_codec=None)
     assert result.ok is False
-    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_RATE_LIMITED
-    assert "RATE_LIMIT_DEGRADED" in _codes(result)
+    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_ADMISSION_TIMEOUT
+    assert "PROVIDER_ADMISSION_TIMEOUT" in _codes(result)
+    assert "RATE_LIMIT_DEGRADED" not in _codes(result)
+    assert isinstance(result.error, ProviderAdmissionTimeoutError)
     assert adapter.call_count == 0
     assert health.failures == []
+    assert health.successes == []
     assert circuit.state(VendorId.MOCK_US, DataCategory.MARKET_SNAPSHOT) is CircuitState.CLOSED
 
     engine, _, _, _, registry = _engine(settings=_settings(provider_retry_max_attempts=1))
@@ -1109,9 +1141,21 @@ async def test_rate_limit_paths_are_skips() -> None:
     _register(registry, VendorId.MOCK_US, handler=_rl)
     result = await _run(engine, cache_codec=None)
     assert result.ok is False
-    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_RATE_LIMITED
-    assert "RATE_LIMIT_DEGRADED" in _codes(result)
+    assert result.attempts[0].outcome is ProviderAttemptOutcome.RATE_LIMITED
+    assert "UPSTREAM_RATE_LIMITED" in _codes(result)
     assert isinstance(result.error, ProviderRateLimitError)
+
+
+@pytest.mark.asyncio
+async def test_admission_queue_waits_before_provider_and_discloses_warning() -> None:
+    engine, _, health, _, registry = _engine(rate_limiter=_QueuedRateLimiter())
+    adapter = _register(registry, VendorId.MOCK_US)
+    result = await _run(engine, cache_codec=None)
+    assert result.ok is True
+    assert adapter.call_count == 1
+    assert "PROVIDER_ADMISSION_QUEUED" in _codes(result)
+    assert "RATE_LIMIT_DEGRADED" not in _codes(result)
+    assert health.successes == [(VendorId.MOCK_US, DataCategory.MARKET_SNAPSHOT)]
 
 
 # --- D6b2 acceptance defects: cancel permit / circuit projection / exact bool -

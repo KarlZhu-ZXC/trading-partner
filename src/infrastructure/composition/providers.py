@@ -108,6 +108,16 @@ class ProviderInfrastructure:
     watchlist_source: WatchlistSourceProvider
 
 
+def enabled_account_provider_order(
+    candidates: tuple[VendorId, ...],
+    enabled_sources: tuple[str, ...],
+) -> tuple[VendorId, ...]:
+    """Keep configured account-source selection separate from route precedence."""
+
+    enabled = frozenset(enabled_sources)
+    return tuple(vendor for vendor in candidates if vendor.name in enabled)
+
+
 def build_provider_infrastructure(
     settings: AppSettings,
     *,
@@ -472,7 +482,11 @@ def build_provider_infrastructure(
         cache_store=state_backend.cache_store,
         health_store=state_backend.health_store,
         route_history_store=state_backend.route_history_store,
-        rate_limiter=ProviderRateLimiter(state_backend.rate_limit_store, clock),
+        rate_limiter=ProviderRateLimiter(
+            state_backend.rate_limit_store,
+            clock,
+            max_wait_seconds=settings.provider_rate_limit_max_wait_seconds,
+        ),
         circuit_breaker=CircuitBreaker(
             clock,
             failure_threshold=settings.circuit_failure_threshold,

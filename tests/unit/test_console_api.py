@@ -219,6 +219,7 @@ async def test_watchlist_console_uses_moomoo_all_group_for_instrument_count(
         {"operation": "groups"},
         {"operation": "items", "limit": 500, "group_name": "All"},
     ]
+    assert response.json()["groups"]["data"]["groups"][1]["source_group_key"] == "All"
     assert response.json()["scope"] == {
         "group_name": "All",
         "all_active_moomoo_items": True,
@@ -259,6 +260,170 @@ async def test_accounts_console_uses_grouped_durable_positions_contract(
     assert response.status_code == 200
     assert response.json()["data"] == {"accounts": []}
     assert calls == [{"operation": "positions"}]
+
+
+@pytest.mark.asyncio
+async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        _ = confirmation
+        request = arguments["request"]
+        calls.append((tool_name, request))
+        if tool_name == "watchlist_get" and request["operation"] == "groups":
+            return {
+                "ok": True,
+                "data": {
+                    "source": "MOOMOO",
+                    "groups": [
+                        {
+                            "name": "All",
+                            "source_group_key": "All",
+                            "group_type": "SYSTEM",
+                            "active": True,
+                        }
+                    ],
+                },
+            }
+        return {"ok": True, "data": {"tool": tool_name, **request}}
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.get(
+            "/api/portfolio?transaction_limit=17&coverage_limit=23"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {
+        "accounts",
+        "transactions",
+        "exposure",
+        "coverage",
+        "risk_policy",
+        "risk_check",
+        "watchlist",
+    }
+    assert payload["watchlist"]["groups"]["data"]["source"] == "MOOMOO"
+    assert payload["watchlist"]["items"]["data"]["group_name"] == "All"
+    assert [
+        (tool, request)
+        for tool, request in calls
+        if tool != "watchlist_get"
+    ] == [
+        ("account_get", {"operation": "positions"}),
+        ("account_get", {"operation": "transactions", "limit": 17}),
+        ("portfolio_analyze", {"operation": "exposure"}),
+        ("portfolio_analyze", {"operation": "coverage", "limit": 23}),
+        ("portfolio_risk_get", {"operation": "policy"}),
+        ("portfolio_risk_get", {"operation": "check"}),
+    ]
+    assert calls[-2:] == [
+        ("watchlist_get", {"operation": "groups"}),
+        ("watchlist_get", {"operation": "items", "limit": 500, "group_name": "All"}),
+    ]
+    assert all(tool != "external_state_sync" for tool, _request in calls)
+
+
+@pytest.mark.asyncio
+async def test_research_console_pages_all_cases_and_keeps_partial_state_failure(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    first_page = [
+        {"case_id": "case_001", "title": "First", "status": "active"}
+        for _ in range(200)
+    ]
+    first_page[0] = {"case_id": "case_001", "title": "First", "status": "active"}
+    second_page = [{"case_id": "case_201", "title": "Archived", "status": "archived"}]
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        _ = confirmation
+        calls.append((tool_name, arguments))
+        if tool_name == "investment_case_read":
+            offset = arguments["request"]["offset"]
+            items = first_page if offset == 0 else second_page
+            return {"ok": True, "data": {"items": items, "total": len(items)}}
+        case_id = arguments["request"]["case_id"]
+        if case_id == "case_001":
+            return {
+                "ok": False,
+                "data": None,
+                "warnings": [],
+                "errors": [{"code": "CASE_STATE_FAILED", "message": "fixture failure"}],
+                "degraded": True,
+            }
+        return {
+            "ok": True,
+            "data": {
+                "theses": [],
+                "latest_revisions": [],
+            },
+            "warnings": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.get("/api/research")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["case_list"]["page_size"] == 200
+    assert payload["case_list"]["total"] == 201
+    assert len(payload["cases"]) == 201
+    assert payload["cases"][0]["state"]["errors"][0]["code"] == "CASE_STATE_FAILED"
+    assert payload["cases"][-1]["state"]["ok"] is True
+
+    list_calls = [arguments for name, arguments in calls if name == "investment_case_read"]
+    assert [call["request"] for call in list_calls] == [
+        {"operation": "query", "include_archived": True, "limit": 200, "offset": 0},
+        {"operation": "query", "include_archived": True, "limit": 200, "offset": 200},
+    ]
+    state_calls = [arguments for name, arguments in calls if name == "research_judgment_get"]
+    assert state_calls[0]["request"] == {
+        "operation": "state",
+        "case_id": "case_001",
+        "include_archived_theses": True,
+        "include_watchlist": False,
+    }
+    assert state_calls[-1]["request"]["case_id"] == "case_201"
 
 
 @pytest.mark.asyncio

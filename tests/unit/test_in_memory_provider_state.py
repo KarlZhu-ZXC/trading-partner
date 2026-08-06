@@ -336,12 +336,12 @@ def test_health_concurrent_success_and_failure_counts(
 # --- Rate limit ---
 
 
-def test_rate_consume_atomic_increment(
+def test_rate_reserve_atomic_increment(
     rate_store: InMemoryProviderRateLimitStore,
 ) -> None:
     v, c = VendorId.MOCK_US, DataCategory.MARKET_SNAPSHOT
     window = NOW.replace(microsecond=0)
-    first = rate_store.consume(
+    first = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -349,8 +349,8 @@ def test_rate_consume_atomic_increment(
         limit_count=1000,
         at=NOW,
     )
-    assert first.request_count == 1
-    second = rate_store.consume(
+    assert first is not None and first.request_count == 1
+    second = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -358,18 +358,18 @@ def test_rate_consume_atomic_increment(
         limit_count=1000,
         at=NOW + timedelta(milliseconds=10),
     )
-    assert second.request_count == 2
+    assert second is not None and second.request_count == 2
     got = rate_store.get(v, c, window)
     assert got is not None
     assert got.request_count == 2
 
 
-def test_rate_consume_overwrites_policy_fields(
+def test_rate_reserve_overwrites_policy_fields(
     rate_store: InMemoryProviderRateLimitStore,
 ) -> None:
     v, c = VendorId.MOCK_A_SHARE, DataCategory.MARKET_QUOTE
     window = NOW.replace(microsecond=0)
-    rate_store.consume(
+    rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -377,7 +377,7 @@ def test_rate_consume_overwrites_policy_fields(
         limit_count=10,
         at=NOW,
     )
-    snap = rate_store.consume(
+    snap = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -385,6 +385,7 @@ def test_rate_consume_overwrites_policy_fields(
         limit_count=99,
         at=NOW + timedelta(seconds=1),
     )
+    assert snap is not None
     assert snap.request_count == 2
     assert snap.window_seconds == 5
     assert snap.limit_count == 99
@@ -403,7 +404,7 @@ def test_rate_get_missing_returns_none(
     )
 
 
-def test_rate_concurrent_consume_counts(
+def test_rate_concurrent_reserve_counts(
     rate_store: InMemoryProviderRateLimitStore,
 ) -> None:
     n = 50
@@ -413,7 +414,7 @@ def test_rate_concurrent_consume_counts(
 
     def _worker(_: int) -> None:
         barrier.wait(timeout=10)
-        rate_store.consume(
+        rate_store.try_reserve(
             vendor=VendorId.MOCK_US,
             category=DataCategory.MARKET_SNAPSHOT,
             window_start=window,

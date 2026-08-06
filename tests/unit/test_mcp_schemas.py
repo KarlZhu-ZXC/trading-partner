@@ -22,6 +22,7 @@ from interfaces.mcp.schemas import (
     InvestmentCaseArchiveInput,
     InvestmentCaseCreateInput,
     InvestmentCaseGetInput,
+    InvestmentCaseUpdateInput,
     JournalAppendInput,
     JournalSearchInput,
     MarketGetMockSnapshotInput,
@@ -200,6 +201,38 @@ def test_investment_case_archive_rejects_codex_and_bad_ids() -> None:
                 "archived_reason": "x",
                 "reviewed_by": "user",
                 "idempotency_key": "arch-3",
+            }
+        )
+
+
+def test_investment_case_update_accepts_partial_metadata_and_rejects_empty_or_extra() -> None:
+    update = InvestmentCaseUpdateInput.model_validate(
+        {
+            "case_id": CASE_ID,
+            "summary": "Updated research scope",
+            "reviewed_by": "user",
+            "idempotency_key": "case-update-1",
+        }
+    )
+    assert update.summary == "Updated research scope"
+    assert update.title is None
+
+    with pytest.raises(ValidationError, match="at least one field"):
+        InvestmentCaseUpdateInput.model_validate(
+            {
+                "case_id": CASE_ID,
+                "reviewed_by": "user",
+                "idempotency_key": "case-update-empty",
+            }
+        )
+    with pytest.raises(ValidationError):
+        InvestmentCaseUpdateInput.model_validate(
+            {
+                "case_id": CASE_ID,
+                "title": "Updated",
+                "reviewed_by": "user",
+                "idempotency_key": "case-update-extra",
+                "unexpected": True,
             }
         )
 

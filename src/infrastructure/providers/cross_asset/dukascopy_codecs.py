@@ -41,6 +41,7 @@ _INSTRUMENT_TO_DUKA: dict[str, str] = {
     "commodity_spot:OTC:XAUUSD": "XAU/USD",
     "commodity_spot:OTC:XAGUSD": "XAG/USD",
     "cfd:OTC:COPPER_CMD_USD": "COPPER.CMD/USD",
+    "cfd:OTC:LIGHT_CMD_USD": "LIGHT.CMD/USD",
 }
 _DUKA_TO_INSTRUMENT: dict[str, str] = {v: k for k, v in _INSTRUMENT_TO_DUKA.items()}
 
@@ -48,6 +49,7 @@ _INSTRUMENT_TO_JETTA: dict[str, str] = {
     "commodity_spot:OTC:XAUUSD": "XAU-USD",
     "commodity_spot:OTC:XAGUSD": "XAG-USD",
     "cfd:OTC:COPPER_CMD_USD": "COPPER.CMD-USD",
+    "cfd:OTC:LIGHT_CMD_USD": "LIGHT.CMD-USD",
 }
 
 _SUPPORTED_OFFER_SIDES = frozenset({OfferSide.BID, OfferSide.ASK})

@@ -8,6 +8,7 @@ from application.dto.error_mapper import to_error_info, to_error_info_from_excep
 from application.dto.portfolio import (
     AccountGetPositionsInput,
     AccountGetSnapshotInput,
+    AccountOpenOrderDTO,
     AccountPositionDTO,
     AccountPositionsAccountDTO,
     AccountPositionsDTO,
@@ -76,11 +77,24 @@ class PortfolioToolCoordinator:
                         snapshot_id=item.snapshot_id,
                         account_ref=item.account_ref,
                         provider=item.provider,
+                        environment=item.environment,
+                        base_currency=item.base_currency,
                         account_as_of=item.account_as_of,
+                        fetched_at=item.fetched_at,
+                        cash=item.cash,
+                        buying_power=item.buying_power,
+                        net_assets=item.net_assets,
+                        margin_used=item.margin_used,
                         positions=tuple(
                             AccountPositionDTO.model_validate(position)
                             for position in item.positions
                         ),
+                        open_orders=tuple(
+                            AccountOpenOrderDTO.model_validate(order)
+                            for order in item.open_orders
+                        ),
+                        degraded=item.degraded,
+                        warning_codes=item.warning_codes,
                     )
                     for item in snapshots
                 )

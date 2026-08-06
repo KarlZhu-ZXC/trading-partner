@@ -167,6 +167,16 @@ a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
 - Alpha Vantage is a configured fallback, not a broker quote substitute. Its optional
   comma-separated key pool is ordered and sticky, and advances only on explicit
   provider rate-limit responses; it is not a round-robin throughput mechanism.
+- All Router-managed Providers share one bounded cross-process admission scheduler.
+  It atomically reserves the earliest available vendor/category fixed-window slot and
+  awaits that slot without blocking the event loop. Local fan-out therefore queues up
+  to the configured budget instead of being mistaken for an upstream quota failure.
+  `PROVIDER_ADMISSION_QUEUED` records a successful wait;
+  `PROVIDER_ADMISSION_TIMEOUT` means the local queue budget expired, while
+  `PROVIDER_RATE_LIMIT_ERROR` and `UPSTREAM_RATE_LIMITED` remain reserved for a real
+  upstream rate-limit response.
+  The scheduler provides anonymous short-lived reservations, not strict FIFO leases;
+  cancellation can leave one reserved slot unused until its fixed window expires.
 - SEC is the authority for filings and separately based reported facts.
 - FRED/ALFRED observations preserve requested vintage cutoffs.
 - Social sources remain separated; current Polymarket odds are never presented as

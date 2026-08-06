@@ -114,6 +114,7 @@ from infrastructure.composition import (
     RuntimeResources,
     build_persistence_infrastructure,
     build_provider_infrastructure,
+    enabled_account_provider_order,
 )
 from infrastructure.config.settings import PROJECT_ROOT, AppSettings
 from infrastructure.persistence.challenge_review_repository import (
@@ -724,7 +725,10 @@ def build_application(
         provider_infrastructure.account_providers,
         account_snapshot_repository,
         clock,
-        default_order=chain_config.chain_for(Market.US, DataCategory.ACCOUNT),
+        default_order=enabled_account_provider_order(
+            chain_config.chain_for(Market.US, DataCategory.ACCOUNT),
+            settings.holdings_sources,
+        ),
     )
     portfolio_service = PortfolioService(
         account_service,

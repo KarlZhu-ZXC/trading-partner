@@ -10,7 +10,7 @@ from domain.common.enums import DataCategory, VendorId
 
 
 class ProviderRateLimitStore(Protocol):
-    def consume(
+    def try_reserve(
         self,
         *,
         vendor: VendorId,
@@ -19,11 +19,12 @@ class ProviderRateLimitStore(Protocol):
         window_seconds: int,
         limit_count: int,
         at: datetime,
-    ) -> ProviderRateLimitSnapshot:
-        """Atomically create or increment the fixed-window counter; return snapshot.
+    ) -> ProviderRateLimitSnapshot | None:
+        """Atomically reserve one slot when the fixed-window limit permits it.
 
-        Allowed/denied is decided by the rate limiter policy using
-        ``request_count <= limit_count``; this store only persists counts.
+        A newly created row starts at one.  On conflict the request count is
+        incremented only when it is strictly below ``limit_count``.  A full
+        window returns ``None`` and leaves its counter unchanged.
         """
         ...
 

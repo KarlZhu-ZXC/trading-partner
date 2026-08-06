@@ -72,22 +72,24 @@ _PATH = "/2.0/"
 _SOURCE = VendorId.DUKASCOPY.value
 _JSON_CONTENT = ("application/json", "text/json", "text/javascript", "text/plain", "*/*")
 
-_SPOT_WARNINGS = (
-    "DUKASCOPY_SWFX_NOT_LBMA",
+_OTC_BROKER_WARNINGS = (
     "OTC_BROKER_FEED",
     "VOLUME_BEST_BID_ASK_NOT_EXCHANGE",
 )
+_PRECIOUS_SPOT_WARNINGS = (
+    "DUKASCOPY_SWFX_NOT_LBMA",
+    *_OTC_BROKER_WARNINGS,
+)
 _CFD_WARNINGS = (
     "ROLLING_CFD_NOT_SPOT",
-    "DUKASCOPY_SWFX_NOT_LBMA",
-    "OTC_BROKER_FEED",
-    "VOLUME_BEST_BID_ASK_NOT_EXCHANGE",
+    *_OTC_BROKER_WARNINGS,
 )
 
 _UNIT_BY_INSTRUMENT: dict[str, str] = {
     "commodity_spot:OTC:XAUUSD": "USD/oz",
     "commodity_spot:OTC:XAGUSD": "USD/oz",
     "cfd:OTC:COPPER_CMD_USD": "USD/lb",
+    "cfd:OTC:LIGHT_CMD_USD": "USD/bbl",
 }
 
 
@@ -132,7 +134,12 @@ def _content_type_ok(headers: dict[str, str] | object) -> bool:
 def _warnings_for(instrument: Instrument) -> tuple[str, ...]:
     if instrument.asset_type is AssetType.CFD:
         return _CFD_WARNINGS
-    return _SPOT_WARNINGS
+    if instrument.asset_type is AssetType.COMMODITY_SPOT and instrument.symbol in {
+        "XAUUSD",
+        "XAGUSD",
+    }:
+        return _PRECIOUS_SPOT_WARNINGS
+    return _OTC_BROKER_WARNINGS
 
 
 def _unit_for(instrument_id: str) -> str:

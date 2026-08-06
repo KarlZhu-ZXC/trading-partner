@@ -23,6 +23,7 @@ class ProviderRouterSettings(Protocol):
     provider_retry_max_attempts: int
     provider_retry_base_delay_seconds: float
     provider_retry_max_delay_seconds: float
+    provider_rate_limit_max_wait_seconds: float
 
     stale_guard_max_age_seconds: int
     stale_guard_respect_session: bool

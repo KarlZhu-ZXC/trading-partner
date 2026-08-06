@@ -37,10 +37,20 @@ configured US/A-share/KR instrument directories; only one validated candidate is
 atomically cached in the Instrument Master. The Master is a registry/cache, not
 an allowlist. Directory failures remain typed provider errors.
 
+All Router-managed Provider calls use the shared bounded cross-process admission
+scheduler keyed by vendor and data category. It atomically reserves current or
+near-future fixed-window capacity and waits asynchronously up to
+`PROVIDER_RATE_LIMIT_MAX_WAIT_SECONDS`. A successful wait emits
+`PROVIDER_ADMISSION_QUEUED`; local budget exhaustion is
+`PROVIDER_ADMISSION_TIMEOUT`; an actual upstream quota response remains
+`PROVIDER_RATE_LIMIT_ERROR` with `UPSTREAM_RATE_LIMITED`. Do not collapse these
+states or reintroduce reject-only counters. Anonymous cancelled reservations expire
+with their short window; this is not a strict FIFO job queue.
+
 **Research files, judgment, and memory**
 
 - `investment_case_read` (`query`, `context`)
-- `investment_case_manage` (`create`, `archive`)
+- `investment_case_manage` (`create`, `update`, `archive`)
 - `research_judgment_get` (`state`, `thesis_history`)
 - `research_judgment_propose` (`research_state`, `thesis_revision`)
 - `research_judgment_confirm`
@@ -57,6 +67,11 @@ scope. Journal/Decision append and confirmed manage operations follow the same r
 and retain confirmer, idempotency, expected-version, and actor gates. Ambiguous target
 or action references require clarification, and no confirmation authorizes orders or
 other out-of-scope execution.
+
+Investment Case `update` changes only confirmed file metadata (`title`, `summary`,
+`topic_tags`, and `linked_case_ids`) through the existing user/external-agent gate and
+an idempotent audit candidate. It does not rewrite a Thesis, Trade Plan, evidence,
+report, Monitor, position, or historical research record.
 
 **Provider facts and technicals**
 
@@ -84,8 +99,13 @@ other out-of-scope execution.
 - Formal CME metal contracts use `future:CME:*` identities, CME public contract/
   settlement facts, and Yahoo active-contract quote/bars. DCE `future:DCE:LH*`
   supplies official EOD chain/settlement facts only. Dukascopy supplies free
-  broker/SWFX `commodity_spot:OTC:XAUUSD`, `XAGUSD`, and the separately labelled
-  rolling copper CFD. None may be relabelled as LBMA/LME benchmark data.
+  broker/SWFX `commodity_spot:OTC:XAUUSD`, `XAGUSD`, and separately labelled
+  rolling copper/light-oil CFDs. None may be relabelled as a licensed benchmark,
+  exchange future, or spot commodity.
+- Dukascopy also supplies `cfd:OTC:LIGHT_CMD_USD` through the upstream
+  `LIGHT.CMD-USD` Jetta code. `USOIL` is a lookup alias only. This identity is a
+  Dukascopy OTC rolling light-oil CFD—not WTI spot, NYMEX `CL`, a specific futures
+  contract, or a continuous futures series.
 - Dukascopy follows the current keyless `dukascopy-node` Jetta strategy: minute/
   hour/day data use UTC day/month/year buckets, up to 10 requests run per batch,
   and batches pause for one second. Completed buckets are cached; active `from`
@@ -153,7 +173,9 @@ credentials for it.
 
 **Accounts, sync, portfolio, workflows, and Challenge Review**
 
-- `account_get` (`positions`, `transactions`) — durable only; never contacts brokers
+- `account_get` (`positions`, `transactions`) — durable only; positions preserve the
+  full native-currency snapshot context, timestamps, open orders, and quality
+  warnings; it never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
 - `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `simulate_addition`)
@@ -222,9 +244,11 @@ requested Monitor identity but must disclose `ig_weekend_cfd`, scrape time, and
 proxy/not-spot warnings; it never supplies bars, technicals, XAGUSD, or historical
 `as_of` facts and must never be presented as XAUUSD spot or LBMA gold.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
-market-close run. Event alerts remain transition-only, while every evaluated
-A-share/US/KR post-market group emits one consolidated run summary even when no state
-changes; INTERVAL runs remain transition-only. Source and Outbox are committed
+market-close run. INTERVAL alerts remain transition-only. A-share/US/KR post-market
+groups persist their ordinary transition events but enqueue no separate event-linked
+Telegram cards: each evaluated group emits exactly one consolidated run summary,
+including an explicit zero-change heartbeat and every changed-point detail. Source
+and Outbox are committed
 atomically, retry is bounded, and expired messages are not delivered late.
 `trading-partner-monitor-notifications` provides
 secret-safe `status`, `test`, and `flush` operations without adding an MCP tool.
@@ -235,8 +259,15 @@ screen; one shared unavailable-fact cause is rendered once. Multiple same-Monito
 transitions in one run are delivered as one Telegram message without collapsing
 their durable Monitor events. Telegram does not support responsive tables, so the
 sender places symbol/current price in the first line, followed by the transition
-summary and mobile-first vertical rule lines. Transition alerts include the prior
-observed price, price change, and the exact Provider source from the run receipt.
+summary and mobile-first vertical rule lines. Transition alerts and changed
+post-market blocks include the prior observed price, price change, and the exact
+Provider source from the run receipt. Price-change percentages are rounded half-up
+and rendered with exactly two decimal places.
+The prominent transition section must identify every changed rule by its exact
+condition/threshold, bounded human meaning, severity, and event state; never reduce
+the change to a bare `TRIGGERED`/`RECOVERED` label. Historical Outbox formats remain
+readable. A single-transition headline includes its bounded condition; a
+multi-transition headline stays a compact count and details each change below.
 Prominent red/green Unicode alert bands distinguish a newly triggered or recovered
 level because Telegram HTML cannot set text background colors. Common provenance
 warnings are condensed to a human-readable basis line without hiding typed errors.

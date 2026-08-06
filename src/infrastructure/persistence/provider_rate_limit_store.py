@@ -1,6 +1,7 @@
 """SQLAlchemy short-session ProviderRateLimitStore (Phase 1D D5a).
 
-Fixed-window counters with SQLite-safe atomic consume in a single transaction.
+Fixed-window counters with SQLite-safe atomic reservations in a single
+transaction.  The existing table also stores near-future anonymous slots.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ class SqlAlchemyProviderRateLimitStore:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def consume(
+    def try_reserve(
         self,
         *,
         vendor: VendorId,
@@ -68,7 +69,14 @@ class SqlAlchemyProviderRateLimitStore:
         window_seconds: int,
         limit_count: int,
         at: datetime,
-    ) -> ProviderRateLimitSnapshot:
+    ) -> ProviderRateLimitSnapshot | None:
+        """Atomically reserve one slot, or return ``None`` for a full window.
+
+        SQLite's single-statement ``ON CONFLICT ... DO UPDATE ... WHERE``
+        acquires the writer lock for the whole decision.  The ``WHERE`` clause
+        means a denied reservation does not update either the count or the
+        timestamp, even when many processes probe the same full window.
+        """
         require_aware_datetime(window_start, field_name="window_start")
         require_aware_datetime(at, field_name="at")
         window_seconds = _require_positive_int(
@@ -86,7 +94,6 @@ class SqlAlchemyProviderRateLimitStore:
         try:
             with Session(self._engine) as session:
                 try:
-                    # Single-statement UPSERT is atomic on SQLite (writer lock).
                     insert_stmt = sqlite_insert(ProviderRateLimitRow).values(
                         vendor=vendor.value,
                         category=category.value,
@@ -96,9 +103,7 @@ class SqlAlchemyProviderRateLimitStore:
                         limit_count=limit_count,
                         updated_at=at_iso,
                     )
-                    # On conflict: increment count; freeze policy overwrites
-                    # window_seconds / limit_count with the values of this call.
-                    upsert_stmt = insert_stmt.on_conflict_do_update(
+                    reserve_stmt = insert_stmt.on_conflict_do_update(
                         index_elements=["vendor", "category", "window_start"],
                         set_={
                             "request_count": ProviderRateLimitRow.request_count + 1,
@@ -106,8 +111,17 @@ class SqlAlchemyProviderRateLimitStore:
                             "limit_count": insert_stmt.excluded.limit_count,
                             "updated_at": insert_stmt.excluded.updated_at,
                         },
-                    )
-                    session.execute(upsert_stmt)
+                        where=(
+                            ProviderRateLimitRow.request_count
+                            < insert_stmt.excluded.limit_count
+                        ),
+                    ).returning(ProviderRateLimitRow.request_count)
+                    returned = session.execute(reserve_stmt).first()
+                    if returned is None:
+                        # A conflict row existed but was full.  Commit the
+                        # read-only statement and leave its count untouched.
+                        session.commit()
+                        return None
                     session.flush()
                     row = session.get(ProviderRateLimitRow, pk)
                     if row is None:
@@ -126,13 +140,12 @@ class SqlAlchemyProviderRateLimitStore:
         except Exception as exc:  # noqa: BLE001
             error_type = type(exc).__name__
         if missing_after_upsert:
-            # Already-safe PersistenceError — no raw DB cause/context.
             raise PersistenceError(
-                "Failed to consume provider rate limit",
+                "Failed to reserve provider rate limit",
                 details={"error_type": "MissingRowAfterUpsert"},
             )
         if error_type is not None:
-            raise _persistence_error("consume", error_type)
+            raise _persistence_error("reserve", error_type)
         assert snapshot is not None
         return snapshot
 

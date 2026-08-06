@@ -43,6 +43,7 @@ from domain.common.enums import (
 from domain.common.errors import (
     DataContractError,
     NoMarketData,
+    ProviderAdmissionTimeoutError,
     ProviderAuthenticationError,
     ProviderNotConfigured,
     ProviderRateLimitError,
@@ -76,7 +77,9 @@ _MSG_CACHE_UNAVAILABLE = "Provider cache store unavailable"
 _MSG_CACHE_ENTRY_REJECTED = "Cached provider entry rejected"
 _MSG_STALE_DATA_REJECTED = "Stale market data rejected"
 _MSG_PARTIAL_VENDOR_CHAIN = "Vendor missing from registry"
-_MSG_RATE_LIMIT_DEGRADED = "Vendor skipped due to rate limit"
+_MSG_UPSTREAM_RATE_LIMITED = "Upstream provider rate limit reached"
+_MSG_ADMISSION_QUEUED = "Provider admission slot queued"
+_MSG_ADMISSION_TIMEOUT = "Provider admission wait budget expired"
 _MSG_CIRCUIT_OPEN_SKIPPED = "Vendor skipped because circuit is open"
 _MSG_PROVIDER_HEALTH_UNAVAILABLE = "Provider health projection unavailable"
 _MSG_PROVIDER_ROUTE_HISTORY_UNAVAILABLE = "Provider route history unavailable"
@@ -87,6 +90,7 @@ _MSG_OPTIONAL_DATA_UNAVAILABLE = "Optional data category unavailable"
 _ERROR_PRIORITY: tuple[type[TradingPartnerError], ...] = (
     DataContractError,
     ProviderAuthenticationError,
+    ProviderAdmissionTimeoutError,
     ProviderTimeoutError,
     ProviderUnavailableError,
     ProviderRateLimitError,
@@ -94,10 +98,6 @@ _ERROR_PRIORITY: tuple[type[TradingPartnerError], ...] = (
     NoMarketData,
     ProviderNotConfigured,
 )
-
-
-class _RateLimitDenied(Exception):
-    """Internal: fixed-window limiter denied admission (not a public error)."""
 
 
 class ProviderRouterEngine:
@@ -725,40 +725,22 @@ class ProviderRouterEngine:
                 ),
                 policy,
             )
-        except _RateLimitDenied:
-            self._add_warning(
-                warnings,
-                code="RATE_LIMIT_DEGRADED",
-                message=_MSG_RATE_LIMIT_DEGRADED,
-                category=category,
-                operation_name=operation_name,
-                vendor=vendor_id.value,
-            )
-            collected_errors.append(
-                ProviderRateLimitError(
-                    "Provider rate limit exceeded",
-                    details={
-                        "vendor": vendor_id.value,
-                        "category": category.value,
-                    },
-                )
-            )
-            return (
-                _AttemptDraft(
-                    outcome=ProviderAttemptOutcome.SKIPPED_RATE_LIMITED,
-                    error_code="PROVIDER_RATE_LIMIT_ERROR",
-                    message=None,
-                ),
-                None,
-                False,
-            )
         except TradingPartnerError as exc:
             outcome = self._outcome_for_error(exc)
+            if isinstance(exc, ProviderAdmissionTimeoutError):
+                self._add_warning(
+                    warnings,
+                    code="PROVIDER_ADMISSION_TIMEOUT",
+                    message=_MSG_ADMISSION_TIMEOUT,
+                    category=category,
+                    operation_name=operation_name,
+                    vendor=vendor_id.value,
+                )
             if isinstance(exc, ProviderRateLimitError):
                 self._add_warning(
                     warnings,
-                    code="RATE_LIMIT_DEGRADED",
-                    message=_MSG_RATE_LIMIT_DEGRADED,
+                    code="UPSTREAM_RATE_LIMITED",
+                    message=_MSG_UPSTREAM_RATE_LIMITED,
                     category=category,
                     operation_name=operation_name,
                     vendor=vendor_id.value,
@@ -854,11 +836,30 @@ class ProviderRouterEngine:
         warnings: list[WarningInfo],
         operation_name: str,
     ) -> ProviderSuccess[T]:
-        """One real provider attempt: rate → permit → timeout → validate → health."""
+        """One real attempt: admission → permit → timeout → validate → health."""
         del market  # reserved for future per-market rate policies
-        decision = self._rate_limiter.check_and_consume(vendor_id, category)
+        decision = await self._rate_limiter.acquire(
+            vendor_id,
+            category,
+            self._settings.provider_rate_limit_max_wait_seconds,
+        )
         if not decision.allowed:
-            raise _RateLimitDenied()
+            raise ProviderAdmissionTimeoutError(
+                "Provider admission wait budget expired",
+                details={
+                    "vendor": vendor_id.value,
+                    "category": category.value,
+                },
+            )
+        if decision.queued:
+            self._add_warning_once(
+                warnings,
+                code="PROVIDER_ADMISSION_QUEUED",
+                message=_MSG_ADMISSION_QUEUED,
+                category=category,
+                operation_name=operation_name,
+                vendor=vendor_id.value,
+            )
 
         permit = None
         if self._settings.enable_circuit_breaker:
@@ -900,16 +901,14 @@ class ProviderRouterEngine:
                     warnings=warnings,
                     operation_name=operation_name,
                 )
-            # Health failure for every real call that failed after admission
-            # (rate limit denial never reaches here).
-            if not isinstance(exc, _RateLimitDenied):
-                self._record_health_failure(
-                    vendor_id=vendor_id,
-                    category=category,
-                    error=exc,
-                    warnings=warnings,
-                    operation_name=operation_name,
-                )
+            # Health failure for every real call that failed after admission.
+            self._record_health_failure(
+                vendor_id=vendor_id,
+                category=category,
+                error=exc,
+                warnings=warnings,
+                operation_name=operation_name,
+            )
             if isinstance(exc, TradingPartnerError):
                 raise
             if isinstance(exc, Exception):
@@ -1192,6 +1191,8 @@ class ProviderRouterEngine:
 
     @staticmethod
     def _outcome_for_error(exc: TradingPartnerError) -> ProviderAttemptOutcome:
+        if isinstance(exc, ProviderAdmissionTimeoutError):
+            return ProviderAttemptOutcome.SKIPPED_ADMISSION_TIMEOUT
         if isinstance(exc, ProviderTimeoutError):
             return ProviderAttemptOutcome.TIMEOUT
         if isinstance(exc, ProviderAuthenticationError):
@@ -1201,7 +1202,7 @@ class ProviderRouterEngine:
         if isinstance(exc, (DataContractError, StaleMarketData)):
             return ProviderAttemptOutcome.CONTRACT_ERROR
         if isinstance(exc, ProviderRateLimitError):
-            return ProviderAttemptOutcome.SKIPPED_RATE_LIMITED
+            return ProviderAttemptOutcome.RATE_LIMITED
         return ProviderAttemptOutcome.FAILURE
 
     def _aggregate_errors(

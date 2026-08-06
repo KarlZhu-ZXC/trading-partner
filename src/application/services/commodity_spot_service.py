@@ -1,8 +1,9 @@
 """Commodity spot / OTC quote and bar application service (Phase 3A-3).
 
 Composes the CommoditySpotProvider port. Never fabricates prices. Dukascopy SWFX
-feeds are broker/OTC observations, not LBMA benchmarks. Rolling copper CFD keeps
-``cfd:OTC:COPPER_CMD_USD`` identity and always warns ``ROLLING_CFD_NOT_SPOT``.
+feeds are broker/OTC observations, not LBMA benchmarks. Rolling copper and light-oil
+CFDs keep their separate ``cfd:OTC:*`` identities and always warn
+``ROLLING_CFD_NOT_SPOT``.
 """
 
 from __future__ import annotations
@@ -22,14 +23,14 @@ from domain.cross_asset.enums import OfferSide
 from domain.instruments.models import Instrument
 from domain.us_market.enums import USBarInterval
 
-_BASE_WARNINGS = (
-    WarningInfo(
-        code="DUKASCOPY_SWFX_NOT_LBMA",
-        message=(
-            "Dukascopy SWFX/broker OTC feed is not an LBMA auction benchmark "
-            "and must not be labelled as LBMA gold or silver."
-        ),
+_LBMA_WARNING = WarningInfo(
+    code="DUKASCOPY_SWFX_NOT_LBMA",
+    message=(
+        "Dukascopy SWFX/broker OTC feed is not an LBMA auction benchmark "
+        "and must not be labelled as LBMA gold or silver."
     ),
+)
+_OTC_WARNINGS = (
     WarningInfo(
         code="OTC_BROKER_FEED",
         message="Observation uses Dukascopy SWFX venue basis, not exchange cash.",
@@ -42,12 +43,25 @@ _BASE_WARNINGS = (
         ),
     ),
 )
-_CFD_WARNING = WarningInfo(
+_PRECIOUS_SPOT_WARNINGS = (_LBMA_WARNING, *_OTC_WARNINGS)
+_COPPER_CFD_WARNING = WarningInfo(
     code="ROLLING_CFD_NOT_SPOT",
     message=(
         "Rolling commodity CFD is not copper spot, LME Cash, or COMEX copper. "
         "Identity remains cfd:OTC:COPPER_CMD_USD."
     ),
+)
+_LIGHT_OIL_CFD_WARNING = WarningInfo(
+    code="ROLLING_CFD_NOT_SPOT",
+    message=(
+        "This is a Dukascopy OTC rolling light-oil CFD, not WTI spot, NYMEX CL, "
+        "a specific futures contract, or a continuous futures series. "
+        "Identity remains cfd:OTC:LIGHT_CMD_USD."
+    ),
+)
+_GENERIC_CFD_WARNING = WarningInfo(
+    code="ROLLING_CFD_NOT_SPOT",
+    message="Rolling commodity CFD is not spot or an exchange-traded futures contract.",
 )
 _IG_WEEKEND_WARNINGS = (
     WarningInfo(
@@ -93,8 +107,19 @@ class CommoditySpotBarsResult:
 
 def _warnings_for(instrument: Instrument) -> tuple[WarningInfo, ...]:
     if instrument.asset_type is AssetType.CFD:
-        return _BASE_WARNINGS + (_CFD_WARNING,)
-    return _BASE_WARNINGS
+        if instrument.instrument_id == "cfd:OTC:COPPER_CMD_USD":
+            cfd_warning = _COPPER_CFD_WARNING
+        elif instrument.instrument_id == "cfd:OTC:LIGHT_CMD_USD":
+            cfd_warning = _LIGHT_OIL_CFD_WARNING
+        else:
+            cfd_warning = _GENERIC_CFD_WARNING
+        return (*_OTC_WARNINGS, cfd_warning)
+    if instrument.asset_type is AssetType.COMMODITY_SPOT and instrument.symbol in {
+        "XAUUSD",
+        "XAGUSD",
+    }:
+        return _PRECIOUS_SPOT_WARNINGS
+    return _OTC_WARNINGS
 
 
 def _quote_warnings(
@@ -104,6 +129,27 @@ def _quote_warnings(
     if observation.venue_basis.value == "ig_weekend_cfd":
         return _IG_WEEKEND_WARNINGS
     return _warnings_for(instrument)
+
+
+def _provider_extra_warnings(
+    instrument: Instrument,
+    meta: ProviderResultMeta,
+    warnings: tuple[WarningInfo, ...],
+) -> tuple[WarningInfo, ...]:
+    known_codes = {warning.code for warning in warnings}
+    # ``DUKASCOPY_SWFX_NOT_LBMA`` is a gold/silver-specific warning.  Keep the
+    # service boundary authoritative even when a legacy/fake Provider returns
+    # that historical code for a CFD identity.
+    lbma_allowed = instrument.asset_type is AssetType.COMMODITY_SPOT and instrument.symbol in {
+        "XAUUSD",
+        "XAGUSD",
+    }
+    return tuple(
+        WarningInfo(code=code, message=code.replace("_", " ").lower())
+        for code in meta.warnings
+        if code not in known_codes
+        and (code != "DUKASCOPY_SWFX_NOT_LBMA" or lbma_allowed)
+    )
 
 
 def _require_otc_instrument(instrument: Instrument) -> None:
@@ -173,11 +219,7 @@ class CommoditySpotService:
             observation = SpotObservationDTO.from_domain(result.value)
             warnings = _quote_warnings(instrument, observation)
             # Merge provider meta warning codes as structured WarningInfo if present.
-            extra = tuple(
-                WarningInfo(code=code, message=code.replace("_", " ").lower())
-                for code in result.meta.warnings
-                if code not in {w.code for w in warnings}
-            )
+            extra = _provider_extra_warnings(instrument, result.meta, warnings)
             return CommoditySpotQuoteResult(
                 ok=True,
                 data=observation,
@@ -229,11 +271,7 @@ class CommoditySpotService:
                     details={"field": "bars", "code": "NO_MARKET_DATA"},
                 )
             warnings = _warnings_for(instrument)
-            extra = tuple(
-                WarningInfo(code=code, message=code.replace("_", " ").lower())
-                for code in result.meta.warnings
-                if code not in {w.code for w in warnings}
-            )
+            extra = _provider_extra_warnings(instrument, result.meta, warnings)
             return CommoditySpotBarsResult(
                 ok=True,
                 data=CommoditySpotBarSeriesDTO.from_domain(result.value),

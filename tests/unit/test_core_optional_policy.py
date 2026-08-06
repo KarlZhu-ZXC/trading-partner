@@ -103,7 +103,13 @@ class _MemRateStore:
 
 
 class _AllowRateLimiter:
-    def check_and_consume(self, vendor: VendorId, category: DataCategory) -> RateLimitDecision:
+    async def acquire(
+        self,
+        vendor: VendorId,
+        category: DataCategory,
+        max_wait_seconds: float,
+    ) -> RateLimitDecision:
+        del vendor, category, max_wait_seconds
         return RateLimitDecision(
             allowed=True,
             remaining=10,

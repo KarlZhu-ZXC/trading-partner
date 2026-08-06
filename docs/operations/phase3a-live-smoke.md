@@ -32,6 +32,8 @@ Dukascopy 默认走与当前 `dukascopy-node` 相同的 keyless Jetta 分桶接�
 - `instrument_resolve(market="CME", query="future:CME:GCZ26", asset_type_hint="future")`
 - `market_get_snapshot(instrument_id="future:CME:GCZ26", operation="quote")`
 - `market_get_bars(instrument_id="commodity_spot:OTC:XAUUSD", interval="60m", ...)`
+- `market_data_get(request={"operation":"quote","instrument_id":"cfd:OTC:LIGHT_CMD_USD"})`
+- `market_data_get(request={"operation":"bars","instrument_id":"cfd:OTC:LIGHT_CMD_USD","interval":"60m",...})`
 - `market_data_get(request={"operation":"futures_curve","product_key":"CME:GC","price_basis":"settlement",...})`
 - `market_data_get(request={"operation":"futures_curve","product_key":"DCE:LH","price_basis":"settlement",...})`
 - `market_data_get(request={"operation":"spot_future_basis","left_instrument_id":"commodity_spot:OTC:XAUUSD","right_instrument_id":"future:CME:GCZ26",...})`
@@ -55,9 +57,9 @@ uv run trading-partner-futures-sync --product DCE:LH --trade-date 2026-07-24
 - CME 公开端点 TLS/网络失败：typed provider error；不能退化成 `GC=F` 冒充具体合约。
 - DCE 返回 401/403/412：`DCE_OFFICIAL_ACCESS_RESTRICTED`，非自动浏览器绕过。
 - Yahoo specific contract 缺失：明确 unavailable，不改查连续代理。
-- Dukascopy 不可用：XAU/XAG/CFD 明确 unavailable，不改用 GC/SI/HG。
+- Dukascopy 不可用：XAU/XAG/铜 CFD/轻质原油 CFD 明确 unavailable，不改用期货代理冒充。
 - Dukascopy `network_route=direct|proxy` 只披露采用的网络路径，不披露代理地址。Jetta
-  使用固定映射 `XAU-USD`、`XAG-USD`、`COPPER.CMD-USD`；旧接口的整数 instrument id
+  使用固定映射 `XAU-USD`、`XAG-USD`、`COPPER.CMD-USD`、`LIGHT.CMD-USD`；旧接口的整数 instrument id
   解析只属于可选 legacy fallback。
 - DCE 没有免费分钟 OHLCV：Technical/price Monitor 保持 `NOT_EVALUATED`。
 

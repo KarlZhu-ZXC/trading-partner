@@ -51,6 +51,13 @@ class ProviderRateLimitError(TradingPartnerError):
     default_retryable = True
 
 
+class ProviderAdmissionTimeoutError(TradingPartnerError):
+    """Local admission queue budget expired before a provider slot was free."""
+
+    default_code = "PROVIDER_ADMISSION_TIMEOUT"
+    default_retryable = True
+
+
 class ProviderTimeoutError(TradingPartnerError):
     default_code = "PROVIDER_TIMEOUT_ERROR"
     default_retryable = True

@@ -49,6 +49,16 @@ _COPPER = Instrument(
     timezone="UTC",
     asset_type=AssetType.CFD,
 )
+_LIGHT_OIL = Instrument(
+    instrument_id="cfd:OTC:LIGHT_CMD_USD",
+    symbol="LIGHT_CMD_USD",
+    name="Dukascopy Light Oil Rolling CFD (not WTI spot, not a NYMEX future)",
+    market=Market.OTC,
+    exchange="DUKASCOPY_SWFX",
+    currency="USD",
+    timezone="UTC",
+    asset_type=AssetType.CFD,
+)
 
 
 def _meta(category: DataCategory, warnings: tuple[str, ...]) -> ProviderResultMeta:
@@ -157,6 +167,21 @@ async def test_service_quote_xau_and_copper_warnings() -> None:
     assert copper.data is not None
     assert copper.data.instrument_id == "cfd:OTC:COPPER_CMD_USD"
     assert any(w.code == "ROLLING_CFD_NOT_SPOT" for w in copper.warnings)
+    copper_warning = next(w for w in copper.warnings if w.code == "ROLLING_CFD_NOT_SPOT")
+    assert "copper" in copper_warning.message.lower()
+    assert "light-oil" not in copper_warning.message.lower()
+    assert not any(w.code == "DUKASCOPY_SWFX_NOT_LBMA" for w in copper.warnings)
+
+    oil = await service.get_quote(_LIGHT_OIL, as_of=AS_OF)
+    assert oil.ok is True
+    oil_warning = next(w for w in oil.warnings if w.code == "ROLLING_CFD_NOT_SPOT")
+    oil_message = oil_warning.message.lower()
+    assert "dukascopy otc rolling light-oil cfd" in oil_message
+    assert "not wti spot" in oil_message
+    assert "nymex cl" in oil_message
+    assert "specific futures contract" in oil_message
+    assert "continuous futures series" in oil_message
+    assert not any(w.code == "DUKASCOPY_SWFX_NOT_LBMA" for w in oil.warnings)
 
 
 @pytest.mark.asyncio

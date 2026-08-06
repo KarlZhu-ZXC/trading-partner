@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-03
+> Updated: 2026-08-04
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -63,6 +63,9 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Yahoo extended-hours quotes | A recovered pre/post-market last price clears unsupported regular-session range/volume fields and emits `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE` |
 | Technical interval input | MCP schemas advertise `1d`/`1w`; common daily/weekly aliases normalize at the DTO boundary instead of failing conversational calls |
 | Schwab OAuth status | `next_action` follows current token health; only the successful `renew` command asks for one account-sync retry |
+| Telegram changed-point identity | Transition banners list each changed condition/threshold, bounded meaning, severity, and state instead of a bare `TRIGGERED`/`RECOVERED` label |
+| Telegram post-market duplication | A market-close run persists transition events but sends exactly one run-linked digest; no duplicate per-symbol event cards, and price-change percentages keep two decimals |
+| Provider burst admission | Router-managed Provider calls atomically reserve bounded current/future slots and wait asynchronously; local queue expiry is `PROVIDER_ADMISSION_TIMEOUT`, distinct from an upstream `PROVIDER_RATE_LIMIT_ERROR` |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
 [Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the

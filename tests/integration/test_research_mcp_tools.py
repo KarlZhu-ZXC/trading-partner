@@ -71,6 +71,7 @@ class _CompactSession:
 
     _GROUPED = {
         "investment_case_create": ("investment_case_manage", "create"),
+        "investment_case_update": ("investment_case_manage", "update"),
         "investment_case_query": ("investment_case_read", "query"),
         "investment_case_archive": ("investment_case_manage", "archive"),
         "research_state_get": ("research_judgment_get", "state"),
@@ -182,6 +183,39 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert got["ok"] is True
         assert got["data"]["case_id"] == case_id
         assert got["data"]["title"] == "NVDA long-horizon"
+
+        updated = _parse_envelope(
+            await api.call_tool(
+                "investment_case_update",
+                {
+                    "case_id": case_id,
+                    "summary": "Updated structural GPU demand scope",
+                    "topic_tags": ["ai", "semiconductors", "long-horizon"],
+                    "reviewed_by": "user",
+                    "idempotency_key": "case-update-1",
+                },
+            )
+        )
+        assert updated["ok"] is True, updated
+        assert updated["data"]["case_id"] == case_id
+        assert updated["data"]["summary"] == "Updated structural GPU demand scope"
+        assert updated["data"]["topic_tags"] == ["ai", "semiconductors", "long-horizon"]
+
+        updated_again = _parse_envelope(
+            await api.call_tool(
+                "investment_case_update",
+                {
+                    "case_id": case_id,
+                    "summary": "Updated structural GPU demand scope",
+                    "topic_tags": ["ai", "semiconductors", "long-horizon"],
+                    "reviewed_by": "user",
+                    "idempotency_key": "case-update-1",
+                },
+            )
+        )
+        assert updated_again["ok"] is True
+        assert updated_again["degraded"] is True
+        assert updated_again["data"]["case_id"] == case_id
 
         listed = _parse_envelope(
             await api.call_tool(
