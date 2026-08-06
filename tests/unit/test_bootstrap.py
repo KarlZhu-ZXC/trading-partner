@@ -12,9 +12,14 @@ import pytest
 
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.watchlist_hub_service import WatchlistHubService
-from bootstrap import ApplicationContainer, BootstrapOverrides, build_application
+from bootstrap import (
+    ApplicationContainer,
+    BootstrapOverrides,
+    build_application,
+)
 from domain.common.enums import AppEnvironment, LogLevel, VendorId
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
+from infrastructure.composition import enabled_account_provider_order
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.in_memory_provider_state import (
     InMemoryProviderCacheStore,
@@ -80,6 +85,18 @@ _REAL_US_VENDORS = (
 _EXPECTED_REGISTERED = (
     frozenset(_REAL_A_SHARE_VENDORS) | frozenset(_REAL_US_VENDORS) | frozenset({VendorId.NULL})
 )
+
+
+def test_enabled_account_provider_order_filters_optional_unselected_sources() -> None:
+    candidates = (VendorId.SCHWAB, VendorId.MOOMOO, VendorId.MANUAL_CSV)
+
+    assert enabled_account_provider_order(candidates, ("SCHWAB", "MOOMOO")) == (
+        VendorId.SCHWAB,
+        VendorId.MOOMOO,
+    )
+    assert enabled_account_provider_order(candidates, ("MANUAL_CSV",)) == (
+        VendorId.MANUAL_CSV,
+    )
 
 
 class _FakeTransport:

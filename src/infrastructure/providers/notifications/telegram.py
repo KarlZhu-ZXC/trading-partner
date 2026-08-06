@@ -17,6 +17,11 @@ from domain.monitoring.models import MonitorNotificationOutboxEntry
 _MAX_RESPONSE_BYTES = 64_000
 _RULE_ROW_PATTERN = re.compile(r"\s{2,}")
 _CHANGE_PATTERN = re.compile(r"^\u2022 \[(?P<severity>[^]]+)] (?P<rule>.+?) \u2192 (?P<event>\S+)$")
+_DETAILED_CHANGE_PATTERN = re.compile(
+    r"^\u2022 \[(?P<severity>[^]]+)] (?P<rule>.+?) · "
+    r"条件：(?P<condition>.*?) · 含义：(?P<meaning>.*?)"
+    r" \u2192 (?P<event>TRIGGERED|RECOVERED|NOT_EVALUATED)$"
+)
 _COMPACT_CARD_PATTERN = re.compile(
     r"^\u2022\s*状态：(?P<state>\S+)\s*·\s*"
     r"条件：(?P<condition>.*?)\s*·\s*"
@@ -147,7 +152,7 @@ def _format_notification_html(title: str, body: str) -> str:
         rules_index = lines.index("RULES")
     except ValueError:
         return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
-    if rules_index + 2 >= len(lines):
+    if rules_index + 1 >= len(lines):
         return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
 
     monitor_name = lines[0].strip() if lines else ""
@@ -270,10 +275,18 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     price_basis = _prefixed_value(lines, "价格口径：")
     price_time = _prefixed_value(lines, "价格时间：")
     data_source = _prefixed_value(lines, "数据来源：")
+    previous_price = _prefixed_value(lines, "上次价格：")
+    price_change = _prefixed_value(lines, "价格变化：")
+    changes_index = lines.index("CHANGES") if "CHANGES" in lines else None
     try:
         rules_index = lines.index("RULES")
     except ValueError:
         return None
+    changes = (
+        lines[changes_index + 1 : rules_index]
+        if changes_index is not None and changes_index < rules_index
+        else []
+    )
     rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
     if not rows:
         return None
@@ -295,6 +308,21 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         )
     if price_basis is not None:
         parts.append(f"⚠️ {html.escape(price_basis)}")
+    if previous_price is not None:
+        parts.append(f"↩️ 上次价格：{html.escape(previous_price)}")
+    if price_change is not None:
+        parts.append(f"📈 较上次：<b>{html.escape(price_change)}</b>")
+    formatted_changes = tuple(
+        formatted for line in changes if (formatted := _format_change(line)) is not None
+    )
+    if formatted_changes:
+        parts.append(
+            _change_banner(changes)
+            + "\n"
+            + "\n".join(formatted_changes)
+            + "\n"
+            + _change_footer(changes)
+        )
     for note in notes:
         if note not in {price_basis}:
             parts.append(f"<i>{html.escape(note)}</i>")
@@ -349,6 +377,16 @@ def _parse_rule_rows(
 
 
 def _format_change(line: str) -> str | None:
+    detailed_match = _detailed_change_match(line)
+    if detailed_match is not None:
+        event = detailed_match.group("event")
+        severity = _short_severity(detailed_match.group("severity"))
+        return (
+            f"{_state_emoji(event)} <b>{html.escape(detailed_match.group('condition'))}</b>"
+            f" · <b>{html.escape(_state_label(event))}</b> · "
+            f"{html.escape(severity)}\n"
+            f"含义：{html.escape(detailed_match.group('meaning'))}"
+        )
     match = _CHANGE_PATTERN.fullmatch(line.strip())
     if match is None:
         return html.escape(line.strip()) if line.strip() else None
@@ -363,12 +401,21 @@ def _format_change(line: str) -> str | None:
     )
 
 
+def _detailed_change_match(line: str) -> re.Match[str] | None:
+    stripped = line.strip()
+    return _DETAILED_CHANGE_PATTERN.fullmatch(stripped)
+
+
+def _change_event(line: str) -> str | None:
+    detailed_match = _detailed_change_match(line)
+    if detailed_match is not None:
+        return detailed_match.group("event")
+    legacy_match = _CHANGE_PATTERN.fullmatch(line.strip())
+    return legacy_match.group("event") if legacy_match is not None else None
+
+
 def _change_banner(changes: list[str]) -> str:
-    event_types = {
-        match.group("event")
-        for line in changes
-        if (match := _CHANGE_PATTERN.fullmatch(line.strip())) is not None
-    }
+    event_types = {event for line in changes if (event := _change_event(line)) is not None}
     if "TRIGGERED" in event_types:
         return "🟥🟥🟥 <b>新触发点位</b> 🟥🟥🟥\n<b>状态较上次发生变化</b>"
     if "RECOVERED" in event_types:
@@ -377,11 +424,7 @@ def _change_banner(changes: list[str]) -> str:
 
 
 def _change_footer(changes: list[str]) -> str:
-    event_types = {
-        match.group("event")
-        for line in changes
-        if (match := _CHANGE_PATTERN.fullmatch(line.strip())) is not None
-    }
+    event_types = {event for line in changes if (event := _change_event(line)) is not None}
     if "TRIGGERED" in event_types:
         return "🟥🟥🟥🟥🟥🟥🟥🟥🟥"
     if "RECOVERED" in event_types:
@@ -514,6 +557,10 @@ def _state_label(state: str) -> str:
         "RECOVERED": "已恢复",
         "QUIET": "未触发",
     }.get(state, state)
+
+
+def _short_severity(value: str) -> str:
+    return {"MEDIUM": "M", "HIGH": "H"}.get(value.strip(), value.strip())
 
 
 def _prefixed_value(lines: list[str], prefix: str) -> str | None:

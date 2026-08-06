@@ -263,7 +263,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v12",
+        "surface_schema_version": "compact-v14",
     }
 
 

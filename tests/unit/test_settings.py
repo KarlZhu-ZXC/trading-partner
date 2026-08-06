@@ -506,6 +506,7 @@ def test_d5b_resilience_defaults() -> None:
     assert s.provider_retry_max_attempts == 2
     assert s.provider_retry_base_delay_seconds == 0.05
     assert s.provider_retry_max_delay_seconds == 1.0
+    assert s.provider_rate_limit_max_wait_seconds == 5.0
     assert s.circuit_failure_threshold == 5
     assert s.circuit_recovery_timeout_seconds == 60.0
     assert s.circuit_half_open_max_calls == 1
@@ -629,6 +630,8 @@ def test_d5b_positive_and_nonnegative_validation() -> None:
     with pytest.raises(ValidationError):
         _base_settings(provider_retry_base_delay_seconds=-0.01)
     with pytest.raises(ValidationError):
+        _base_settings(provider_rate_limit_max_wait_seconds=-0.01)
+    with pytest.raises(ValidationError):
         _base_settings(circuit_failure_threshold=0)
     with pytest.raises(ValidationError):
         _base_settings(circuit_recovery_timeout_seconds=0)
@@ -679,6 +682,7 @@ def test_d5b_env_keys_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
                 "PROVIDER_RETRY_MAX_ATTEMPTS=3",
                 "PROVIDER_RETRY_BASE_DELAY_SECONDS=0.1",
                 "PROVIDER_RETRY_MAX_DELAY_SECONDS=2.0",
+                "PROVIDER_RATE_LIMIT_MAX_WAIT_SECONDS=7.5",
                 "AUTH_FAILURE_FALLBACK=true",
                 "CIRCUIT_FAILURE_THRESHOLD=7",
                 "CIRCUIT_RECOVERY_TIMEOUT_SECONDS=90",
@@ -697,6 +701,7 @@ def test_d5b_env_keys_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.provider_retry_max_attempts == 3
     assert settings.provider_retry_base_delay_seconds == 0.1
     assert settings.provider_retry_max_delay_seconds == 2.0
+    assert settings.provider_rate_limit_max_wait_seconds == 7.5
     assert settings.auth_failure_fallback is True
     assert settings.circuit_failure_threshold == 7
     assert settings.circuit_recovery_timeout_seconds == 90.0

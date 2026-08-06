@@ -117,6 +117,11 @@ class AppSettings(BaseSettings):
     provider_retry_max_attempts: int = Field(default=2, ge=1)
     provider_retry_base_delay_seconds: float = Field(default=0.05, ge=0)
     provider_retry_max_delay_seconds: float = Field(default=1.0, ge=0)
+    provider_rate_limit_max_wait_seconds: float = Field(
+        default=5.0,
+        ge=0,
+        allow_inf_nan=False,
+    )
 
     # Circuit breaker (Phase 1D D5b). Unwired until Router (D6+).
     circuit_failure_threshold: int = Field(default=5, ge=1)

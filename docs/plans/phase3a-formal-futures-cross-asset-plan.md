@@ -120,7 +120,7 @@ Discovery gate 失败时，DCE Phase 3A 返回明确的 provider/entitlement err
 东方财富“主连”或新浪连续行情当作正式合约链。第三方公开源可继续作为明确降级的观察源，
 但不满足 P1 正式验收。
 
-### 4.3 XAU/USD、XAG/USD 与铜代理：免费组合源
+### 4.3 XAU/USD、XAG/USD 与滚动商品 CFD：免费组合源
 
 | 来源 | 粒度/能力 | 数据口径 | 评估 |
 |---|---|---|---|
@@ -137,6 +137,10 @@ UTC day boundary 和其 volume 为 best bid/ask volume 汇总的特殊口径。
 Dukascopy 的 `COPPER.CMD/USD` 是非到期 commodity CFD，价格受相应近月期货影响并在换月时
 做 monthly adjustment；它必须使用独立 `cfd:OTC:COPPER_CMD_USD` 身份，不能命名为铜现货、
 LME Cash 或 COMEX HG。免费版可以把它作为 P2 观察代理，真正铜现货仍保持 unavailable。
+
+Dukascopy 的 `LIGHT.CMD/USD`（Jetta `LIGHT.CMD-USD`）同样使用独立
+`cfd:OTC:LIGHT_CMD_USD` 身份。`USOIL` 只是本地解析别名；响应必须持续披露它是 OTC
+滚动轻质原油 CFD，而不是 WTI 现货、NYMEX `CL`、具体交割合约或连续期货序列。
 
 Gold-API 免费 current endpoint 经 2026-07-25 smoke 可返回 XAU、XAG、HG 和 `updatedAt`，
 但周末也会持续刷新 `updatedAt`。该时间更像服务缓存更新时间，不能当作市场成交时间。
@@ -169,6 +173,7 @@ future:DCE:LH2609                # DCE 生猪具体合约
 commodity_spot:OTC:XAUUSD        # 聚合 OTC gold/USD
 commodity_spot:OTC:XAGUSD        # 聚合 OTC silver/USD
 cfd:OTC:COPPER_CMD_USD           # Dukascopy rolling copper CFD；不是铜现货
+cfd:OTC:LIGHT_CMD_USD            # Dukascopy rolling light-oil CFD；USOIL 仅为别名
 benchmark:OTC:LBMA_GOLD_PM       # 仅在取得许可后启用
 ```
 

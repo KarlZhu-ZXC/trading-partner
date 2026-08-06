@@ -24,6 +24,7 @@ docs/
 │   ├── phase3a-formal-futures-cross-asset-plan.md
 │   ├── phase3c-quantconnect-free-bridge.md
 │   ├── catalyst-agenda-and-scorecard-plan.md
+│   ├── local-console-product-closure-plan.md
 │   ├── product-capability-and-market-gap-review.md
 │   └── performance-attribution-and-console-plan.md
 ├── operations/
@@ -31,7 +32,9 @@ docs/
 │   ├── local-console-and-maintenance.md
 │   └── phase3a-live-smoke.md
 ├── releases/
-│   └── unreleased.md
+│   ├── unreleased.md
+│   ├── v0.4.0.md
+│   └── v0.2.0.md
 ├── roadmap/
 │   └── global-roadmap-cn-us.md
 ```
@@ -64,6 +67,7 @@ docs/
 | [plans/phase3c-quantconnect-free-bridge.md](plans/phase3c-quantconnect-free-bridge.md) | Implemented zero-cost LEAN package/result-import bridge for user-operated QuantConnect Free backtests |
 | [plans/performance-attribution-and-console-plan.md](plans/performance-attribution-and-console-plan.md) | Staged real-performance attribution plan, QMT/FX deferral, and implemented local-console boundary |
 | [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Frozen durable Catalyst Agenda contract, free-source sequence, lean TDD, and Judgment Scorecard prerequisites |
+| [plans/local-console-product-closure-plan.md](plans/local-console-product-closure-plan.md) | Complete Local Console information architecture, editing semantics, gap inventory, and staged closure plan |
 | [plans/product-capability-and-market-gap-review.md](plans/product-capability-and-market-gap-review.md) | Current user-facing capability inventory, comparable-product research, and bounded product-gap priorities |
 | [plans/mcp-surface-reduction-plan.md](plans/mcp-surface-reduction-plan.md) | Implemented compact v2 reduction from 52 legacy tools to the sole 28-tool runtime surface, with discriminated schemas and permission separation; the compatibility profile was removed |
 
@@ -81,6 +85,7 @@ docs/
 | Document | Purpose |
 |---|---|
 | [releases/unreleased.md](releases/unreleased.md) | Changes queued for the next release |
+| [releases/v0.4.0.md](releases/v0.4.0.md) | Portfolio attribution, data quality, Monitor reliability, Console closure, and cross-asset additions |
 | [releases/v0.2.0.md](releases/v0.2.0.md) | Phase 3 facts, compact 28, and judgment controls |
 
 ## Source layout

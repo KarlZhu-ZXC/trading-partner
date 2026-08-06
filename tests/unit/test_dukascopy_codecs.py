@@ -16,6 +16,7 @@ from infrastructure.providers.cross_asset.dukascopy_codecs import (
     decode_jetta_candles,
     dukascopy_instrument_code,
     dukascopy_jetta_instrument_code,
+    instrument_id_for_dukascopy_code,
     loads_dukascopy_json,
     supported_bar_intervals,
     timeframe_for_interval,
@@ -105,8 +106,11 @@ def test_decode_instrument_list_and_identity_map() -> None:
     assert [row.instrument_id for row in rows] == [1001, 1002, None]
     assert dukascopy_instrument_code("commodity_spot:OTC:XAUUSD") == "XAU/USD"
     assert dukascopy_instrument_code("cfd:OTC:COPPER_CMD_USD") == "COPPER.CMD/USD"
+    assert dukascopy_instrument_code("cfd:OTC:LIGHT_CMD_USD") == "LIGHT.CMD/USD"
+    assert instrument_id_for_dukascopy_code("LIGHT.CMD/USD") == "cfd:OTC:LIGHT_CMD_USD"
     assert dukascopy_jetta_instrument_code("commodity_spot:OTC:XAUUSD") == "XAU-USD"
     assert dukascopy_jetta_instrument_code("cfd:OTC:COPPER_CMD_USD") == "COPPER.CMD-USD"
+    assert dukascopy_jetta_instrument_code("cfd:OTC:LIGHT_CMD_USD") == "LIGHT.CMD-USD"
 
 
 def test_decode_instrument_list_rejects_non_integer_id() -> None:

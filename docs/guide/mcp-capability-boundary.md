@@ -103,6 +103,7 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 | 工具 | 能力与边界 |
 |---|---|
 | `investment_case_manage` (`create`) | 创建经用户确认的研究档案；company/catalyst 必须绑定标的，且不自动形成投资判断 |
+| `investment_case_manage` (`update`) | 经用户或外部 agent 确认、带幂等键地更新 Case 标题、摘要、标签或关联 Case；不改写 Thesis、Trade Plan 或历史记录 |
 | `investment_case_read` (`query`) | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
 | `investment_case_manage` (`archive`) | 经明确复核后归档研究档案；不删除 Instrument，也不是物理删除 |
 | `research_judgment_get` (`state`) | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
@@ -196,10 +197,10 @@ CLI 会报告实际覆盖与缺失月份。当前官方在线档案不能证明�
 
 | 工具 | 能力与边界 |
 |---|---|
-| `market_data_get` (`quote`/`quotes`/`composite`) | `quote` 支持美股、韩股、CME 具体/兼容连续期货和 Dukascopy OTC 金属；`quotes` 一次读取 1–50 个唯一标的并逐项保留成功/失败；`composite` 仍仅限美股 |
-| `market_data_get` (`bars`) | 美股、韩股、CME 具体/兼容连续期货及 Dukascopy OTC 金属 OHLCV；期货/OTC 固定不复权 |
+| `market_data_get` (`quote`/`quotes`/`composite`) | `quote` 支持美股、韩股、CME 具体/兼容连续期货和 Dukascopy OTC 金属/滚动 CFD；`quotes` 一次读取 1–50 个唯一标的并逐项保留成功/失败；`composite` 仍仅限美股 |
+| `market_data_get` (`bars`) | 美股、韩股、CME 具体/兼容连续期货及 Dukascopy OTC 金属/滚动 CFD OHLCV；期货/OTC 固定不复权 |
 | `market_data_get` (`us_market`/`futures_curve`/`spot_future_basis`) | `us_market`、CME/DCE 官方结算期限结构，或经过单位/时间门槛的期现基差 |
-| `technical_get_snapshot` | A 股、美股、韩股、CME 具体/兼容期货和 OTC 金属日线与周线技术事实 |
+| `technical_get_snapshot` | A 股、美股、韩股、CME 具体/兼容期货和 Dukascopy OTC 金属/滚动 CFD 日线与周线技术事实 |
 | `technical_render_chart` | 返回可审计元数据和 PNG K线/成交量/RSI 图 |
 
 股票默认路由为 Yahoo → Alpha Vantage；兼容连续期货以 Yahoo 免费代理为主，
@@ -225,7 +226,9 @@ quote/bars 使用 Yahoo active-contract symbol；不会回退为 `GC=F` 冒充�
 `future:DCE:LH*`，免费边界仅承诺官方 EOD 合约链、结算、成交量和持仓量；官方端点被反爬
 拦截时返回 typed degradation。`commodity_spot:OTC:XAUUSD`、`XAGUSD` 是 Dukascopy
 broker/SWFX 报价，不是 LBMA；`cfd:OTC:COPPER_CMD_USD` 是 rolling CFD，不是铜现货或
-LME Cash。显式运行 `uv run trading-partner-futures-sync --trade-date YYYY-MM-DD` 会刷新定义
+LME Cash。`cfd:OTC:LIGHT_CMD_USD` 对应 Dukascopy `LIGHT.CMD-USD`，`USOIL` 只作为查询
+别名；它是 OTC 滚动轻质原油 CFD，不是 WTI 现货、NYMEX `CL`、某张期货合约或连续期货。
+显式运行 `uv run trading-partner-futures-sync --trade-date YYYY-MM-DD` 会刷新定义
 并幂等保存 EOD statistics vintage，不产生订单或仓位变化。
 
 Moomoo Hot List 返回交易、搜索、新闻及综合热度排名，只代表社区注意力，不代表看多或看空。
@@ -267,7 +270,7 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 
 | 工具 | 能力与边界 |
 |---|---|
-| `account_get` (`positions`/`transactions`) | 只读取持久化持仓或标准化历史成交，不接触券商 |
+| `account_get` (`positions`/`transactions`) | 只读取持久化账户快照与持仓，或标准化历史成交，不接触券商；快照保留原币种现金、净资产、购买力、融资、未成交订单、时点与数据质量警告 |
 | `external_state_sync` | 仅在明确要求时刷新 `accounts`、读取 `transactions` 或刷新 active `watchlist` upstream |
 | `portfolio_analyze` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
 | `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
@@ -547,8 +550,15 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`，不会再混入日盘区间。补查失败则附带
   `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近已知常规值。历史 `as_of` 不走这条
   current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。
-- Yahoo 的本地 admission control 允许有界的 KO + SPY/QQQ/IWM 组合并发；这只是防止
-  Router 自己误拒绝请求，不代表对 Yahoo 上游额度的声明。闭市时保留真实 timestamp-based
+- Provider Router 使用统一、跨进程的有界 admission scheduler。它按
+  `vendor + data_category` 原子预占当前或未来固定时间窗，并异步等到预占时刻；默认最多等待
+  `PROVIDER_RATE_LIMIT_MAX_WAIT_SECONDS`。因此批量技术请求会先排队，不会因为同一秒的本地
+  fan-out 立即误走 fallback。成功等待附带 `PROVIDER_ADMISSION_QUEUED`；等待预算耗尽返回
+  `PROVIDER_ADMISSION_TIMEOUT`，与真实上游 429 的 `PROVIDER_RATE_LIMIT_ERROR` /
+  `UPSTREAM_RATE_LIMITED` 明确分型。
+  该本地策略只是防止 Router 自己误拒绝请求，不代表对 Yahoo 或其他上游额度的声明。
+  它使用匿名短期时间窗预占而非永久任务队列；取消后的槽位会随窗口自然过期。
+  闭市时保留真实 timestamp-based
   freshness，但用 `CLOSED_SESSION_LAST_KNOWN` 说明这是最近已知交易时段值，而不笼统报
   `STALE_US_DATA`。
 - SEC EDGAR 需要配置合规的 `SEC_USER_AGENT` 才应启用真实请求。
@@ -662,8 +672,10 @@ Provider 路由回执。
 Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具。配置
 `MONITOR_NOTIFICATIONS_ENABLED=true`、`TELEGRAM_BOT_TOKEN` 和
 `TELEGRAM_CHAT_ID` 后，本地小时调度与市场收盘 Monitor CLI 会投递新的
-`TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移；A 股/美股/韩股盘后组还会在每个已评估
-交易日发送一条合并摘要，即使本轮没有状态变化。INTERVAL 相同状态的重复观测只写 run，
+`TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移。A 股/美股/韩股盘后组仍逐条持久化
+状态转移 event，但不再为这些 event 另发逐标的 Telegram；每个已评估交易日只发送一条
+run-linked 合并摘要，其中包含本轮全部变化点，即使本轮没有状态变化也发送 heartbeat。
+INTERVAL 相同状态的重复观测只写 run，
 不重复通知。失败消息保留在 Outbox 中进行有限重试；超过消息 TTL 后转为过期，避免旧
 报警延迟送达。`PROVIDER_PROXY_URL` 如有设置，也用于 Telegram Bot API。
 消息直接复用同一次 run 的 observations，不会为了排版再次调用行情 Provider。首行展示
@@ -672,7 +684,11 @@ Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具�
 共同的不可评估原因只解释一次，常见 Provider 口径 warning 可压缩成人话，但 typed error
 不得隐藏。同一 Monitor 在同一 run 中出现多项状态变化时合并为一条 Telegram 消息，底层
 event 仍逐条持久化。Telegram 不支持响应式表格，因此使用可换行的普通 HTML；新触发或
-恢复会显示醒目的红色/绿色 Unicode 警报条，且不伪造 CSS 红底。IG Weekend Gold 仍明确
+恢复会显示醒目的红色/绿色 Unicode 警报条；警报条下逐条列出本轮发生变化的具体
+condition/threshold、状态、级别与有界人类含义，不再只显示笼统的 `TRIGGERED`。旧 Outbox
+中的 generic/rule-code 格式仍可渲染。单一状态变化的首行标题也包含该 bounded condition；
+多项变化仍使用数量摘要。相邻两次有效价格的百分比变化统一按 Decimal half-up 四舍五入，
+固定保留两位小数；且不伪造 CSS 红底。IG Weekend Gold 仍明确
 标为 XAUUSD 周末波动代理。该过程不生成或上传图片，也不调用 LLM。
 
 ```bash

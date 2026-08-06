@@ -125,8 +125,18 @@ class AccountPositionsAccountDTO(_DTO):
     snapshot_id: str
     account_ref: str
     provider: VendorId
+    environment: AccountEnvironment
+    base_currency: str
     account_as_of: datetime
+    fetched_at: datetime
+    cash: DecimalWire | None
+    buying_power: DecimalWire | None
+    net_assets: DecimalWire | None
+    margin_used: DecimalWire | None
     positions: tuple[AccountPositionDTO, ...]
+    open_orders: tuple[AccountOpenOrderDTO, ...]
+    degraded: bool
+    warning_codes: tuple[str, ...]
 
 
 class AccountPositionsDTO(_DTO):

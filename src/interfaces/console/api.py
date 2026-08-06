@@ -299,14 +299,96 @@ async def accounts(request: Request) -> dict[str, Any]:
     )
 
 
-@app.get("/api/watchlist")
-async def watchlist(request: Request) -> dict[str, Any]:
-    groups = await _invoke_capability(
+@app.get("/api/portfolio")
+async def portfolio(
+    request: Request,
+    transaction_limit: int = Query(default=500, ge=1, le=1000),
+    coverage_limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """Build the durable Portfolio Hub from compact read capabilities only."""
+
+    accounts_result = await _durable_console_call(
+        request,
+        "account_get",
+        {"request": {"operation": "positions"}},
+    )
+    transactions_result = await _durable_console_call(
+        request,
+        "account_get",
+        {"request": {"operation": "transactions", "limit": transaction_limit}},
+    )
+    exposure_result = await _durable_console_call(
+        request,
+        "portfolio_analyze",
+        {"request": {"operation": "exposure"}},
+    )
+    coverage_result = await _durable_console_call(
+        request,
+        "portfolio_analyze",
+        {"request": {"operation": "coverage", "limit": coverage_limit}},
+    )
+    risk_policy_result = await _durable_console_call(
+        request,
+        "portfolio_risk_get",
+        {"request": {"operation": "policy"}},
+    )
+    risk_check_result = await _durable_console_call(
+        request,
+        "portfolio_risk_get",
+        {"request": {"operation": "check"}},
+    )
+    return {
+        "accounts": accounts_result,
+        "transactions": transactions_result,
+        "exposure": exposure_result,
+        "coverage": coverage_result,
+        "risk_policy": risk_policy_result,
+        "risk_check": risk_check_result,
+        "watchlist": await _watchlist_envelopes(request),
+    }
+
+
+def _console_failure(request: Request, error: Exception, code: str) -> dict[str, Any]:
+    """Represent one failed console capability without hiding other aggregates."""
+
+    return {
+        "ok": False,
+        "data": None,
+        "warnings": [],
+        "errors": [{"code": code, "message": _sanitized_error(request, error)}],
+        "degraded": True,
+    }
+
+
+async def _durable_console_call(
+    request: Request,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Invoke one compact read and preserve a per-capability failure envelope."""
+
+    try:
+        result = await _invoke_capability(request, tool_name, arguments)
+    except Exception as error:  # noqa: BLE001 - one failed tile must not hide the hub
+        return _console_failure(request, error, "CONSOLE_DURABLE_CALL_FAILED")
+    if isinstance(result, dict):
+        return result
+    return _console_failure(
+        request,
+        TypeError(f"{tool_name} returned a non-object result"),
+        "CONSOLE_DURABLE_CALL_INVALID",
+    )
+
+
+async def _watchlist_envelopes(request: Request) -> dict[str, Any]:
+    """Read groups plus the active Moomoo ``All`` aggregate through compact MCP."""
+
+    groups = await _durable_console_call(
         request,
         "watchlist_get",
         {"request": {"operation": "groups"}},
     )
-    groups_data = groups.get("data") if isinstance(groups, dict) else None
+    groups_data = groups.get("data")
     group_items = groups_data.get("groups") if isinstance(groups_data, dict) else None
     source = groups_data.get("source") if isinstance(groups_data, dict) else None
     aggregate_group_name = next(
@@ -325,15 +407,145 @@ async def watchlist(request: Request) -> dict[str, Any]:
     item_request: dict[str, Any] = {"operation": "items", "limit": 500}
     if aggregate_group_name is not None:
         item_request["group_name"] = aggregate_group_name
+    items = await _durable_console_call(
+        request,
+        "watchlist_get",
+        {"request": item_request},
+    )
     return {
-        "items": await _invoke_capability(
-            request,
-            "watchlist_get",
-            {"request": item_request},
-        ),
+        "groups": groups,
+        "items": items,
         "scope": {
             "group_name": aggregate_group_name,
             "all_active_moomoo_items": aggregate_group_name is not None,
+        },
+    }
+
+
+@app.get("/api/watchlist")
+async def watchlist(request: Request) -> dict[str, Any]:
+    """Return the durable Watchlist items while retaining its groups envelope."""
+
+    return await _watchlist_envelopes(request)
+
+
+def _research_state_failure(request: Request, error: Exception) -> dict[str, Any]:
+    """Keep one Case visible when its state read fails.
+
+    The research console is an audit/read surface.  A broken state read for one
+    Case must therefore be represented as a normal failed envelope rather than
+    aborting the whole aggregate.  The exception text is passed through the
+    same secret redactor used by the other console endpoints.
+    """
+
+    return {
+        "ok": False,
+        "data": None,
+        "warnings": [],
+        "errors": [
+            {
+                "code": "CONSOLE_RESEARCH_STATE_READ_FAILED",
+                "message": _sanitized_error(request, error),
+            }
+        ],
+        "degraded": True,
+    }
+
+
+@app.get("/api/research")
+async def research(request: Request) -> dict[str, Any]:
+    """Return every durable Case and its current Thesis state.
+
+    This endpoint deliberately routes through the same compact capability
+    registry exposed to MCP.  It does not refresh providers, read repositories,
+    or create a second research API.  Case listing is paged at the public
+    maximum (200) and each state envelope is retained beside its Case so a
+    partial read remains visible and auditable in the UI.
+    """
+
+    page_size = 200
+    offset = 0
+    case_pages: list[dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
+
+    while True:
+        page = await _invoke_capability(
+            request,
+            "investment_case_read",
+            {
+                "request": {
+                    "operation": "query",
+                    "include_archived": True,
+                    "limit": page_size,
+                    "offset": offset,
+                }
+            },
+        )
+        if not isinstance(page, dict):
+            page = {
+                "ok": False,
+                "data": None,
+                "warnings": [],
+                "errors": [
+                    {
+                        "code": "CONSOLE_RESEARCH_CASE_LIST_INVALID",
+                        "message": "investment_case_read returned a non-object result",
+                    }
+                ],
+                "degraded": True,
+            }
+        case_pages.append(page)
+
+        page_data = page.get("data")
+        page_items = page_data.get("items") if isinstance(page_data, dict) else None
+        if not isinstance(page_items, list):
+            break
+        for case in page_items:
+            if not isinstance(case, dict):
+                continue
+            case_id = case.get("case_id")
+            if not isinstance(case_id, str) or not case_id:
+                cases.append(
+                    {
+                        "case": case,
+                        "state": _research_state_failure(
+                            request,
+                            ValueError("investment case is missing case_id"),
+                        ),
+                    }
+                )
+                continue
+            try:
+                state = await _invoke_capability(
+                    request,
+                    "research_judgment_get",
+                    {
+                        "request": {
+                            "operation": "state",
+                            "case_id": case_id,
+                            "include_archived_theses": True,
+                            "include_watchlist": False,
+                        }
+                    },
+                )
+            except Exception as error:  # noqa: BLE001 - preserve other Cases
+                state = _research_state_failure(request, error)
+            cases.append({"case": case, "state": state})
+
+        if len(page_items) < page_size:
+            break
+        offset += page_size
+
+    # ``InvestmentCaseListDTO.total`` is the page count, not a global count.
+    # The aggregate has already walked every page, so its durable count is the
+    # number of valid Case records retained below.
+    total = len(cases)
+    return {
+        "cases": cases,
+        "case_list": {
+            "pages": case_pages,
+            "total": total,
+            "page_size": page_size,
         },
     }
 

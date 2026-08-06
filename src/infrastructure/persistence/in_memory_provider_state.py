@@ -2,7 +2,7 @@
 
 Used when the SQLite schema does not yet expose provider_cache /
 provider_health / provider_rate_limits. Semantics match the SQL stores
-for cache key/entry coherence, health projection, and atomic rate consume.
+for cache key/entry coherence, health projection, and atomic rate reservation.
 """
 
 from __future__ import annotations
@@ -267,16 +267,17 @@ class InMemoryProviderHealthStore:
 
 
 class InMemoryProviderRateLimitStore:
-    """Thread-safe fixed-window rate-limit store with atomic consume."""
+    """Thread-safe fixed-window rate-limit store with atomic reservations."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        # Keyed by (vendor, category, window_start); policy fields rewritten on consume.
+        # Keyed by (vendor, category, window_start); policy fields are rewritten
+        # on a successful reservation.
         self._rows: dict[
             tuple[VendorId, DataCategory, datetime], ProviderRateLimitSnapshot
         ] = {}
 
-    def consume(
+    def try_reserve(
         self,
         *,
         vendor: VendorId,
@@ -285,7 +286,7 @@ class InMemoryProviderRateLimitStore:
         window_seconds: int,
         limit_count: int,
         at: datetime,
-    ) -> ProviderRateLimitSnapshot:
+    ) -> ProviderRateLimitSnapshot | None:
         require_aware_datetime(window_start, field_name="window_start")
         require_aware_datetime(at, field_name="at")
         window_seconds = _require_positive_int(
@@ -296,6 +297,10 @@ class InMemoryProviderRateLimitStore:
         key = (vendor, category, window_start)
         with self._lock:
             existing = self._rows.get(key)
+            if existing is not None and existing.request_count >= limit_count:
+                # Denial is deliberately side-effect free.  In particular,
+                # do not inflate the count while probing a full window.
+                return None
             count = 1 if existing is None else existing.request_count + 1
             snapshot = ProviderRateLimitSnapshot(
                 vendor=vendor,

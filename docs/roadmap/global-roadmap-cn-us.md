@@ -22,7 +22,7 @@
     GC/SI/HG 带时间戳 quote fallback，东方财富仅提供六种金属日线及周/月聚合。
   - [x] 正式期货统一接入：具体合约、到期日、乘数、交易时段、结算、持仓量、合约链、
     期限结构与受控换月；金属期货和 DCE 生猪期货使用同一模型。
-  - [x] OTC 免费观察链：Dukascopy XAUUSD/XAGUSD 与 rolling copper CFD、期现基差 gate；
+  - [x] OTC 免费观察链：Dukascopy XAUUSD/XAGUSD 与 rolling copper/light-oil CFD、期现基差 gate；
     不得由 `GC=F`、`SI=F` 或 `HG=F` 冒充。LME Cash/LME 3M 仍等待零费用用途许可核验。
     数据必须披露 bid/ask/mid、单位、币种、时间戳、session 和 venue/aggregate basis。
   Alpha Vantage 免费额度和 close-only 历史不足以担任主源，只保留为合规的低频
@@ -598,7 +598,7 @@ Yahoo 连续金属期货以及新浪 quote/东方财富日线 fallback 固定披
 生猪期货不再作为猪周期数据集的专用子模块。DCE 生猪只是正式期货接入的首批中国期货
 品种之一；Phase 3B 通过标准期货事实消费它，不重复实现行情或期限结构。
 
-同一能力域还包含 Dukascopy XAUUSD/XAGUSD、rolling copper CFD 和受控期现基差。
+同一能力域还包含 Dukascopy XAUUSD/XAGUSD、rolling copper/light-oil CFD 和受控期现基差。
 LME Cash/LME 3M 保留为零费用用途许可 discovery；Crypto 与普通 Forex 不属于当前
 产品路线图。
 

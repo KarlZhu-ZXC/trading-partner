@@ -5,8 +5,9 @@ import { ThemeSwitch } from "./theme-switch";
 const navigation = [
   { href: "/", label: "总览", mark: "OV", key: "overview" },
   { href: "/monitors", label: "Monitor", mark: "MN", key: "monitors" },
+  { href: "/research", label: "Research", mark: "RS", key: "research" },
   { href: "/capabilities", label: "能力目录", mark: "CP", key: "capabilities" },
-  { href: "/portfolio", label: "账户", mark: "PF", key: "portfolio" },
+  { href: "/portfolio", label: "Portfolio", mark: "PF", key: "portfolio" },
   { href: "/operations", label: "操作中心", mark: "AC", key: "operations" },
 ];
 

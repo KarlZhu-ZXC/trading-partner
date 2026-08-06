@@ -589,12 +589,14 @@ path, so it consumes no Codex/LLM tokens. Monitor definitions, complete per-rule
 states, transition events, and resolutions are durable; all runs have
 `execution_effect=false`.
 
-An optional Telegram Bot channel consumes durable transition events and scheduled
-market-close run summaries. The source event/run and its notification Outbox row
-are committed in the same database transaction. Repeated unchanged INTERVAL
-observations produce no duplicate alert, while each evaluated A-share/US/KR post-market
-group emits one consolidated zero-change-or-change heartbeat without fabricating a
-Monitor event. Delivery is deterministic and local—no
+An optional Telegram Bot channel consumes durable INTERVAL transition events and
+scheduled market-close run summaries. The source event/run and its notification
+Outbox row are committed in the same database transaction. Repeated unchanged
+INTERVAL observations produce no duplicate alert. A-share/US/KR post-market runs
+still persist ordinary transition events, but enqueue no event-linked Telegram card;
+each evaluated group emits exactly one consolidated zero-change-or-change heartbeat
+with every changed-point detail, without fabricating a Monitor event. Delivery is
+deterministic and local—no
 Codex task or LLM is involved. Failed deliveries use bounded retry, Telegram `429`
 respects `retry_after`, and events older than the configured TTL expire instead of
 arriving as misleading late alerts.
@@ -607,10 +609,16 @@ in the durable Run rather than being repeated on a phone screen. A shared
 run are batched into one Telegram message; the underlying events remain separate
 and auditable.
 Telegram does not support responsive tables, so the sender uses a price-first
-headline and mobile-first vertical rule lines. Transition alerts include the prior
-observed price, price change, and exact Provider source from the run receipt. They
+headline and mobile-first vertical rule lines. Transition alerts and changed
+post-market blocks include the prior observed price, price change, and exact Provider
+source from the run receipt; percentages are rounded half-up to exactly two decimals. They
 show a prominent red/green Unicode alert band when a monitored level newly triggers
-or recovers because Telegram HTML cannot set a text background color. Common source
+or recovers, followed by every changed rule's exact condition/threshold, bounded
+human meaning, severity, and transition state; a generic `TRIGGERED` label is not
+enough. A single-transition headline also includes its bounded condition; multiple
+transitions retain a count headline and list their points below. Historical Outbox
+body formats remain readable. Telegram HTML cannot set a
+text background color. Common source
 provenance warnings are condensed into a human-readable basis line; true errors are
 not hidden. IG Weekend Gold fallback messages explicitly say
 that the value is an XAUUSD weekend-volatility proxy rather than spot/LBMA. It does

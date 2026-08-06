@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -30,9 +31,9 @@ class InMemoryRateLimitStore:
         self._lock = threading.Lock()
         self._rows: dict[tuple[str, str, datetime], dict[str, Any]] = {}
         self.fail = fail
-        self.consume_calls = 0
+        self.reserve_calls = 0
 
-    def consume(
+    def try_reserve(
         self,
         *,
         vendor: VendorId,
@@ -41,16 +42,18 @@ class InMemoryRateLimitStore:
         window_seconds: int,
         limit_count: int,
         at: datetime,
-    ) -> ProviderRateLimitSnapshot:
+    ) -> ProviderRateLimitSnapshot | None:
         if self.fail:
             raise PersistenceError(
-                "Failed to consume provider rate limit",
+                "Failed to reserve provider rate limit",
                 details={"error_type": "SimulatedStoreError"},
             )
         with self._lock:
-            self.consume_calls += 1
+            self.reserve_calls += 1
             key = (vendor.value, category.value, window_start)
             row = self._rows.get(key)
+            if row is not None and int(row["request_count"]) >= limit_count:
+                return None
             count = 1 if row is None else int(row["request_count"]) + 1
             self._rows[key] = {
                 "request_count": count,
@@ -172,22 +175,22 @@ def test_floor_window_requires_aware() -> None:
 # --- ProviderRateLimiter ---
 
 
-def test_check_and_consume_allows_until_limit() -> None:
+def test_reserve_allows_until_limit() -> None:
     store = InMemoryRateLimitStore()
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
     # EASTMONEY default limit=1
-    d1 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
+    d1 = limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
     assert d1.allowed is True
     assert d1.remaining == 0
     assert d1.limit_per_window == 1
     assert d1.reset_at == datetime(2026, 7, 16, 12, 0, 1, tzinfo=UTC)
 
-    d2 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
+    d2 = limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
     assert d2.allowed is False
     assert d2.remaining == 0
     assert d2.limit_per_window == 1
-    assert store.consume_calls == 2  # denied still consumes
+    assert store.reserve_calls == 2
 
 
 def test_mock_vendor_high_limit() -> None:
@@ -195,7 +198,7 @@ def test_mock_vendor_high_limit() -> None:
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
     for i in range(5):
-        d = limiter.check_and_consume(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
+        d = limiter.reserve(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
         assert d.allowed is True
         assert d.limit_per_window == 1000
         assert d.remaining == 1000 - (i + 1)
@@ -205,29 +208,29 @@ def test_window_boundary_resets_counter() -> None:
     store = InMemoryRateLimitStore()
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
-    d1 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.NEWS)
+    d1 = limiter.reserve(VendorId.EASTMONEY, DataCategory.NEWS)
     assert d1.allowed is True
-    d2 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.NEWS)
+    d2 = limiter.reserve(VendorId.EASTMONEY, DataCategory.NEWS)
     assert d2.allowed is False
 
     # Advance into next 1s window.
     clock.set(datetime(2026, 7, 16, 12, 0, 1, tzinfo=UTC))
-    d3 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.NEWS)
+    d3 = limiter.reserve(VendorId.EASTMONEY, DataCategory.NEWS)
     assert d3.allowed is True
     assert d3.reset_at == datetime(2026, 7, 16, 12, 0, 2, tzinfo=UTC)
 
 
-def test_denied_still_increments_store() -> None:
+def test_denied_does_not_increment_store() -> None:
     store = InMemoryRateLimitStore()
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
-    limiter.check_and_consume(VendorId.YFINANCE, DataCategory.MARKET_OHLCV)
-    limiter.check_and_consume(VendorId.YFINANCE, DataCategory.MARKET_OHLCV)
-    limiter.check_and_consume(VendorId.YFINANCE, DataCategory.MARKET_OHLCV)
+    limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_OHLCV)
+    limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_OHLCV)
+    limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_OHLCV)
     window = floor_window_start(NOW, 1)
-    snap = store.get(VendorId.YFINANCE, DataCategory.MARKET_OHLCV, window)
+    snap = store.get(VendorId.EASTMONEY, DataCategory.MARKET_OHLCV, window)
     assert snap is not None
-    assert snap.request_count == 3
+    assert snap.request_count == 1
 
 
 def test_naive_clock_rejected() -> None:
@@ -239,7 +242,7 @@ def test_naive_clock_rejected() -> None:
 
     limiter = ProviderRateLimiter(store, NaiveClock())  # type: ignore[arg-type]
     with pytest.raises(DataContractError, match="timezone-aware"):
-        limiter.check_and_consume(VendorId.NULL, DataCategory.INSTRUMENT_MASTER)
+        limiter.reserve(VendorId.NULL, DataCategory.INSTRUMENT_MASTER)
 
 
 def test_store_persistence_error_propagates_typed() -> None:
@@ -247,12 +250,12 @@ def test_store_persistence_error_propagates_typed() -> None:
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
     with pytest.raises(PersistenceError) as exc_info:
-        limiter.check_and_consume(VendorId.MOCK_A_SHARE, DataCategory.MARKET_QUOTE)
+        limiter.reserve(VendorId.MOCK_A_SHARE, DataCategory.MARKET_QUOTE)
     assert exc_info.value.details == {"error_type": "SimulatedStoreError"}
     assert "password" not in str(exc_info.value).lower()
 
 
-def test_concurrency_exact_consume_counts() -> None:
+def test_concurrency_exact_reservation_counts() -> None:
     store = InMemoryRateLimitStore()
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock)
@@ -265,7 +268,7 @@ def test_concurrency_exact_consume_counts() -> None:
     def _once() -> None:
         try:
             barrier.wait(timeout=10)
-            d = limiter.check_and_consume(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
+            d = limiter.reserve(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
             with lock:
                 decisions.append(d)
         except BaseException as exc:  # noqa: BLE001
@@ -293,7 +296,7 @@ def test_limiter_accepts_store_protocol() -> None:
     store: ProviderRateLimitStore = InMemoryRateLimitStore()
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(store, clock, DefaultRateLimitPolicy())
-    d = limiter.check_and_consume(VendorId.SEED_FIXTURE, DataCategory.INSTRUMENT_MASTER)
+    d = limiter.reserve(VendorId.SEED_FIXTURE, DataCategory.INSTRUMENT_MASTER)
     assert d.allowed is True
     assert d.limit_per_window == 1000
 
@@ -308,3 +311,71 @@ def test_common_exports() -> None:
 
     assert P is DefaultRateLimitPolicy
     assert L is ProviderRateLimiter
+
+
+def test_future_reservations_distribute_across_windows_without_overbooking() -> None:
+    store = InMemoryRateLimitStore()
+    clock = FixedClock(NOW)
+    limiter = ProviderRateLimiter(store, clock, max_wait_seconds=2.0)
+
+    decisions = [
+        limiter.reserve(
+            VendorId.YFINANCE,
+            DataCategory.MARKET_OHLCV,
+            max_wait_seconds=2.0,
+        )
+        for _ in range(12)
+    ]
+    assert sum(decision.allowed for decision in decisions) == 12
+    assert sum(decision.queued for decision in decisions) == 4
+
+    current = floor_window_start(NOW, 1)
+    next_window = current + timedelta(seconds=1)
+    current_snapshot = store.get(
+        VendorId.YFINANCE, DataCategory.MARKET_OHLCV, current
+    )
+    next_snapshot = store.get(
+        VendorId.YFINANCE, DataCategory.MARKET_OHLCV, next_window
+    )
+    assert current_snapshot is not None and current_snapshot.request_count == 8
+    assert next_snapshot is not None and next_snapshot.request_count == 4
+
+
+@pytest.mark.asyncio
+async def test_async_acquire_waits_and_cancellation_keeps_reservation() -> None:
+    store = InMemoryRateLimitStore()
+    clock = FixedClock(NOW)
+    waits: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        waits.append(delay)
+
+    limiter = ProviderRateLimiter(store, clock, max_wait_seconds=1.0, sleep=_sleep)
+    for _ in range(8):
+        assert limiter.reserve(
+            VendorId.YFINANCE, DataCategory.MARKET_QUOTE
+        ).allowed
+
+    decision = await limiter.acquire(
+        VendorId.YFINANCE, DataCategory.MARKET_QUOTE, max_wait_seconds=1.0
+    )
+    assert decision.allowed is True
+    assert decision.queued is True
+    assert waits == [pytest.approx(0.5)]
+
+    async def _cancel(_delay: float) -> None:
+        raise asyncio.CancelledError
+
+    cancelled = ProviderRateLimiter(
+        store,
+        clock,
+        max_wait_seconds=1.0,
+        sleep=_cancel,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled.acquire(
+            VendorId.YFINANCE, DataCategory.MARKET_QUOTE, max_wait_seconds=1.0
+        )
+    next_window = floor_window_start(NOW, 1) + timedelta(seconds=1)
+    snapshot = store.get(VendorId.YFINANCE, DataCategory.MARKET_QUOTE, next_window)
+    assert snapshot is not None and snapshot.request_count == 2

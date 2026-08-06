@@ -568,7 +568,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v12",
+            surface_schema_version="compact-v14",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -618,12 +618,19 @@ def create_compact_capability_registry(
     _register_dispatch_tool(
         registry,
         name="investment_case_manage",
-        description="Create or archive a durable research file with confirmation and idempotency.",
+        description=(
+            "Create, update, or archive a durable research file with confirmation and idempotency."
+        ),
         variants=(
             _spec(
                 "create",
                 adapters.research.investment_case_create,
                 _all_fields(adapters.research.investment_case_create),
+            ),
+            _spec(
+                "update",
+                adapters.research.investment_case_update,
+                _all_fields(adapters.research.investment_case_update),
             ),
             _spec(
                 "archive",

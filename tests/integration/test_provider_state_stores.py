@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from application.dto.provider_resilience import RateLimitDecision
 from application.dto.provider_state import CacheEntry
 from application.dto.reddit_state import RedditSampleCacheEntry
 from application.services.provider_cache_support import build_cache_key
@@ -41,6 +42,10 @@ from infrastructure.persistence.provider_rate_limit_store import (
     SqlAlchemyProviderRateLimitStore,
 )
 from infrastructure.persistence.reddit_state_store import SqlAlchemyRedditStateStore
+from infrastructure.providers.common.rate_limiter import (
+    ProviderRateLimiter,
+    floor_window_start,
+)
 from infrastructure.system.redactor import DefaultSecretRedactor
 
 NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=UTC)
@@ -683,12 +688,12 @@ def test_health_db_error_sanitized(tmp_path: Path) -> None:
 # --- Rate limit store ---
 
 
-def test_rate_limit_consume_and_get_roundtrip(
+def test_rate_limit_reserve_and_get_roundtrip(
     rate_store: SqlAlchemyProviderRateLimitStore,
 ) -> None:
     v, c = VendorId.MOCK_US, DataCategory.MARKET_QUOTE
     window = NOW
-    s1 = rate_store.consume(
+    s1 = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -696,11 +701,12 @@ def test_rate_limit_consume_and_get_roundtrip(
         limit_count=100,
         at=NOW,
     )
+    assert s1 is not None
     assert s1.request_count == 1
     assert s1.limit_count == 100
     assert s1.window_seconds == 60
 
-    s2 = rate_store.consume(
+    s2 = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -708,6 +714,7 @@ def test_rate_limit_consume_and_get_roundtrip(
         limit_count=100,
         at=NOW + timedelta(seconds=1),
     )
+    assert s2 is not None
     assert s2.request_count == 2
 
     got = rate_store.get(v, c, window)
@@ -722,10 +729,10 @@ def test_rate_limit_window_isolation(
     v, c = VendorId.MOCK_US, DataCategory.MARKET_QUOTE
     w1 = NOW
     w2 = NOW + timedelta(seconds=60)
-    rate_store.consume(
+    rate_store.try_reserve(
         vendor=v, category=c, window_start=w1, window_seconds=60, limit_count=5, at=NOW
     )
-    rate_store.consume(
+    rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=w2,
@@ -744,10 +751,10 @@ def test_rate_limit_overwrites_limit_metadata(
 ) -> None:
     v, c = VendorId.EASTMONEY, DataCategory.MARKET_QUOTE
     window = NOW
-    rate_store.consume(
+    rate_store.try_reserve(
         vendor=v, category=c, window_start=window, window_seconds=1, limit_count=1, at=NOW
     )
-    snap = rate_store.consume(
+    snap = rate_store.try_reserve(
         vendor=v,
         category=c,
         window_start=window,
@@ -755,6 +762,7 @@ def test_rate_limit_overwrites_limit_metadata(
         limit_count=10,
         at=NOW + timedelta(seconds=1),
     )
+    assert snap is not None
     assert snap.request_count == 2
     assert snap.window_seconds == 5
     assert snap.limit_count == 10
@@ -764,7 +772,7 @@ def test_rate_limit_rejects_nonpositive_and_naive(
     rate_store: SqlAlchemyProviderRateLimitStore,
 ) -> None:
     with pytest.raises(DataContractError, match="positive"):
-        rate_store.consume(
+        rate_store.try_reserve(
             vendor=VendorId.MOCK_US,
             category=DataCategory.MARKET_QUOTE,
             window_start=NOW,
@@ -773,7 +781,7 @@ def test_rate_limit_rejects_nonpositive_and_naive(
             at=NOW,
         )
     with pytest.raises(DataContractError, match="timezone-aware"):
-        rate_store.consume(
+        rate_store.try_reserve(
             vendor=VendorId.MOCK_US,
             category=DataCategory.MARKET_QUOTE,
             window_start=datetime(2026, 7, 17),
@@ -783,10 +791,10 @@ def test_rate_limit_rejects_nonpositive_and_naive(
         )
 
 
-def test_rate_limit_concurrent_consume_stable(
+def test_rate_limit_concurrent_reserve_stable(
     rate_store: SqlAlchemyProviderRateLimitStore,
 ) -> None:
-    """Hard exit: concurrent consume must yield exact 1..n sequence, no skip."""
+    """Concurrent reservations yield an exact 1..n sequence, with no skip."""
     v, c = VendorId.MOCK_US, DataCategory.MARKET_OHLCV
     window = NOW
     n = 20
@@ -795,7 +803,7 @@ def test_rate_limit_concurrent_consume_stable(
 
     def _once(_: int) -> int:
         barrier.wait(timeout=10)
-        snap = rate_store.consume(
+        snap = rate_store.try_reserve(
             vendor=v,
             category=c,
             window_start=window,
@@ -803,6 +811,7 @@ def test_rate_limit_concurrent_consume_stable(
             limit_count=1000,
             at=NOW,
         )
+        assert snap is not None
         return snap.request_count
 
     with ThreadPoolExecutor(max_workers=n) as pool:
@@ -814,11 +823,53 @@ def test_rate_limit_concurrent_consume_stable(
             except BaseException as exc:  # noqa: BLE001
                 errors.append(exc)
 
-    assert errors == [], f"concurrent consume failed: {errors!r}"
+    assert errors == [], f"concurrent reservations failed: {errors!r}"
     final = rate_store.get(v, c, window)
     assert final is not None
     assert final.request_count == n
     assert sorted(counts) == list(range(1, n + 1))
+
+
+def test_rate_limit_cross_instance_future_reservations_do_not_overbook(
+    engine: Engine,
+) -> None:
+    """Independent store instances share capacity and reserve the next window."""
+    clock = FixedClock(NOW + timedelta(milliseconds=500))
+    n = 12
+    barrier = threading.Barrier(n)
+
+    def _once(_: int) -> RateLimitDecision:
+        limiter = ProviderRateLimiter(
+            SqlAlchemyProviderRateLimitStore(engine),
+            clock,
+            max_wait_seconds=1.0,
+        )
+        barrier.wait(timeout=10)
+        return limiter.reserve(
+            VendorId.YFINANCE,
+            DataCategory.MARKET_OHLCV,
+        )
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        futures = [pool.submit(_once, index) for index in range(n)]
+        decisions = [future.result() for future in as_completed(futures)]
+
+    assert len(decisions) == 12
+    assert all(decision.allowed for decision in decisions)
+    assert sum(decision.queued for decision in decisions) == 4
+
+    store = SqlAlchemyProviderRateLimitStore(engine)
+    current = floor_window_start(clock.now(), 1)
+    current_snapshot = store.get(
+        VendorId.YFINANCE, DataCategory.MARKET_OHLCV, current
+    )
+    next_snapshot = store.get(
+        VendorId.YFINANCE,
+        DataCategory.MARKET_OHLCV,
+        current + timedelta(seconds=1),
+    )
+    assert current_snapshot is not None and current_snapshot.request_count == 8
+    assert next_snapshot is not None and next_snapshot.request_count == 4
 
 
 def test_rate_limit_db_error_sanitized(tmp_path: Path) -> None:
@@ -827,7 +878,7 @@ def test_rate_limit_db_error_sanitized(tmp_path: Path) -> None:
     eng = create_engine(f"sqlite:///{bad}")
     store = SqlAlchemyProviderRateLimitStore(eng)
     with pytest.raises(PersistenceError) as exc_info:
-        store.consume(
+        store.try_reserve(
             vendor=VendorId.MOCK_US,
             category=DataCategory.MARKET_QUOTE,
             window_start=NOW,
@@ -858,20 +909,18 @@ def test_provider_rate_limiter_sqlalchemy_store_integration(
     rate_store: SqlAlchemyProviderRateLimitStore,
 ) -> None:
     """D5b ProviderRateLimiter + D5a SqlAlchemyProviderRateLimitStore."""
-    from infrastructure.providers.common.rate_limiter import ProviderRateLimiter
-
     clock = FixedClock(NOW)
     limiter = ProviderRateLimiter(rate_store, clock)
-    d1 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
+    d1 = limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
     assert d1.allowed is True
     assert d1.remaining == 0
     assert d1.limit_per_window == 1
-    d2 = limiter.check_and_consume(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
+    d2 = limiter.reserve(VendorId.EASTMONEY, DataCategory.MARKET_QUOTE)
     assert d2.allowed is False
     assert d2.remaining == 0
     # Mock vendors keep high throughput defaults.
     for _ in range(3):
-        dm = limiter.check_and_consume(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
+        dm = limiter.reserve(VendorId.MOCK_US, DataCategory.MARKET_QUOTE)
         assert dm.allowed is True
         assert dm.limit_per_window == 1000
 

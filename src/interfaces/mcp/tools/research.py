@@ -16,6 +16,7 @@ from interfaces.mcp.schemas import (
     InvestmentCaseCreateInput,
     InvestmentCaseGetInput,
     InvestmentCaseListInput,
+    InvestmentCaseUpdateInput,
     ResearchStateGetInput,
     ResearchStateUpdateInput,
     ThesisHistoryGetInput,
@@ -65,6 +66,45 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 topic_tags=inp.topic_tags,
                 linked_case_ids=inp.linked_case_ids,
                 confirmed_by=inp.confirmed_by,
+                idempotency_key=inp.idempotency_key,
+            )
+            return envelope.model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def investment_case_update(
+        case_id: str,
+        reviewed_by: str,
+        idempotency_key: str,
+        title: str | None = None,
+        summary: str | None = None,
+        topic_tags: list[str] | None = None,
+        linked_case_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Update confirmed research-file metadata without changing its Thesis."""
+        try:
+            inp = InvestmentCaseUpdateInput.model_validate(
+                {
+                    "case_id": case_id,
+                    "title": title,
+                    "summary": summary,
+                    "topic_tags": tuple(topic_tags) if topic_tags is not None else None,
+                    "linked_case_ids": (
+                        tuple(linked_case_ids) if linked_case_ids is not None else None
+                    ),
+                    "reviewed_by": reviewed_by,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            envelope = container.services.investment_cases.update_case_metadata(
+                inp.case_id,
+                title=inp.title,
+                summary=inp.summary,
+                topic_tags=inp.topic_tags,
+                linked_case_ids=inp.linked_case_ids,
+                reviewed_by=inp.reviewed_by,
                 idempotency_key=inp.idempotency_key,
             )
             return envelope.model_dump(mode="json")
@@ -332,6 +372,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
 
     return SimpleNamespace(
         investment_case_create=investment_case_create,
+        investment_case_update=investment_case_update,
         investment_case_query=investment_case_query,
         investment_case_archive=investment_case_archive,
         research_state_get=research_state_get,

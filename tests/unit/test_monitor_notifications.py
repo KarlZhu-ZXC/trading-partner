@@ -16,19 +16,27 @@ from application.dto.tool_envelope import SourceReference, ToolEnvelope
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import (
     MonitorEvaluationService,
+    _notification_event_label,
+    _notification_price_change_lines,
+    _NotificationPriceContext,
     _rule_meaning,
 )
 from application.services.monitor_notification_service import MonitorNotificationService
 from domain.common.enums import Freshness, SourceRole, TradingSession
 from domain.monitoring.enums import (
     MonitorCadence,
+    MonitorEventType,
     MonitorNotificationChannel,
     MonitorNotificationStatus,
     MonitorRuleType,
     MonitorSeverity,
     MonitorStatus,
 )
-from domain.monitoring.models import MonitorDefinition, MonitorNotificationOutboxEntry
+from domain.monitoring.models import (
+    MonitorDefinition,
+    MonitorEvent,
+    MonitorNotificationOutboxEntry,
+)
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 from infrastructure.providers.notifications.telegram import (
@@ -238,6 +246,140 @@ RULES
     assert "DUKASCOPY_SWFX_NOT_LBMA" not in rendered
 
 
+def test_detailed_transition_changes_render_each_point_and_escape_html() -> None:
+    body = """XAUUSD monitor
+标的：XAUUSD
+当前价格：4081
+价格时间：2026-08-03T12:00:00+00:00
+CHANGES
+• [HIGH] XAU_BREAKOUT_4080 · 条件：> 4080 · 含义：突破 <关键位> & 观察 → TRIGGERED
+• [MEDIUM] XAU_PULLBACK_4080 · 条件：< 4080 · 含义：回落 <关键位> & 已恢复 → RECOVERED
+RULES
+• 状态：TRIGGERED · 条件：> 4080 · 含义：突破 <关键位> · 级别：HIGH
+"""
+
+    rendered = _format_notification_html("🚨 XAUUSD · 2项变化", body)
+
+    assert "🟥🟥🟥 <b>新触发点位</b> 🟥🟥🟥" in rendered
+    assert "🔴 <b>&gt; 4080</b> · <b>已触发</b> · H" in rendered
+    assert "🟢 <b>&lt; 4080</b> · <b>已恢复</b> · M" in rendered
+    assert "含义：突破 &lt;关键位&gt; &amp; 观察" in rendered
+    assert "含义：回落 &lt;关键位&gt; &amp; 已恢复" in rendered
+    assert rendered.index("&gt; 4080") < rendered.index("&lt; 4080")
+    assert "状态变化" not in rendered.split("<b>全部监控规则</b>", 1)[0]
+
+
+def test_post_market_digest_renders_each_changed_rule_and_price_delta() -> None:
+    body = """POST_MARKET_SUMMARY
+运行时间：2026-08-03T12:00:00+00:00
+本轮变化：2
+MONITOR
+XAUUSD monitor
+标的：XAUUSD
+当前价格：100
+价格时间：2026-08-03T12:00:00+00:00
+上次价格：99
+价格变化：+1 (+1.01%)
+CHANGES
+• [HIGH] XAU_BREAKOUT_100 · 条件：> 100 · 含义：突破关键位 → TRIGGERED
+• [MEDIUM] XAU_PULLBACK_99 · 条件：< 99 · 含义：回落关键位 → RECOVERED
+RULES
+• 状态：TRIGGERED · 条件：> 100 · 含义：突破关键位 · 级别：HIGH
+END_MONITOR
+"""
+
+    rendered = _format_notification_html(
+        "📊 美股盘后 Monitor · 1 标的 · 2 变化",
+        body,
+    )
+
+    assert "XAUUSD · 100" in rendered
+    assert "↩️ 上次价格：99" in rendered
+    assert "📈 较上次：<b>+1 (+1.01%)</b>" in rendered
+    assert "🔴 <b>&gt; 100</b> · <b>已触发</b> · H" in rendered
+    assert "🟢 <b>&lt; 99</b> · <b>已恢复</b> · M" in rendered
+    assert "含义：突破关键位" in rendered
+    assert "含义：回落关键位" in rendered
+    assert "<pre>" not in rendered
+
+
+def test_price_change_percent_rounds_half_up_and_avoids_negative_zero() -> None:
+    repeating = _notification_price_change_lines(
+        _NotificationPriceContext(
+            instrument_id="equity:US:TEST",
+            symbol="TEST",
+            price="100",
+            price_time=NOW.isoformat(),
+            current_available=True,
+            previous_price=Decimal("3"),
+        )
+    )
+    half_up = _notification_price_change_lines(
+        _NotificationPriceContext(
+            instrument_id="equity:US:TEST",
+            symbol="TEST",
+            price="100.005",
+            price_time=NOW.isoformat(),
+            current_available=True,
+            previous_price=Decimal("100"),
+        )
+    )
+    negative_zero = _notification_price_change_lines(
+        _NotificationPriceContext(
+            instrument_id="equity:US:TEST",
+            symbol="TEST",
+            price="99.996",
+            price_time=NOW.isoformat(),
+            current_available=True,
+            previous_price=Decimal("100"),
+        )
+    )
+
+    assert repeating == ("上次价格：3", "价格变化：+97 (+3233.33%)")
+    assert half_up == ("上次价格：100", "价格变化：+0.005 (+0.01%)")
+    assert negative_zero == ("上次价格：100", "价格变化：-0.004 (0.00%)")
+
+
+def test_single_transition_title_contains_bounded_condition() -> None:
+    rule = MonitorRuleInput(
+        rule_code="XAU_PULLBACK_4080",
+        description="黄金回落至 4080 下方提醒。",
+        rule_type=MonitorRuleType.PRICE_BELOW,
+        severity=MonitorSeverity.MEDIUM,
+        instrument_id="future:US:GC=F",
+        price_threshold=Decimal("4080"),
+        max_fact_age_seconds=3600,
+    ).to_domain()
+    event = MonitorEvent(
+        event_id="monitor_event_00000000-0000-7000-8000-000000000002",
+        monitor_id="monitor_00000000-0000-7000-8000-000000000002",
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        event_type=MonitorEventType.TRIGGERED,
+        severity=rule.severity,
+        observed_value=Decimal("4070"),
+        threshold_value=Decimal("4080"),
+        fact_as_of=NOW,
+        message="Rule condition triggered.",
+        created_at=NOW,
+    )
+
+    assert _notification_event_label((event,), {rule.rule_code: rule}) == "< 4080 新触发"
+    rendered = _format_notification_html(
+        "🚨 XAUUSD · < 4080 新触发",
+        """XAUUSD monitor
+标的：XAUUSD
+当前价格：4042.110
+价格时间：2026-08-03T12:00:00+00:00
+CHANGES
+• [MEDIUM] XAU_PULLBACK_4080 · 条件：< 4080 · 含义：黄金回落提醒 → TRIGGERED
+RULES
+• 状态：TRIGGERED · 条件：< 4080 · 含义：黄金回落提醒 · 级别：MEDIUM
+""",
+    )
+    assert rendered.startswith("<b>🚨 XAUUSD · 4042.110 · &lt; 4080 新触发</b>")
+
+
 @pytest.mark.asyncio
 async def test_monitor_transition_and_post_market_digest_are_durable(
     tmp_path, fixed_clock, id_generator
@@ -338,8 +480,18 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     pending = repository.list_due_notifications(
         MonitorNotificationChannel.TELEGRAM, NOW, 20
     )
-    transition = next(item for item in pending if item.source_event_id is not None)
-    assert "数据来源：yfinance" in transition.body
+    assert len(pending) == 1
+    digest = pending[0]
+    assert digest.source_event_id is None
+    assert digest.source_run_id == first_run.run_id
+    assert "数据来源：yfinance" in digest.body
+    assert "状态变化" not in digest.body
+    assert "GC_PULLBACK_ALERT_4080" in digest.body
+    assert "条件：< 4080" in digest.body
+    assert "含义：黄金回落至 4080 下方提醒" in digest.body
+    assert "GC_ABOVE_4000" in digest.body
+    assert "条件：> 4000" in digest.body
+    assert "含义：黄金保持在 4000 上方" in digest.body
     delivery = await service.flush_pending()
     second_run = await evaluator.evaluate(request)
     second_delivery = await service.flush_pending()
@@ -348,21 +500,110 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     )
 
     assert first_run.events_created == 2
-    assert counts_before == {MonitorNotificationStatus.PENDING: 3}
-    assert delivery.delivered == 2
+    assert counts_before == {MonitorNotificationStatus.PENDING: 1}
+    assert delivery.delivered == 1
     assert second_run.events_created == 0
     assert second_delivery.pending_selected == 1
     assert second_delivery.delivered == 1
-    assert counts_after == {MonitorNotificationStatus.DELIVERED: 4}
+    assert counts_after == {MonitorNotificationStatus.DELIVERED: 2}
     messages = tuple(call.args[0] for call in sender.send.await_args_list)
+    assert all(item.source_event_id is None for item in messages)
     assert any("含义：黄金回落至 4080 下方提醒" in item.body for item in messages)
-    assert any("2项变化" in item.title for item in messages)
+    assert any("含义：黄金保持在 4000 上方" in item.body for item in messages)
     digests = tuple(
         item for item in messages if item.body.startswith("POST_MARKET_SUMMARY")
     )
     assert len(digests) == 2
     assert all(item.source_run_id is not None for item in digests)
     assert all("当前价格：4070" in item.body for item in digests)
+    assert "价格变化：" not in digests[0].body
+    assert "上次价格：4070" in digests[1].body
+    assert "价格变化：0 (0.00%)" in digests[1].body
     assert all("连续合约存在换月风险" in item.body for item in digests)
-    assert sender.send.await_count == 3
+    assert sender.send.await_count == 2
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_interval_transition_still_enqueues_event_notification(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'interval-notifications.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    repository.create(
+        MonitorDefinition(
+            monitor_id="monitor_00000000-0000-7000-8000-000000000010",
+            version=1,
+            name="Interval price alert",
+            case_id=None,
+            primary_instrument_id="equity:US:TEST",
+            cadence=MonitorCadence.INTERVAL,
+            interval_minutes=60,
+            status=MonitorStatus.ACTIVE,
+            rules=(
+                MonitorRuleInput(
+                    rule_code="TEST_ABOVE_100",
+                    description="Test price is above 100.",
+                    rule_type=MonitorRuleType.PRICE_ABOVE,
+                    severity=MonitorSeverity.HIGH,
+                    instrument_id="equity:US:TEST",
+                    price_threshold=Decimal("100"),
+                    max_fact_age_seconds=3600,
+                ).to_domain(),
+            ),
+            confirmed_by="user",
+            idempotency_key="interval-notification-monitor",
+            created_at=NOW,
+        )
+    )
+    fixed_clock.set(NOW)
+    quote = ToolEnvelope.success(
+        request_id="req_interval_quote",
+        market=None,
+        as_of=NOW,
+        fetched_at=NOW,
+        freshness=Freshness.FRESH,
+        sources=(SourceReference(name="yfinance", role=SourceRole.PRIMARY),),
+        data=USQuoteDTO(
+            instrument_id="equity:US:TEST",
+            quote_at=NOW,
+            session=TradingSession.REGULAR,
+            last=Decimal("101"),
+            open=None,
+            high=None,
+            low=None,
+            previous_close=None,
+            volume=None,
+            average_volume=None,
+            market_cap=None,
+            beta=None,
+            week_52_low=None,
+            week_52_high=None,
+        ),
+    )
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(return_value=quote)
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(cadence=MonitorCadence.INTERVAL, as_of=NOW)
+    )
+    pending = repository.list_due_notifications(
+        MonitorNotificationChannel.TELEGRAM, NOW, 20
+    )
+
+    assert run.events_created == 1
+    assert len(pending) == 1
+    assert pending[0].source_event_id is not None
+    assert pending[0].source_run_id is None
+    assert "条件：> 100" in pending[0].body
+    assert "含义：Test price is above 100" in pending[0].body
     engine.dispose()

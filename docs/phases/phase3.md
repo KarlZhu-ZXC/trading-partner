@@ -25,7 +25,7 @@ KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizi
 ## Phase 3A — Formal futures and cross-asset market facts
 
 > Status: free continuous proxies, formal CME metal contracts, DCE live-hog EOD
-> facts, Dukascopy OTC gold/silver and rolling copper CFD implemented on 2026-07-25.
+> facts, Dukascopy OTC gold/silver and rolling copper/light-oil CFDs implemented.
 > LME remains a non-blocking licensing/discovery item.
 >
 > The proposed provider selection, domain model, MCP migration, implementation
@@ -102,7 +102,9 @@ back-adjusted research-grade continuous series.
 - DCE LH uses the same model but exposes official EOD facts only. Intraday DCE
   bars and quotes remain unavailable rather than inferred from third-party main contracts.
 - Dukascopy supplies XAUUSD/XAGUSD bid/ask broker-feed quotes and bars. Its copper
-  instrument is separately identified as a rolling CFD and never called spot/LME.
+  and light-oil instruments are separately identified as rolling CFDs. The latter
+  uses `cfd:OTC:LIGHT_CMD_USD`; `USOIL` is an alias and never implies WTI spot or
+  a NYMEX `CL` contract.
 - `market_data_get` now supports `futures_curve` and gated `spot_future_basis`;
   non-comparable units/times/delivery bases stay explicit.
 - Monitor and Technical Engine accept CME and OTC instruments. DCE rules remain

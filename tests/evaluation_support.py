@@ -49,7 +49,7 @@ FORBIDDEN_TABLES = frozenset(
     }
 )
 FORBIDDEN_RUNTIME_DEPENDENCIES = ("tradingagents", "langgraph", "minimax", "grok")
-EXPECTED_MIGRATION_HEADS = frozenset({"0028_provider_route_history"})
+EXPECTED_MIGRATION_HEADS = frozenset({"0029_dukascopy_light_oil_cfd"})
 
 
 def _load(path: Path) -> dict[str, Any]:

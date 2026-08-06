@@ -109,7 +109,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0028_provider_route_history"})
+_HEAD_REVISIONS = frozenset({"0029_dukascopy_light_oil_cfd"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -141,6 +141,7 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0026_korean_market_support",
     "0027_account_activity_coverage",
     "0028_provider_route_history",
+    "0029_dukascopy_light_oil_cfd",
 }
 
 
@@ -257,8 +258,8 @@ def test_phase1d_migration_round_trip_preserves_1b_data(
                 "1, '2026-07-17T12:00:00+00:00', '2026-07-17T12:00:00+00:00')"
             )
         )
-        # Confirm migration seeds are present before downgrade (19 head seeds + AAPL).
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 20
+        # Confirm migration seeds are present before downgrade (20 head seeds + AAPL).
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 21
 
     # Explicit downgrade to 0002 (not relative -1): 1D+1C gone, 1A+1B data remain.
     command.downgrade(cfg, _PHASE1B_REVISION)
@@ -295,8 +296,8 @@ def test_phase1d_migration_round_trip_preserves_1b_data(
         assert _alembic_heads(engine) == _HEAD_REVISIONS
         assert conn.execute(text("SELECT COUNT(*) FROM investment_cases")).scalar() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM system_audit_log")).scalar() == 1
-        # Manual row was dropped; re-upgrade restores 16 legacy seeds and 3 OTC seeds.
-        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 19
+        # Manual row was dropped; re-upgrade restores 16 legacy seeds and 4 OTC seeds.
+        assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == 20
 
     # second upgrade is idempotent
     command.upgrade(cfg, _HEAD_TARGET)

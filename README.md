@@ -68,17 +68,18 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   bars with explicit non-spot and contract-roll warnings.
 - Resolve formal CME metal contracts, build official-reference settlement curves,
   and read DCE live-hog EOD contract facts through one shared futures model.
-- Read free Dukascopy XAUUSD/XAGUSD broker-feed quotes and bars plus a separately
-  labelled rolling copper CFD; never relabel them as LBMA/LME benchmarks.
+- Read free Dukascopy XAUUSD/XAGUSD broker-feed quotes and bars plus separately
+  labelled rolling copper and light-oil CFDs. `USOIL` resolves to the latter but
+  is never relabelled as WTI spot or a NYMEX `CL` contract.
 - Retrieve official national hog-cycle price, feed, pig-grain-ratio, and capacity
   observations with publication-time cutoffs and no fabricated phase verdict.
 - Run repeatable deep-dive, catalyst, market-review, portfolio-review, and explicit
   same-market peer-comparison workflows while keeping the AI host as the synthesizer.
 - Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
   backtests and import downloaded result JSON with explicit reproducibility gaps.
-- Browse system health, a durable-only Data Quality Center, all 28 MCP capabilities,
-  Monitor runs/events, accounts/Watchlists, and operational state in an LLM-free
-  local web console.
+- Browse system health, a durable-only Data Quality Center, every Investment Case
+  and Thesis, all 28 MCP capabilities, Monitor runs/events, accounts/Watchlists,
+  and operational state in an LLM-free local web console.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -288,7 +289,7 @@ flowchart TB
         Continuous[Yahoo continuous futures<br/>→ Sina quote fallback<br/>→ Eastmoney daily-bar fallback]
         CME[CME public reference<br/>contracts · settlement · curve]
         DCE[DCE public EOD<br/>live-hog contracts · settlement]
-        Jetta[Dukascopy Jetta keyless<br/>XAUUSD · XAGUSD · rolling copper CFD]
+        Jetta[Dukascopy Jetta keyless<br/>XAUUSD · XAGUSD · rolling copper/light-oil CFDs]
         IGWeekend[IG Weekend Gold via Apify browser<br/>current XAUUSD fallback · CFD proxy label]
         Legacy[optional legacy Dukascopy key API]
         Jetta -. failure with configured key .-> Legacy

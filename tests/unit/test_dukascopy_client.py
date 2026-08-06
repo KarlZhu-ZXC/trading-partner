@@ -45,6 +45,16 @@ _XAG = Instrument(
     timezone="UTC",
     asset_type=AssetType.COMMODITY_SPOT,
 )
+_LIGHT_OIL = Instrument(
+    instrument_id="cfd:OTC:LIGHT_CMD_USD",
+    symbol="LIGHT_CMD_USD",
+    name="Dukascopy Light Oil Rolling CFD (not WTI spot, not a NYMEX future)",
+    market=Market.OTC,
+    exchange="DUKASCOPY_SWFX",
+    currency="USD",
+    timezone="UTC",
+    asset_type=AssetType.CFD,
+)
 
 
 def _candle_payload(
@@ -164,6 +174,34 @@ async def test_jetta_hour_bars_decode_delta_columns_and_volume_basis() -> None:
     assert transport.requests[0].params["from"] == str(
         int(datetime(2026, 7, 1, tzinfo=UTC).timestamp() * 1000)
     )
+
+
+@pytest.mark.asyncio
+async def test_jetta_light_oil_quote_uses_rolling_cfd_unit_and_warnings() -> None:
+    quote_at = AS_OF - timedelta(minutes=1)
+    transport = _FixtureTransport(
+        {
+            "/v1/candles/minute/LIGHT.CMD-USD/BID": (
+                200,
+                _candle_payload(timestamp=quote_at, base="78.100"),
+            ),
+            "/v1/candles/minute/LIGHT.CMD-USD/ASK": (
+                200,
+                _candle_payload(timestamp=quote_at, base="78.120"),
+            ),
+        }
+    )
+    result = await DukascopySpotAdapter(transport, clock=_FixedClock()).get_quote(
+        _LIGHT_OIL, AS_OF
+    )
+
+    assert result.value.instrument_id == "cfd:OTC:LIGHT_CMD_USD"
+    assert result.value.unit == "USD/bbl"
+    assert result.value.bid == Decimal("78.10")
+    assert "ROLLING_CFD_NOT_SPOT" in result.meta.warnings
+    assert "OTC_BROKER_FEED" in result.meta.warnings
+    assert "VOLUME_BEST_BID_ASK_NOT_EXCHANGE" in result.meta.warnings
+    assert "DUKASCOPY_SWFX_NOT_LBMA" not in result.meta.warnings
 
 
 @pytest.mark.asyncio
