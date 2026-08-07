@@ -24,7 +24,7 @@ class JournalRepository(Protocol):
     def list(
         self,
         *,
-        case_id: str | None,
+        subject_id: str | None,
         as_of: datetime | None,
         limit: int,
         offset: int,

@@ -31,8 +31,8 @@ class ChallengeReviewRow(Base):
     )
 
     review_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT"), nullable=False
+    subject_id: Mapped[str] = mapped_column(
+        "case_id", Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT"), nullable=False
     )
     mode: Mapped[str] = mapped_column(Text, nullable=False)
     trigger: Mapped[str] = mapped_column(Text, nullable=False)
@@ -137,8 +137,8 @@ class WorkflowRunRow(Base):
 
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
     workflow_type: Mapped[str] = mapped_column(Text, nullable=False)
-    case_id: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT")
+    subject_id: Mapped[str | None] = mapped_column(
+        "case_id", Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT")
     )
     instrument_id: Mapped[str | None] = mapped_column(Text)
     requested_as_of: Mapped[str] = mapped_column(Text, nullable=False)

@@ -25,14 +25,14 @@ from domain.common.enums import (
     EvidenceQuality,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     JournalEntryType,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
 )
@@ -43,14 +43,14 @@ from domain.common.errors import (
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     EvidenceAssessment,
-    InvestmentCase,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    ResearchSubject,
+    SubjectEvidenceLink,
     Thesis,
     ThesisRevision,
     compute_evidence_content_sha256,
@@ -124,13 +124,13 @@ def uow_factory(engine: Engine):  # type: ignore[no-untyped-def]
     return factory
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> InvestmentCase:
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> ResearchSubject:
     base: dict[str, Any] = {
-        "case_id": ids.new(EntityIdPrefix.CASE),
-        "case_type": InvestmentCaseType.COMPANY,
+        "subject_id": ids.new(EntityIdPrefix.SUBJECT),
+        "subject_type": ResearchSubjectType.COMPANY,
         "title": "Research case",
         "summary": "Long horizon",
-        "status": InvestmentCaseStatus.ACTIVE,
+        "status": ResearchSubjectStatus.ACTIVE,
         "primary_instrument_id": US_INSTRUMENT,
         "topic_tags": ("ai",),
         "created_at": clock.now(),
@@ -138,7 +138,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "created_by": "user",
         "archived_at": None,
         "archived_reason": None,
-        "linked_case_ids": (),
+        "linked_subject_ids": (),
         "evidence_ids": (),
         "report_ids": (),
         "event_ids": (),
@@ -146,7 +146,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return InvestmentCase(**base)
+    return ResearchSubject(**base)
 
 
 def _evidence_hash(**overrides: Any) -> str:
@@ -219,13 +219,13 @@ def _make_evidence(ids: SequentialIdGenerator, **overrides: Any) -> Evidence:
 def _make_link(
     ids: SequentialIdGenerator,
     *,
-    case_id: str,
+    subject_id: str,
     evidence_id: str,
     linked_at: datetime = NOW,
-) -> CaseEvidenceLink:
-    return CaseEvidenceLink(
+) -> SubjectEvidenceLink:
+    return SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case_id,
+        subject_id=subject_id,
         evidence_id=evidence_id,
         linked_at=linked_at,
         linked_by="user",
@@ -237,19 +237,19 @@ def _bootstrap_case(
     uow_factory,  # type: ignore[no-untyped-def]
     *,
     primary_instrument_id: str = US_INSTRUMENT,
-) -> InvestmentCase:
+) -> ResearchSubject:
     # 0003 seed already provides A_SHARE/US instruments after alembic upgrade.
-    case = _make_case(
+    subject = _make_case(
         uow_factory.ids, uow_factory.clock, primary_instrument_id=primary_instrument_id
     )
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case
+    return subject
 
 
 def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
+    subject = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
     ids = uow_factory.ids
 
     evidence = _make_evidence(
@@ -264,12 +264,12 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
     )
     link = _make_link(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=EARLIER,
     )
     report_hash = compute_report_content_sha256(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Structural demand intact",
@@ -280,7 +280,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
     )
     report = ResearchReport(
         report_id=ids.new(EntityIdPrefix.REPORT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Structural demand intact",
@@ -299,7 +299,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
     )
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.COMPANY,
         title="Regulatory notice",
         summary="Regulator published guidance",
@@ -316,7 +316,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="Watch Moutai",
         rationale="Wait for confirmation",
@@ -334,7 +334,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
     )
     journal = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Field note",
         body_markdown="Observed channel inventory",
@@ -351,7 +351,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
 
     with uow_factory() as uow:
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.reports.add(report)
         uow.events.add(event)
         uow.decisions.add(
@@ -380,16 +380,20 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
         assert uow.search_index.probe() is True
 
         # CJK unigram recall
-        page = uow.search_index.search(ResearchSearchQuery(text="茅台", case_id=case.case_id))
+        page = uow.search_index.search(
+            ResearchSearchQuery(text="茅台", subject_id=subject.subject_id)
+        )
         assert page.total >= 1
         assert any(h.entity_id == evidence.evidence_id for h in page.items)
         hit = next(h for h in page.items if h.entity_id == evidence.evidence_id)
-        assert hit.case_id == case.case_id
+        assert hit.subject_id == subject.subject_id
         assert hit.snippet == evidence.summary
         assert hit.source_name == "mock_a_share"
         assert hit.title == evidence.title  # business source, not FTS unigram text
 
-        page2 = uow.search_index.search(ResearchSearchQuery(text="业绩", case_id=case.case_id))
+        page2 = uow.search_index.search(
+            ResearchSearchQuery(text="业绩", subject_id=subject.subject_id)
+        )
         assert any(h.entity_id == evidence.evidence_id for h in page2.items)
 
         # instrument structured filter (A-share vs US)
@@ -411,7 +415,7 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
         # entity type filter
         only_report = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 entity_types=(ResearchSearchEntityType.REPORT,),
             )
         )
@@ -428,12 +432,12 @@ def test_index_five_entity_types_and_search_filters(uow_factory) -> None:  # typ
 
 
 def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
     thesis = Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         title="Primary",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -448,7 +452,7 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
     revision = ThesisRevision(
         revision_id=rev_id,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Demand structural",
@@ -478,12 +482,12 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
         instrument_ids=(US_INSTRUMENT,),
         content_text="risks",
     )
-    link1 = _make_link(ids, case_id=case.case_id, evidence_id=e1.evidence_id)
-    link2 = _make_link(ids, case_id=case.case_id, evidence_id=e2.evidence_id)
+    link1 = _make_link(ids, subject_id=subject.subject_id, evidence_id=e1.evidence_id)
+    link2 = _make_link(ids, subject_id=subject.subject_id, evidence_id=e2.evidence_id)
     a1 = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=e1.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=thesis.thesis_id,
         thesis_revision_id=rev_id,
         stance=EvidenceStance.SUPPORTS,
@@ -497,7 +501,7 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
     a2 = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=e2.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=thesis.thesis_id,
         thesis_revision_id=rev_id,
         stance=EvidenceStance.CONTRADICTS,
@@ -514,8 +518,8 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
         uow.revisions.append(revision)
         uow.evidence.add(e1)
         uow.evidence.add(e2)
-        uow.case_evidence_links.add(link1)
-        uow.case_evidence_links.add(link2)
+        uow.subject_evidence_links.add(link1)
+        uow.subject_evidence_links.add(link2)
         uow.evidence_assessments.add(a1)
         uow.evidence_assessments.add(a2)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, e1.evidence_id)
@@ -525,7 +529,7 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
     with uow_factory() as uow:
         contra = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 thesis_id=thesis.thesis_id,
                 stances=(EvidenceStance.CONTRADICTS,),
             )
@@ -549,10 +553,10 @@ def test_stance_thesis_and_pagination(uow_factory) -> None:  # type: ignore[no-u
         assert thesis_page.total == 2
 
         page0 = uow.search_index.search(
-            ResearchSearchQuery(case_id=case.case_id, limit=1, offset=0)
+            ResearchSearchQuery(subject_id=subject.subject_id, limit=1, offset=0)
         )
         page1 = uow.search_index.search(
-            ResearchSearchQuery(case_id=case.case_id, limit=1, offset=1)
+            ResearchSearchQuery(subject_id=subject.subject_id, limit=1, offset=1)
         )
         assert page0.total == 2
         assert page0.has_more is True
@@ -567,13 +571,13 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
     """thesis_id alone must return exactly linked Evidence/Report/Decision."""
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
 
     match_rev_id = ids.new(EntityIdPrefix.REV)
     match_thesis = Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         title="Match thesis",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -588,7 +592,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     match_revision = ThesisRevision(
         revision_id=match_rev_id,
         thesis_id=match_thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Structural demand",
@@ -609,7 +613,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     other_rev_id = ids.new(EntityIdPrefix.REV)
     other_thesis = Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         title="Other thesis",
         role=ThesisRole.BEAR,
         status=ThesisStatus.ACTIVE,
@@ -624,7 +628,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     other_revision = ThesisRevision(
         revision_id=other_rev_id,
         thesis_id=other_thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Bear case",
@@ -651,14 +655,14 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     )
     link = _make_link(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=EARLIER,
     )
     assessment = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=evidence.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=match_thesis.thesis_id,
         thesis_revision_id=match_rev_id,
         stance=EvidenceStance.SUPPORTS,
@@ -671,7 +675,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     )
 
     match_report_hash = compute_report_content_sha256(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Match report",
         summary="Bound to match revision",
@@ -682,7 +686,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     )
     match_report = ResearchReport(
         report_id=ids.new(EntityIdPrefix.REPORT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Match report",
         summary="Bound to match revision",
@@ -700,7 +704,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     other_report_hash = compute_report_content_sha256(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Other report",
         summary="Bound to other revision",
@@ -711,7 +715,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     )
     other_report = ResearchReport(
         report_id=ids.new(EntityIdPrefix.REPORT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Other report",
         summary="Bound to other revision",
@@ -731,7 +735,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
 
     match_decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="Match decision",
         rationale="Act on match thesis",
@@ -749,7 +753,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
     )
     other_decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="Other decision",
         rationale="Act on other thesis",
@@ -772,7 +776,7 @@ def test_thesis_id_filter_returns_matching_evidence_report_decision(
         uow.revisions.append(match_revision)
         uow.revisions.append(other_revision)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.evidence_assessments.add(assessment)
         uow.reports.add(match_report)
         uow.reports.add(other_report)
@@ -829,12 +833,12 @@ def test_legacy_decision_excludes_future_confirmed_revision_under_as_of(
     """
     import json
 
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
     thesis = Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         title="Legacy thesis",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -850,7 +854,7 @@ def test_legacy_decision_excludes_future_confirmed_revision_under_as_of(
     revision = ThesisRevision(
         revision_id=rev_id,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Confirmed after decision",
@@ -886,7 +890,7 @@ def test_legacy_decision_excludes_future_confirmed_revision_under_as_of(
                 "position_context_snapshot_id, idempotency_key, "
                 "idempotency_payload_sha256, schema_version"
                 ") VALUES ("
-                ":decision_id, :case_id, :decision_type, :title, :rationale, "
+                ":decision_id, :subject_id, :decision_type, :title, :rationale, "
                 ":decided_at, :recorded_at, :decided_by, :confirmation_mode, "
                 ":primary_instrument_id, :thesis_revision_ids_json, "
                 ":evidence_ids_json, :report_ids_json, NULL, NULL, "
@@ -895,7 +899,7 @@ def test_legacy_decision_excludes_future_confirmed_revision_under_as_of(
             ),
             {
                 "decision_id": decision_id,
-                "case_id": case.case_id,
+                "subject_id": subject.subject_id,
                 "decision_type": DecisionType.WATCH.value,
                 "title": "Legacy pre-confirmation decision",
                 "rationale": "Recorded before revision confirm",
@@ -923,7 +927,7 @@ def test_legacy_decision_excludes_future_confirmed_revision_under_as_of(
         # Document is visible at as_of=NOW (recorded_at=NOW).
         visible = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 as_of=NOW,
                 entity_types=(ResearchSearchEntityType.DECISION,),
             )
@@ -964,24 +968,24 @@ def test_supersession_case_specific_and_as_of(uow_factory) -> None:  # type: ign
         instrument_ids=(A_SHARE_INSTRUMENT,),
     )
     link_old_a = _make_link(
-        ids, case_id=case_a.case_id, evidence_id=old.evidence_id, linked_at=EARLIER
+        ids, subject_id=case_a.subject_id, evidence_id=old.evidence_id, linked_at=EARLIER
     )
     link_old_b = _make_link(
-        ids, case_id=case_b.case_id, evidence_id=old.evidence_id, linked_at=EARLIER
+        ids, subject_id=case_b.subject_id, evidence_id=old.evidence_id, linked_at=EARLIER
     )
     # Correction only linked to case A
     link_corr_a = _make_link(
-        ids, case_id=case_a.case_id, evidence_id=correction.evidence_id, linked_at=LATER
+        ids, subject_id=case_a.subject_id, evidence_id=correction.evidence_id, linked_at=LATER
     )
 
     with uow_factory() as uow:
-        uow.cases.add(case_a)
-        uow.cases.add(case_b)
+        uow.subjects.add(case_a)
+        uow.subjects.add(case_b)
         uow.evidence.add(old)
         uow.evidence.add(correction)
-        uow.case_evidence_links.add(link_old_a)
-        uow.case_evidence_links.add(link_old_b)
-        uow.case_evidence_links.add(link_corr_a)
+        uow.subject_evidence_links.add(link_old_a)
+        uow.subject_evidence_links.add(link_old_b)
+        uow.subject_evidence_links.add(link_corr_a)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, old.evidence_id)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, correction.evidence_id)
         uow.commit()
@@ -999,13 +1003,13 @@ def test_supersession_case_specific_and_as_of(uow_factory) -> None:  # type: ign
         assert old.evidence_id not in global_ids
 
         # Case A: old hidden (successor linked)
-        case_a_page = uow.search_index.search(ResearchSearchQuery(case_id=case_a.case_id))
+        case_a_page = uow.search_index.search(ResearchSearchQuery(subject_id=case_a.subject_id))
         case_a_ids = {h.entity_id for h in case_a_page.items}
         assert correction.evidence_id in case_a_ids
         assert old.evidence_id not in case_a_ids
 
         # Case B: old still visible (correction not linked to B)
-        case_b_page = uow.search_index.search(ResearchSearchQuery(case_id=case_b.case_id))
+        case_b_page = uow.search_index.search(ResearchSearchQuery(subject_id=case_b.subject_id))
         case_b_ids = {h.entity_id for h in case_b_page.items}
         assert old.evidence_id in case_b_ids
         assert correction.evidence_id not in case_b_ids
@@ -1036,10 +1040,10 @@ def test_supersession_case_specific_and_as_of(uow_factory) -> None:  # type: ign
 
 
 def test_report_as_of_and_membership_refresh(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
     report_hash = compute_report_content_sha256(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Future report",
         summary="uses future as_of facts",
@@ -1050,7 +1054,7 @@ def test_report_as_of_and_membership_refresh(uow_factory) -> None:  # type: igno
     )
     report = ResearchReport(
         report_id=ids.new(EntityIdPrefix.REPORT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Future report",
         summary="uses future as_of facts",
@@ -1079,7 +1083,7 @@ def test_report_as_of_and_membership_refresh(uow_factory) -> None:  # type: igno
         # Report created_at / as_of both in future relative to NOW
         page = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 as_of=NOW,
                 entity_types=(ResearchSearchEntityType.REPORT,),
             )
@@ -1089,27 +1093,29 @@ def test_report_as_of_and_membership_refresh(uow_factory) -> None:  # type: igno
         # Membership refresh after linking evidence to case
         link = _make_link(
             uow_factory.ids,
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             evidence_id=evidence.evidence_id,
             linked_at=LATER,
         )
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.search_index.refresh_evidence_membership(evidence.evidence_id)
         uow.commit()
 
     with uow_factory() as uow:
         before_link_time = uow.search_index.search(
-            ResearchSearchQuery(case_id=case.case_id, as_of=NOW)
+            ResearchSearchQuery(subject_id=subject.subject_id, as_of=NOW)
         )
         # membership_visible_at = LATER > NOW → evidence not visible under as_of=NOW
         assert all(h.entity_id != evidence.evidence_id for h in before_link_time.items)
 
-        after = uow.search_index.search(ResearchSearchQuery(case_id=case.case_id, as_of=MUCH_LATER))
+        after = uow.search_index.search(
+            ResearchSearchQuery(subject_id=subject.subject_id, as_of=MUCH_LATER)
+        )
         assert any(h.entity_id == evidence.evidence_id for h in after.items)
 
 
 def test_rebuild_repairs_fts_drift_and_probe_failure(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
+    subject = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
     ids = uow_factory.ids
     evidence = _make_evidence(
         ids,
@@ -1118,10 +1124,10 @@ def test_rebuild_repairs_fts_drift_and_probe_failure(uow_factory) -> None:  # ty
         content_text="正文",
         instrument_ids=(A_SHARE_INSTRUMENT,),
     )
-    link = _make_link(ids, case_id=case.case_id, evidence_id=evidence.evidence_id)
+    link = _make_link(ids, subject_id=subject.subject_id, evidence_id=evidence.evidence_id)
     with uow_factory() as uow:
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, evidence.evidence_id)
         uow.commit()
 
@@ -1167,14 +1173,18 @@ def test_rebuild_repairs_fts_drift_and_probe_failure(uow_factory) -> None:  # ty
         session.commit()
 
     with uow_factory() as uow:
-        broken = uow.search_index.search(ResearchSearchQuery(text="茅台", case_id=case.case_id))
+        broken = uow.search_index.search(
+            ResearchSearchQuery(text="茅台", subject_id=subject.subject_id)
+        )
         assert broken.total == 0
         count = uow.search_index.rebuild()
         assert count >= 1
         uow.commit()
 
     with uow_factory() as uow:
-        fixed = uow.search_index.search(ResearchSearchQuery(text="茅台", case_id=case.case_id))
+        fixed = uow.search_index.search(
+            ResearchSearchQuery(text="茅台", subject_id=subject.subject_id)
+        )
         assert fixed.total >= 1
         assert uow.search_index.probe() is True
 
@@ -1202,7 +1212,7 @@ def test_index_missing_entity(uow_factory) -> None:  # type: ignore[no-untyped-d
 
 
 def test_uow_rollback_discards_partial_projection(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
     evidence = _make_evidence(ids, title="rollback me", summary="s")
     with uow_factory() as uow:
@@ -1221,12 +1231,12 @@ def test_uow_rollback_discards_partial_projection(uow_factory) -> None:  # type:
         # evidence itself rolled back too
         with pytest.raises(ResearchMemoryNotFound):
             uow.evidence.get(evidence.evidence_id)
-    assert case.case_id
+    assert subject.subject_id
 
 
 def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None:  # type: ignore[no-untyped-def]
     """Nonempty evidence_types must not let Report/Event/Decision/Journal pass through."""
-    case = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
+    subject = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
     ids = uow_factory.ids
 
     matching = _make_evidence(
@@ -1248,16 +1258,16 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
         published_at=EARLIER,
     )
     link_matching = _make_link(
-        ids, case_id=case.case_id, evidence_id=matching.evidence_id, linked_at=EARLIER
+        ids, subject_id=subject.subject_id, evidence_id=matching.evidence_id, linked_at=EARLIER
     )
     link_other = _make_link(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=other_evidence.evidence_id,
         linked_at=EARLIER,
     )
     report_hash = compute_report_content_sha256(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Uses filing context",
@@ -1268,7 +1278,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
     )
     report = ResearchReport(
         report_id=ids.new(EntityIdPrefix.REPORT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Uses filing context",
@@ -1287,7 +1297,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
     )
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.COMPANY,
         title="Company event",
         summary="External event",
@@ -1304,7 +1314,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="Watch",
         rationale="Hold for filing clarity",
@@ -1322,7 +1332,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
     )
     journal = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Note",
         body_markdown="Filed under review",
@@ -1340,8 +1350,8 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
     with uow_factory() as uow:
         uow.evidence.add(matching)
         uow.evidence.add(other_evidence)
-        uow.case_evidence_links.add(link_matching)
-        uow.case_evidence_links.add(link_other)
+        uow.subject_evidence_links.add(link_matching)
+        uow.subject_evidence_links.add(link_other)
         uow.reports.add(report)
         uow.events.add(event)
         uow.decisions.add(
@@ -1369,7 +1379,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
         # evidence_types-only: default five entity types, but only matching Evidence.
         page = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 evidence_types=(EvidenceType.SEC_FILING,),
             )
         )
@@ -1389,7 +1399,7 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
         # Explicit entity_types without Evidence + evidence_types => empty page.
         empty = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 entity_types=(
                     ResearchSearchEntityType.REPORT,
                     ResearchSearchEntityType.EVENT,
@@ -1404,11 +1414,11 @@ def test_evidence_types_restricts_to_matching_evidence_only(uow_factory) -> None
 
 
 def test_evidence_types_without_evidence_entity_returns_empty(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case = _bootstrap_case(uow_factory)
+    subject = _bootstrap_case(uow_factory)
     ids = uow_factory.ids
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.MACRO,
         title="Macro",
         summary="CPI print",
@@ -1431,7 +1441,7 @@ def test_evidence_types_without_evidence_entity_returns_empty(uow_factory) -> No
     with uow_factory() as uow:
         page = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 entity_types=(ResearchSearchEntityType.EVENT,),
                 evidence_types=(EvidenceType.MARKET_SNAPSHOT,),
             )
@@ -1442,12 +1452,12 @@ def test_evidence_types_without_evidence_entity_returns_empty(uow_factory) -> No
 
 def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> None:  # type: ignore[no-untyped-def]
     """journal_entry_types must filter in SQL on count and page with accurate total."""
-    case = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
+    subject = _bootstrap_case(uow_factory, primary_instrument_id=A_SHARE_INSTRUMENT)
     ids = uow_factory.ids
 
     note = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Note A",
         body_markdown="channel note body",
@@ -1463,7 +1473,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
     )
     postmortem = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.POSTMORTEM,
         title="Postmortem B",
         body_markdown="postmortem body",
@@ -1479,7 +1489,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
     )
     reflection = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.REFLECTION,
         title="Reflection C",
         body_markdown="reflection body",
@@ -1503,14 +1513,14 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
     )
     link = _make_link(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
     )
 
     with uow_factory() as uow:
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.journal.add(
             note,
             idempotency_key="j-note",
@@ -1535,7 +1545,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         # Single type: total/page accurate.
         note_page = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 journal_entry_types=(JournalEntryType.NOTE,),
                 limit=10,
                 offset=0,
@@ -1550,7 +1560,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         # Multi-type OR + pagination across matching journals only.
         page0 = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 journal_entry_types=(
                     JournalEntryType.NOTE,
                     JournalEntryType.POSTMORTEM,
@@ -1561,7 +1571,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         )
         page1 = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 journal_entry_types=(
                     JournalEntryType.NOTE,
                     JournalEntryType.POSTMORTEM,
@@ -1582,7 +1592,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         # Non-matching type yields empty with total=0.
         empty = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 journal_entry_types=(JournalEntryType.QUESTION,),
             )
         )
@@ -1590,7 +1600,7 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         assert empty.items == ()
         assert empty.has_more is False
 
-        # journal_entry_types alone forces JOURNAL entity type even without case_id.
+        # journal_entry_types alone forces JOURNAL entity type even without subject_id.
         by_type_only = uow.search_index.search(
             ResearchSearchQuery(journal_entry_types=(JournalEntryType.REFLECTION,))
         )

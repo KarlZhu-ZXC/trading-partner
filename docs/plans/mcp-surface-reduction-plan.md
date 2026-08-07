@@ -134,7 +134,7 @@ FastMCP 继续从 Pydantic `arg_model.model_json_schema()` 生成 schema。禁�
 |---|---|---|
 | Durable/provider read | `*_get`, `portfolio_analyze`, technical snapshot | 不改变投资判断、仓位或策略；Provider warning 必须保留 |
 | Explicit upstream sync | `external_state_sync` | 只有用户明确要求刷新/同步时调用；不得由“当前持仓”自动触发 |
-| Confirmed append/manage | case/judgment/memory/challenge/watchlist/risk-policy/monitor manage | 保留 confirmer、idempotency、expected-version 和 ActorContext mismatch gate |
+| Confirmed append/manage | subject/judgment/memory/challenge/watchlist/risk-policy/monitor manage | 保留 confirmer、idempotency、expected-version 和 ActorContext mismatch gate |
 | State evaluation | `monitor_evaluate` | 可持久化 rule state/event transition；仍 `execution_effect=false` |
 | Local artifact | `technical_render_chart` | 单独保留 image content 返回和 permission-restricted artifact |
 
@@ -153,7 +153,7 @@ annotation 不得谎称完全 read-only。
 
 `research_workflow_run` 合并研究 workflow 和 Phase 3C 手工验证桥接，但不允许借合并扩大权限：
 
-- `deep_dive` 默认仍只复用唯一 Draft；创建新 Case 必须先通过
+- `deep_dive` 默认仍只复用唯一 Draft；创建新研究档案必须先通过
   `investment_case_manage(operation="create")`，compact workflow 不接受 `create_case=true`；
 - `portfolio_review` 不接受 `refresh_accounts=true`；需要刷新时先显式调用
   `external_state_sync(operation="accounts")`；
@@ -178,7 +178,7 @@ annotation 不得谎称完全 read-only。
 ### 7.2 不做 runtime alias
 
 Compact profile 收到旧工具名时返回普通 `method not found`。server 内不翻译旧名，Skill、
-AGENTS、automation 和示例只使用 compact operation。旧 workflow 曾经隐藏的 Case 创建与账户
+AGENTS、automation 和示例只使用 compact operation。旧 workflow 曾经隐藏的研究档案创建与账户
 刷新必须继续拆成显式 compact 调用。
 
 ### 7.3 无数据库迁移
@@ -236,13 +236,13 @@ mapping，缩短 `$defs` 名称并共享重复属性 schema；服务端 Pydantic
 ## 10. 明确不在本次范围
 
 - 不把 MCP tools 改成一个 `dispatch(action, payload)`；
-- 不把 durable report/case 改成 MCP Resource template（可作为后续 28→24 的独立实验）；
-- 不改变 Investment Case、Thesis、Trade Plan、Risk、Monitor 业务模型；
+- 不把 durable report/subject 改成 MCP Resource template（可作为后续 28→24 的独立实验）；
+- 不改变研究档案、Thesis、Trade Plan、Risk、Monitor 业务模型；
 - 不增加 backtest、orders、fills 或 runtime LLM；
 - 不为减少数字而合并 JSON envelope 与 image block 返回通道。
 
 ## 11. 后续 28 → 24 的条件
 
 只有当目标 host 已证明能稳定发现和读取 MCP Resource templates，才评估把以下纯读取入口迁移
-为 resources：immutable report、case context、persisted challenge review、monitor event page。
+为 resources：immutable report、subject context、persisted challenge review、monitor event page。
 这属于第二阶段协议设计，不是 compact v2 的验收条件。

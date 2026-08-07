@@ -39,7 +39,7 @@ _PAYLOAD_LISTENERS_REGISTERED = False
 def _to_domain(row: CandidateThesisRevisionRow) -> CandidateThesisRevision:
     return CandidateThesisRevision(
         candidate_id=row.candidate_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         thesis_id=row.thesis_id,
         target_revision_no=row.target_revision_no,
         payload_json=row.payload_json,
@@ -61,7 +61,7 @@ def _to_domain(row: CandidateThesisRevisionRow) -> CandidateThesisRevision:
 def _to_row(candidate: CandidateThesisRevision) -> CandidateThesisRevisionRow:
     return CandidateThesisRevisionRow(
         candidate_id=candidate.candidate_id,
-        case_id=candidate.case_id,
+        subject_id=candidate.subject_id,
         thesis_id=candidate.thesis_id,
         target_revision_no=candidate.target_revision_no,
         payload_json=candidate.payload_json,
@@ -119,9 +119,7 @@ def register_candidate_payload_listeners() -> None:
     global _PAYLOAD_LISTENERS_REGISTERED
     if _PAYLOAD_LISTENERS_REGISTERED:
         return
-    event.listen(
-        CandidateThesisRevisionRow, "before_update", _deny_payload_mutation_after_proposed
-    )
+    event.listen(CandidateThesisRevisionRow, "before_update", _deny_payload_mutation_after_proposed)
     _PAYLOAD_LISTENERS_REGISTERED = True
 
 
@@ -154,7 +152,7 @@ class SqlAlchemyCandidateThesisRevisionRepository:
     def list(
         self,
         *,
-        case_id: str | None = None,
+        subject_id: str | None = None,
         kind: CandidateKind | None = None,
         status: CandidateStatus | None = None,
         confirmation_mode: ConfirmationMode | None = None,
@@ -163,8 +161,8 @@ class SqlAlchemyCandidateThesisRevisionRepository:
         offset: int = 0,
     ) -> tuple[CandidateThesisRevision, ...]:
         stmt = select(CandidateThesisRevisionRow)
-        if case_id is not None:
-            stmt = stmt.where(CandidateThesisRevisionRow.case_id == case_id)
+        if subject_id is not None:
+            stmt = stmt.where(CandidateThesisRevisionRow.subject_id == subject_id)
         if kind is not None:
             stmt = stmt.where(CandidateThesisRevisionRow.kind == kind.value)
         if status is not None:
@@ -200,9 +198,7 @@ class SqlAlchemyCandidateThesisRevisionRepository:
         rejection_reason: str | None,
     ) -> None:
         """Update lifecycle fields only — payload_json is never modified (INV-15)."""
-        row = self._session.get(
-            CandidateThesisRevisionRow, candidate_id, with_for_update=True
-        )
+        row = self._session.get(CandidateThesisRevisionRow, candidate_id, with_for_update=True)
         if row is None:
             raise CandidateNotFound(
                 f"CandidateThesisRevision not found: {candidate_id}",
@@ -221,9 +217,7 @@ class SqlAlchemyCandidateThesisRevisionRepository:
             )
         # Residual fields for non-terminal / non-matching statuses are cleared
         # to match domain + SQL CHECK equality rules.
-        effective_rejection = (
-            rejection_reason if new_status is CandidateStatus.REJECTED else None
-        )
+        effective_rejection = rejection_reason if new_status is CandidateStatus.REJECTED else None
         effective_review_note = review_note
         if new_status in {CandidateStatus.PROPOSED, CandidateStatus.EXPIRED}:
             effective_review_note = None
@@ -232,7 +226,7 @@ class SqlAlchemyCandidateThesisRevisionRepository:
         current_domain = _to_domain(row)
         next_domain = CandidateThesisRevision(
             candidate_id=current_domain.candidate_id,
-            case_id=current_domain.case_id,
+            subject_id=current_domain.subject_id,
             thesis_id=current_domain.thesis_id,
             target_revision_no=current_domain.target_revision_no,
             payload_json=current_domain.payload_json,
@@ -272,7 +266,7 @@ class SqlAlchemyCandidateThesisRevisionRepository:
             current_domain = _to_domain(row)
             next_domain = CandidateThesisRevision(
                 candidate_id=current_domain.candidate_id,
-                case_id=current_domain.case_id,
+                subject_id=current_domain.subject_id,
                 thesis_id=current_domain.thesis_id,
                 target_revision_no=current_domain.target_revision_no,
                 payload_json=current_domain.payload_json,

@@ -15,7 +15,7 @@ packages.
 
 The product can:
 
-- restore a research file (normally an instrument-centered Investment Case) and its evolving investment
+- restore a research file (normally an instrument-centered Research Subject) and its evolving investment
   judgments (Theses) across Codex tasks;
 - research A-share and US instruments with source/time/freshness metadata;
 - read Moomoo, Schwab, or strict manual-CSV accounts without order permissions;
@@ -31,7 +31,7 @@ monitoring. Those capabilities belong to later phases.
 | Slice | Delivered capability |
 |---|---|
 | 1A | Python/MCP skeleton, health, mock snapshots, architecture boundaries |
-| 1B | Investment Case, Thesis revisions, assumptions, invalidations, questions, research WatchlistItem |
+| 1B | Research Subject, Thesis revisions, assumptions, invalidations, questions, research WatchlistItem |
 | 1C | Immutable research memory, timeline, journal, decisions, full-text search |
 | 1D | Instrument Master, local-first dynamic resolution, provider router/cache/rate limits |
 | 1E | A-share quote, structure, capital, limit-up, sentiment, reports, ETF options |
@@ -99,11 +99,11 @@ receipts.
 
 ## 4. Research model
 
-The user-facing concept is a **research file**. For the primary company/catalyst
-flow, `Instrument` is the objective security identity and `InvestmentCase` is the
-durable, subjective research file opened around that Instrument; `Thesis` is one
+The user-facing concept is a **Research Subject** (research file). For the primary
+company/catalyst flow, `Instrument` is the objective security identity and the
+Research Subject is the durable, subjective research file opened around that Instrument; `Thesis` is one
 current, falsifiable investment judgment inside the file. Theme, macro, and
-portfolio-concern Cases may instead span instruments or have no primary Instrument.
+portfolio-concern Research Subjects may instead span instruments or have no primary Instrument.
 A research file owns or links its current judgments,
 append-only revisions, assumptions, invalidation conditions, open questions,
 reports, events, decisions, journals, challenge reviews, and optional WatchlistItem
@@ -111,13 +111,13 @@ metadata.
 
 ```text
 Instrument
-└── Investment Case (instrument research file)
+└── Research Subject (instrument research file)
     ├── Thesis (current investment judgment)
     ├── Thesis revisions
     └── evidence, reports, events, decisions, journals, and reviews
 ```
 
-For an instrument-centered Case, the three entities are deliberately not collapsed:
+For an instrument-centered Research Subject, the three entities are deliberately not collapsed:
 an Instrument can exist without a research file, a research file can exist before any judgment is confirmed, and
 the judgment can change while the Instrument identity and research history remain
 stable. One open file is reused by default for an instrument; an archived file does
@@ -136,6 +136,20 @@ An instrument-only Deep Dive reuses a unique Draft instrument research file by
 default. Creating a new Draft requires an explicit confirmer and idempotency key.
 Draft means the research has a durable home, not automatic long-term monitoring or
 a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
+Research Subject title identifies a stable research object/question and summary defines research
+scope. Action levels, add/trim or exit instructions, sizing, and position plans live
+in the Thesis/Trade Plan rather than Research Subject metadata. Research Subject type and primary Instrument
+are immutable after creation. New Research Subject lifecycle writes use DRAFT/ACTIVE/ARCHIVED;
+legacy conviction-like Research Subject states remain read-compatible while Thesis owns judgment.
+An ACTIVE/STRENGTHENED/WEAKENED Thesis requires its Research Subject to be in one of the same
+tracking states; an ACTIVE Trade Plan additionally requires a live Thesis. The
+confirmation path returns non-retryable `RESEARCH_STATE_CONFLICT` instead of
+implicitly activating or cascading another entity. A tracking Research Subject cannot leave
+tracking while a live Thesis or ACTIVE/PAUSED Trade Plan remains.
+Existing Thesis revisions preserve the current status unless `thesis_status` is
+explicitly supplied; an actual status transition requires strict review. Closure is
+ordered and explicit: archive the live Trade Plan, retire the Thesis, then archive
+the Research Subject.
 
 ## 5. Provider model
 
@@ -154,7 +168,9 @@ a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
   session, a stale regular quote is compared with the latest available one-minute
   `includePrePost` bar. The newer timestamp wins and carries
   `EXTENDED_HOURS_PRICE` or `INTRADAY_QUOTE_RECOVERY`; a failed recovery remains
-  explicit as `INTRADAY_QUOTE_UNAVAILABLE`. Historical `as_of` requests never use
+  explicit as `INTRADAY_QUOTE_UNAVAILABLE`. A prior-day post-market latest-known
+  value keeps its own session and same-day completed regular close as the baseline;
+  it must not move `previous_close` back an extra session. Historical `as_of` requests never use
   this current-only recovery path, and Yahoo does not provide a complete overnight
   equity market.
 - Yahoo quote `previous_close` is derived from the latest completed daily bar before
@@ -227,7 +243,7 @@ US Market Review
 Portfolio Review
 ```
 
-Each workflow persists a compact run receipt and optional Case-bound report.
+Each workflow persists a compact run receipt and optional Research Subject-linked report.
 Required and optional steps determine `complete`, `partial`, or `failed`. Provider
 content is untrusted external data and cannot become instructions, permissions,
 or trade authorization.
@@ -277,7 +293,7 @@ Phase 1 closeout passed:
 - Alembic upgrade to `0008_phase1l_workflows`;
 - sdist/wheel build and fresh Python 3.13 isolated-wheel smoke;
 - 80 declarative dialogue scenarios;
-- three longitudinal Investment Case fixtures;
+- three longitudinal Research Subject fixtures;
 - exact tool inventory, forbidden dependency/table/tool audit;
 - SQLite backup/restore integrity verification.
 

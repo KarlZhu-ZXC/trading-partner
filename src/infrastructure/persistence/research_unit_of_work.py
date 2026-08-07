@@ -15,17 +15,17 @@ from infrastructure.persistence.audit_log_writer import SqlAlchemySessionAuditLo
 from infrastructure.persistence.repositories import (
     SqlAlchemyAssumptionRepository,
     SqlAlchemyCandidateThesisRevisionRepository,
-    SqlAlchemyCaseEvidenceLinkRepository,
     SqlAlchemyDecisionRecordRepository,
     SqlAlchemyEvidenceAssessmentRepository,
     SqlAlchemyEvidenceRepository,
     SqlAlchemyInvalidationConditionRepository,
-    SqlAlchemyInvestmentCaseRepository,
     SqlAlchemyJournalRepository,
     SqlAlchemyOpenQuestionRepository,
     SqlAlchemyResearchEventRepository,
     SqlAlchemyResearchReportRepository,
     SqlAlchemyResearchSearchIndex,
+    SqlAlchemyResearchSubjectRepository,
+    SqlAlchemySubjectEvidenceLinkRepository,
     SqlAlchemyThesisRepository,
     SqlAlchemyThesisRevisionRepository,
     SqlAlchemyWatchlistRepository,
@@ -49,7 +49,7 @@ class SqlAlchemyResearchUnitOfWork:
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
         self._session: Session | None = None
-        self._cases: SqlAlchemyInvestmentCaseRepository | None = None
+        self._subjects: SqlAlchemyResearchSubjectRepository | None = None
         self._theses: SqlAlchemyThesisRepository | None = None
         self._revisions: SqlAlchemyThesisRevisionRepository | None = None
         self._assumptions: SqlAlchemyAssumptionRepository | None = None
@@ -58,10 +58,8 @@ class SqlAlchemyResearchUnitOfWork:
         self._watchlist: SqlAlchemyWatchlistRepository | None = None
         self._candidates: SqlAlchemyCandidateThesisRevisionRepository | None = None
         self._evidence: SqlAlchemyEvidenceRepository | None = None
-        self._case_evidence_links: SqlAlchemyCaseEvidenceLinkRepository | None = None
-        self._evidence_assessments: (
-            SqlAlchemyEvidenceAssessmentRepository | None
-        ) = None
+        self._subject_evidence_links: SqlAlchemySubjectEvidenceLinkRepository | None = None
+        self._evidence_assessments: SqlAlchemyEvidenceAssessmentRepository | None = None
         self._reports: SqlAlchemyResearchReportRepository | None = None
         self._events: SqlAlchemyResearchEventRepository | None = None
         self._decisions: SqlAlchemyDecisionRecordRepository | None = None
@@ -81,7 +79,7 @@ class SqlAlchemyResearchUnitOfWork:
 
             session.execute(text("PRAGMA foreign_keys=ON"))
         self._session = session
-        self._cases = SqlAlchemyInvestmentCaseRepository(session, self._clock)
+        self._subjects = SqlAlchemyResearchSubjectRepository(session, self._clock)
         self._theses = SqlAlchemyThesisRepository(session, self._clock)
         self._revisions = SqlAlchemyThesisRevisionRepository(session)
         self._assumptions = SqlAlchemyAssumptionRepository(session)
@@ -90,7 +88,7 @@ class SqlAlchemyResearchUnitOfWork:
         self._watchlist = SqlAlchemyWatchlistRepository(session, self._clock)
         self._candidates = SqlAlchemyCandidateThesisRevisionRepository(session)
         self._evidence = SqlAlchemyEvidenceRepository(session)
-        self._case_evidence_links = SqlAlchemyCaseEvidenceLinkRepository(session)
+        self._subject_evidence_links = SqlAlchemySubjectEvidenceLinkRepository(session)
         self._evidence_assessments = SqlAlchemyEvidenceAssessmentRepository(session)
         self._reports = SqlAlchemyResearchReportRepository(session)
         self._events = SqlAlchemyResearchEventRepository(session)
@@ -119,7 +117,7 @@ class SqlAlchemyResearchUnitOfWork:
                 self._session.close()
         finally:
             self._session = None
-            self._cases = None
+            self._subjects = None
             self._theses = None
             self._revisions = None
             self._assumptions = None
@@ -128,7 +126,7 @@ class SqlAlchemyResearchUnitOfWork:
             self._watchlist = None
             self._candidates = None
             self._evidence = None
-            self._case_evidence_links = None
+            self._subject_evidence_links = None
             self._evidence_assessments = None
             self._reports = None
             self._events = None
@@ -144,10 +142,10 @@ class SqlAlchemyResearchUnitOfWork:
         return self._session
 
     @property
-    def cases(self) -> SqlAlchemyInvestmentCaseRepository:
+    def subjects(self) -> SqlAlchemyResearchSubjectRepository:
         self._require_session()
-        assert self._cases is not None
-        return self._cases
+        assert self._subjects is not None
+        return self._subjects
 
     @property
     def theses(self) -> SqlAlchemyThesisRepository:
@@ -198,10 +196,10 @@ class SqlAlchemyResearchUnitOfWork:
         return self._evidence
 
     @property
-    def case_evidence_links(self) -> SqlAlchemyCaseEvidenceLinkRepository:
+    def subject_evidence_links(self) -> SqlAlchemySubjectEvidenceLinkRepository:
         self._require_session()
-        assert self._case_evidence_links is not None
-        return self._case_evidence_links
+        assert self._subject_evidence_links is not None
+        return self._subject_evidence_links
 
     @property
     def evidence_assessments(self) -> SqlAlchemyEvidenceAssessmentRepository:

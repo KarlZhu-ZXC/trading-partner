@@ -18,11 +18,11 @@ from domain.common.enums import (
     DecisionType,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     Market,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ResearchTimelineEntityType,
 )
 from domain.common.errors import DataContractError
@@ -123,12 +123,26 @@ class MarketGetMockSnapshotInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class InvestmentCaseCreateInput(BaseModel):
+class ResearchSubjectCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    case_type: InvestmentCaseType
-    title: str = Field(min_length=1, max_length=200)
-    summary: str = Field(min_length=1, max_length=4000)
+    case_type: ResearchSubjectType
+    title: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "Research object or question identifier. Keep action levels, sizing, "
+            "and entry/exit instructions in the Thesis or Trade Plan."
+        ),
+    )
+    summary: str = Field(
+        min_length=1,
+        max_length=4000,
+        description=(
+            "Research scope and investigation boundaries. This is not a buy/sell, "
+            "sizing, entry, or exit plan."
+        ),
+    )
     primary_instrument_id: str | None = None
     topic_tags: tuple[str, ...] = ()
     linked_case_ids: tuple[str, ...] = ()
@@ -139,26 +153,28 @@ class InvestmentCaseCreateInput(BaseModel):
     def _company_catalyst_requires_instrument(self) -> Self:
         # Domain INV: COMPANY/CATALYST require primary_instrument_id (design §4).
         if self.case_type in {
-            InvestmentCaseType.COMPANY,
-            InvestmentCaseType.CATALYST,
+            ResearchSubjectType.COMPANY,
+            ResearchSubjectType.CATALYST,
         }:
             instrument = self.primary_instrument_id
             if instrument is None or not instrument.strip():
-                raise ValueError("COMPANY/CATALYST case requires non-empty primary_instrument_id")
+                raise ValueError(
+                    "COMPANY/CATALYST Research Subject requires non-empty primary_instrument_id"
+                )
         return self
 
 
-class InvestmentCaseGetInput(BaseModel):
+class ResearchSubjectGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     case_id: str = Field(pattern=CASE_ID_UUID7_PATTERN)
 
 
-class InvestmentCaseListInput(BaseModel):
+class ResearchSubjectListInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    case_type: InvestmentCaseType | None = None
-    status: InvestmentCaseStatus | None = None
+    case_type: ResearchSubjectType | None = None
+    status: ResearchSubjectStatus | None = None
     primary_instrument_id: str | None = None
     topic_tag: str | None = None
     include_archived: bool = False
@@ -166,7 +182,7 @@ class InvestmentCaseListInput(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
-class InvestmentCaseArchiveInput(BaseModel):
+class ResearchSubjectArchiveInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     case_id: str = Field(pattern=CASE_ID_FLEX_PATTERN)
@@ -175,14 +191,24 @@ class InvestmentCaseArchiveInput(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
-class InvestmentCaseUpdateInput(BaseModel):
+class ResearchSubjectUpdateInput(BaseModel):
     """Confirmed partial metadata update for one durable research file."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     case_id: str = Field(pattern=CASE_ID_UUID7_PATTERN)
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    summary: str | None = Field(default=None, min_length=1, max_length=4000)
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Updated research object or question identifier; not an action plan.",
+    )
+    summary: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4000,
+        description="Updated research scope and boundaries; not a sizing or entry/exit plan.",
+    )
     topic_tags: tuple[str, ...] | None = None
     linked_case_ids: tuple[str, ...] | None = None
     reviewed_by: Literal["user", "external_agent"]
@@ -196,7 +222,7 @@ class InvestmentCaseUpdateInput(BaseModel):
             and self.topic_tags is None
             and self.linked_case_ids is None
         ):
-            raise ValueError("investment case update requires at least one field")
+            raise ValueError("Research Subject update requires at least one field")
         return self
 
 

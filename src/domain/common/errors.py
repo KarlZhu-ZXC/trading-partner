@@ -188,7 +188,8 @@ class WorkflowRunInProgress(TradingPartnerError):
 # --- Phase 1B research-state errors (default_retryable=False; no silent retry) ---
 
 
-class InvestmentCaseNotFound(TradingPartnerError):
+class ResearchSubjectNotFound(TradingPartnerError):
+    # Published machine-code ABI predates the Research Subject terminology.
     default_code = "INVESTMENT_CASE_NOT_FOUND"
     default_retryable = False
 
@@ -200,6 +201,13 @@ class ThesisNotFound(TradingPartnerError):
 
 class ThesisRevisionNotFound(TradingPartnerError):
     default_code = "THESIS_REVISION_NOT_FOUND"
+    default_retryable = False
+
+
+class ResearchStateConflict(TradingPartnerError):
+    """Raised when a research-state entity transition violates a cross-entity invariant."""
+
+    default_code = "RESEARCH_STATE_CONFLICT"
     default_retryable = False
 
 
@@ -260,6 +268,14 @@ class DuplicateIdempotencyKey(TradingPartnerError):
 
 class InputValidationError(TradingPartnerError):
     default_code = "INPUT_VALIDATION_ERROR"
+    default_retryable = False
+
+
+class SubjectMetadataPolicyViolation(TradingPartnerError):
+    """Raised when Subject metadata is written as an action plan rather than research scope."""
+
+    # Published machine-code ABI predates the Research Subject terminology.
+    default_code = "CASE_METADATA_POLICY_VIOLATION"
     default_retryable = False
 
 

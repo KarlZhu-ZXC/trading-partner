@@ -7,8 +7,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from application.dto.monitor_notifications import NotificationFlushReceipt
 from application.dto.monitoring import MonitorRunDTO
+from application.dto.notifications import NotificationFlushReceipt
 
 
 class MonitorDispatchDisposition(StrEnum):

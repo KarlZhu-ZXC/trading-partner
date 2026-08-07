@@ -25,6 +25,7 @@ class DataQualityIssueDTO(_DTO):
         "account_activity",
         "monitor",
         "provider_route",
+        "research_state",
         "persistence",
     ]
     subject_ref: str | None = Field(default=None, max_length=128)

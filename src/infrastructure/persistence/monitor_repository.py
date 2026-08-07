@@ -28,24 +28,28 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
-    MonitorNotificationMessage,
-    MonitorNotificationOutboxEntry,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
     MonitorRunObservation,
 )
+from domain.notifications.enums import (
+    NotificationChannel,
+    NotificationSourceType,
+    NotificationStatus,
+)
+from domain.notifications.models import NotificationMessage, NotificationOutboxEntry
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 from infrastructure.persistence.orm import (
     MonitorEventResolutionRow,
     MonitorEventRow,
     MonitorIdentityRow,
-    MonitorNotificationOutboxRow,
     MonitorRuleStateRow,
     MonitorRunObservationRow,
     MonitorRunRow,
     MonitorVersionRow,
+    NotificationOutboxRow,
 )
 
 
@@ -147,7 +151,7 @@ def _definition(row: MonitorVersionRow) -> MonitorDefinition:
         monitor_id=row.monitor_id,
         version=row.version,
         name=row.name,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         primary_instrument_id=row.primary_instrument_id,
         trade_plan_id=row.trade_plan_id,
         trade_plan_version=row.trade_plan_version,
@@ -168,7 +172,7 @@ def _version_row(value: MonitorDefinition) -> MonitorVersionRow:
         monitor_id=value.monitor_id,
         version=value.version,
         name=value.name,
-        case_id=value.case_id,
+        subject_id=value.subject_id,
         primary_instrument_id=value.primary_instrument_id,
         trade_plan_id=value.trade_plan_id,
         trade_plan_version=value.trade_plan_version,
@@ -235,16 +239,16 @@ def _observation(row: MonitorRunObservationRow) -> MonitorRunObservation:
 
 
 def _notification_entry(
-    row: MonitorNotificationOutboxRow,
-) -> MonitorNotificationOutboxEntry:
-    return MonitorNotificationOutboxEntry(
+    row: NotificationOutboxRow,
+) -> NotificationOutboxEntry:
+    return NotificationOutboxEntry(
         notification_id=row.notification_id,
-        source_event_id=row.source_event_id,
-        source_run_id=row.source_run_id,
-        channel=MonitorNotificationChannel(row.channel),
+        source_type=NotificationSourceType(row.source_type),
+        source_id=row.source_id,
+        channel=NotificationChannel(row.channel),
         title=row.title,
         body=row.body,
-        status=MonitorNotificationStatus(row.status),
+        status=NotificationStatus(row.status),
         attempt_count=row.attempt_count,
         next_attempt_at=datetime.fromisoformat(row.next_attempt_at),
         created_at=datetime.fromisoformat(row.created_at),
@@ -252,6 +256,10 @@ def _notification_entry(
         delivered_at=_dt(row.delivered_at),
         provider_message_id=row.provider_message_id,
         last_error_code=row.last_error_code,
+        idempotency_key=row.idempotency_key,
+        confirmed_by=row.confirmed_by,
+        authorization_note=row.authorization_note,
+        expires_at=_dt(row.expires_at),
     )
 
 
@@ -411,7 +419,7 @@ class SqlAlchemyMonitorRepository:
         run: MonitorRun,
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
-        notifications: tuple[MonitorNotificationMessage, ...],
+        notifications: tuple[NotificationMessage, ...],
     ) -> MonitorRun:
         with Session(self._engine) as session, session.begin():
             session.add(
@@ -526,17 +534,23 @@ class SqlAlchemyMonitorRepository:
             )
             session.add_all(
                 [
-                    MonitorNotificationOutboxRow(
+                    NotificationOutboxRow(
                         notification_id=value.notification_id,
-                        source_event_id=value.source_event_id,
-                        source_run_id=value.source_run_id,
+                        source_type=value.source_type.value,
+                        source_id=value.source_id,
                         channel=value.channel.value,
                         title=value.title,
                         body=value.body,
-                        status=MonitorNotificationStatus.PENDING.value,
+                        status=NotificationStatus.PENDING.value,
                         attempt_count=0,
                         next_attempt_at=value.created_at.isoformat(),
                         created_at=value.created_at.isoformat(),
+                        idempotency_key=value.idempotency_key,
+                        confirmed_by=value.confirmed_by,
+                        authorization_note=value.authorization_note,
+                        expires_at=(
+                            value.expires_at.isoformat() if value.expires_at is not None else None
+                        ),
                     )
                     for value in notifications
                 ]
@@ -548,18 +562,18 @@ class SqlAlchemyMonitorRepository:
         channel: MonitorNotificationChannel,
         as_of: datetime,
         limit: int,
-    ) -> tuple[MonitorNotificationOutboxEntry, ...]:
+    ) -> tuple[NotificationOutboxEntry, ...]:
         with Session(self._engine) as session:
             rows = session.scalars(
-                select(MonitorNotificationOutboxRow)
+                select(NotificationOutboxRow)
                 .where(
-                    MonitorNotificationOutboxRow.channel == channel.value,
-                    MonitorNotificationOutboxRow.status == MonitorNotificationStatus.PENDING.value,
-                    MonitorNotificationOutboxRow.next_attempt_at <= as_of.isoformat(),
+                    NotificationOutboxRow.channel == channel.value,
+                    NotificationOutboxRow.status == MonitorNotificationStatus.PENDING.value,
+                    NotificationOutboxRow.next_attempt_at <= as_of.isoformat(),
                 )
                 .order_by(
-                    MonitorNotificationOutboxRow.next_attempt_at,
-                    MonitorNotificationOutboxRow.created_at,
+                    NotificationOutboxRow.next_attempt_at,
+                    NotificationOutboxRow.created_at,
                 )
                 .limit(limit)
             )
@@ -575,12 +589,9 @@ class SqlAlchemyMonitorRepository:
         next_attempt_at: datetime,
         provider_message_id: str | None,
         error_code: str | None,
-    ) -> MonitorNotificationOutboxEntry:
+    ) -> NotificationOutboxEntry:
         with Session(self._engine) as session, session.begin():
-            row = session.get(
-                MonitorNotificationOutboxRow,
-                notification_id,
-            )
+            row = session.get(NotificationOutboxRow, notification_id)
             if row is None or row.channel != channel.value:
                 raise PersistenceError(
                     "Monitor notification outbox entry was not found",
@@ -606,24 +617,120 @@ class SqlAlchemyMonitorRepository:
         with Session(self._engine) as session:
             rows = session.execute(
                 select(
-                    MonitorNotificationOutboxRow.status,
+                    NotificationOutboxRow.status,
                     func.count(),
                 )
-                .where(MonitorNotificationOutboxRow.channel == channel.value)
-                .group_by(MonitorNotificationOutboxRow.status)
+                .where(NotificationOutboxRow.channel == channel.value)
+                .group_by(NotificationOutboxRow.status)
             )
             return {MonitorNotificationStatus(status): int(count) for status, count in rows}
 
     def last_notification_delivery_at(self, channel: MonitorNotificationChannel) -> datetime | None:
         with Session(self._engine) as session:
             value = session.scalar(
-                select(func.max(MonitorNotificationOutboxRow.delivered_at)).where(
-                    MonitorNotificationOutboxRow.channel == channel.value,
-                    MonitorNotificationOutboxRow.status
-                    == MonitorNotificationStatus.DELIVERED.value,
+                select(func.max(NotificationOutboxRow.delivered_at)).where(
+                    NotificationOutboxRow.channel == channel.value,
+                    NotificationOutboxRow.status == MonitorNotificationStatus.DELIVERED.value,
                 )
             )
             return _dt(value)
+
+    # Generic NotificationOutboxRepository implementation. These methods are
+    # deliberately separate from the MonitorRepository read/write vocabulary;
+    # the concrete adapter may implement both ports without making the
+    # application layer depend on SQLAlchemy.
+    def enqueue(self, message: NotificationMessage) -> NotificationOutboxEntry:
+        try:
+            with Session(self._engine) as session, session.begin():
+                session.add(
+                    NotificationOutboxRow(
+                        notification_id=message.notification_id,
+                        source_type=message.source_type.value,
+                        source_id=message.source_id,
+                        channel=message.channel.value,
+                        title=message.title,
+                        body=message.body,
+                        status=NotificationStatus.PENDING.value,
+                        attempt_count=0,
+                        next_attempt_at=message.created_at.isoformat(),
+                        created_at=message.created_at.isoformat(),
+                        idempotency_key=message.idempotency_key,
+                        confirmed_by=message.confirmed_by,
+                        authorization_note=message.authorization_note,
+                        expires_at=(
+                            message.expires_at.isoformat()
+                            if message.expires_at is not None
+                            else None
+                        ),
+                    )
+                )
+                session.flush()
+                row = session.get(NotificationOutboxRow, message.notification_id)
+                if row is None:  # pragma: no cover - SQLAlchemy identity invariant
+                    raise PersistenceError(
+                        "Notification outbox entry was not persisted",
+                        retryable=False,
+                        details={},
+                    )
+                return _notification_entry(row)
+        except IntegrityError as exc:
+            raise _persistence_error(exc) from exc
+
+    def get_notification_by_idempotency_key(self, key: str) -> NotificationOutboxEntry | None:
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(NotificationOutboxRow).where(NotificationOutboxRow.idempotency_key == key)
+            )
+            return _notification_entry(row) if row is not None else None
+
+    def list_due(
+        self,
+        channel: NotificationChannel,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[NotificationOutboxEntry, ...]:
+        return self.list_due_notifications(channel, as_of, limit)
+
+    def list_recent(
+        self,
+        channel: NotificationChannel,
+        limit: int,
+    ) -> tuple[NotificationOutboxEntry, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(NotificationOutboxRow)
+                .where(NotificationOutboxRow.channel == channel.value)
+                .order_by(NotificationOutboxRow.created_at.desc())
+                .limit(limit)
+            )
+            return tuple(_notification_entry(row) for row in rows)
+
+    def record_attempt(
+        self,
+        notification_id: str,
+        channel: NotificationChannel,
+        *,
+        status: NotificationStatus,
+        attempted_at: datetime,
+        next_attempt_at: datetime,
+        provider_message_id: str | None,
+        error_code: str | None,
+    ) -> NotificationOutboxEntry:
+        return self.record_notification_attempt(
+            notification_id,
+            channel,
+            status=status,
+            attempted_at=attempted_at,
+            next_attempt_at=next_attempt_at,
+            provider_message_id=provider_message_id,
+            error_code=error_code,
+        )
+
+    def counts(self, channel: NotificationChannel) -> dict[NotificationStatus, int]:
+        return self.notification_counts(channel)
+
+    def last_delivery_at(self, channel: NotificationChannel) -> datetime | None:
+        return self.last_notification_delivery_at(channel)
 
     def get_run(self, run_id: str) -> MonitorRun | None:
         with Session(self._engine) as session:

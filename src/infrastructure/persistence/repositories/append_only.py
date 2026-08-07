@@ -14,13 +14,13 @@ from sqlalchemy.orm import Mapper
 
 from domain.common.errors import AppendOnlyViolation, ImmutableResearchRecord
 from infrastructure.persistence.orm import (
-    CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
     JournalEntryRow,
     ResearchEventRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    SubjectEvidenceLinkRow,
     ThesisRevisionRow,
 )
 
@@ -28,7 +28,7 @@ _LISTENERS_REGISTERED = False
 
 _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
     ResearchEvidenceRow,
-    CaseEvidenceLinkRow,
+    SubjectEvidenceLinkRow,
     EvidenceAssessmentRow,
     ResearchReportRow,
     ResearchEventRow,
@@ -38,7 +38,7 @@ _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
 
 _PHASE1C_ID_ATTR: dict[type[Any], str] = {
     ResearchEvidenceRow: "evidence_id",
-    CaseEvidenceLinkRow: "link_id",
+    SubjectEvidenceLinkRow: "link_id",
     EvidenceAssessmentRow: "assessment_id",
     ResearchReportRow: "report_id",
     ResearchEventRow: "event_id",
@@ -48,7 +48,7 @@ _PHASE1C_ID_ATTR: dict[type[Any], str] = {
 
 _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
     ResearchEvidenceRow: "evidence",
-    CaseEvidenceLinkRow: "case_evidence_link",
+    SubjectEvidenceLinkRow: "subject_evidence_link",
     EvidenceAssessmentRow: "evidence_assessment",
     ResearchReportRow: "report",
     ResearchEventRow: "event",

@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -13,9 +14,10 @@ from sqlalchemy.orm import Session
 from application.dto.research import (
     AssumptionPayload,
     InvalidationPayload,
+    SubjectUpdateCandidatePayload,
     ThesisRevisionCandidatePayload,
 )
-from application.services.investment_case_service import InvestmentCaseService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.thesis_revision_service import ThesisRevisionService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.actor import ActorContext
@@ -24,8 +26,9 @@ from domain.common.enums import (
     ConfidenceBand,
     ConfirmationMode,
     InvalidationSeverity,
-    InvestmentCaseType,
     InvestmentRating,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
 )
 from infrastructure.persistence.metadata import Base
@@ -33,6 +36,18 @@ from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchU
 from infrastructure.system.redactor import DefaultSecretRedactor
 
 NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("field", ["subject_type", "primary_instrument_id"])
+def test_case_update_candidate_cannot_change_subject_identity(field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        SubjectUpdateCandidatePayload.model_validate(
+            {
+                "action": "update",
+                "title": "NVDA company research",
+                field: "company" if field == "subject_type" else "equity:US:TSLA",
+            }
+        )
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -56,25 +71,50 @@ def harness(tmp_path):  # type: ignore[no-untyped-def]
     def factory() -> SqlAlchemyResearchUnitOfWork:
         return SqlAlchemyResearchUnitOfWork(eng, clock, ids, redactor)
 
-    cases = InvestmentCaseService(factory, clock, ids, redactor)
+    subjects = ResearchSubjectService(factory, clock, ids, redactor)
     thesis = ThesisRevisionService(factory, clock, ids, redactor)
-    yield cases, thesis, factory, clock, ids, eng
+    yield subjects, thesis, factory, clock, ids, eng
     eng.dispose()
 
 
-def _create_case(cases: InvestmentCaseService, key: str = "case-1") -> str:
-    env = cases.create_case(
-        case_type=InvestmentCaseType.COMPANY,
+def _create_subject(
+    subjects: ResearchSubjectService,
+    thesis: ThesisRevisionService,
+    key: str = "case-1",
+    *,
+    activate: bool = True,
+) -> str:
+    env = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="GPU demand",
         primary_instrument_id="equity:US:NVDA",
         topic_tags=("ai",),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key=key,
     )
     assert env.ok and env.data is not None
-    return env.data.case_id
+    subject_id = env.data.subject_id
+    if activate:
+        proposed = thesis.propose_state_update(
+            subject_id=subject_id,
+            payload=SubjectUpdateCandidatePayload(
+                action="update",
+                new_status=ResearchSubjectStatus.ACTIVE,
+            ),
+            confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+            proposed_by="codex",
+            proposed_by_rationale="Activate case for live judgment tests",
+            idempotency_key=f"{key}-activate",
+        )
+        assert proposed.ok and proposed.data is not None
+        confirmed = thesis.confirm_candidate(
+            proposed.data.candidate_id,
+            reviewed_by="user",
+        )
+        assert confirmed.ok
+    return subject_id
 
 
 def _revision_payload() -> ThesisRevisionCandidatePayload:
@@ -105,11 +145,11 @@ def _revision_payload() -> ThesisRevisionCandidatePayload:
 
 
 def test_propose_idempotent_same_payload_warning(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     payload = _revision_payload()
     first = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=payload,
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -118,7 +158,7 @@ def test_propose_idempotent_same_payload_warning(harness) -> None:  # type: igno
         idempotency_key="prop-1",
     )
     second = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=payload,
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -133,11 +173,11 @@ def test_propose_idempotent_same_payload_warning(harness) -> None:  # type: igno
 
 
 def test_propose_idempotent_different_payload_conflict(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     payload = _revision_payload()
     first = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=payload,
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -157,7 +197,7 @@ def test_propose_idempotent_different_payload_conflict(harness) -> None:  # type
         thesis_role=ThesisRole.PRIMARY,
     )
     second = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=other,
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -170,10 +210,10 @@ def test_propose_idempotent_different_payload_conflict(harness) -> None:  # type
 
 
 def test_codex_cannot_confirm(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -192,10 +232,10 @@ def test_codex_cannot_confirm(harness) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_confirm_writes_revision_assumptions_invalidations(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, factory, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, factory, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -222,20 +262,51 @@ def test_confirm_writes_revision_assumptions_invalidations(harness) -> None:  # 
     assert inv.status in {"armed", "ARMED"} or str(inv.status) == "armed"
 
     with factory() as uow:
-        theses = uow.theses.list_by_case(case_id)
+        theses = uow.theses.list_by_subject(subject_id)
         assert len(theses) == 1
         revs = uow.revisions.list_by_thesis(theses[0].thesis_id)
         assert len(revs) == 1
         assert theses[0].current_revision_no == revs[0].revision_no
 
 
+def test_confirm_live_thesis_rejected_for_draft_case(harness) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, *_ = harness
+    subject_id = _create_subject(subjects, thesis, key="draft-live-thesis", activate=False)
+    proposed = thesis.propose_revision(
+        subject_id=subject_id,
+        thesis_id=None,
+        payload=_revision_payload(),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Attempt live judgment before case activation",
+        idempotency_key="draft-live-thesis-candidate",
+    )
+    assert proposed.ok and proposed.data is not None
+
+    confirmed = thesis.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+    )
+
+    assert not confirmed.ok
+    assert confirmed.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert confirmed.errors[0].retryable is False
+    assert confirmed.errors[0].details == {
+        "subject_id": subject_id,
+        "subject_status": "draft",
+        "attempted_child_status": "active",
+    }
+    with factory() as uow:
+        assert uow.theses.list_by_subject(subject_id) == ()
+
+
 def test_chat_authorized_confirm_persists_user_decision_and_relay_provenance(
     harness,
 ) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_, eng = harness
-    case_id = _create_case(cases, key="case-chat-auth")
+    subjects, thesis, *_, eng = harness
+    subject_id = _create_subject(subjects, thesis, key="case-chat-auth")
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -261,7 +332,8 @@ def test_chat_authorized_confirm_persists_user_decision_and_relay_provenance(
         payload_json = session.execute(
             text(
                 "SELECT payload_json FROM system_audit_log "
-                "WHERE event_type = 'phase1b.candidate.confirmed'"
+                "WHERE event_type = 'phase1b.candidate.confirmed' "
+                "AND payload_json LIKE '%user_instruction%'"
             )
         ).scalar_one()
     payload = json.loads(payload_json)
@@ -273,10 +345,10 @@ def test_chat_authorized_confirm_persists_user_decision_and_relay_provenance(
 
 
 def test_confirm_advances_revision_no(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     p1 = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -290,7 +362,7 @@ def test_confirm_advances_revision_no(harness) -> None:  # type: ignore[no-untyp
     thesis_id = c1.data.research_state.theses[0].thesis_id  # type: ignore[union-attr]
 
     p2 = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=thesis_id,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -306,10 +378,10 @@ def test_confirm_advances_revision_no(harness) -> None:  # type: ignore[no-untyp
 
 
 def test_reject_does_not_write_formal_rows(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, factory, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, factory, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -328,15 +400,15 @@ def test_reject_does_not_write_formal_rows(harness) -> None:  # type: ignore[no-
     assert rejected.data.status in {CandidateStatus.REJECTED, "rejected"}
 
     with factory() as uow:
-        assert uow.theses.list_by_case(case_id) == ()
+        assert uow.theses.list_by_subject(subject_id) == ()
         assert uow.candidates.get(proposed.data.candidate_id).payload_json
 
 
 def test_withdraw_only_by_proposer_or_user(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -365,10 +437,10 @@ def test_withdraw_only_by_proposer_or_user(harness) -> None:  # type: ignore[no-
 
 
 def test_codex_cannot_withdraw_strict_review(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -387,10 +459,10 @@ def test_codex_cannot_withdraw_strict_review(harness) -> None:  # type: ignore[n
 
 
 def test_active_primary_unique(harness) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, *_ = harness
-    case_id = _create_case(cases)
+    subjects, thesis, *_ = harness
+    subject_id = _create_subject(subjects, thesis)
     p1 = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.NORMAL,
@@ -402,7 +474,7 @@ def test_active_primary_unique(harness) -> None:  # type: ignore[no-untyped-def]
     assert thesis.confirm_candidate(p1.data.candidate_id, reviewed_by="user").ok
 
     p2 = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_revision_payload(),
         confirmation_mode=ConfirmationMode.NORMAL,

@@ -12,13 +12,13 @@ from application.dto.research_context import ResearchContextBuildInput
 from bootstrap import ApplicationContainer
 from domain.common.actor import ActorContext
 from interfaces.mcp.schemas import (
-    InvestmentCaseArchiveInput,
-    InvestmentCaseCreateInput,
-    InvestmentCaseGetInput,
-    InvestmentCaseListInput,
-    InvestmentCaseUpdateInput,
     ResearchStateGetInput,
     ResearchStateUpdateInput,
+    ResearchSubjectArchiveInput,
+    ResearchSubjectCreateInput,
+    ResearchSubjectGetInput,
+    ResearchSubjectListInput,
+    ResearchSubjectUpdateInput,
     ThesisHistoryGetInput,
     ThesisRevisionConfirmInput,
     ThesisRevisionProposeInput,
@@ -40,13 +40,23 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         topic_tags: list[str] | None = None,
         linked_case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a user-confirmed research file (Investment Case).
+        """Create a user-confirmed Research Subject (标的).
 
-        COMPANY and CATALYST files are anchored to an objective Instrument. The Case
+        COMPANY and CATALYST subjects are anchored to an objective Instrument. The subject
         is the durable research file around it; creating one does not confirm a Thesis.
+
+        Args:
+            case_type: Legacy transport name for the Research Subject category.
+            title: Identifier for the research object or question, not an action plan.
+            summary: Scope and investigation boundaries, not sizing or entry/exit instructions.
+            confirmed_by: User or external-agent confirmer for this durable write.
+            idempotency_key: Stable key for retry-safe creation.
+            primary_instrument_id: Optional instrument anchor for the Research Subject type.
+            topic_tags: Optional normalized research tags.
+            linked_case_ids: Legacy transport name for related Research Subject identifiers.
         """
         try:
-            inp = InvestmentCaseCreateInput.model_validate(
+            inp = ResearchSubjectCreateInput.model_validate(
                 {
                     "case_type": case_type,
                     "title": title,
@@ -58,13 +68,13 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.services.investment_cases.create_case(
-                case_type=inp.case_type,
+            envelope = container.services.research_subjects.create_subject(
+                subject_type=inp.case_type,
                 title=inp.title,
                 summary=inp.summary,
                 primary_instrument_id=inp.primary_instrument_id,
                 topic_tags=inp.topic_tags,
-                linked_case_ids=inp.linked_case_ids,
+                linked_subject_ids=inp.linked_case_ids,
                 confirmed_by=inp.confirmed_by,
                 idempotency_key=inp.idempotency_key,
             )
@@ -83,9 +93,20 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         topic_tags: list[str] | None = None,
         linked_case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Update confirmed research-file metadata without changing its Thesis."""
+        """Update confirmed Research Subject metadata without changing its Thesis.
+
+        Args:
+            case_id: Legacy transport identifier for the durable Research Subject.
+            reviewed_by: User or external-agent confirmer for this metadata write.
+            idempotency_key: Stable key for retry-safe update.
+            title: Replacement research object/question identifier, not an action plan.
+            summary: Replacement research scope and boundaries, not sizing or entry/exit
+                instructions.
+            topic_tags: Optional replacement research tags.
+            linked_case_ids: Legacy transport name for related Research Subject identifiers.
+        """
         try:
-            inp = InvestmentCaseUpdateInput.model_validate(
+            inp = ResearchSubjectUpdateInput.model_validate(
                 {
                     "case_id": case_id,
                     "title": title,
@@ -98,12 +119,12 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.services.investment_cases.update_case_metadata(
+            envelope = container.services.research_subjects.update_subject_metadata(
                 inp.case_id,
                 title=inp.title,
                 summary=inp.summary,
                 topic_tags=inp.topic_tags,
-                linked_case_ids=inp.linked_case_ids,
+                linked_subject_ids=inp.linked_case_ids,
                 reviewed_by=inp.reviewed_by,
                 idempotency_key=inp.idempotency_key,
             )
@@ -123,14 +144,16 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Get one research file, or list research files with filters."""
+        """Get one Research Subject, or list Research Subjects with filters."""
         try:
             if case_id is not None:
-                get_input = InvestmentCaseGetInput.model_validate({"case_id": case_id})
-                return container.services.investment_cases.get_case(get_input.case_id).model_dump(
+                get_input = ResearchSubjectGetInput.model_validate({"case_id": case_id})
+                return container.services.research_subjects.get_subject(
+                    get_input.case_id
+                ).model_dump(
                     mode="json"
                 )
-            list_input = InvestmentCaseListInput.model_validate(
+            list_input = ResearchSubjectListInput.model_validate(
                 {
                     "case_type": case_type,
                     "status": status,
@@ -141,8 +164,8 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "offset": offset,
                 }
             )
-            envelope = container.services.investment_cases.list_cases(
-                case_type=list_input.case_type,
+            envelope = container.services.research_subjects.list_subjects(
+                subject_type=list_input.case_type,
                 status=list_input.status,
                 primary_instrument_id=list_input.primary_instrument_id,
                 topic_tag=list_input.topic_tag,
@@ -162,9 +185,9 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         reviewed_by: str,
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """Archive a research file without deleting its linked Instrument."""
+        """Archive a Research Subject without deleting its linked Instrument."""
         try:
-            inp = InvestmentCaseArchiveInput.model_validate(
+            inp = ResearchSubjectArchiveInput.model_validate(
                 {
                     "case_id": case_id,
                     "archived_reason": archived_reason,
@@ -172,7 +195,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                     "idempotency_key": idempotency_key,
                 }
             )
-            envelope = container.services.investment_cases.archive_case(
+            envelope = container.services.research_subjects.archive_subject(
                 inp.case_id,
                 archived_reason=inp.archived_reason,
                 reviewed_by=inp.reviewed_by,
@@ -189,7 +212,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         include_archived_theses: bool = False,
         include_watchlist: bool = True,
     ) -> dict[str, Any]:
-        """Return a research file's current judgments, assumptions, and open questions."""
+        """Return a Research Subject's current judgments, assumptions, and open questions."""
         try:
             inp = ResearchStateGetInput.model_validate(
                 {
@@ -230,7 +253,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 }
             )
             envelope = container.services.thesis_revisions.propose_state_update(
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 payload=inp.payload,
                 confirmation_mode=inp.confirmation_mode,
                 proposed_by=inp.proposed_by,
@@ -252,7 +275,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         thesis_id: str | None = None,
         confirmation_mode: str = "strict_review",
     ) -> dict[str, Any]:
-        """Propose a revision to an investment judgment in a research file."""
+        """Propose a revision to an investment judgment for a Research Subject."""
         try:
             inp = ThesisRevisionProposeInput.model_validate(
                 {
@@ -266,7 +289,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 }
             )
             envelope = container.services.thesis_revisions.propose_revision(
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 thesis_id=inp.thesis_id,
                 payload=inp.payload,
                 confirmation_mode=inp.confirmation_mode,
@@ -358,7 +381,7 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         try:
             inp = ResearchContextBuildInput.model_validate(
                 {
-                    "case_id": case_id,
+                    "subject_id": case_id,
                     "instrument_id": instrument_id,
                     "since": since,
                     "token_budget": token_budget,

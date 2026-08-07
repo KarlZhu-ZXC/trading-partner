@@ -15,7 +15,7 @@ class EntityIdPrefix(StrEnum):
     """Frozen ID prefixes. Phase 1A uses req, snapshot, and audit only."""
 
     REQ = "req"
-    CASE = "case"
+    SUBJECT = "case"
     THESIS = "thesis"
     REV = "rev"
     EVIDENCE = "evidence"

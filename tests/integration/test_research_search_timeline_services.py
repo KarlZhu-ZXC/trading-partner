@@ -23,22 +23,22 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     ReliabilityLevel,
     ResearchReportType,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ResearchTimelineEntityType,
 )
 from domain.common.errors import ResearchMemoryNotFound
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     Evidence,
-    InvestmentCase,
     JournalEntry,
+    ResearchSubject,
+    SubjectEvidenceLink,
     compute_evidence_content_sha256,
 )
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
@@ -104,13 +104,13 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
     eng.dispose()
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> InvestmentCase:
-    return InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> ResearchSubject:
+    return ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="Integration case",
         summary="Summary",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("ai",),
         created_at=clock.now(),
@@ -118,7 +118,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> InvestmentCase:
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -176,11 +176,11 @@ def _make_evidence(ids: SequentialIdGenerator, **overrides: Any) -> Evidence:
 
 def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore[no-untyped-def]
     search, timeline, archive, factory, clock, ids = harness
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     evidence = _make_evidence(ids, title="A share 茅台 inventory", instrument_ids=(A_SHARE,))
-    link = CaseEvidenceLink(
+    link = SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
         linked_by="user",
@@ -188,7 +188,7 @@ def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore
     )
     note = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Channel note",
         body_markdown="observed restocking",
@@ -203,9 +203,9 @@ def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.journal.add(
             note,
             idempotency_key="int-j1",
@@ -216,7 +216,7 @@ def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore
         uow.commit()
 
     report_env = archive.archive_report(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Case report",
         summary="summary",
@@ -235,7 +235,7 @@ def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore
 
     search_env = search.search(
         ResearchSearchQuery(
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             journal_entry_types=(JournalEntryType.NOTE,),
         )
     )
@@ -255,7 +255,7 @@ def test_search_and_timeline_share_case_memory(harness) -> None:  # type: ignore
         uow.events.get(missing_event)
 
     tl = timeline.get_timeline(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entity_types=(
             ResearchTimelineEntityType.EVIDENCE,
             ResearchTimelineEntityType.JOURNAL,

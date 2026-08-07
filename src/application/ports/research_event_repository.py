@@ -16,7 +16,7 @@ class ResearchEventRepository(Protocol):
 
     def list_timeline(
         self,
-        case_id: str,
+        subject_id: str,
         *,
         start: datetime | None,
         end: datetime | None,

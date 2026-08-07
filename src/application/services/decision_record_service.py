@@ -19,7 +19,7 @@ from application.services._research_memory_write_support import (
     redact_required_text,
     schema_version,
     stable_dedupe_strs,
-    update_case_decision_cache,
+    update_subject_decision_cache,
     validate_decision_references,
 )
 from application.services._research_support import (
@@ -52,7 +52,7 @@ class DecisionRecordService:
     def append(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         decision_type: DecisionType,
         title: str,
         rationale: str,
@@ -72,17 +72,15 @@ class DecisionRecordService:
             require_confirm_reviewer(decided_by, action="decision_record_append")
             decider = decided_by.strip()
 
-            case_id_n = case_id.strip()
-            if not case_id_n:
+            subject_id_n = subject_id.strip()
+            if not subject_id_n:
                 raise InputValidationError(
-                    "case_id must be non-blank",
-                    details={"field": "case_id"},
+                    "subject_id must be non-blank",
+                    details={"field": "subject_id"},
                 )
 
             title_r = redact_required_text(title, self._redactor, field="title")
-            rationale_r = redact_required_text(
-                rationale, self._redactor, field="rationale"
-            )
+            rationale_r = redact_required_text(rationale, self._redactor, field="rationale")
             decided = require_aware_datetime(decided_at, field_name="decided_at")
 
             primary: str | None
@@ -101,9 +99,7 @@ class DecisionRecordService:
             reports = stable_dedupe_strs(report_ids)
 
             supersedes = (
-                supersedes_decision_id.strip()
-                if supersedes_decision_id is not None
-                else None
+                supersedes_decision_id.strip() if supersedes_decision_id is not None else None
             )
             if supersedes is not None and not supersedes:
                 raise InputValidationError(
@@ -124,7 +120,7 @@ class DecisionRecordService:
 
             key = normalize_idempotency_key(idempotency_key)
             payload_sha = compute_decision_idempotency_payload_sha256(
-                case_id=case_id_n,
+                subject_id=subject_id_n,
                 decision_type=decision_type,
                 title=title_r,
                 rationale=rationale_r,
@@ -143,7 +139,7 @@ class DecisionRecordService:
                 existing = uow.decisions.get_by_idempotency_key(key)
                 if existing is not None:
                     existing_sha = compute_decision_idempotency_payload_sha256(
-                        case_id=existing.case_id,
+                        subject_id=existing.subject_id,
                         decision_type=existing.decision_type,
                         title=existing.title,
                         rationale=existing.rationale,
@@ -155,9 +151,7 @@ class DecisionRecordService:
                         evidence_ids=existing.evidence_ids,
                         report_ids=existing.report_ids,
                         supersedes_decision_id=existing.supersedes_decision_id,
-                        position_context_snapshot_id=(
-                            existing.position_context_snapshot_id
-                        ),
+                        position_context_snapshot_id=(existing.position_context_snapshot_id),
                     )
                     if existing_sha != payload_sha:
                         raise DuplicateIdempotencyKey(
@@ -189,7 +183,7 @@ class DecisionRecordService:
 
                 validate_decision_references(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     recorded_at=recorded_at,
                     thesis_revision_ids=revisions,
                     evidence_ids=evidence,
@@ -200,7 +194,7 @@ class DecisionRecordService:
                 decision_id = self._id_generator.new(EntityIdPrefix.DECISION)
                 decision = DecisionRecord(
                     decision_id=decision_id,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     decision_type=decision_type,
                     title=title_r,
                     rationale=rationale_r,
@@ -216,21 +210,19 @@ class DecisionRecordService:
                     position_context_snapshot_id=snapshot_id,
                     schema_version=schema_version(),
                 )
-                # Frozen order: business → Case cache → Search → Audit → commit.
+                # Frozen order: business → Research Subject cache → Search → Audit → commit.
                 uow.decisions.add(
                     decision,
                     idempotency_key=key,
                     idempotency_payload_sha256=payload_sha,
                 )
-                update_case_decision_cache(
+                update_subject_decision_cache(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     decision_id=decision_id,
                     updated_at=recorded_at,
                 )
-                uow.search_index.index(
-                    ResearchSearchEntityType.DECISION, decision_id
-                )
+                uow.search_index.index(ResearchSearchEntityType.DECISION, decision_id)
                 linked = list(revisions) + list(evidence) + list(reports)
                 if supersedes is not None:
                     linked.append(supersedes)
@@ -240,7 +232,7 @@ class DecisionRecordService:
                         action="record",
                         entity_type="decision",
                         entity_id=decision_id,
-                        case_id=case_id_n,
+                        subject_id=subject_id_n,
                         actor=decider,
                         confirmed_by=decider,
                         content_sha256=payload_sha,

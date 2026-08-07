@@ -119,7 +119,7 @@ export function MonitorEditor({
   );
   const [symbolQuery, setSymbolQuery] = useState(primaryInitial.split(":").at(-1) ?? "");
   const [primaryInstrumentId, setPrimaryInstrumentId] = useState(primaryInitial);
-  const [caseId, setCaseId] = useState(String(initialMonitor?.case_id ?? ""));
+  const [subjectId, setSubjectId] = useState(String(initialMonitor?.subject_id ?? ""));
   const [cadence, setCadence] = useState(String(initialMonitor?.cadence ?? "US_POST_MARKET"));
   const [intervalMinutes, setIntervalMinutes] = useState(String(initialMonitor?.interval_minutes ?? 60));
   const [status, setStatus] = useState(String(initialMonitor?.status ?? "ACTIVE"));
@@ -231,7 +231,7 @@ export function MonitorEditor({
       idempotency_key: idempotencyKey,
       rules: normalizedRules(),
       ...(primaryInstrumentId ? { primary_instrument_id: primaryInstrumentId } : {}),
-      ...(caseId.trim() ? { case_id: caseId.trim() } : {}),
+      ...(subjectId.trim() ? { case_id: subjectId.trim() } : {}),
       ...(cadence === "INTERVAL" ? { interval_minutes: Number(intervalMinutes) } : {}),
       ...(validUntil ? { valid_until: new Date(validUntil).toISOString() } : {}),
       ...(editing ? {
@@ -266,7 +266,7 @@ export function MonitorEditor({
       <header><div><p className="card-kicker">MONITOR BUILDER</p><h2>{editing ? "编辑 Monitor" : "新建 Monitor"}</h2></div><button className="close-button" type="button" onClick={onClose}>关闭</button></header>
       <div className="monitor-form-grid">
         <label><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：TTWO 关键价位监控" /></label>
-        <label><span>关联 Case ID（可选）</span><input value={caseId} onChange={(event) => setCaseId(event.target.value)} placeholder="case_…" /></label>
+        <label><span>关联研究档案 ID（可选）</span><input value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder="case_…" /></label>
         <div className="instrument-resolver"><label><span>市场</span><select value={market} onChange={(event) => updateMarket(event.target.value as ResolverMarket)}><option value="US">美股</option><option value="A_SHARE">A 股</option><option value="KR">韩股</option></select></label><label><span>代码/名称</span><input value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value)} placeholder="TTWO / 600519 / 005930" /></label><ActionButton onClick={resolveInstrument} busy={resolving}>解析标的</ActionButton></div>
         <label><span>主标的 Instrument ID</span><input value={primaryInstrumentId} onChange={(event) => setPrimaryInstrumentId(event.target.value)} placeholder="equity:US:TTWO" /><small>解析后自动填入，也可以直接输入规范 ID。</small></label>
         <label><span>Cadence</span><select value={cadence} onChange={(event) => setCadence(event.target.value)}><option value="ON_DEMAND">按需</option><option value="INTERVAL">固定间隔</option><option value="A_SHARE_POST_MARKET">A 股收盘后</option><option value="US_POST_MARKET">美股收盘后</option><option value="KR_POST_MARKET">韩股收盘后</option></select></label>

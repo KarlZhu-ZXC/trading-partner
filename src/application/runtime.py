@@ -15,7 +15,6 @@ from application.services.decision_record_service import DecisionRecordService
 from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_resolve_service import InstrumentResolveService
-from application.services.investment_case_service import InvestmentCaseService
 from application.services.journal_service import JournalService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
@@ -24,6 +23,7 @@ from application.services.research_archive_service import ResearchArchiveService
 from application.services.research_context_builder import ResearchContextBuilder
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.research_timeline_service import ResearchTimelineService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
 from application.services.risk_tool_coordinator import RiskToolCoordinator
@@ -41,7 +41,7 @@ class ApplicationServices:
 
     health: HealthService
     data_quality: DataQualityService
-    investment_cases: InvestmentCaseService
+    research_subjects: ResearchSubjectService
     thesis_revisions: ThesisRevisionService
     research_state: ResearchStateQueryService
     research_archive: ResearchArchiveService

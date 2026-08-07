@@ -89,7 +89,7 @@ class LogLevel(StrEnum):
 # --- Phase 1B research-state enums (wire values frozen once persisted) ---
 
 
-class InvestmentCaseType(StrEnum):
+class ResearchSubjectType(StrEnum):
     COMPANY = "company"
     THEME = "theme"
     MACRO = "macro"
@@ -97,7 +97,7 @@ class InvestmentCaseType(StrEnum):
     PORTFOLIO_CONCERN = "portfolio_concern"
 
 
-class InvestmentCaseStatus(StrEnum):
+class ResearchSubjectStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"
     STRENGTHENED = "strengthened"
@@ -153,7 +153,8 @@ class OpenQuestionStatus(StrEnum):
 class WatchlistItemStatus(StrEnum):
     WATCHING = "watching"
     TRIGGERED = "triggered"
-    PROMOTED_TO_CASE = "promoted_to_case"
+    # Persisted wire token retained for storage and historical payload compatibility.
+    PROMOTED_TO_SUBJECT = "promoted_to_case"
     EXPIRED = "expired"
     ARCHIVED = "archived"
 
@@ -164,7 +165,8 @@ class CandidateKind(StrEnum):
     INVALIDATION_CONDITION = "invalidation_condition"
     OPEN_QUESTION = "open_question"
     WATCHLIST_ITEM = "watchlist_item"
-    CASE_STATUS_CHANGE = "case_status_change"
+    # Persisted wire token retained for storage and historical payload compatibility.
+    SUBJECT_STATUS_CHANGE = "case_status_change"
     TRADE_PLAN = "trade_plan"
 
 

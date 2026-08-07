@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -25,11 +26,11 @@ from domain.common.enums import (
     ConfirmationMode,
     InvalidationSeverity,
     InvalidationStatus,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     Market,
     OpenQuestionStatus,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
     WatchlistItemStatus,
@@ -41,8 +42,8 @@ from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
     InvalidationCondition,
-    InvestmentCase,
     OpenQuestion,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
     WatchlistItem,
@@ -181,7 +182,9 @@ class OpenQuestionCandidatePayload(BaseModel):
 
 
 class WatchlistCandidatePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, use_enum_values=True, serialize_by_alias=True
+    )
 
     kind: Literal["watchlist_item"] = "watchlist_item"
     action: Literal["create", "update_status"]
@@ -191,10 +194,18 @@ class WatchlistCandidatePayload(BaseModel):
     display_name: str | None = Field(default=None, max_length=128)
     thesis_hint: str | None = Field(default=None, max_length=1000)
     triggers: tuple[str, ...] = ()
-    case_id: str | None = None
+    subject_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("subject_id", "case_id"),
+        serialization_alias="case_id",
+    )
     expires_at: datetime | None = None
     new_status: WatchlistItemStatus | None = None
-    promoted_to_case_id: str | None = None
+    promoted_to_subject_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("promoted_to_subject_id", "promoted_to_case_id"),
+        serialization_alias="promoted_to_case_id",
+    )
     triggered_reason: str | None = None
 
     @field_validator("expires_at")
@@ -225,10 +236,10 @@ class WatchlistCandidatePayload(BaseModel):
             if self.new_status is None:
                 raise ValueError("update_status watchlist_item requires new_status")
             if (
-                self.new_status == WatchlistItemStatus.PROMOTED_TO_CASE
-                and self.promoted_to_case_id is None
+                self.new_status == WatchlistItemStatus.PROMOTED_TO_SUBJECT
+                and self.promoted_to_subject_id is None
             ):
-                raise ValueError("PROMOTED_TO_CASE requires promoted_to_case_id")
+                raise ValueError("PROMOTED_TO_SUBJECT requires promoted_to_subject_id")
             if self.new_status == WatchlistItemStatus.TRIGGERED and (
                 self.triggered_reason is None or not self.triggered_reason.strip()
             ):
@@ -236,44 +247,58 @@ class WatchlistCandidatePayload(BaseModel):
         return self
 
 
-class CaseUpdateCandidatePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+class SubjectUpdateCandidatePayload(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, use_enum_values=True, serialize_by_alias=True
+    )
 
+    # Candidate payloads are durable and hashed; retain the historical token.
     kind: Literal["case_status_change"] = "case_status_change"
     action: Literal["create", "archive", "update"]
-    case_type: InvestmentCaseType | None = None
-    new_status: InvestmentCaseStatus | None = None
+    subject_type: ResearchSubjectType | None = Field(
+        default=None,
+        validation_alias=AliasChoices("subject_type", "case_type"),
+        serialization_alias="case_type",
+    )
+    new_status: ResearchSubjectStatus | None = None
     title: str | None = Field(default=None, max_length=200)
     summary: str | None = Field(default=None, max_length=4000)
     primary_instrument_id: str | None = None
     topic_tags: tuple[str, ...] | None = None
-    linked_case_ids: tuple[str, ...] | None = None
+    linked_subject_ids: tuple[str, ...] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("linked_subject_ids", "linked_case_ids"),
+        serialization_alias="linked_case_ids",
+    )
     archived_reason: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def _action_fields(self) -> Self:
         if self.action == "create":
-            if self.case_type is None:
-                raise ValueError("create case_status_change requires case_type")
+            if self.subject_type is None:
+                raise ValueError("create subject_status_change requires subject_type")
             if self.title is None or not self.title.strip():
-                raise ValueError("create case_status_change requires title")
+                raise ValueError("create subject_status_change requires title")
             if self.summary is None or not self.summary.strip():
-                raise ValueError("create case_status_change requires summary")
+                raise ValueError("create subject_status_change requires summary")
         elif self.action == "archive":
             if self.archived_reason is None or not self.archived_reason.strip():
-                raise ValueError("archive case_status_change requires archived_reason")
-            if self.new_status is not None and self.new_status != InvestmentCaseStatus.ARCHIVED:
+                raise ValueError("archive subject_status_change requires archived_reason")
+            if self.new_status is not None and self.new_status != ResearchSubjectStatus.ARCHIVED:
                 raise ValueError("archive action new_status must be archived when set")
         elif self.action == "update":
+            if self.subject_type is not None:
+                raise ValueError("update subject_status_change cannot change subject_type")
+            if self.primary_instrument_id is not None:
+                raise ValueError("update subject_status_change cannot change primary_instrument_id")
             if (
                 self.title is None
                 and self.summary is None
                 and self.topic_tags is None
-                and self.linked_case_ids is None
+                and self.linked_subject_ids is None
                 and self.new_status is None
-                and self.primary_instrument_id is None
             ):
-                raise ValueError("update case_status_change requires at least one field")
+                raise ValueError("update subject_status_change requires at least one field")
         return self
 
 
@@ -290,7 +315,14 @@ class TradePlanConditionPayload(BaseModel):
     comparator: TradePlanComparator | None = None
     threshold: Decimal | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=64)
-    instrument_id: str | None = None
+    instrument_id: str | None = Field(
+        default=None,
+        description=(
+            "Instrument whose fact is evaluated for this condition. It may differ "
+            "from the Trade Plan execution instrument, for example USOIL as the "
+            "reference for a UCO plan."
+        ),
+    )
     max_fact_age_seconds: int | None = Field(default=None, gt=0)
     event_after: datetime | None = None
 
@@ -319,13 +351,9 @@ class TradePlanConditionPayload(BaseModel):
                 mode=TradePlanConditionMode(self.mode),
                 description=self.description,
                 severity=self.severity,
-                fact_type=(
-                    TradePlanFactType(self.fact_type) if self.fact_type else None
-                ),
+                fact_type=(TradePlanFactType(self.fact_type) if self.fact_type else None),
                 metric_key=self.metric_key,
-                comparator=(
-                    TradePlanComparator(self.comparator) if self.comparator else None
-                ),
+                comparator=(TradePlanComparator(self.comparator) if self.comparator else None),
                 threshold=self.threshold,
                 unit=self.unit,
                 instrument_id=self.instrument_id,
@@ -344,7 +372,14 @@ class TradePlanCandidatePayload(BaseModel):
     plan_id: str | None = None
     expected_version: int | None = Field(default=None, ge=1)
     thesis_id: str = Field(min_length=1, max_length=128)
-    instrument_id: str = Field(min_length=1, max_length=160)
+    instrument_id: str = Field(
+        min_length=1,
+        max_length=160,
+        description=(
+            "Execution/position instrument governed by the Trade Plan. Individual "
+            "conditions may observe a different reference instrument."
+        ),
+    )
     status: TradePlanStatus
     valid_from: datetime
     valid_until: datetime | None = None
@@ -393,7 +428,7 @@ CandidateRevisionPayload = Annotated[
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
-    | CaseUpdateCandidatePayload
+    | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload,
     Field(discriminator="kind"),
 ]
@@ -404,18 +439,20 @@ _CANDIDATE_PAYLOAD_ADAPTER: TypeAdapter[
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
-    | CaseUpdateCandidatePayload
+    | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload
 ] = TypeAdapter(CandidateRevisionPayload)
 
 
-def parse_candidate_payload(payload_json: str) -> (
+def parse_candidate_payload(
+    payload_json: str,
+) -> (
     ThesisRevisionCandidatePayload
     | AssumptionCandidatePayload
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
     | WatchlistCandidatePayload
-    | CaseUpdateCandidatePayload
+    | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload
 ):
     """Parse and validate closed candidate payload JSON."""
@@ -429,7 +466,7 @@ def candidate_payload_to_json(
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
-        | CaseUpdateCandidatePayload
+        | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
     ),
 ) -> str:
@@ -444,7 +481,7 @@ def candidate_payload_canonical_dict(
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
-        | CaseUpdateCandidatePayload
+        | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
     ),
 ) -> dict[str, Any]:
@@ -472,12 +509,12 @@ ProposedInvalidationPayload = InvalidationCandidatePayload
 # ---------------------------------------------------------------------------
 
 
-class InvestmentCaseDTO(_BaseResearchDTO):
-    case_id: str
-    case_type: InvestmentCaseType
+class ResearchSubjectDTO(_BaseResearchDTO):
+    subject_id: str
+    subject_type: ResearchSubjectType
     title: str
     summary: str
-    status: InvestmentCaseStatus
+    status: ResearchSubjectStatus
     primary_instrument_id: str | None
     topic_tags: tuple[str, ...]
     created_at: datetime
@@ -485,7 +522,7 @@ class InvestmentCaseDTO(_BaseResearchDTO):
     created_by: str
     archived_at: datetime | None
     archived_reason: str | None
-    linked_case_ids: tuple[str, ...]
+    linked_subject_ids: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     report_ids: tuple[str, ...]
     event_ids: tuple[str, ...]
@@ -500,41 +537,41 @@ class InvestmentCaseDTO(_BaseResearchDTO):
         return value
 
     @classmethod
-    def from_domain(cls, case: InvestmentCase) -> InvestmentCaseDTO:
+    def from_domain(cls, subject: ResearchSubject) -> ResearchSubjectDTO:
         return cls(
-            case_id=case.case_id,
-            case_type=case.case_type,
-            title=case.title,
-            summary=case.summary,
-            status=case.status,
-            primary_instrument_id=case.primary_instrument_id,
-            topic_tags=case.topic_tags,
-            created_at=case.created_at,
-            updated_at=case.updated_at,
-            created_by=case.created_by,
-            archived_at=case.archived_at,
-            archived_reason=case.archived_reason,
-            linked_case_ids=case.linked_case_ids,
-            evidence_ids=case.evidence_ids,
-            report_ids=case.report_ids,
-            event_ids=case.event_ids,
-            decision_ids=case.decision_ids,
-            schema_version=case.schema_version,
+            subject_id=subject.subject_id,
+            subject_type=subject.subject_type,
+            title=subject.title,
+            summary=subject.summary,
+            status=subject.status,
+            primary_instrument_id=subject.primary_instrument_id,
+            topic_tags=subject.topic_tags,
+            created_at=subject.created_at,
+            updated_at=subject.updated_at,
+            created_by=subject.created_by,
+            archived_at=subject.archived_at,
+            archived_reason=subject.archived_reason,
+            linked_subject_ids=subject.linked_subject_ids,
+            evidence_ids=subject.evidence_ids,
+            report_ids=subject.report_ids,
+            event_ids=subject.event_ids,
+            decision_ids=subject.decision_ids,
+            schema_version=subject.schema_version,
         )
 
     @classmethod
-    def from_domain_list(cls, items: tuple[InvestmentCase, ...]) -> tuple[InvestmentCaseDTO, ...]:
+    def from_domain_list(cls, items: tuple[ResearchSubject, ...]) -> tuple[ResearchSubjectDTO, ...]:
         return tuple(cls.from_domain(i) for i in items)
 
 
-class InvestmentCaseListDTO(_BaseResearchDTO):
-    items: tuple[InvestmentCaseDTO, ...]
+class ResearchSubjectListDTO(_BaseResearchDTO):
+    items: tuple[ResearchSubjectDTO, ...]
     total: int
 
 
 class ThesisDTO(_BaseResearchDTO):
     thesis_id: str
-    case_id: str
+    subject_id: str
     title: str
     role: ThesisRole
     status: ThesisStatus
@@ -557,7 +594,7 @@ class ThesisDTO(_BaseResearchDTO):
     def from_domain(cls, thesis: Thesis) -> ThesisDTO:
         return cls(
             thesis_id=thesis.thesis_id,
-            case_id=thesis.case_id,
+            subject_id=thesis.subject_id,
             title=thesis.title,
             role=thesis.role,
             status=thesis.status,
@@ -582,7 +619,7 @@ class ThesisListDTO(_BaseResearchDTO):
 class ThesisRevisionDTO(_BaseResearchDTO):
     revision_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     supersedes_revision_no: int | None
     statement: str
@@ -610,7 +647,7 @@ class ThesisRevisionDTO(_BaseResearchDTO):
         return cls(
             revision_id=revision.revision_id,
             thesis_id=revision.thesis_id,
-            case_id=revision.case_id,
+            subject_id=revision.subject_id,
             revision_no=revision.revision_no,
             supersedes_revision_no=revision.supersedes_revision_no,
             statement=revision.statement,
@@ -629,16 +666,14 @@ class ThesisRevisionDTO(_BaseResearchDTO):
         )
 
     @classmethod
-    def from_domain_list(
-        cls, items: tuple[ThesisRevision, ...]
-    ) -> tuple[ThesisRevisionDTO, ...]:
+    def from_domain_list(cls, items: tuple[ThesisRevision, ...]) -> tuple[ThesisRevisionDTO, ...]:
         return tuple(cls.from_domain(i) for i in items)
 
 
 class AssumptionDTO(_BaseResearchDTO):
     assumption_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     statement: str
     basis: str
@@ -663,7 +698,7 @@ class AssumptionDTO(_BaseResearchDTO):
         return cls(
             assumption_id=assumption.assumption_id,
             thesis_id=assumption.thesis_id,
-            case_id=assumption.case_id,
+            subject_id=assumption.subject_id,
             revision_no=assumption.revision_no,
             statement=assumption.statement,
             basis=assumption.basis,
@@ -685,7 +720,7 @@ class AssumptionDTO(_BaseResearchDTO):
 class InvalidationConditionDTO(_BaseResearchDTO):
     invalidation_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     description: str
     observable: str
@@ -711,7 +746,7 @@ class InvalidationConditionDTO(_BaseResearchDTO):
         return cls(
             invalidation_id=inv.invalidation_id,
             thesis_id=inv.thesis_id,
-            case_id=inv.case_id,
+            subject_id=inv.subject_id,
             revision_no=inv.revision_no,
             description=inv.description,
             observable=inv.observable,
@@ -735,7 +770,7 @@ class InvalidationConditionDTO(_BaseResearchDTO):
 
 class OpenQuestionDTO(_BaseResearchDTO):
     question_id: str
-    case_id: str
+    subject_id: str
     text: str
     status: OpenQuestionStatus
     asked_at: datetime
@@ -755,7 +790,7 @@ class OpenQuestionDTO(_BaseResearchDTO):
     def from_domain(cls, question: OpenQuestion) -> OpenQuestionDTO:
         return cls(
             question_id=question.question_id,
-            case_id=question.case_id,
+            subject_id=question.subject_id,
             text=question.text,
             status=question.status,
             asked_at=question.asked_at,
@@ -781,12 +816,12 @@ class WatchlistItemDTO(_BaseResearchDTO):
     display_name: str
     thesis_hint: str
     triggers: tuple[str, ...]
-    case_id: str | None
+    subject_id: str | None
     status: WatchlistItemStatus
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None
-    promoted_to_case_id: str | None
+    promoted_to_subject_id: str | None
     triggered_at: datetime | None
     triggered_reason: str | None
 
@@ -806,12 +841,12 @@ class WatchlistItemDTO(_BaseResearchDTO):
             display_name=item.display_name,
             thesis_hint=item.thesis_hint,
             triggers=item.triggers,
-            case_id=item.case_id,
+            subject_id=item.subject_id,
             status=item.status,
             created_at=item.created_at,
             updated_at=item.updated_at,
             expires_at=item.expires_at,
-            promoted_to_case_id=item.promoted_to_case_id,
+            promoted_to_subject_id=item.promoted_to_subject_id,
             triggered_at=item.triggered_at,
             triggered_reason=item.triggered_reason,
         )
@@ -827,7 +862,7 @@ class WatchlistListDTO(_BaseResearchDTO):
 
 class CandidateRevisionDTO(_BaseResearchDTO):
     candidate_id: str
-    case_id: str | None
+    subject_id: str | None
     thesis_id: str | None
     target_revision_no: int | None
     kind: CandidateKind
@@ -848,7 +883,7 @@ class CandidateRevisionDTO(_BaseResearchDTO):
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
-        | CaseUpdateCandidatePayload
+        | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
     )
 
@@ -874,7 +909,7 @@ class CandidateRevisionDTO(_BaseResearchDTO):
         payload = parse_candidate_payload(candidate.payload_json)
         return cls(
             candidate_id=candidate.candidate_id,
-            case_id=candidate.case_id,
+            subject_id=candidate.subject_id,
             thesis_id=candidate.thesis_id,
             target_revision_no=candidate.target_revision_no,
             kind=candidate.kind,
@@ -910,7 +945,7 @@ class ThesisHistoryDTO(_BaseResearchDTO):
 
 
 class ResearchStateDTO(_BaseResearchDTO):
-    case: InvestmentCaseDTO
+    subject: ResearchSubjectDTO
     theses: tuple[ThesisDTO, ...]
     latest_revisions: tuple[ThesisRevisionDTO, ...]
     assumptions: tuple[AssumptionDTO, ...]
@@ -927,7 +962,7 @@ class ConfirmedRevisionDTO(_BaseResearchDTO):
     revision: ThesisRevisionDTO
     assumptions: tuple[AssumptionDTO, ...]
     invalidations: tuple[InvalidationConditionDTO, ...]
-    case: InvestmentCaseDTO
+    subject: ResearchSubjectDTO
 
 
 class ConfirmedStateUpdateDTO(_BaseResearchDTO):
@@ -944,7 +979,7 @@ def kind_from_payload(
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
         | WatchlistCandidatePayload
-        | CaseUpdateCandidatePayload
+        | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
     ),
 ) -> CandidateKind:

@@ -18,6 +18,17 @@ import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
 
+function qualityIssueHref(issue: Dict): string {
+  const scope = String(issue.scope ?? "");
+  const subject = String(issue.subject_ref ?? "");
+  if (scope === "monitor" && subject) return `/monitors#${monitorAnchorId(subject)}`;
+  if (scope === "research_state" && subject) return `/research#subject-${subject}`;
+  if (scope === "account_snapshot") return "/portfolio#holdings";
+  if (scope === "account_activity") return "/portfolio#activity";
+  if (scope === "provider_route" || scope === "persistence") return "/operations";
+  return "/capabilities";
+}
+
 export default function OverviewPage() {
   const result = useApi<Dict>("/api/overview");
   const health = envelopeData<Dict>(result.data?.health);
@@ -49,6 +60,14 @@ export default function OverviewPage() {
       .filter((item) => item.scope === "monitor")
       .map((item) => String(item.subject_ref)),
   ).size;
+  const researchAttention = listOf<Dict>(result.data, "research_attention");
+  const failedRuns = runs.filter((run) => !["SUCCEEDED", "SKIPPED"].includes(String(run.status ?? "").toUpperCase()));
+  const attentionItems = [
+    ...researchAttention.map((item) => ({ key: `research-${String(item.subject_id)}`, severity: "ATTENTION", title: `${String(item.pending_count)} 个待审候选`, detail: String(item.title ?? item.subject_id), href: `/research#subject-${String(item.subject_id)}` })),
+    ...failedRuns.map((run) => ({ key: `run-${String(run.run_id)}`, severity: "DEGRADED", title: `Monitor Run ${String(run.status)}`, detail: String(run.run_id), href: "/monitors" })),
+    ...(Number(notifications?.dead_letter ?? 0) > 0 ? [{ key: "outbox-dead", severity: "ERROR", title: `${String(notifications?.dead_letter)} 条通知 dead-letter`, detail: "检查通知配置与投递回执", href: "/operations" }] : []),
+    ...qualityIssues.map((issue, index) => ({ key: `quality-${String(issue.code)}-${index}`, severity: String(issue.severity ?? "DEGRADED"), title: String(issue.code), detail: `${String(issue.subject_ref ?? issue.scope)} · ${String(issue.detail ?? "")}`, href: qualityIssueHref(issue) })),
+  ];
 
   return (
     <ConsoleShell active="overview" eyebrow="System overview" title="投资研究控制台">
@@ -74,6 +93,9 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
+          <Card className="span-12" kicker="ATTENTION QUEUE" title="需要处理" action={<Badge value={`${attentionItems.length} ITEMS`} />}>
+            {attentionItems.length === 0 ? <Empty>没有需要人工处理的持久化状态。</Empty> : <div className="attention-queue">{attentionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          </Card>
           <Card
             className="span-12"
             kicker="DATA QUALITY"
@@ -99,13 +121,15 @@ export default function OverviewPage() {
                 ) : (
                   <div className="quality-issue-list">
                     {qualityIssues.slice(0, 6).map((issue, index) => (
-                      <article key={`${String(issue.code)}-${String(issue.subject_ref)}-${index}`}>
+                      <Link className="quality-issue-link" href={qualityIssueHref(issue)} key={`${String(issue.code)}-${String(issue.subject_ref)}-${index}`}>
+                      <article>
                         <Badge value={String(issue.severity ?? "DEGRADED")} />
                         <div>
                           <strong>{String(issue.code)}</strong>
                           <span>{String(issue.subject_ref ?? issue.scope ?? "system")} · {String(issue.detail ?? "—")}</span>
                         </div>
                       </article>
+                      </Link>
                     ))}
                     {qualityIssues.length > 6 ? <small>另有 {qualityIssues.length - 6} 项，可通过 system_health 读取完整机器视图。</small> : null}
                   </div>

@@ -25,7 +25,7 @@ _STALEABLE = frozenset({OpenQuestionStatus.OPEN})
 def _to_domain(row: OpenQuestionRow) -> OpenQuestion:
     return OpenQuestion(
         question_id=row.question_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         text=row.text,
         status=OpenQuestionStatus(row.status),
         asked_at=dt_from_db(row.asked_at, field_name="asked_at"),
@@ -39,9 +39,7 @@ def _to_domain(row: OpenQuestionRow) -> OpenQuestion:
 def _apply_domain(row: OpenQuestionRow, question: OpenQuestion) -> None:
     """Write a fully validated domain shape onto the ORM row."""
     row.status = question.status.value
-    row.answered_at = (
-        None if question.answered_at is None else dt_to_db(question.answered_at)
-    )
+    row.answered_at = None if question.answered_at is None else dt_to_db(question.answered_at)
     row.answer_summary = question.answer_summary
     row.closed_without_answer_reason = question.closed_without_answer_reason
 
@@ -49,7 +47,7 @@ def _apply_domain(row: OpenQuestionRow, question: OpenQuestion) -> None:
 def _to_row(question: OpenQuestion) -> OpenQuestionRow:
     return OpenQuestionRow(
         question_id=question.question_id,
-        case_id=question.case_id,
+        subject_id=question.subject_id,
         text=question.text,
         status=question.status.value,
         asked_at=dt_to_db(question.asked_at),
@@ -64,10 +62,10 @@ class SqlAlchemyOpenQuestionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def list_by_case(self, case_id: str) -> tuple[OpenQuestion, ...]:
+    def list_by_subject(self, subject_id: str) -> tuple[OpenQuestion, ...]:
         stmt = (
             select(OpenQuestionRow)
-            .where(OpenQuestionRow.case_id == case_id)
+            .where(OpenQuestionRow.subject_id == subject_id)
             .order_by(OpenQuestionRow.asked_at.asc())
         )
         return tuple(_to_domain(row) for row in self._session.scalars(stmt).all())
@@ -111,7 +109,7 @@ class SqlAlchemyOpenQuestionRepository:
         current_domain = _to_domain(row)
         next_domain = OpenQuestion(
             question_id=current_domain.question_id,
-            case_id=current_domain.case_id,
+            subject_id=current_domain.subject_id,
             text=current_domain.text,
             status=OpenQuestionStatus.ANSWERED,
             asked_at=current_domain.asked_at,
@@ -147,7 +145,7 @@ class SqlAlchemyOpenQuestionRepository:
         current_domain = _to_domain(row)
         next_domain = OpenQuestion(
             question_id=current_domain.question_id,
-            case_id=current_domain.case_id,
+            subject_id=current_domain.subject_id,
             text=current_domain.text,
             status=OpenQuestionStatus.CLOSED_WITHOUT_ANSWER,
             asked_at=current_domain.asked_at,
@@ -178,7 +176,7 @@ class SqlAlchemyOpenQuestionRepository:
         current_domain = _to_domain(row)
         next_domain = OpenQuestion(
             question_id=current_domain.question_id,
-            case_id=current_domain.case_id,
+            subject_id=current_domain.subject_id,
             text=current_domain.text,
             status=OpenQuestionStatus.STALE,
             asked_at=current_domain.asked_at,

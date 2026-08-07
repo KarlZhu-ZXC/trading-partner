@@ -56,6 +56,7 @@ trading-partner-performance-reconciliation = "interfaces.cli.performance_reconci
 trading-partner-monitor-run = "interfaces.cli.monitor_run:main"
 trading-partner-monitor-scheduler = "interfaces.cli.monitor_scheduler:main"
 trading-partner-monitor-notifications = "interfaces.cli.monitor_notifications:main"
+trading-partner-notifications = "interfaces.cli.notifications:main"
 trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
 trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
 trading-partner-maintenance = "interfaces.cli.maintenance:main"

@@ -25,7 +25,7 @@ missing screen one feature at a time:
 
 | Object | Console behavior | Persistence rule |
 |---|---|---|
-| Investment Case metadata | create, edit title/summary/tags/links, archive | confirmed and idempotent mutation with audit candidate |
+| Research Subject metadata | create, edit title/summary/tags/links, archive | confirmed and idempotent mutation with audit candidate |
 | Thesis | create or revise through a proposal; confirm/reject explicitly | append-only revisions; no direct rewrite of confirmed history |
 | Trade Plan and research state | propose, compare, confirm/reject | versioned Candidate → Confirm lifecycle |
 | Monitor | create, revise cadence/rules/status, pause/archive | immutable definition versions |
@@ -41,13 +41,13 @@ missing screen one feature at a time:
 - System health and Data Quality Center summary with issue drill-down.
 - Pending research candidates, open Challenge Reviews, triggered/unevaluated
   Monitors, stale account state, failed syncs, OAuth age, notification backlog.
-- Every summary links to the exact Case, Monitor, account, run, or operation rather
+- Every summary links to the exact Research Subject, Monitor, account, run, or operation rather
   than instructing the user to invoke a raw tool.
 
 ### 3.2 Research Hub — judgment lifecycle
 
-- Searchable/filterable Case index and one selected Case workspace.
-- Case create, metadata edit, archive, links, and related instrument.
+- Searchable/filterable Research Subject index and one selected Research Subject workspace.
+- Research Subject create, metadata edit, archive, links, and related instrument.
 - Current Thesis and full revision history; new/revise proposal forms; pending
   candidate diff plus confirm/reject/withdraw actions.
 - Assumptions, invalidations, open questions, current/versioned Trade Plan.
@@ -66,13 +66,13 @@ missing screen one feature at a time:
   and traceable incomplete reasons.
 - Exposure, Risk Policy/checks, Position Sizing, and hypothetical-addition analysis.
 - Watchlist groups/items, active source, explicit full sync, add/remove, unsupported
-  symbols, and Case/Monitor links.
+  symbols, and Research Subject/Monitor links.
 - No implicit broker refresh and no FX aggregation or order surface.
 
 ### 3.4 Monitoring Hub — definitions, runs, events
 
 - Definition index and selected Monitor detail/editor rather than one unbounded page.
-- Current observation and every rule meaning/state; cadence, due time, linked Case
+- Current observation and every rule meaning/state; cadence, due time, linked Research Subject
   and exact Trade Plan version.
 - Immutable per-Monitor run history and full batch drill-down.
 - Transition event acknowledgement/resolution and notification delivery status.
@@ -116,9 +116,9 @@ must not substitute for common workflows or duplicate application services.
 
 ### Console C0 — Research closure (completed 2026-08-04)
 
-- Replace the all-expanded Research page with a Case index and selected workspace.
+- Replace the all-expanded Research page with a Research Subject index and selected workspace.
 - Add `investment_case_manage/update` without increasing the 28-tool surface.
-- Add Case create/edit/archive, Thesis propose/review, pending candidates, and the
+- Add Research Subject create/edit/archive, Thesis propose/review, pending candidates, and the
   existing assumptions/invalidations/questions/Trade Plan context.
 - Correct Research responsive overflow and add focused Console/MCP tests.
 

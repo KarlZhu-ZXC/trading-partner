@@ -1,6 +1,6 @@
 """Research domain namespace.
 
-Phase 1B implements Investment Case / Thesis state models while preserving the
+Phase 1B implements Research Subject / Thesis state models while preserving the
 Phase 1A frozen 12-name registry (including Phase 1C placeholders).
 """
 
@@ -11,8 +11,8 @@ from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
     InvalidationCondition,
-    InvestmentCase,
     OpenQuestion,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
     WatchlistItem,
@@ -25,7 +25,7 @@ __all__ = [
     "Assumption",
     "CandidateThesisRevision",
     "InvalidationCondition",
-    "InvestmentCase",
+    "ResearchSubject",
     "OpenQuestion",
     "Thesis",
     "ThesisRevision",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from application.dto.research import InvestmentCaseDTO, ResearchStateDTO
+from application.dto.research import ResearchStateDTO, ResearchSubjectDTO
 from application.dto.research_context import (
     ContextBudgetDTO,
     ContextDecisionDTO,
@@ -31,7 +31,7 @@ from application.services._research_support import (
 from domain.common.enums import EvidenceStance, Freshness
 from domain.common.errors import InputValidationError
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import InvestmentCase
+from domain.research.models import ResearchSubject
 
 _LIVE_TOOLS = (
     "market_data_get/quote",
@@ -68,9 +68,9 @@ class ResearchContextBuilder:
             if request.since is not None and request.since > now:
                 raise InputValidationError("since must not be in the future")
             with self._uow_factory() as uow:
-                case = self._select_case(uow, request)
-                state = build_research_state(uow, case.case_id)
-                evidence = self._evidence(uow, case.case_id, now)
+                subject = self._select_subject(uow, request)
+                state = build_research_state(uow, subject.subject_id)
+                evidence = self._evidence(uow, subject.subject_id, now)
                 reports = tuple(
                     ContextReportDTO(
                         report_id=item.report_id,
@@ -79,7 +79,7 @@ class ResearchContextBuilder:
                         summary=_clip(item.summary, 1_000),
                         as_of=item.as_of,
                     )
-                    for item in uow.reports.list_by_case(case.case_id, as_of=now)[:10]
+                    for item in uow.reports.list_by_subject(subject.subject_id, as_of=now)[:10]
                 )
                 events = tuple(
                     ContextEventDTO(
@@ -90,7 +90,7 @@ class ResearchContextBuilder:
                         occurred_at=item.occurred_at,
                     )
                     for item in uow.events.list_timeline(
-                        case.case_id,
+                        subject.subject_id,
                         start=request.since,
                         end=now,
                         as_of=now,
@@ -107,7 +107,7 @@ class ResearchContextBuilder:
                         confirmation_mode=item.confirmation_mode,
                         execution_effect=False,
                     )
-                    for item in uow.decisions.list_by_case(case.case_id, as_of=now)[-10:]
+                    for item in uow.decisions.list_by_subject(subject.subject_id, as_of=now)[-10:]
                     if request.since is None or item.decided_at >= request.since
                 )
                 journals = tuple(
@@ -119,7 +119,7 @@ class ResearchContextBuilder:
                         created_at=item.created_at,
                     )
                     for item in uow.journal.list(
-                        case_id=case.case_id, as_of=now, limit=20, offset=0
+                        subject_id=subject.subject_id, as_of=now, limit=20, offset=0
                     )
                     if request.since is None or item.created_at >= request.since
                 )
@@ -142,7 +142,7 @@ class ResearchContextBuilder:
                 missing.append("NO_DURABLE_PORTFOLIO_CONTEXT")
             context, budget_warnings = self._budget(
                 request.token_budget,
-                case=InvestmentCaseDTO.from_domain(case),
+                subject=ResearchSubjectDTO.from_domain(subject),
                 state=state,
                 evidence=evidence,
                 reports=reports,
@@ -181,11 +181,13 @@ class ResearchContextBuilder:
             )
 
     @staticmethod
-    def _select_case(uow: ResearchUnitOfWork, request: ResearchContextBuildInput) -> InvestmentCase:
-        cases = uow.cases
-        if request.case_id is not None:
-            return cases.get(request.case_id)
-        matches = cases.list(
+    def _select_subject(
+        uow: ResearchUnitOfWork, request: ResearchContextBuildInput
+    ) -> ResearchSubject:
+        subjects = uow.subjects
+        if request.subject_id is not None:
+            return subjects.get(request.subject_id)
+        matches = subjects.list(
             primary_instrument_id=request.instrument_id,
             include_archived=False,
             limit=10,
@@ -193,16 +195,16 @@ class ResearchContextBuilder:
         )
         if len(matches) != 1:
             raise InputValidationError(
-                "instrument_id must resolve to exactly one active Investment Case",
-                details={"candidate_case_ids": tuple(item.case_id for item in matches)},
+                "instrument_id must resolve to exactly one active Research Subject",
+                details={"candidate_subject_ids": tuple(item.subject_id for item in matches)},
             )
         return matches[0]
 
     @staticmethod
     def _evidence(
-        uow: ResearchUnitOfWork, case_id: str, now: datetime
+        uow: ResearchUnitOfWork, subject_id: str, now: datetime
     ) -> tuple[ContextEvidenceDTO, ...]:
-        linked = uow.case_evidence_links.list_evidence(case_id, as_of=now)
+        linked = uow.subject_evidence_links.list_evidence(subject_id, as_of=now)
         items: list[ContextEvidenceDTO] = []
         for evidence in linked:
             assessments = tuple(
@@ -210,7 +212,7 @@ class ResearchContextBuilder:
                 for item in uow.evidence_assessments.list_for_evidence(
                     evidence.evidence_id, as_of=now
                 )
-                if item.case_id == case_id
+                if item.subject_id == subject_id
             )
             stances = tuple(dict.fromkeys(item.stance for item in assessments))
             materiality = max((item.materiality for item in assessments), default=None)
@@ -269,7 +271,7 @@ class ResearchContextBuilder:
         self,
         requested: int,
         *,
-        case: InvestmentCaseDTO,
+        subject: ResearchSubjectDTO,
         state: ResearchStateDTO,
         evidence: tuple[ContextEvidenceDTO, ...],
         reports: tuple[ContextReportDTO, ...],
@@ -291,7 +293,7 @@ class ResearchContextBuilder:
 
         def package(estimated: int = 0) -> ResearchContextDTO:
             return ResearchContextDTO(
-                case=case,
+                subject=subject,
                 research_state=state,
                 evidence=tuple(evidence_items),
                 reports=tuple(report_items),

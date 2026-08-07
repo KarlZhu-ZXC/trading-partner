@@ -7,7 +7,6 @@ from typing import get_type_hints
 
 import pytest
 
-from application.ports.case_evidence_link_repository import CaseEvidenceLinkRepository
 from application.ports.decision_record_repository import DecisionRecordRepository
 from application.ports.evidence_assessment_repository import (
     EvidenceAssessmentRepository,
@@ -17,9 +16,7 @@ from application.ports.journal_repository import JournalRepository
 from application.ports.research_event_repository import ResearchEventRepository
 from application.ports.research_report_repository import ResearchReportRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
-from infrastructure.persistence.repositories.case_evidence_link import (
-    SqlAlchemyCaseEvidenceLinkRepository,
-)
+from application.ports.subject_evidence_link_repository import SubjectEvidenceLinkRepository
 from infrastructure.persistence.repositories.decision_record import (
     SqlAlchemyDecisionRecordRepository,
 )
@@ -37,6 +34,9 @@ from infrastructure.persistence.repositories.research_event import (
 )
 from infrastructure.persistence.repositories.research_report import (
     SqlAlchemyResearchReportRepository,
+)
+from infrastructure.persistence.repositories.subject_evidence_link import (
+    SqlAlchemySubjectEvidenceLinkRepository,
 )
 from infrastructure.persistence.repositories.thesis_revision import (
     SqlAlchemyThesisRevisionRepository,
@@ -63,9 +63,9 @@ _PORT_IMPL: list[tuple[type, type, frozenset[str]]] = [
         frozenset({"add", "get", "get_by_content_sha256"}),
     ),
     (
-        CaseEvidenceLinkRepository,
-        SqlAlchemyCaseEvidenceLinkRepository,
-        frozenset({"add", "get", "exists", "list_evidence", "list_cases"}),
+        SubjectEvidenceLinkRepository,
+        SqlAlchemySubjectEvidenceLinkRepository,
+        frozenset({"add", "get", "exists", "list_evidence", "list_subjects"}),
     ),
     (
         EvidenceAssessmentRepository,
@@ -75,7 +75,7 @@ _PORT_IMPL: list[tuple[type, type, frozenset[str]]] = [
     (
         ResearchReportRepository,
         SqlAlchemyResearchReportRepository,
-        frozenset({"add", "get", "get_by_content_sha256", "list_by_case"}),
+        frozenset({"add", "get", "get_by_content_sha256", "list_by_subject"}),
     ),
     (
         ResearchEventRepository,
@@ -85,7 +85,7 @@ _PORT_IMPL: list[tuple[type, type, frozenset[str]]] = [
     (
         DecisionRecordRepository,
         SqlAlchemyDecisionRecordRepository,
-        frozenset({"add", "get", "get_by_idempotency_key", "list_by_case"}),
+        frozenset({"add", "get", "get_by_idempotency_key", "list_by_subject"}),
     ),
     (
         JournalRepository,
@@ -147,7 +147,7 @@ def test_phase1b_thesis_revision_surface_unchanged() -> None:
 def test_uow_protocol_has_phase1c_business_and_search_index_properties() -> None:
     expected = {
         "evidence",
-        "case_evidence_links",
+        "subject_evidence_links",
         "evidence_assessments",
         "reports",
         "events",
@@ -162,7 +162,7 @@ def test_uow_protocol_has_phase1c_business_and_search_index_properties() -> None
 
 def test_uow_keeps_phase1b_properties() -> None:
     for name in (
-        "cases",
+        "subjects",
         "theses",
         "revisions",
         "assumptions",

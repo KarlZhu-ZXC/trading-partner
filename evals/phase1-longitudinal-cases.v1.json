@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "terminology": "Research Subject; legacy catalog and case_id keys are schema v1 compatibility",
   "cases": [
     {"case_id":"eval-nvda","instrument_id":"equity:US:NVDA","revisions":["initial","earnings-update","valuation-review"],"supporting_evidence":["revenue-growth"],"contrary_evidence":["valuation-risk"],"assumptions":["data-center-demand"],"invalidations":["growth-below-threshold"],"formal_reviews":["confidence-review"],"user_resolutions":["defer"],"account_position_link":true},
     {"case_id":"eval-maotai","instrument_id":"equity:A_SHARE:600519.SH","revisions":["initial","channel-check","demand-review"],"supporting_evidence":["brand-strength"],"contrary_evidence":["wholesale-price-pressure"],"assumptions":["premium-demand"],"invalidations":["channel-inventory-threshold"],"formal_reviews":["invalidation-review"],"user_resolutions":["revise"],"account_position_link":false},

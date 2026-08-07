@@ -56,7 +56,7 @@ class JournalService:
     def append(
         self,
         *,
-        case_id: str | None,
+        subject_id: str | None,
         entry_type: JournalEntryType,
         title: str,
         body_markdown: str,
@@ -80,32 +80,24 @@ class JournalService:
                     details={"field": "authored_by"},
                 )
 
-            case_id_n: str | None
-            if case_id is None:
-                case_id_n = None
+            subject_id_n: str | None
+            if subject_id is None:
+                subject_id_n = None
             else:
-                case_id_n = case_id.strip()
-                if not case_id_n:
+                subject_id_n = subject_id.strip()
+                if not subject_id_n:
                     raise InputValidationError(
-                        "case_id must be non-blank when provided",
-                        details={"field": "case_id"},
+                        "subject_id must be non-blank when provided",
+                        details={"field": "subject_id"},
                     )
 
             title_r = redact_required_text(title, self._redactor, field="title")
-            body_r = redact_required_text(
-                body_markdown, self._redactor, field="body_markdown"
-            )
+            body_r = redact_required_text(body_markdown, self._redactor, field="body_markdown")
             instruments = stable_dedupe_strs(instrument_ids)
             tags = prepare_topic_tags(topic_tags, self._redactor)
 
-            rel_type = (
-                related_entity_type.strip()
-                if related_entity_type is not None
-                else None
-            )
-            rel_id = (
-                related_entity_id.strip() if related_entity_id is not None else None
-            )
+            rel_type = related_entity_type.strip() if related_entity_type is not None else None
+            rel_id = related_entity_id.strip() if related_entity_id is not None else None
             if rel_type is not None and not rel_type:
                 raise InputValidationError(
                     "related_entity_type must be non-blank when provided",
@@ -118,9 +110,7 @@ class JournalService:
                 )
 
             supersedes = (
-                supersedes_journal_id.strip()
-                if supersedes_journal_id is not None
-                else None
+                supersedes_journal_id.strip() if supersedes_journal_id is not None else None
             )
             if supersedes is not None and not supersedes:
                 raise InputValidationError(
@@ -130,7 +120,7 @@ class JournalService:
 
             key = normalize_idempotency_key(idempotency_key)
             payload_sha = compute_journal_idempotency_payload_sha256(
-                case_id=case_id_n,
+                subject_id=subject_id_n,
                 entry_type=entry_type,
                 title=title_r,
                 body_markdown=body_r,
@@ -147,7 +137,7 @@ class JournalService:
                 existing = uow.journal.get_by_idempotency_key(key)
                 if existing is not None:
                     existing_sha = compute_journal_idempotency_payload_sha256(
-                        case_id=existing.case_id,
+                        subject_id=existing.subject_id,
                         entry_type=existing.entry_type,
                         title=existing.title,
                         body_markdown=existing.body_markdown,
@@ -176,20 +166,20 @@ class JournalService:
                         degraded=True,
                     )
 
-                if case_id_n is not None:
-                    uow.cases.get(case_id_n)
+                if subject_id_n is not None:
+                    uow.subjects.get(subject_id_n)
 
                 created_at = self._clock.now()
                 validate_journal_related_entity(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     created_at=created_at,
                     related_entity_type=rel_type,
                     related_entity_id=rel_id,
                 )
                 validate_journal_supersedes(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     created_at=created_at,
                     supersedes_journal_id=supersedes,
                 )
@@ -197,7 +187,7 @@ class JournalService:
                 journal_id = self._id_generator.new(EntityIdPrefix.JOURNAL)
                 entry = JournalEntry(
                     journal_id=journal_id,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     entry_type=entry_type,
                     title=title_r,
                     body_markdown=body_r,
@@ -217,9 +207,7 @@ class JournalService:
                     idempotency_key=key,
                     idempotency_payload_sha256=payload_sha,
                 )
-                uow.search_index.index(
-                    ResearchSearchEntityType.JOURNAL, journal_id
-                )
+                uow.search_index.index(ResearchSearchEntityType.JOURNAL, journal_id)
                 linked: list[str] = []
                 if rel_id is not None:
                     linked.append(rel_id)
@@ -231,7 +219,7 @@ class JournalService:
                         action="append",
                         entity_type="journal",
                         entity_id=journal_id,
-                        case_id=case_id_n,
+                        subject_id=subject_id_n,
                         actor=author,
                         confirmed_by=confirmer,
                         content_sha256=payload_sha,
@@ -258,7 +246,7 @@ class JournalService:
         self,
         *,
         text: str | None,
-        case_id: str | None,
+        subject_id: str | None,
         instrument_id: str | None,
         entry_types: tuple[JournalEntryType, ...],
         as_of: datetime | None,
@@ -269,10 +257,8 @@ class JournalService:
         try:
             # Caller must supply a real filter; forced JOURNAL entity type is not one.
             text_filter = text is not None and bool(text.strip())
-            case_filter = case_id is not None and bool(case_id.strip())
-            instrument_filter = (
-                instrument_id is not None and bool(instrument_id.strip())
-            )
+            case_filter = subject_id is not None and bool(subject_id.strip())
+            instrument_filter = instrument_id is not None and bool(instrument_id.strip())
             types_filter = len(entry_types) > 0
             as_of_filter = as_of is not None
             if not any(
@@ -286,7 +272,7 @@ class JournalService:
             ):
                 raise InputValidationError(
                     "journal search requires at least one effective filter "
-                    "(non-blank text, case_id, instrument_id, entry_types, or as_of)",
+                    "(non-blank text, subject_id, instrument_id, entry_types, or as_of)",
                     details={
                         "field": "filters",
                         "rule": "at_least_one_effective_filter",
@@ -296,7 +282,7 @@ class JournalService:
             # Structured filter on journal_entry_types then hydrate in hit order.
             query = ResearchSearchQuery(
                 text=text,
-                case_id=case_id,
+                subject_id=subject_id,
                 instrument_id=instrument_id,
                 entity_types=(ResearchSearchEntityType.JOURNAL,),
                 journal_entry_types=entry_types,

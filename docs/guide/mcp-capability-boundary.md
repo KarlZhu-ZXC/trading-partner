@@ -8,7 +8,7 @@
 Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex 负责理解问题、
 选择工具、组织正反观点并生成最终回答；MCP 负责提供：
 
-- 默认以标的为入口的持久化研究档案（Investment Case）、当前投资判断（Thesis）、
+- 默认以标的为入口的持久化研究档案（Research Subject）、当前投资判断（Thesis）、
   假设、失效条件和历史研究记录；
 - 带来源、时间、新鲜度、口径和降级状态的 A 股、美股、韩股与选定跨资产事实；
 - 只读账户、持仓、历史交易和跨市场组合事实；
@@ -81,20 +81,34 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 
 | 工具 | 能力与边界 |
 |---|---|
-| `system_health` | 检查应用、数据库和全文检索，并嵌入 durable-only Data Quality Center：汇总最新账户快照的估值/价格时间覆盖、账户活动 coverage receipt、Active Monitor 最近运行与 `NOT_EVALUATED` 盲区，以及最近 24 小时 Provider route/fallback/失败聚合；不请求券商或行情上游。运行健康与证据质量保留独立 status。Provider 检查保留 `live_probe`/`configuration` 标签，配置不等于实时连通。路由账本只保存安全枚举、error/warning code 和耗时，固定保留 30 天且最多 5,000 条，不保存请求指纹、响应 payload 或异常文本。基础诊断本身可能以 degraded envelope 返回 |
+| `system_health` | 检查应用、数据库和全文检索，并嵌入 durable-only Data Quality Center：汇总最新账户快照的估值/价格时间覆盖、账户活动 coverage receipt、研究档案/Thesis/Trade Plan 生命周期冲突、Active Monitor 最近运行与 `NOT_EVALUATED` 盲区，以及最近 24 小时 Provider route/fallback/失败聚合；不请求券商或行情上游。运行健康与证据质量保留独立 status。Provider 检查保留 `live_probe`/`configuration` 标签，配置不等于实时连通。路由账本只保存安全枚举、error/warning code 和耗时，固定保留 30 天且最多 5,000 条，不保存请求指纹、响应 payload 或异常文本。基础诊断本身可能以 degraded envelope 返回 |
 
-### 3.2 标的研究档案与投资判断（Investment Case / Thesis，9）
+### 3.2 标的研究档案与投资判断（Research Subject / Thesis，9）
 
-面向用户，Case 应理解为“研究档案”；在最常见的公司/催化剂研究中，就是“某个标的的
-研究档案”。Thesis 应理解为“档案中的当前投资判断”。Instrument 是客观标的身份；Case
-是围绕它建立的主观、可归档研究容器；Thesis 则是可被证伪、可随证据修订的具体判断。
-`theme`、`macro`、`portfolio_concern` 档案可以跨越多个标的或没有主标的。创建 Draft Case
-只是在研究记忆中建立档案，
+面向用户，Research Subject 应称为“标的”“研究标的”或“研究档案”；在最常见的
+公司/催化剂研究中，就是“某个标的的研究档案”。Thesis 是档案中的当前投资判断。
+Instrument 是客观标的身份；研究档案是围绕它建立的主观、可归档研究容器；Thesis
+则是可被证伪、可随证据修订的具体判断。`theme`、`macro`、`portfolio_concern`
+档案可以跨越多个标的或没有主标的。创建草稿研究档案只是在研究记忆中建立档案，
 不代表看多、看空、开始长期跟踪或确认 Thesis。
+
+研究档案标题必须标识稳定的研究对象或研究问题，摘要用于界定研究范围。加仓、减仓、
+止盈、止损、仓位大小和进出场计划不得复制为研究档案元数据：当前投资判断属于
+Thesis，条件化的执行意图属于 Trade Plan。研究档案创建后不能通过 metadata update
+或通用 candidate 更换 `case_type` 或 `primary_instrument_id`。新的研究档案生命周期
+只使用 Draft、Active、Archived；
+旧数据中的 Strengthened、Weakened、Invalidated 仍可读取，但判断强弱语义由 Thesis 承担。
+因此草稿研究档案可以保存报告和待审核 candidate，但不能确认为
+`ACTIVE`/`STRENGTHENED`/`WEAKENED` Thesis，也不能确认 `ACTIVE` Trade Plan。
+必须先通过研究档案状态候选明确确认研究档案进入跟踪状态。确认 Thesis
+不会暗中激活研究档案；研究档案离开跟踪状态时也不会暗中归档子对象。
+现有 Thesis revision 显式携带 `thesis_status` 时会同版本落库，不携带时
+保持原状态。若需归档整个研究档案，顺序是：先显式归档 ACTIVE/PAUSED
+Trade Plan，再以 STRICT_REVIEW 确认 Thesis 归档，最后归档研究档案。
 
 ```text
 标的 Instrument
-└── 标的研究档案 Investment Case
+└── 标的研究档案 Research Subject
     ├── 当前投资判断 Thesis
     ├── 判断修订历史
     └── 证据、报告、事件、日志、决策与质询
@@ -103,7 +117,7 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 | 工具 | 能力与边界 |
 |---|---|
 | `investment_case_manage` (`create`) | 创建经用户确认的研究档案；company/catalyst 必须绑定标的，且不自动形成投资判断 |
-| `investment_case_manage` (`update`) | 经用户或外部 agent 确认、带幂等键地更新 Case 标题、摘要、标签或关联 Case；不改写 Thesis、Trade Plan 或历史记录 |
+| `investment_case_manage` (`update`) | 经用户或外部 agent 确认、带幂等键地更新研究档案标题、摘要、标签或关联研究档案；不改写 Thesis、Trade Plan 或历史记录 |
 | `investment_case_read` (`query`) | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
 | `investment_case_manage` (`archive`) | 经明确复核后归档研究档案；不删除 Instrument，也不是物理删除 |
 | `research_judgment_get` (`state`) | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
@@ -112,10 +126,16 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 | `research_judgment_confirm` | 由有权限的确认者确认、拒绝或撤回候选 |
 | `research_judgment_get` (`thesis_history`) | 读取不可改写的投资判断版本历史 |
 
-状态变更采用 Candidate Propose → Confirm / Reject / Withdraw。Codex 不得自主选择确认或
+状态变更采用 Candidate Propose → Confirm / Reject / Withdraw。跨实体冲突返回
+`RESEARCH_STATE_CONFLICT`，不可重试；应先完成父研究档案或子状态的显式转换。
+Codex 不得自主选择确认或
 拒绝；但用户在当前聊天中明确表达决定时，该表达就是用户授权，Codex 应立即按
 `reviewed_by="user"`、`submitted_via="codex_chat"` 转交，并把原始授权语句写入
 `authorization_note`。这不是 Codex 自确认，也不需要额外审核界面；目标或动作不明确时才需澄清。
+Assumption、Invalidation、Open Question 等子对象不仅要“存在”，还必须属于 candidate
+声明的同一研究档案/Thesis/revision，且提议与确认阶段都应校验。当前通用 candidate 路径尚未
+统一完成这层 owner-scope guard，已记录为 `RESEARCH-STATE-002`；在修复前不得借用其他
+研究档案的子对象 ID。
 
 ### 3.3 Instrument 与研究记忆
 
@@ -124,7 +144,7 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 | `instrument_resolve` | 本地优先解析代码、名称或 ID；未命中时通过外部目录发现并验证，唯一候选原子写入 Instrument Master；不查询实时价格 |
 | `research_memory_get` (`search`) | 对 Evidence、Report、Event、Decision、Journal 做全文与结构化检索 |
 | `research_memory_get` (`report`) | 按 ID 读取一份不可变研究报告 |
-| `research_memory_get` (`timeline`) | 读取一个 Case 的统一时间线 |
+| `research_memory_get` (`timeline`) | 读取一个研究档案的统一时间线 |
 | `research_memory_append` (`journal`) | 在用户明确要求记录后追加日志 |
 | `research_memory_append` (`decision`) | 记录研究或仓位意图；不会产生订单、成交或持仓 |
 
@@ -228,6 +248,8 @@ quote/bars 使用 Yahoo active-contract symbol；不会回退为 `GC=F` 冒充�
 broker/SWFX 报价，不是 LBMA；`cfd:OTC:COPPER_CMD_USD` 是 rolling CFD，不是铜现货或
 LME Cash。`cfd:OTC:LIGHT_CMD_USD` 对应 Dukascopy `LIGHT.CMD-USD`，`USOIL` 只作为查询
 别名；它是 OTC 滚动轻质原油 CFD，不是 WTI 现货、NYMEX `CL`、某张期货合约或连续期货。
+OTC quote 同时给出 `display_price` 和精确的 `price_basis`。Dukascopy 买卖盘通常以
+`mid` 作为展示参考价，同时保持 `last=null`，因为报价中点不能伪装成真实成交价。
 显式运行 `uv run trading-partner-futures-sync --trade-date YYYY-MM-DD` 会刷新定义
 并幂等保存 EOD statistics vintage，不产生订单或仓位变化。
 
@@ -325,7 +347,7 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 
 ### 3.9 跨 Thread 恢复
 
-`investment_case_read` (`context`) 按 `case_id` 或无歧义的 `instrument_id` 恢复一个 Case：当前研究
+`investment_case_read` (`context`) 按 `case_id` 或无歧义的 `instrument_id` 恢复一个研究档案：当前研究
 状态、反方优先的 Evidence、压缩历史、最新持久化仓位、缺失事实和 token budget 元数据。
 
 这个结果是长期上下文，不是实时行情。调用方应根据 `live_fact_tools_required` 再拉取当前
@@ -402,7 +424,7 @@ point-in-time 数据集。导入器以正式 `statistics` 为绩效口径、保�
 Watchlist 上游严格二选一：Moomoo OpenD 或严格 Manual CSV。它们不会合并、对账、镜像或
 互相覆盖。Moomoo 使用 Quote Context，不需要交易账号、交易密码或解锁；Manual CSV 使用
 `schema_version,group_name,instrument_id,display_name` 固定表头并采用文件锁、临时文件、
-`fsync` 和原子替换。外部删除不会删除 Phase 1 Research WatchlistItem 或 Investment Case。
+`fsync` 和原子替换。外部删除不会删除 Phase 1 Research WatchlistItem 或研究档案。
 FX 等暂不支持研究的 Moomoo 成员仍会显示，但 `instrument_id=null` 且
 `research_supported=false`，不能伪装成股票。
 Moomoo durable items 读取省略 `group_name` 时优先选择系统 `All`，不会静默退回
@@ -513,7 +535,7 @@ sources, degraded, data, warnings, errors
 
 ## 5. 写入边界与用户控制
 
-允许的写入只服务于研究连续性和只读分析状态：Case、候选研究状态、Thesis revision、
+允许的写入只服务于研究连续性和只读分析状态：研究档案、候选研究状态、Thesis revision、
 Journal、Decision、Challenge Review resolution、账户快照、工作流 receipt/report、经明确
 确认的 Watchlist 成员增删与 Risk Policy 版本，以及 Monitor 定义、状态转换事件和事件处理
 记录。Watchlist、Risk 与 Monitoring 写入都不是交易，也不修改真实持仓或自动确认 Thesis。
@@ -548,7 +570,9 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`。补查
   得到盘前/盘后最新价时，只能证明该价格和时间；`open/high/low/volume` 返回空值并附带
   `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`，不会再混入日盘区间。补查失败则附带
-  `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近已知常规值。历史 `as_of` 不走这条
+  `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近带时间戳的已知值。若当前盘前没有当日成交而
+  只剩上一交易日盘后观察，该值按自己的盘后 session 分类，`previous_close` 仍取同日已完成
+  常规收盘，不能额外向前错退一个交易日。历史 `as_of` 不走这条
   current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。
 - Provider Router 使用统一、跨进程的有界 admission scheduler。它按
   `vendor + data_category` 原子预占当前或未来固定时间窗，并异步等到预占时刻；默认最多等待
@@ -578,11 +602,11 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   相关性过滤是强制步骤。该 feed 只保证当前快照，不是历史帖子档案；当前响应没有可靠互动
   量时，`likes` / `comments` 保持 `null`。适配器按标的缓存 15 分钟，不增加独立 Skill、公共
   MCP 工具或运行时 LLM 依赖，最终分析仍由 Codex 等外部交互层完成。
-- `research_workflow_run` (`deep_dive`) 仅传 `instrument_id` 时会复用唯一未归档的 Draft Investment Case；
-  若没有可复用 Case，只有显式提供 confirmer 和 idempotency key 才会创建，并以 Case-bound
+- `research_workflow_run` (`deep_dive`) 仅传 `instrument_id` 时会复用唯一未归档的草稿研究档案；
+  若没有可复用研究档案，只有显式提供 confirmer 和 idempotency key 才会创建，并以研究档案绑定
   模式归档本次 Report。Draft 只是研究档案，不等于启用长期跟踪、确认
-  Thesis 或批准仓位动作；传 `create_case=false` 才进入纯 ad-hoc partial 模式。存在多个匹配 Case
-  时必须显式给出 `case_id`。`research_workflow_run` (`catalyst_review`) 不自动建 Case，可接续 Deep Dive
+  Thesis 或批准仓位动作；传 `create_case=false` 才进入纯 ad-hoc partial 模式。存在多个匹配研究档案
+  时必须显式给出 `case_id`。`research_workflow_run` (`catalyst_review`) 不自动建研究档案，可接续 Deep Dive
   生成的 `case_id` 恢复上下文。
 - Moomoo 默认关闭；需要本地 OpenD、只读账户配置和允许的 account IDs。也可使用严格手工
   持仓 CSV，但它不是实时账户连接。
@@ -662,15 +686,15 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0028_provider_route_history`；它包含 append-only Trade Plan
+`0030_generic_notification_outbox`；它包含 append-only Trade Plan
 identity/version/conditions、Risk v2 policy 字段、Monitor 的精确计划版本关联，以及与
 Monitor 状态转移事件或盘后 run 同事务写入的通知 Outbox，并追加 bounded、secret-safe
 Provider 路由回执。
 
-### Monitor 手机通知（可选）
+### Telegram 通知 Outbox（可选）
 
 Telegram Bot 是后台 Monitor 的可选投递出口，不是新的 MCP 工具。配置
-`MONITOR_NOTIFICATIONS_ENABLED=true`、`TELEGRAM_BOT_TOKEN` 和
+`NOTIFICATIONS_ENABLED=true`、`TELEGRAM_BOT_TOKEN` 和
 `TELEGRAM_CHAT_ID` 后，本地小时调度与市场收盘 Monitor CLI 会投递新的
 `TRIGGERED`、`RECOVERED`、`NOT_EVALUATED` 状态转移。A 股/美股/韩股盘后组仍逐条持久化
 状态转移 event，但不再为这些 event 另发逐标的 Telegram；每个已评估交易日只发送一条
@@ -692,10 +716,20 @@ condition/threshold、状态、级别与有界人类含义，不再只显示笼�
 标为 XAUUSD 周末波动代理。该过程不生成或上传图片，也不调用 LLM。
 
 ```bash
-uv run trading-partner-monitor-notifications status
-uv run trading-partner-monitor-notifications test
-uv run trading-partner-monitor-notifications flush
+uv run trading-partner-notifications status
+uv run trading-partner-notifications test
+uv run trading-partner-notifications flush
+printf '%s' 'body' | uv run trading-partner-notifications enqueue \
+  --title 'Operational note' --idempotency-key note-1 \
+  --confirmed-by user --authorization-note 'Explicitly authorized notification'
 ```
+
+`trading-partner-monitor-notifications` remains an alias. The generic `enqueue`
+command is operational CLI only, not an MCP tool; it reads UTF-8 plain text from
+stdin, requires explicit `user` or `external_agent` authorization, persists a
+bounded expiry, and never echoes body or authorization note in its JSON receipt.
+Internal deterministic producers use the closed SYSTEM source; MANUAL remains
+explicitly authorized and has no order effect.
 
 `test` 会发送一张明确标注“非真实监控事件”的完整移动端样式预览，便于检查数据来源、
 状态变化警报条和规则卡片的 Telegram 实际渲染；它不写 Monitor event 或 Outbox。
@@ -715,6 +749,10 @@ uv run trading-partner-monitor-notifications flush
   account snapshot 计算确定性仓位区间。A 股按
   100 股向下取整，美股股票/ETF 支持四位小数碎股；结果固定
   `historically_validated=false`、`execution_effect=false`。
+- Trade Plan 顶层 `instrument_id` 是仓位和风险计算使用的实际操作标的；每条
+  `MONITORABLE` condition 的 `instrument_id` 是该条件读取事实的参考标的，两者可以不同。
+  例如 UCO 计划可以绑定监控 USOIL 别名对应的 `cfd:OTC:LIGHT_CMD_USD`。系统只把它作为
+  决策基准，不会拿 CFD 价格计算 UCO 数量，也不会假设价格、收益率或杠杆是一一对应。
 - `monitor_manage` (`create`) / `monitor_manage` (`update`) 可绑定精确 Trade Plan 版本并显式编译
   `MONITORABLE` 条件；`MANUAL` 条件不会伪装成自动规则。有限期计划会收紧绑定 Monitor 的
   `valid_until`，过期后不访问 Provider。
@@ -744,13 +782,13 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 
 可以直接在项目 Codex Thread 中这样提问：
 
-- “先检查 Trading Partner 健康状态，再恢复我关于 NVDA 的 Investment Case。”
+- “先检查 Trading Partner 健康状态，再恢复我关于 NVDA 的研究档案。”
 - “拉取当前美股事实和过去 Thesis，列出支持、反对证据与尚未验证的假设。”
 - “结合我的真实持仓，对这个加仓想法启动严格质询，但不要修改 Thesis。”
 - “做一次 A 股市场复盘，保留所有降级提示和数据截止时间。”
 - “做一次 Portfolio Review，分币种展示暴露，不要隐含换汇。”
 - “把我刚才确认的决定记录为研究意图，不要执行任何交易。”
-- “刷新 Favorites，列出我的自选并标出已经有 Investment Case 的标的。”
+- “刷新 Favorites，列出我的自选并标出已经有研究档案的标的。”
 - “把 NVDA 加到 Favorites，只修改自选，不要创建 Thesis 或下单。”
 
 第一次实际使用建议按以下顺序验证：
@@ -758,7 +796,7 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 1. `system_health`；
 2. `system_health`，确认 MCP 通路；
 3. 一次 A 股和一次美股真实事实查询；
-4. 创建一个小型 Investment Case，再用 `investment_case_read` (`context`) 恢复；
+4. 创建一个小型研究档案，再用 `investment_case_read` (`context`) 恢复；
 5. 配置账户后再测试 account/portfolio 工具；
 6. 最后运行 Deep Dive 或 Portfolio Review。
 

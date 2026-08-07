@@ -59,12 +59,12 @@ from application.ports.workflow_run_repository import WorkflowRunRecord, Workflo
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.idempotency import canonical_payload_sha256
-from application.services.investment_case_service import InvestmentCaseService
 from application.services.peer_comparison_service import PeerComparisonService
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.research_archive_service import ResearchArchiveService
 from application.services.research_context_builder import ResearchContextBuilder
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
 from application.services.us_tool_coordinator import USToolCoordinator
@@ -72,9 +72,9 @@ from domain.a_share.enums import AShareMarketScope, AShareSnapshotDetail, Capita
 from domain.common.enums import (
     AssetType,
     Freshness,
-    InvestmentCaseType,
     Market,
     ResearchReportType,
+    ResearchSubjectType,
     VendorId,
 )
 from domain.common.errors import InputValidationError, TradingPartnerError, WorkflowRunInProgress
@@ -160,7 +160,7 @@ class ResearchWorkflowOrchestrator:
     def __init__(
         self,
         repository: WorkflowRunRepository,
-        investment_cases: InvestmentCaseService,
+        research_subjects: ResearchSubjectService,
         context_builder: ResearchContextBuilder,
         archive: ResearchArchiveService,
         a_share: AShareToolCoordinator,
@@ -176,7 +176,7 @@ class ResearchWorkflowOrchestrator:
         secret_redactor: SecretRedactor,
     ) -> None:
         self._repository = repository
-        self._investment_cases = investment_cases
+        self._research_subjects = research_subjects
         self._context = context_builder
         self._archive = archive
         self._a_share = a_share
@@ -194,41 +194,45 @@ class ResearchWorkflowOrchestrator:
     async def run_deep_dive(
         self, request: ResearchRunDeepDiveInput
     ) -> ToolEnvelope[WorkflowRunDTO]:
-        if request.case_id is None and request.instrument_id is not None and request.create_case:
-            prepared = self._ensure_deep_dive_case(request)
+        if (
+            request.subject_id is None
+            and request.instrument_id is not None
+            and request.create_subject
+        ):
+            prepared = self._ensure_deep_dive_subject(request)
             if isinstance(prepared, ToolEnvelope):
                 return prepared
             request = prepared
-        return await self._run_case_recipe(WorkflowType.DEEP_DIVE, request)
+        return await self._run_subject_recipe(WorkflowType.DEEP_DIVE, request)
 
-    def _ensure_deep_dive_case(
+    def _ensure_deep_dive_subject(
         self, request: ResearchRunDeepDiveInput
     ) -> ResearchRunDeepDiveInput | ToolEnvelope[WorkflowRunDTO]:
         """Reuse one open instrument research file or create a confirmed Draft file."""
         instrument_id = request.instrument_id
         assert instrument_id is not None
-        open_cases = self._investment_cases.list_cases(
+        open_subjects = self._research_subjects.list_subjects(
             primary_instrument_id=instrument_id,
             include_archived=False,
             limit=50,
             offset=0,
         )
-        if not open_cases.ok or open_cases.data is None:
-            return cast(ToolEnvelope[WorkflowRunDTO], open_cases)
-        if open_cases.data.total == 1:
-            case_id = open_cases.data.items[0].case_id
-        elif open_cases.data.total > 1:
+        if not open_subjects.ok or open_subjects.data is None:
+            return cast(ToolEnvelope[WorkflowRunDTO], open_subjects)
+        if open_subjects.data.total == 1:
+            subject_id = open_subjects.data.items[0].subject_id
+        elif open_subjects.data.total > 1:
             # Preserve the context builder's typed ambiguity failure; never
             # guess which existing research judgment the user meant.
             return request
         else:
             if (
-                request.case_creation_confirmed_by is None
-                or request.case_creation_idempotency_key is None
+                request.subject_creation_confirmed_by is None
+                or request.subject_creation_idempotency_key is None
             ):
                 exc = InputValidationError(
                     "Creating a Draft research file requires explicit "
-                    "case_creation_confirmed_by and case_creation_idempotency_key"
+                    "subject_creation_confirmed_by and subject_creation_idempotency_key"
                 )
                 now = self._clock.now()
                 return ToolEnvelope.failure(
@@ -238,37 +242,37 @@ class ResearchWorkflowOrchestrator:
                     fetched_at=now,
                     errors=(to_error_info(exc, self._redactor),),
                 )
-            all_cases = self._investment_cases.list_cases(
+            all_subjects = self._research_subjects.list_subjects(
                 primary_instrument_id=instrument_id,
                 include_archived=True,
                 limit=50,
                 offset=0,
             )
-            if not all_cases.ok or all_cases.data is None:
-                return cast(ToolEnvelope[WorkflowRunDTO], all_cases)
+            if not all_subjects.ok or all_subjects.data is None:
+                return cast(ToolEnvelope[WorkflowRunDTO], all_subjects)
             _, _, symbol = parse_instrument_id(instrument_id)
-            created = self._investment_cases.create_case(
-                case_type=InvestmentCaseType.COMPANY,
-                title=request.case_title or f"{symbol} 深度研究",
-                summary=request.case_summary
+            created = self._research_subjects.create_subject(
+                subject_type=ResearchSubjectType.COMPANY,
+                title=request.subject_title or f"{symbol} 深度研究",
+                summary=request.subject_summary
                 or "由个股深度研究创建的标的研究档案（Draft）；尚未确认投资判断或长期跟踪。",
                 primary_instrument_id=instrument_id,
-                topic_tags=request.case_topic_tags,
-                linked_case_ids=(),
-                confirmed_by=request.case_creation_confirmed_by,
-                idempotency_key=request.case_creation_idempotency_key,
+                topic_tags=request.subject_topic_tags,
+                linked_subject_ids=(),
+                confirmed_by=request.subject_creation_confirmed_by,
+                idempotency_key=request.subject_creation_idempotency_key,
             )
             if not created.ok or created.data is None:
                 return cast(ToolEnvelope[WorkflowRunDTO], created)
-            case_id = created.data.case_id
+            subject_id = created.data.subject_id
         return request.model_copy(
-            update={"case_id": case_id, "instrument_id": None, "create_case": False}
+            update={"subject_id": subject_id, "instrument_id": None, "create_subject": False}
         )
 
     async def run_catalyst_review(
         self, request: ResearchRunCatalystReviewInput
     ) -> ToolEnvelope[WorkflowRunDTO]:
-        return await self._run_case_recipe(WorkflowType.CATALYST_REVIEW, request)
+        return await self._run_subject_recipe(WorkflowType.CATALYST_REVIEW, request)
 
     async def run_a_share_market_review(
         self, request: AShareRunMarketReviewInput
@@ -474,14 +478,14 @@ class ResearchWorkflowOrchestrator:
             request_payload_sha256=self._request_payload_sha256(request),
         )
 
-    async def _run_case_recipe(
+    async def _run_subject_recipe(
         self,
         workflow_type: WorkflowType,
         request: ResearchRunDeepDiveInput | ResearchRunCatalystReviewInput,
     ) -> ToolEnvelope[WorkflowRunDTO]:
         as_of = request.as_of or self._clock.now()
         request_payload_sha256 = self._request_payload_sha256(request)
-        ad_hoc = request.case_id is None and request.instrument_id is not None
+        ad_hoc = request.subject_id is None and request.instrument_id is not None
         if ad_hoc:
             instrument_id = request.instrument_id
             assert instrument_id is not None
@@ -490,11 +494,11 @@ class ResearchWorkflowOrchestrator:
             steps: list[_Step] = []
             if market is Market.US:
                 steps.extend(
-                    self._us_case_steps(instrument_id, since, as_of, workflow_type, request)
+                    self._us_subject_steps(instrument_id, since, as_of, workflow_type, request)
                 )
             elif market is Market.A_SHARE:
                 steps.extend(
-                    self._a_share_case_steps(instrument_id, since, as_of, workflow_type, request)
+                    self._a_share_subject_steps(instrument_id, since, as_of, workflow_type, request)
                 )
             else:
                 return await self._execute(
@@ -524,14 +528,14 @@ class ResearchWorkflowOrchestrator:
 
         context_envelope = self._context.build(
             ResearchContextBuildInput(
-                case_id=request.case_id,
+                subject_id=request.subject_id,
                 instrument_id=request.instrument_id,
                 token_budget=4_000,
             )
         )
         context_step = _Step(
             "durable_research_context",
-            "investment_case_read/context",
+            "research_subject_read/context",
             True,
             lambda: self._async_envelope(context_envelope),
         )
@@ -539,20 +543,20 @@ class ResearchWorkflowOrchestrator:
             return await self._execute(
                 workflow_type,
                 as_of,
-                request.case_id,
+                request.subject_id,
                 request.instrument_id,
                 (context_step,),
                 idempotency_key=request.idempotency_key,
                 request_payload_sha256=request_payload_sha256,
             )
         context = context_envelope.data
-        case_id = context.case.case_id
-        instrument_id = context.case.primary_instrument_id
+        subject_id = context.subject.subject_id
+        instrument_id = context.subject.primary_instrument_id
         if instrument_id is None:
             return await self._execute(
                 workflow_type,
                 as_of,
-                case_id,
+                subject_id,
                 None,
                 (context_step,),
                 missing_capabilities=("Instrument research file has no primary instrument",),
@@ -563,16 +567,18 @@ class ResearchWorkflowOrchestrator:
         since = as_of - timedelta(days=request.lookback_days)
         steps = [context_step]
         if market is Market.US:
-            steps.extend(self._us_case_steps(instrument_id, since, as_of, workflow_type, request))
+            steps.extend(
+                self._us_subject_steps(instrument_id, since, as_of, workflow_type, request)
+            )
         elif market is Market.A_SHARE:
             steps.extend(
-                self._a_share_case_steps(instrument_id, since, as_of, workflow_type, request)
+                self._a_share_subject_steps(instrument_id, since, as_of, workflow_type, request)
             )
         else:
             return await self._execute(
                 workflow_type,
                 as_of,
-                case_id,
+                subject_id,
                 instrument_id,
                 tuple(steps),
                 missing_capabilities=(f"workflow market {market.value} is unsupported",),
@@ -583,7 +589,7 @@ class ResearchWorkflowOrchestrator:
         return await self._execute(
             workflow_type,
             as_of,
-            case_id,
+            subject_id,
             instrument_id,
             tuple(steps),
             serial=market is Market.A_SHARE,
@@ -591,7 +597,7 @@ class ResearchWorkflowOrchestrator:
             request_payload_sha256=request_payload_sha256,
         )
 
-    def _us_case_steps(
+    def _us_subject_steps(
         self,
         instrument_id: str,
         since: datetime,
@@ -621,9 +627,7 @@ class ResearchWorkflowOrchestrator:
                         lambda: self._us_context.get_live_news(
                             MarketGetLiveNewsInput(
                                 instrument_id=(
-                                    instrument_id
-                                    if asset_type is AssetType.ETF
-                                    else None
+                                    instrument_id if asset_type is AssetType.ETF else None
                                 ),
                                 query=(
                                     None
@@ -768,7 +772,7 @@ class ResearchWorkflowOrchestrator:
             )
         return steps
 
-    def _a_share_case_steps(
+    def _a_share_subject_steps(
         self,
         instrument_id: str,
         since: datetime,
@@ -933,7 +937,7 @@ class ResearchWorkflowOrchestrator:
         self,
         workflow_type: WorkflowType,
         as_of: datetime,
-        case_id: str | None,
+        subject_id: str | None,
         instrument_id: str | None,
         steps: tuple[_Step, ...],
         *,
@@ -948,7 +952,7 @@ class ResearchWorkflowOrchestrator:
             claimed_run = WorkflowRun(
                 run_id=self._ids.new(EntityIdPrefix.RUN),
                 workflow_type=workflow_type,
-                case_id=case_id,
+                subject_id=subject_id,
                 instrument_id=instrument_id,
                 requested_as_of=as_of,
                 started_at=started_at,
@@ -1011,7 +1015,7 @@ class ResearchWorkflowOrchestrator:
             run = WorkflowRun(
                 run_id=run_id,
                 workflow_type=workflow_type,
-                case_id=case_id,
+                subject_id=subject_id,
                 instrument_id=instrument_id,
                 requested_as_of=as_of,
                 started_at=started_at,
@@ -1020,12 +1024,12 @@ class ResearchWorkflowOrchestrator:
                 steps=tuple(receipts),
             )
             archive_missing = list(missing_capabilities)
-            if case_id is not None:
+            if subject_id is not None:
                 report = self._archive_fact_report(run)
                 if report.ok and report.data is not None:
                     run = replace(run, report_id=report.data.report_id)
                 else:
-                    archive_missing.append("case-bound fact report could not be archived")
+                    archive_missing.append("subject-bound fact report could not be archived")
             record = self._repository.complete(
                 run,
                 fact_data=tuple(fact_data),
@@ -1130,7 +1134,7 @@ class ResearchWorkflowOrchestrator:
         )
         report_type = ResearchReportType(run.workflow_type.value)
         return self._archive.archive_report(
-            case_id=run.case_id or "",
+            subject_id=run.subject_id or "",
             report_type=report_type,
             title=f"{run.workflow_type.value.replace('_', ' ').title()} fact package",
             summary=f"{len(run.steps)} fact steps; terminal status {run.status.value}.",

@@ -452,7 +452,7 @@ portfolio_review
 
 ## 9.1 产品目标
 
-把“想继续观察、但未必值得建立 Investment Case”的标的变成稳定、可对话管理的研究入口。
+把“想继续观察、但未必值得建立研究档案”的标的变成稳定、可对话管理的研究入口。
 
 典型交互：
 
@@ -460,7 +460,7 @@ portfolio_review
 列出我的 Moomoo 半导体自选。
 把 NVDA 加到 Moomoo 的 MAG 分组。
 从 CSV 的“等待回调”分组删除这个标的。
-这个自选为什么被加入？它是否已经值得建立 Investment Case？
+这个自选为什么被加入？它是否已经值得建立研究档案？
 ```
 
 ## 9.2 三层职责
@@ -473,7 +473,7 @@ Trading Partner Watchlist Store
 = 数据库中的完整分组、成员、来源、同步时间与生命周期历史
 
 Trading Partner WatchlistItem
-= thesis hint、触发条件、状态与 Investment Case 关联
+= thesis hint、触发条件、状态与研究档案关联
 ```
 
 删除 Moomoo/CSV 成员不得删除项目内的研究历史；项目内 WatchlistItem 归档也不得暗中修改
@@ -515,7 +515,7 @@ Trading Partner WatchlistItem
 - 操作必须幂等并保存脱敏审计回执
 - 美股/A 股成员进入 Instrument Master 前 local-first 动态验证
 - 暂不支持研究的 Moomoo 市场仍可列出，但必须标记 `research_supported=false`
-- Watchlist 成员可以显式建立/关联 Investment Case，但不得自动启用长期跟踪
+- Watchlist 成员可以显式建立/关联研究档案，但不得自动启用长期跟踪
 
 ## 9.5 MCP
 
@@ -534,7 +534,7 @@ Watchlist Hub，不复制 Candidate/Confirm 状态机。
 - 任一 source 的分组和成员均完整持久化到数据库，不丢 provider、group、时间和原始代码
 - 写入必须显式授权、幂等且可审计
 - CSV 手工编辑和 MCP 写入可互操作且不会损坏文件
-- 外部删除不会级联删除 Research State 或 Investment Case
+- 外部删除不会级联删除 Research State 或研究档案
 - Codex/App 重启或 source 暂时不可用后仍能恢复最近 Watchlist 与本地研究关联
 - 不引入自动监控、回测或订单写入
 
@@ -1096,7 +1096,7 @@ TradingAgents 只同步有价值的模式：
    计算。每种公式保留版本、现金流时点口径与 `COMPLETE/INCOMPLETE`。
 2. A3 贡献：账户、标的与研究主题贡献先行；总贡献与账户损益必须勾稽，残差单列。行业与
    基准事实缺失时不做伪 Brinson 分解。
-3. Catalyst Agenda：把持仓/Watchlist/Case 的财报、公告、宏观与已知事件排成未来议程，
+3. Catalyst Agenda：把持仓/Watchlist/研究档案的财报、公告、宏观与已知事件排成未来议程，
    复用现有事件事实和 Monitor，不新增运行时 LLM。数据契约、免费源顺序、MCP/CLI 形态与
    精简 TDD 已冻结在 `docs/plans/catalyst-agenda-and-scorecard-plan.md`；下一步先做 C0–C1，
    不把已发生 `ResearchEvent` 冒充未来事项。

@@ -2,6 +2,11 @@
 
 from enum import StrEnum
 
+from domain.notifications.enums import (
+    NotificationChannel,
+    NotificationStatus,
+)
+
 
 class MonitorStatus(StrEnum):
     ACTIVE = "ACTIVE"
@@ -53,12 +58,7 @@ class MonitorRunStatus(StrEnum):
     FAILED = "FAILED"
 
 
-class MonitorNotificationChannel(StrEnum):
-    TELEGRAM = "TELEGRAM"
-
-
-class MonitorNotificationStatus(StrEnum):
-    PENDING = "PENDING"
-    DELIVERED = "DELIVERED"
-    DEAD_LETTER = "DEAD_LETTER"
-    EXPIRED = "EXPIRED"
+# Compatibility aliases for callers written before the generic outbox. New
+# application code should import from ``domain.notifications``.
+MonitorNotificationChannel = NotificationChannel
+MonitorNotificationStatus = NotificationStatus

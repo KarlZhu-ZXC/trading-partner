@@ -20,7 +20,7 @@ from domain.common.enums import (
     TradingSession,
     VendorId,
 )
-from domain.cross_asset.enums import OfferSide, SpotVenueBasis, SpotVolumeBasis
+from domain.cross_asset.enums import OfferSide, PriceBasis, SpotVenueBasis, SpotVolumeBasis
 from domain.cross_asset.spot_models import CommoditySpotBarSeries, SpotObservation
 from domain.instruments.models import Instrument
 from domain.market.models import MarketBar
@@ -159,6 +159,8 @@ async def test_service_quote_xau_and_copper_warnings() -> None:
     assert xau.data is not None
     assert xau.data.instrument_id == "commodity_spot:OTC:XAUUSD"
     assert xau.data.venue_basis is SpotVenueBasis.DUKASCOPY_SWFX
+    assert xau.data.display_price == Decimal("2348.25")
+    assert xau.data.price_basis is PriceBasis.MID
     assert any(w.code == "DUKASCOPY_SWFX_NOT_LBMA" for w in xau.warnings)
     assert not any(w.code == "ROLLING_CFD_NOT_SPOT" for w in xau.warnings)
 

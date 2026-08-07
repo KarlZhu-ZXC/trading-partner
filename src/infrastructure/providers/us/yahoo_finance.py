@@ -56,9 +56,7 @@ _NY = ZoneInfo("America/New_York")
 _SEOUL = ZoneInfo("Asia/Seoul")
 _CHART_HOST = "https://query1.finance.yahoo.com"
 _CHART_PATH_PREFIX = "/v8/finance/chart/"
-_ALLOWED_ASSETS = frozenset(
-    {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE}
-)
+_ALLOWED_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE})
 _CONTINUOUS_FUTURES_WARNING_CODES = (
     "FUTURES_CONTRACT_NOT_SPOT",
     "CONTINUOUS_FUTURES_ROLL_RISK",
@@ -209,9 +207,7 @@ def _local_midnight(day: date, timezone: ZoneInfo) -> datetime:
 
 
 def _local_session_close(day: date, timezone: ZoneInfo, close: time) -> datetime:
-    return datetime(
-        day.year, day.month, day.day, close.hour, close.minute, tzinfo=timezone
-    )
+    return datetime(day.year, day.month, day.day, close.hour, close.minute, tzinfo=timezone)
 
 
 def _unix_to_aware(ts: object, *, field: str, timezone: ZoneInfo = _NY) -> datetime:
@@ -445,9 +441,7 @@ class YahooFinanceAdapter:
                 },
             )
 
-    def _require_json_content_type(
-        self, headers: Mapping[str, str], *, operation: str
-    ) -> None:
+    def _require_json_content_type(self, headers: Mapping[str, str], *, operation: str) -> None:
         if _content_type_ok(headers):
             return
         if not headers.get("content-type") and not headers.get("Content-Type"):
@@ -556,6 +550,25 @@ class YahooFinanceAdapter:
             if type(start) is int and type(end) is int and start <= unix < end:
                 return session
         return TradingSession.CLOSED
+
+    def _session_for_observation(
+        self,
+        meta: Mapping[str, object],
+        observed_at: datetime,
+        *,
+        market: Market,
+    ) -> TradingSession:
+        """Classify an observation even when Yahoo metadata describes another day.
+
+        ``currentTradingPeriod`` is anchored to Yahoo's current trading day.  A
+        valid prior-day extended-hours minute therefore falls outside every block
+        and must be classified from its own timestamp rather than as ``CLOSED``.
+        """
+        session = self._session_from_meta(meta, observed_at, market=market)
+        if session is not TradingSession.CLOSED:
+            return session
+        timezone = "Asia/Seoul" if market is Market.KR else "America/New_York"
+        return infer_session_basic(market, observed_at, timezone=timezone)
 
     def _meta(
         self,
@@ -717,13 +730,9 @@ class YahooFinanceAdapter:
             # Yahoo pads gaps with null rows — skip rather than invent prices.
             if any(v is None for v in (open_raw, high_raw, low_raw, close_raw)):
                 continue
-            ts = _unix_to_aware(
-                timestamps[idx], field=f"timestamp[{idx}]", timezone=timezone
-            )
+            ts = _unix_to_aware(timestamps[idx], field=f"timestamp[{idx}]", timezone=timezone)
             if interval is USBarInterval.ONE_DAY:
-                ts = _local_session_close(
-                    ts.astimezone(timezone).date(), timezone, session_close
-                )
+                ts = _local_session_close(ts.astimezone(timezone).date(), timezone, session_close)
             if ts > as_of:
                 continue
             local_day = ts.astimezone(timezone).date()
@@ -737,9 +746,7 @@ class YahooFinanceAdapter:
             low = _as_decimal(low_raw, field=f"bars[{idx}].low")
             close = _as_decimal(close_raw, field=f"bars[{idx}].close")
             volume = (
-                Decimal(0)
-                if vol_raw is None
-                else _as_decimal(vol_raw, field=f"bars[{idx}].volume")
+                Decimal(0) if vol_raw is None else _as_decimal(vol_raw, field=f"bars[{idx}].volume")
             )
             if volume < 0:
                 raise _contract(
@@ -847,9 +854,7 @@ class YahooFinanceAdapter:
         for bar in reversed(bars):
             bar_day = bar.timestamp.astimezone(timezone).date()
             if bar_day < quote_day or (
-                same_day_close_allowed
-                and bar_day == quote_day
-                and bar.timestamp <= quote_at
+                same_day_close_allowed and bar_day == quote_day and bar.timestamp <= quote_at
             ):
                 selected_bar = bar
                 break
@@ -872,20 +877,14 @@ class YahooFinanceAdapter:
         ):
             regular_day = regular_market_at.astimezone(timezone).date()
             completed_for_quote = (
-                quote_session is TradingSession.PRE_MARKET
-                and regular_day < quote_day
-            ) or (
-                quote_session is TradingSession.POST_MARKET
-                and regular_day == quote_day
-            )
+                quote_session is TradingSession.PRE_MARKET and regular_day < quote_day
+            ) or (quote_session is TradingSession.POST_MARKET and regular_day == quote_day)
             selected_day = (
                 selected_bar.timestamp.astimezone(timezone).date()
                 if selected_bar is not None
                 else None
             )
-            if completed_for_quote and (
-                selected_day is None or regular_day > selected_day
-            ):
+            if completed_for_quote and (selected_day is None or regular_day > selected_day):
                 return regular_market_price, True
 
         return (selected_bar.close if selected_bar is not None else None), False
@@ -933,9 +932,7 @@ class YahooFinanceAdapter:
             )
         return bars[-1], fetched_at, meta
 
-    async def get_quote(
-        self, instrument: Instrument, as_of: datetime
-    ) -> ProviderSuccess[USQuote]:
+    async def get_quote(self, instrument: Instrument, as_of: datetime) -> ProviderSuccess[USQuote]:
         self._require_configured()
         now = self._require_as_of(as_of)
         symbol = self._require_chart_instrument(instrument)
@@ -979,9 +976,7 @@ class YahooFinanceAdapter:
         regular_market_at: datetime | None = None
         rmt = meta_raw.get("regularMarketTime")
         if type(rmt) is int or type(rmt) is Decimal:
-            candidate = _unix_to_aware(
-                int(rmt), field="regularMarketTime", timezone=timezone
-            )
+            candidate = _unix_to_aware(int(rmt), field="regularMarketTime", timezone=timezone)
             if candidate <= as_of:
                 regular_market_at = candidate
 
@@ -1001,15 +996,9 @@ class YahooFinanceAdapter:
 
         regular_market_price: Decimal | None = None
         if regular_market_at is not None:
-            volume = _optional_decimal(
-                meta_raw.get("regularMarketVolume"), field="volume"
-            )
-            week_low = _optional_decimal(
-                meta_raw.get("fiftyTwoWeekLow"), field="week_52_low"
-            )
-            week_high = _optional_decimal(
-                meta_raw.get("fiftyTwoWeekHigh"), field="week_52_high"
-            )
+            volume = _optional_decimal(meta_raw.get("regularMarketVolume"), field="volume")
+            week_low = _optional_decimal(meta_raw.get("fiftyTwoWeekLow"), field="week_52_low")
+            week_high = _optional_decimal(meta_raw.get("fiftyTwoWeekHigh"), field="week_52_high")
             regular_market_price = _optional_decimal(
                 meta_raw.get("regularMarketPrice"), field="last"
             )
@@ -1056,7 +1045,8 @@ class YahooFinanceAdapter:
                 rule="as_of_cutoff",
             )
 
-        meta_session = self._session_from_meta(meta_raw, as_of, market=instrument.market)
+        meta_session = self._session_for_observation(meta_raw, as_of, market=instrument.market)
+        request_session = meta_session
         additional_warnings: list[str] = []
         if instrument.market is Market.KR:
             additional_warnings.append("YAHOO_KR_DELAYED_QUOTE")
@@ -1068,10 +1058,12 @@ class YahooFinanceAdapter:
             and regular_age > self._max_delayed_seconds
         ):
             try:
-                intraday_bar, intraday_fetched_at, intraday_meta = (
-                    await self._latest_intraday_quote_bar(
-                        symbol, as_of=as_of, market=instrument.market
-                    )
+                (
+                    intraday_bar,
+                    intraday_fetched_at,
+                    intraday_meta,
+                ) = await self._latest_intraday_quote_bar(
+                    symbol, as_of=as_of, market=instrument.market
                 )
             except (
                 DataContractError,
@@ -1081,11 +1073,23 @@ class YahooFinanceAdapter:
             ):
                 additional_warnings.append(_INTRADAY_QUOTE_UNAVAILABLE_WARNING)
             else:
+                equity_like = instrument.asset_type in {
+                    AssetType.EQUITY,
+                    AssetType.ETF,
+                    AssetType.INDEX,
+                }
+                current_session_observation = (
+                    not equity_like
+                    or intraday_bar.timestamp.astimezone(timezone).date()
+                    == as_of.astimezone(timezone).date()
+                )
+                if not current_session_observation:
+                    additional_warnings.append(_INTRADAY_QUOTE_UNAVAILABLE_WARNING)
                 if intraday_bar.timestamp > quote_at:
                     quote_at = intraday_bar.timestamp
                     last = intraday_bar.close
                     fetched_at = intraday_fetched_at
-                    quote_session = self._session_from_meta(
+                    quote_session = self._session_for_observation(
                         intraday_meta, quote_at, market=instrument.market
                     )
                     meta_session = quote_session
@@ -1110,10 +1114,24 @@ class YahooFinanceAdapter:
                     else:
                         additional_warnings.append(_INTRADAY_QUOTE_RECOVERY_WARNING)
 
+        baseline_at = quote_at
+        baseline_session = quote_session
+        if instrument.asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX} and (
+            request_session in {TradingSession.PRE_MARKET, TradingSession.REGULAR}
+            or (
+                request_session is TradingSession.POST_MARKET
+                and quote_session is TradingSession.POST_MARKET
+            )
+        ):
+            # ``previous_close`` describes the requested current session even
+            # when its latest usable price is an older regular/post-market fact.
+            baseline_at = as_of
+            baseline_session = request_session
+
         previous_close, previous_close_recovered = self._previous_session_close(
             bars,
-            quote_at=quote_at,
-            quote_session=quote_session,
+            quote_at=baseline_at,
+            quote_session=baseline_session,
             asset_type=instrument.asset_type,
             regular_market_at=regular_market_at,
             regular_market_price=regular_market_price,

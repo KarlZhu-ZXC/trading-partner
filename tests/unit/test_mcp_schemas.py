@@ -19,16 +19,16 @@ from domain.common.enums import (
 from interfaces.mcp.schemas import (
     DecisionRecordAppendInput,
     InstrumentResolveInput,
-    InvestmentCaseArchiveInput,
-    InvestmentCaseCreateInput,
-    InvestmentCaseGetInput,
-    InvestmentCaseUpdateInput,
     JournalAppendInput,
     JournalSearchInput,
     MarketGetMockSnapshotInput,
     ResearchReportGetInput,
     ResearchSearchInput,
     ResearchStateUpdateInput,
+    ResearchSubjectArchiveInput,
+    ResearchSubjectCreateInput,
+    ResearchSubjectGetInput,
+    ResearchSubjectUpdateInput,
     ResearchTimelineGetInput,
     ThesisHistoryGetInput,
     ThesisRevisionConfirmInput,
@@ -98,9 +98,9 @@ def test_instrument_resolve_input_validation() -> None:
         InstrumentResolveInput.model_validate({"market": "US", "query": "   "})
 
 
-def test_investment_case_create_forbids_extra() -> None:
+def test_research_subject_create_forbids_extra() -> None:
     with pytest.raises(ValidationError):
-        InvestmentCaseCreateInput.model_validate(
+        ResearchSubjectCreateInput.model_validate(
             {
                 "case_type": "company",
                 "title": "NVDA",
@@ -113,9 +113,9 @@ def test_investment_case_create_forbids_extra() -> None:
         )
 
 
-def test_investment_case_create_company_requires_primary_instrument() -> None:
+def test_research_subject_create_company_requires_primary_instrument() -> None:
     with pytest.raises(ValidationError, match="primary_instrument_id"):
-        InvestmentCaseCreateInput.model_validate(
+        ResearchSubjectCreateInput.model_validate(
             {
                 "case_type": "company",
                 "title": "NVDA",
@@ -125,7 +125,7 @@ def test_investment_case_create_company_requires_primary_instrument() -> None:
             }
         )
     with pytest.raises(ValidationError, match="primary_instrument_id"):
-        InvestmentCaseCreateInput.model_validate(
+        ResearchSubjectCreateInput.model_validate(
             {
                 "case_type": "catalyst",
                 "title": "Event",
@@ -136,7 +136,7 @@ def test_investment_case_create_company_requires_primary_instrument() -> None:
             }
         )
     # THEME / MACRO may omit instrument
-    theme = InvestmentCaseCreateInput.model_validate(
+    theme = ResearchSubjectCreateInput.model_validate(
         {
             "case_type": "theme",
             "title": "AI theme",
@@ -148,9 +148,9 @@ def test_investment_case_create_company_requires_primary_instrument() -> None:
     assert theme.primary_instrument_id is None
 
 
-def test_investment_case_create_rejects_codex_confirmed_by() -> None:
+def test_research_subject_create_rejects_codex_confirmed_by() -> None:
     with pytest.raises(ValidationError):
-        InvestmentCaseCreateInput.model_validate(
+        ResearchSubjectCreateInput.model_validate(
             {
                 "case_type": "theme",
                 "title": "AI",
@@ -161,21 +161,21 @@ def test_investment_case_create_rejects_codex_confirmed_by() -> None:
         )
 
 
-def test_investment_case_get_requires_uuid7_case_id() -> None:
-    ok = InvestmentCaseGetInput.model_validate(
+def test_research_subject_get_requires_uuid7_case_id() -> None:
+    ok = ResearchSubjectGetInput.model_validate(
         {"case_id": "case_00000000-0000-7000-8000-000000000001"}
     )
     assert ok.case_id.startswith("case_")
     with pytest.raises(ValidationError):
-        InvestmentCaseGetInput.model_validate({"case_id": "case_not-a-uuid"})
+        ResearchSubjectGetInput.model_validate({"case_id": "case_not-a-uuid"})
     with pytest.raises(ValidationError):
-        InvestmentCaseGetInput.model_validate(
+        ResearchSubjectGetInput.model_validate(
             {"case_id": "run_00000000-0000-7000-8000-000000000001"}
         )
 
 
-def test_investment_case_archive_rejects_codex_and_bad_ids() -> None:
-    ok = InvestmentCaseArchiveInput.model_validate(
+def test_research_subject_archive_rejects_codex_and_bad_ids() -> None:
+    ok = ResearchSubjectArchiveInput.model_validate(
         {
             # Archive accepts any UUID structure (design flex), not only uuid7.
             "case_id": "case_00000000-0000-4000-8000-000000000001",
@@ -186,7 +186,7 @@ def test_investment_case_archive_rejects_codex_and_bad_ids() -> None:
     )
     assert ok.reviewed_by == "user"
     with pytest.raises(ValidationError):
-        InvestmentCaseArchiveInput.model_validate(
+        ResearchSubjectArchiveInput.model_validate(
             {
                 "case_id": "case_00000000-0000-7000-8000-000000000001",
                 "archived_reason": "x",
@@ -195,7 +195,7 @@ def test_investment_case_archive_rejects_codex_and_bad_ids() -> None:
             }
         )
     with pytest.raises(ValidationError):
-        InvestmentCaseArchiveInput.model_validate(
+        ResearchSubjectArchiveInput.model_validate(
             {
                 "case_id": "case_not-a-uuid",
                 "archived_reason": "x",
@@ -205,8 +205,8 @@ def test_investment_case_archive_rejects_codex_and_bad_ids() -> None:
         )
 
 
-def test_investment_case_update_accepts_partial_metadata_and_rejects_empty_or_extra() -> None:
-    update = InvestmentCaseUpdateInput.model_validate(
+def test_research_subject_update_accepts_partial_metadata_and_rejects_empty_or_extra() -> None:
+    update = ResearchSubjectUpdateInput.model_validate(
         {
             "case_id": CASE_ID,
             "summary": "Updated research scope",
@@ -218,7 +218,7 @@ def test_investment_case_update_accepts_partial_metadata_and_rejects_empty_or_ex
     assert update.title is None
 
     with pytest.raises(ValidationError, match="at least one field"):
-        InvestmentCaseUpdateInput.model_validate(
+        ResearchSubjectUpdateInput.model_validate(
             {
                 "case_id": CASE_ID,
                 "reviewed_by": "user",
@@ -226,7 +226,7 @@ def test_investment_case_update_accepts_partial_metadata_and_rejects_empty_or_ex
             }
         )
     with pytest.raises(ValidationError):
-        InvestmentCaseUpdateInput.model_validate(
+        ResearchSubjectUpdateInput.model_validate(
             {
                 "case_id": CASE_ID,
                 "title": "Updated",

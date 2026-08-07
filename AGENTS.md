@@ -6,10 +6,16 @@ Trading Partner is a long-horizon investment judgment companion. Codex (or anoth
 agent host) talks to the user; Trading Partner MCP supplies facts, research state,
 and structured tools. The implemented Phase 1–3D boundary covers A-share/US research,
 Korea Exchange quote/technical monitoring,
-accounts, Investment Cases, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
+accounts, Research Subjects, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
 analysis, plus a manual QuantConnect Free code/result bridge — **not** an automated
 backtest runner or live order writes.
+
+Canonical product language is **Research Subject** in English and 标的、研究标的 or
+研究档案 in Chinese, depending on whether the context emphasizes the object or its
+durable file. `InvestmentCase`, `investment_case_*`, `case_id`, `case_type`,
+`linked_case_ids`, and the opaque `case_` ID prefix are compatibility-boundary names,
+not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Implemented boundary
 
@@ -68,10 +74,35 @@ and retain confirmer, idempotency, expected-version, and actor gates. Ambiguous 
 or action references require clarification, and no confirmation authorizes orders or
 other out-of-scope execution.
 
-Investment Case `update` changes only confirmed file metadata (`title`, `summary`,
+Research Subject `update` changes only confirmed file metadata (`title`, `summary`,
 `topic_tags`, and `linked_case_ids`) through the existing user/external-agent gate and
 an idempotent audit candidate. It does not rewrite a Thesis, Trade Plan, evidence,
 report, Monitor, position, or historical research record.
+The Research Subject title must identify the durable research object or research question, and
+the summary must define stable research scope. Entry/add/trim, take-profit,
+stop-loss, sizing, and position plans belong to the Thesis or Trade Plan, never the
+Research Subject title/summary. Research Subject type and primary Instrument are immutable after creation.
+For new lifecycle decisions use `DRAFT`, `ACTIVE`, and `ARCHIVED`; legacy Research Subject
+`STRENGTHENED`, `WEAKENED`, and `INVALIDATED` values remain readable only for
+compatibility because conviction state belongs to the Thesis.
+
+A Draft/non-tracking Research Subject may contain research artifacts and proposed candidates,
+but it cannot receive an ACTIVE/STRENGTHENED/WEAKENED Thesis or an ACTIVE Trade
+Plan. A live Thesis requires an ACTIVE/STRENGTHENED/WEAKENED Research Subject; an ACTIVE Trade
+Plan additionally requires a live Thesis. A tracking Research Subject cannot leave tracking
+while a live Thesis or ACTIVE/PAUSED Trade Plan remains. Violations return the
+non-retryable `RESEARCH_STATE_CONFLICT`. Never auto-activate or cascade another
+entity to hide the conflict; each lifecycle transition retains its own explicit
+Candidate confirmation.
+An existing Thesis revision preserves status unless `thesis_status` is explicitly
+provided; a real status transition requires `STRICT_REVIEW`. To archive a tracked
+Research Subject, explicitly archive its ACTIVE/PAUSED Trade Plan first, retire the live Thesis,
+then archive the Research Subject.
+Assumption, Invalidation, Open Question, Watchlist, parent/rival Thesis, and linked
+Research Subject references must be validated against their owning Research Subject/Thesis before proposal
+and again before confirmation. Existence alone is insufficient. Retiring a Research Subject or
+Trade Plan never silently pauses or archives a bound Monitor; callers must inspect
+and transition Monitor definitions explicitly.
 
 **Provider facts and technicals**
 
@@ -110,6 +141,9 @@ report, Monitor, position, or historical research record.
   hour/day data use UTC day/month/year buckets, up to 10 requests run per batch,
   and batches pause for one second. Completed buckets are cached; active `from`
   buckets are not. `DUKASCOPY_API_KEY` is legacy-fallback-only.
+- Dukascopy OTC quote DTOs expose `display_price` plus `price_basis`; bid/ask
+  observations normally use their midpoint while `last` stays null. Never
+  relabel a quote midpoint as a traded price.
 - `uv run trading-partner-futures-sync` explicitly refreshes contract definitions
   and persists EOD statistics vintages. It is idempotent and has no order effect.
 
@@ -191,12 +225,12 @@ QuantConnect Results JSON. The user operates the free web UI. Remote code matchi
 and dataset version remain explicitly unverified; the bridge never confirms a
 Thesis, mutates a Trade Plan, or creates a broker order.
 
-Compact workflows never accept hidden Case creation or account refresh. Create a
-Case first with `investment_case_manage(request={"operation":"create",...})`;
+Compact workflows never accept hidden Research Subject creation or account refresh. Create a
+Research Subject first with `investment_case_manage(request={"operation":"create",...})`;
 refresh accounts first with `external_state_sync(request={"operation":"accounts"})`.
 Peer Comparison accepts one primary and 1–5 caller-specified same-market A-share/US
 equity peers. It aligns normalized statements and optional current valuation facts,
-does not discover/rank peers, and never mutates a Case, Thesis, Trade Plan, or account.
+does not discover/rank peers, and never mutates a Research Subject, Thesis, Trade Plan, or account.
 
 **Scheduled operational CLI (not a public MCP tool)**
 
@@ -250,8 +284,14 @@ Telegram cards: each evaluated group emits exactly one consolidated run summary,
 including an explicit zero-change heartbeat and every changed-point detail. Source
 and Outbox are committed
 atomically, retry is bounded, and expired messages are not delivered late.
-`trading-partner-monitor-notifications` provides
-secret-safe `status`, `test`, and `flush` operations without adding an MCP tool.
+`trading-partner-notifications` provides secret-safe `status`, `test`, `flush`,
+and explicitly authorized `enqueue` operations without adding an MCP tool.
+`trading-partner-monitor-notifications` remains an alias. `enqueue` reads a
+plain-text body from stdin and requires `--title`, `--idempotency-key`,
+`--confirmed-by user|external_agent`, and a bounded `--authorization-note`;
+the JSON receipt never echoes the body or authorization note. Internal
+deterministic producers use the closed `SYSTEM` source; explicitly authorized
+`MANUAL` writes retain their caller authorization and have no order effect.
 Messages reuse the same run observations to include current price/time/source once,
 then every rule's state, condition, and bounded human meaning. Repeated values and
 distances remain available in the durable Run instead of being repeated on a phone
@@ -287,6 +327,12 @@ spot/LBMA. It does not generate or upload an image.
   `NOT_EVALUATED`/`INCOMPLETE`.
 - `monitor_manage` operations `create` and `update` can bind one exact confirmed Trade Plan version and
   compile its `MONITORABLE` conditions. `MANUAL` conditions remain human review items.
+- Trade Plan `instrument_id` is the execution/position instrument consumed by
+  Position Sizing and portfolio risk. Each monitorable condition may name a
+  different fact/reference instrument, and a bound Monitor may display that
+  reference instrument. This supports relationships such as UCO execution with
+  `cfd:OTC:LIGHT_CMD_USD` observation without treating their prices, returns,
+  multipliers, or currencies as interchangeable.
 - Monitoring v2 fact comparisons cover price, volume, technical, fundamental, company
   event, macro, sentiment, Thesis state, and portfolio risk with typed unavailability.
 
@@ -305,7 +351,11 @@ one-minute `includePrePost` bar with an explicit recovery/extended-hours warning
 pre/post-market recovery establishes only the latest price/time, so
 open/high/low/volume stay null with `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`;
 historical `as_of` remains cutoff-safe and Yahoo is not presented as complete
-overnight equity coverage. Phase 1G combines current
+overnight equity coverage. If current pre-market has no same-day minute
+observation, a prior-day post-market value may remain latest-known only with
+`INTRADAY_QUOTE_UNAVAILABLE`; classify it by its own timestamp and derive
+`previous_close` from that day's completed regular session rather than moving the
+baseline back another day. Phase 1G combines current
 Yahoo/Alpha facts with separately based SEC reported facts and preserves filing
 visibility cutoffs. Phase 1H adds dated news,
 vintage-safe FRED observations, source-separated social sentiment, and
@@ -347,7 +397,7 @@ Schwab Realized Gain/Loss CSV and compare one redacted statement account/month w
 the durable FIFO ledger. It writes only an immutable redacted draft, never contacts
 Schwab, adds no MCP tool, and never constitutes A1 sign-off; account and symbol-level
 residuals still require explicit human review.
-Phase 1J restores one current durable research file (`InvestmentCase`)
+Phase 1J restores one current durable Research Subject
 context with contrary-first
 evidence, explicit budget truncation, and optional latest portfolio positions.
 Phase 1K bypasses ordinary discussion but persists material strict reviews with a
@@ -360,8 +410,8 @@ instrument-only `research_workflow_run(request={"operation":"deep_dive",...})` r
 non-archived Draft instrument
 research file by default. Creating a new Draft requires explicit confirmer and
 idempotency key; `create_case=false` preserves ad-hoc mode.
-Draft case creation is a research-folder write, not long-term tracking, Thesis confirmation,
-or trading authority. Catalyst Review does not auto-create a Case.
+Draft Research Subject creation is a research-folder write, not long-term tracking, Thesis confirmation,
+or trading authority. Catalyst Review does not auto-create a Research Subject.
 For A-share Deep Dive, `industry_cycle="hog"` explicitly adds the compact national
 hog-cycle package and, for equities, the company operating-metrics package. The
 workflow never infers an industry cycle from an instrument or company name.
@@ -371,8 +421,8 @@ The database persists complete group/membership lifecycle history and mutation
 receipts. Reads are durable-first by default, may refresh only when explicitly
 requested, and fall back to stale durable state with a
 typed warning. Adds/removes require an allowed confirmer and idempotency key;
-external deletion never deletes Phase 1 Research WatchlistItems or Investment
-Cases. Unsupported provider codes stay visible without fabricated instruments.
+external deletion never deletes Phase 1 Research WatchlistItems or Research Subjects.
+Unsupported provider codes stay visible without fabricated instruments.
 For Moomoo durable item reads, omitted `group_name` selects the system `All` group
 when present and returns explicit total/continuation metadata. Public Watchlist sync
 always refreshes all groups and memberships.

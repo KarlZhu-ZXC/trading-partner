@@ -29,7 +29,7 @@ async def _run(cadence: MonitorCadence) -> int:
             MonitorEvaluateInput(cadence=cadence)
         )
         notification_delivery = (
-            await container.operations.monitor_notifications.flush_pending()
+            await container.operations.notifications.flush_pending()
         )
         print(
             json.dumps(

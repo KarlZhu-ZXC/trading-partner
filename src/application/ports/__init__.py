@@ -14,7 +14,6 @@ from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
 from application.ports.invalidation_condition_repository import (
     InvalidationConditionRepository,
 )
-from application.ports.investment_case_repository import InvestmentCaseRepository
 from application.ports.monitor_repository import MonitorRepository
 from application.ports.open_question_repository import OpenQuestionRepository
 from application.ports.provider_cache import ProviderCacheStore
@@ -24,6 +23,7 @@ from application.ports.provider_rate_limit_store import ProviderRateLimitStore
 from application.ports.provider_router_engine import ProviderRouterEnginePort
 from application.ports.provider_router_settings import ProviderRouterSettings
 from application.ports.reddit_state_store import RedditStateStore
+from application.ports.research_subject_repository import ResearchSubjectRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
@@ -58,7 +58,7 @@ __all__ = [
     "WatchlistMembershipRepository",
     "WatchlistMutationRepository",
     "InvalidationConditionRepository",
-    "InvestmentCaseRepository",
+    "ResearchSubjectRepository",
     "MonitorRepository",
     "OpenQuestionRepository",
     "ProviderCacheCodec",

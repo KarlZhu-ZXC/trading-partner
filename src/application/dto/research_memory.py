@@ -34,13 +34,13 @@ from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     EvidenceAssessment,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    SubjectEvidenceLink,
 )
 
 # Strict uuid7 token: lowercase hex, version nibble 7, RFC4122 variant.
@@ -145,9 +145,7 @@ def _require_optional_finite_decimal(value: object, *, field: str) -> Decimal | 
     return _require_finite_decimal(value, field=field)
 
 
-def _require_optional_unit_interval_decimal(
-    value: object, *, field: str
-) -> Decimal | None:
+def _require_optional_unit_interval_decimal(value: object, *, field: str) -> Decimal | None:
     if value is None:
         return None
     dec = _require_finite_decimal(value, field=field)
@@ -181,9 +179,7 @@ def _require_schema_version(value: object) -> int:
     """Exact int equal to RESEARCH_SCHEMA_VERSION; reject bool and other int-like."""
     # bool is a subclass of int; type(value) is int rejects True/False.
     if type(value) is not int:
-        raise ValueError(
-            "schema_version must be an exact int equal to RESEARCH_SCHEMA_VERSION"
-        )
+        raise ValueError("schema_version must be an exact int equal to RESEARCH_SCHEMA_VERSION")
     if value != RESEARCH_SCHEMA_VERSION:
         raise ValueError("schema_version must equal RESEARCH_SCHEMA_VERSION")
     return value
@@ -208,9 +204,7 @@ def _validate_page_invariants(
     # Non-empty pages must not claim more items than the remaining total.
     # Empty pages may have offset past total (end-of-results / over-seek).
     if items_len > 0 and offset + items_len > total:
-        raise ValueError(
-            "offset + len(items) must be <= total when items is non-empty"
-        )
+        raise ValueError("offset + len(items) must be <= total when items is non-empty")
     expected_has_more = offset + items_len < total
     if has_more is not expected_has_more:
         raise ValueError("has_more must equal (offset + len(items) < total)")
@@ -318,9 +312,9 @@ class EvidenceDTO(_BaseResearchMemoryDTO):
         )
 
 
-class CaseEvidenceLinkDTO(_BaseResearchMemoryDTO):
+class SubjectEvidenceLinkDTO(_BaseResearchMemoryDTO):
     link_id: str
-    case_id: str
+    subject_id: str
     evidence_id: str
     linked_at: datetime
     linked_by: str
@@ -331,10 +325,10 @@ class CaseEvidenceLinkDTO(_BaseResearchMemoryDTO):
     def _link_id(cls, value: str) -> str:
         return _require_entity_id(value, field="link_id", prefix=EntityIdPrefix.REV)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("evidence_id")
     @classmethod
@@ -352,10 +346,10 @@ class CaseEvidenceLinkDTO(_BaseResearchMemoryDTO):
         return _require_schema_version(value)
 
     @classmethod
-    def from_domain(cls, link: CaseEvidenceLink) -> CaseEvidenceLinkDTO:
+    def from_domain(cls, link: SubjectEvidenceLink) -> SubjectEvidenceLinkDTO:
         return cls(
             link_id=link.link_id,
-            case_id=link.case_id,
+            subject_id=link.subject_id,
             evidence_id=link.evidence_id,
             linked_at=link.linked_at,
             linked_by=link.linked_by,
@@ -366,7 +360,7 @@ class CaseEvidenceLinkDTO(_BaseResearchMemoryDTO):
 class EvidenceAssessmentDTO(_BaseResearchMemoryDTO):
     assessment_id: str
     evidence_id: str
-    case_id: str
+    subject_id: str
     thesis_id: str | None
     thesis_revision_id: str | None
     stance: EvidenceStance
@@ -387,17 +381,15 @@ class EvidenceAssessmentDTO(_BaseResearchMemoryDTO):
     def _evidence_id(cls, value: str) -> str:
         return _require_entity_id(value, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("thesis_id")
     @classmethod
     def _thesis_id(cls, value: str | None) -> str | None:
-        return _require_optional_entity_id(
-            value, field="thesis_id", prefix=EntityIdPrefix.THESIS
-        )
+        return _require_optional_entity_id(value, field="thesis_id", prefix=EntityIdPrefix.THESIS)
 
     @field_validator("thesis_revision_id")
     @classmethod
@@ -426,7 +418,7 @@ class EvidenceAssessmentDTO(_BaseResearchMemoryDTO):
         return cls(
             assessment_id=assessment.assessment_id,
             evidence_id=assessment.evidence_id,
-            case_id=assessment.case_id,
+            subject_id=assessment.subject_id,
             thesis_id=assessment.thesis_id,
             thesis_revision_id=assessment.thesis_revision_id,
             stance=assessment.stance,
@@ -441,7 +433,7 @@ class EvidenceAssessmentDTO(_BaseResearchMemoryDTO):
 
 class ResearchReportDTO(_BaseResearchMemoryDTO):
     report_id: str
-    case_id: str
+    subject_id: str
     report_type: ResearchReportType
     title: str
     summary: str
@@ -463,10 +455,10 @@ class ResearchReportDTO(_BaseResearchMemoryDTO):
     def _report_id(cls, value: str) -> str:
         return _require_entity_id(value, field="report_id", prefix=EntityIdPrefix.REPORT)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("research_run_id")
     @classmethod
@@ -490,9 +482,7 @@ class ResearchReportDTO(_BaseResearchMemoryDTO):
     @field_validator("evidence_ids")
     @classmethod
     def _evidence_ids(cls, value: object) -> tuple[str, ...]:
-        return _require_unique_id_tuple(
-            value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
+        return _require_unique_id_tuple(value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
 
     @field_validator("thesis_revision_ids")
     @classmethod
@@ -510,7 +500,7 @@ class ResearchReportDTO(_BaseResearchMemoryDTO):
     def from_domain(cls, report: ResearchReport) -> ResearchReportDTO:
         return cls(
             report_id=report.report_id,
-            case_id=report.case_id,
+            subject_id=report.subject_id,
             report_type=report.report_type,
             title=report.title,
             summary=report.summary,
@@ -531,7 +521,7 @@ class ResearchReportDTO(_BaseResearchMemoryDTO):
 
 class ResearchEventDTO(_BaseResearchMemoryDTO):
     event_id: str
-    case_id: str
+    subject_id: str
     event_type: ResearchEventType
     title: str
     summary: str
@@ -551,10 +541,10 @@ class ResearchEventDTO(_BaseResearchMemoryDTO):
     def _event_id(cls, value: str) -> str:
         return _require_entity_id(value, field="event_id", prefix=EntityIdPrefix.EVENT)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("occurred_at", "recorded_at")
     @classmethod
@@ -574,16 +564,12 @@ class ResearchEventDTO(_BaseResearchMemoryDTO):
     @field_validator("evidence_ids")
     @classmethod
     def _evidence_ids(cls, value: object) -> tuple[str, ...]:
-        return _require_unique_id_tuple(
-            value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
+        return _require_unique_id_tuple(value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
 
     @field_validator("report_ids")
     @classmethod
     def _report_ids(cls, value: object) -> tuple[str, ...]:
-        return _require_unique_id_tuple(
-            value, field="report_ids", prefix=EntityIdPrefix.REPORT
-        )
+        return _require_unique_id_tuple(value, field="report_ids", prefix=EntityIdPrefix.REPORT)
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -594,7 +580,7 @@ class ResearchEventDTO(_BaseResearchMemoryDTO):
     def from_domain(cls, event: ResearchEvent) -> ResearchEventDTO:
         return cls(
             event_id=event.event_id,
-            case_id=event.case_id,
+            subject_id=event.subject_id,
             event_type=event.event_type,
             title=event.title,
             summary=event.summary,
@@ -613,7 +599,7 @@ class ResearchEventDTO(_BaseResearchMemoryDTO):
 
 class DecisionRecordDTO(_BaseResearchMemoryDTO):
     decision_id: str
-    case_id: str
+    subject_id: str
     decision_type: DecisionType
     title: str
     rationale: str
@@ -633,14 +619,12 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     @field_validator("decision_id")
     @classmethod
     def _decision_id(cls, value: str) -> str:
-        return _require_entity_id(
-            value, field="decision_id", prefix=EntityIdPrefix.DECISION
-        )
+        return _require_entity_id(value, field="decision_id", prefix=EntityIdPrefix.DECISION)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("decided_at", "recorded_at")
     @classmethod
@@ -666,16 +650,12 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     @field_validator("evidence_ids")
     @classmethod
     def _evidence_ids(cls, value: object) -> tuple[str, ...]:
-        return _require_unique_id_tuple(
-            value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
+        return _require_unique_id_tuple(value, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
 
     @field_validator("report_ids")
     @classmethod
     def _report_ids(cls, value: object) -> tuple[str, ...]:
-        return _require_unique_id_tuple(
-            value, field="report_ids", prefix=EntityIdPrefix.REPORT
-        )
+        return _require_unique_id_tuple(value, field="report_ids", prefix=EntityIdPrefix.REPORT)
 
     @field_validator("supersedes_decision_id")
     @classmethod
@@ -700,7 +680,7 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     def from_domain(cls, decision: DecisionRecord) -> DecisionRecordDTO:
         return cls(
             decision_id=decision.decision_id,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             decision_type=decision.decision_type,
             title=decision.title,
             rationale=decision.rationale,
@@ -721,7 +701,7 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
 
 class JournalEntryDTO(_BaseResearchMemoryDTO):
     journal_id: str
-    case_id: str | None
+    subject_id: str | None
     entry_type: JournalEntryType
     title: str
     body_markdown: str
@@ -738,16 +718,12 @@ class JournalEntryDTO(_BaseResearchMemoryDTO):
     @field_validator("journal_id")
     @classmethod
     def _journal_id(cls, value: str) -> str:
-        return _require_entity_id(
-            value, field="journal_id", prefix=EntityIdPrefix.JOURNAL
-        )
+        return _require_entity_id(value, field="journal_id", prefix=EntityIdPrefix.JOURNAL)
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str | None) -> str | None:
-        return _require_optional_entity_id(
-            value, field="case_id", prefix=EntityIdPrefix.CASE
-        )
+    def _subject_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("created_at")
     @classmethod
@@ -775,7 +751,7 @@ class JournalEntryDTO(_BaseResearchMemoryDTO):
     def from_domain(cls, entry: JournalEntry) -> JournalEntryDTO:
         return cls(
             journal_id=entry.journal_id,
-            case_id=entry.case_id,
+            subject_id=entry.subject_id,
             entry_type=entry.entry_type,
             title=entry.title,
             body_markdown=entry.body_markdown,
@@ -798,7 +774,7 @@ class JournalEntryDTO(_BaseResearchMemoryDTO):
 
 class ResearchSearchQuery(_BaseResearchMemoryDTO):
     text: str | None = None
-    case_id: str | None = None
+    subject_id: str | None = None
     thesis_id: str | None = None
     instrument_id: str | None = None
     entity_types: tuple[ResearchSearchEntityType, ...] = ()
@@ -824,19 +800,15 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
             return None
         return value
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str | None) -> str | None:
-        return _require_optional_entity_id(
-            value, field="case_id", prefix=EntityIdPrefix.CASE
-        )
+    def _subject_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("thesis_id")
     @classmethod
     def _thesis_id(cls, value: str | None) -> str | None:
-        return _require_optional_entity_id(
-            value, field="thesis_id", prefix=EntityIdPrefix.THESIS
-        )
+        return _require_optional_entity_id(value, field="thesis_id", prefix=EntityIdPrefix.THESIS)
 
     @field_validator("instrument_id")
     @classmethod
@@ -847,9 +819,7 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
             raise ValueError("instrument_id must be a non-empty string")
         return value
 
-    @field_validator(
-        "entity_types", "evidence_types", "journal_entry_types", "stances"
-    )
+    @field_validator("entity_types", "evidence_types", "journal_entry_types", "stances")
     @classmethod
     def _unique_enum_filters(cls, value: object) -> tuple[object, ...]:
         return _require_unique_enum_tuple(value, field="filter")
@@ -869,7 +839,7 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
         has_filter = any(
             (
                 self.text is not None,
-                self.case_id is not None,
+                self.subject_id is not None,
                 self.thesis_id is not None,
                 self.instrument_id is not None,
                 len(self.entity_types) > 0,
@@ -885,7 +855,7 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
         if not has_filter:
             raise ValueError(
                 "ResearchSearchQuery requires at least one effective filter "
-                "(text/case_id/thesis_id/instrument_id/entity_types/evidence_types/"
+                "(text/subject_id/thesis_id/instrument_id/entity_types/evidence_types/"
                 "journal_entry_types/stances/topic_tags/visible_from/visible_to/as_of)"
             )
         if (
@@ -895,8 +865,8 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
         ):
             raise ValueError("visible_to must be >= visible_from")
         if self.stances:
-            if self.case_id is None and self.thesis_id is None:
-                raise ValueError("stances filter requires case_id or thesis_id")
+            if self.subject_id is None and self.thesis_id is None:
+                raise ValueError("stances filter requires subject_id or thesis_id")
             if self.entity_types and any(
                 _wire_enum_value(t) != ResearchSearchEntityType.EVIDENCE.value
                 for t in self.entity_types
@@ -904,33 +874,30 @@ class ResearchSearchQuery(_BaseResearchMemoryDTO):
                 raise ValueError(
                     "stances filter requires entity_types to be empty or only EVIDENCE"
                 )
-        if self.journal_entry_types and self.entity_types and any(
-            _wire_enum_value(t) != ResearchSearchEntityType.JOURNAL.value
-            for t in self.entity_types
+        if (
+            self.journal_entry_types
+            and self.entity_types
+            and any(
+                _wire_enum_value(t) != ResearchSearchEntityType.JOURNAL.value
+                for t in self.entity_types
+            )
         ):
             raise ValueError(
-                "journal_entry_types filter requires entity_types to be empty "
-                "or only JOURNAL"
+                "journal_entry_types filter requires entity_types to be empty or only JOURNAL"
             )
         if self.journal_entry_types and self.evidence_types:
-            raise ValueError(
-                "journal_entry_types must not be combined with evidence_types"
-            )
+            raise ValueError("journal_entry_types must not be combined with evidence_types")
         if self.journal_entry_types and self.stances:
-            raise ValueError(
-                "journal_entry_types must not be combined with stances"
-            )
+            raise ValueError("journal_entry_types must not be combined with stances")
         if self.journal_entry_types and self.thesis_id is not None:
-            raise ValueError(
-                "journal_entry_types must not be combined with thesis_id"
-            )
+            raise ValueError("journal_entry_types must not be combined with thesis_id")
         return self
 
 
 class ResearchSearchHitDTO(_BaseResearchMemoryDTO):
     entity_type: ResearchSearchEntityType
     entity_id: str
-    case_id: str | None
+    subject_id: str | None
     title: str
     snippet: str
     visible_at: datetime
@@ -942,12 +909,10 @@ class ResearchSearchHitDTO(_BaseResearchMemoryDTO):
     score: Decimal | None
     source_name: str | None
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str | None) -> str | None:
-        return _require_optional_entity_id(
-            value, field="case_id", prefix=EntityIdPrefix.CASE
-        )
+    def _subject_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("visible_at")
     @classmethod
@@ -992,8 +957,7 @@ class ResearchSearchHitDTO(_BaseResearchMemoryDTO):
             self.matched_stances or self.matched_assessment_ids
         ):
             raise ValueError(
-                "non-Evidence hits must have empty matched_stances "
-                "and matched_assessment_ids"
+                "non-Evidence hits must have empty matched_stances and matched_assessment_ids"
             )
         return self
 
@@ -1044,7 +1008,7 @@ class JournalSearchPageDTO(_BaseResearchMemoryDTO):
 class ResearchTimelineItemDTO(_BaseResearchMemoryDTO):
     entity_type: ResearchTimelineEntityType
     entity_id: str
-    case_id: str
+    subject_id: str
     title: str
     summary: str
     occurred_at: datetime
@@ -1052,10 +1016,10 @@ class ResearchTimelineItemDTO(_BaseResearchMemoryDTO):
     instrument_ids: tuple[str, ...]
     source_name: str | None
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("occurred_at", "visible_at")
     @classmethod
@@ -1078,15 +1042,15 @@ class ResearchTimelineItemDTO(_BaseResearchMemoryDTO):
 
 
 class ResearchTimelineDTO(_BaseResearchMemoryDTO):
-    case_id: str
+    subject_id: str
     as_of: datetime
     items: tuple[ResearchTimelineItemDTO, ...]
     total: int
 
-    @field_validator("case_id")
+    @field_validator("subject_id")
     @classmethod
-    def _case_id(cls, value: str) -> str:
-        return _require_entity_id(value, field="case_id", prefix=EntityIdPrefix.CASE)
+    def _subject_id(cls, value: str) -> str:
+        return _require_entity_id(value, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
 
     @field_validator("as_of")
     @classmethod

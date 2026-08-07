@@ -10,7 +10,6 @@ import pytest
 from pydantic import ValidationError
 
 from application.dto.research_memory import (
-    CaseEvidenceLinkDTO,
     DecisionRecordDTO,
     EvidenceAssessmentDTO,
     EvidenceDTO,
@@ -23,6 +22,7 @@ from application.dto.research_memory import (
     ResearchSearchQuery,
     ResearchTimelineDTO,
     ResearchTimelineItemDTO,
+    SubjectEvidenceLinkDTO,
 )
 from domain.common.enums import (
     ConfirmationMode,
@@ -40,13 +40,13 @@ from domain.common.enums import (
 )
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     EvidenceAssessment,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    SubjectEvidenceLink,
     compute_evidence_content_sha256,
     compute_report_content_sha256,
 )
@@ -141,7 +141,7 @@ def _evidence(**overrides: Any) -> Evidence:
 
 def _report_hash(**overrides: Any) -> str:
     base: dict[str, Any] = {
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -157,7 +157,7 @@ def _report_hash(**overrides: Any) -> str:
 def _report(**overrides: Any) -> ResearchReport:
     base: dict[str, Any] = {
         "report_id": REPORT_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -177,7 +177,7 @@ def _report(**overrides: Any) -> ResearchReport:
     base.update(overrides)
     if "content_sha256" not in overrides or base["content_sha256"] == "":
         base["content_sha256"] = _report_hash(
-            case_id=base["case_id"],
+            subject_id=base["subject_id"],
             report_type=base["report_type"],
             title=base["title"],
             summary=base["summary"],
@@ -193,7 +193,7 @@ def _assessment(**overrides: Any) -> EvidenceAssessment:
     base: dict[str, Any] = {
         "assessment_id": REV_ID,
         "evidence_id": EVIDENCE_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "thesis_id": THESIS_ID,
         "thesis_revision_id": REV_ID_2,
         "stance": EvidenceStance.SUPPORTS,
@@ -208,23 +208,23 @@ def _assessment(**overrides: Any) -> EvidenceAssessment:
     return EvidenceAssessment(**base)
 
 
-def _link(**overrides: Any) -> CaseEvidenceLink:
+def _link(**overrides: Any) -> SubjectEvidenceLink:
     base: dict[str, Any] = {
         "link_id": REV_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "evidence_id": EVIDENCE_ID,
         "linked_at": NOW,
         "linked_by": "user",
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return CaseEvidenceLink(**base)
+    return SubjectEvidenceLink(**base)
 
 
 def _event(**overrides: Any) -> ResearchEvent:
     base: dict[str, Any] = {
         "event_id": EVENT_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "event_type": ResearchEventType.EARNINGS,
         "title": "Q2 earnings",
         "summary": "Beat consensus",
@@ -246,7 +246,7 @@ def _event(**overrides: Any) -> ResearchEvent:
 def _decision(**overrides: Any) -> DecisionRecord:
     base: dict[str, Any] = {
         "decision_id": DECISION_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "decision_type": DecisionType.WATCH,
         "title": "Keep watching",
         "rationale": "Need more evidence",
@@ -269,7 +269,7 @@ def _decision(**overrides: Any) -> DecisionRecord:
 def _journal(**overrides: Any) -> JournalEntry:
     base: dict[str, Any] = {
         "journal_id": JOURNAL_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "entry_type": JournalEntryType.NOTE,
         "title": "Personal note",
         "body_markdown": "Watching margin trends",
@@ -291,7 +291,7 @@ def _evidence_hit(**overrides: Any) -> ResearchSearchHitDTO:
     base: dict[str, Any] = {
         "entity_type": ResearchSearchEntityType.EVIDENCE,
         "entity_id": EVIDENCE_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "title": "Moutai quote",
         "snippet": "Close snapshot",
         "visible_at": NOW,
@@ -311,7 +311,7 @@ def _timeline_item(**overrides: Any) -> ResearchTimelineItemDTO:
     base: dict[str, Any] = {
         "entity_type": ResearchTimelineEntityType.EVIDENCE,
         "entity_id": EVIDENCE_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "title": "Moutai quote",
         "summary": "Close snapshot",
         "occurred_at": NOW,
@@ -387,13 +387,13 @@ def test_evidence_dto_prefix_duplicate_and_aware_time_rules() -> None:
         _rebuild(dto, instrument_ids=(A_SHARE_INSTRUMENT, A_SHARE_INSTRUMENT))
 
 
-# --- CaseEvidenceLinkDTO ---
+# --- SubjectEvidenceLinkDTO ---
 
 
 def test_case_evidence_link_dto_happy_and_from_domain() -> None:
-    dto = CaseEvidenceLinkDTO.from_domain(_link())
+    dto = SubjectEvidenceLinkDTO.from_domain(_link())
     assert dto.link_id == REV_ID
-    assert dto.case_id == CASE_ID
+    assert dto.subject_id == CASE_ID
     assert dto.model_dump(mode="json")["linked_at"].startswith("2026-07-16")
 
 
@@ -463,14 +463,14 @@ def test_journal_entry_dto_happy_and_from_domain() -> None:
     assert dto.model_dump(mode="json")["entry_type"] == "note"
 
 
-def test_journal_entry_dto_optional_case_id() -> None:
-    dto = JournalEntryDTO.from_domain(_journal(case_id=None))
-    assert dto.case_id is None
+def test_journal_entry_dto_optional_subject_id() -> None:
+    dto = JournalEntryDTO.from_domain(_journal(subject_id=None))
+    assert dto.subject_id is None
 
 
 def test_all_seven_entity_dtos_reject_prefixes_time_duplicate_and_schema_version() -> None:
     evidence = EvidenceDTO.from_domain(_evidence())
-    link = CaseEvidenceLinkDTO.from_domain(_link())
+    link = SubjectEvidenceLinkDTO.from_domain(_link())
     assessment = EvidenceAssessmentDTO.from_domain(_assessment())
     report = ResearchReportDTO.from_domain(_report())
     event = ResearchEventDTO.from_domain(_event())
@@ -569,8 +569,8 @@ def test_search_query_happy_paths() -> None:
     assert q.limit == 10
     assert q.entity_types == ()
 
-    by_case = ResearchSearchQuery(case_id=CASE_ID)
-    assert by_case.case_id == CASE_ID
+    by_case = ResearchSearchQuery(subject_id=CASE_ID)
+    assert by_case.subject_id == CASE_ID
 
     by_instrument = ResearchSearchQuery(instrument_id=A_SHARE_INSTRUMENT)
     assert by_instrument.instrument_id == A_SHARE_INSTRUMENT
@@ -584,9 +584,9 @@ def test_search_query_blank_text_normalizes_to_none_and_needs_other_filter() -> 
         ResearchSearchQuery(text="   ")
     with pytest.raises(ValidationError, match="at least one"):
         ResearchSearchQuery(text="")
-    q = ResearchSearchQuery(text="  ", case_id=CASE_ID)
+    q = ResearchSearchQuery(text="  ", subject_id=CASE_ID)
     assert q.text is None
-    q2 = ResearchSearchQuery(text="keep spaces  ", case_id=CASE_ID)
+    q2 = ResearchSearchQuery(text="keep spaces  ", subject_id=CASE_ID)
     assert q2.text == "keep spaces  "
 
 
@@ -600,7 +600,7 @@ def test_search_query_thesis_only_leaves_entity_types_empty() -> None:
 def test_search_query_stances_require_case_or_thesis() -> None:
     with pytest.raises(ValidationError, match="stances"):
         ResearchSearchQuery(stances=(EvidenceStance.CONTRADICTS,), text="x")
-    ok_case = ResearchSearchQuery(case_id=CASE_ID, stances=(EvidenceStance.CONTRADICTS,))
+    ok_case = ResearchSearchQuery(subject_id=CASE_ID, stances=(EvidenceStance.CONTRADICTS,))
     assert ok_case.stances == (EvidenceStance.CONTRADICTS.value,)
     ok_thesis = ResearchSearchQuery(thesis_id=THESIS_ID, stances=(EvidenceStance.SUPPORTS,))
     assert ok_thesis.stances == (EvidenceStance.SUPPORTS.value,)
@@ -609,13 +609,13 @@ def test_search_query_stances_require_case_or_thesis() -> None:
 def test_search_query_stances_reject_non_evidence_entity_types() -> None:
     with pytest.raises(ValidationError, match="entity_types"):
         ResearchSearchQuery(
-            case_id=CASE_ID,
+            subject_id=CASE_ID,
             stances=(EvidenceStance.SUPPORTS,),
             entity_types=(ResearchSearchEntityType.REPORT,),
         )
     with pytest.raises(ValidationError, match="entity_types"):
         ResearchSearchQuery(
-            case_id=CASE_ID,
+            subject_id=CASE_ID,
             stances=(EvidenceStance.SUPPORTS,),
             entity_types=(
                 ResearchSearchEntityType.EVIDENCE,
@@ -623,12 +623,12 @@ def test_search_query_stances_reject_non_evidence_entity_types() -> None:
             ),
         )
     ok = ResearchSearchQuery(
-        case_id=CASE_ID,
+        subject_id=CASE_ID,
         stances=(EvidenceStance.SUPPORTS,),
         entity_types=(ResearchSearchEntityType.EVIDENCE,),
     )
     assert ok.entity_types == (ResearchSearchEntityType.EVIDENCE.value,)
-    ok_empty = ResearchSearchQuery(case_id=CASE_ID, stances=(EvidenceStance.NEUTRAL,))
+    ok_empty = ResearchSearchQuery(subject_id=CASE_ID, stances=(EvidenceStance.NEUTRAL,))
     assert ok_empty.entity_types == ()
 
 
@@ -667,7 +667,7 @@ def test_search_query_journal_entry_types_reject_invalid_filter_combinations() -
         },
         {
             "journal_entry_types": (JournalEntryType.NOTE,),
-            "case_id": CASE_ID,
+            "subject_id": CASE_ID,
             "stances": (EvidenceStance.SUPPORTS,),
         },
         {
@@ -683,17 +683,17 @@ def test_search_query_journal_entry_types_reject_invalid_filter_combinations() -
 def test_search_query_rejects_duplicate_filter_tuples() -> None:
     with pytest.raises(ValidationError, match="duplicate"):
         ResearchSearchQuery(
-            case_id=CASE_ID,
+            subject_id=CASE_ID,
             entity_types=(
                 ResearchSearchEntityType.EVIDENCE,
                 ResearchSearchEntityType.EVIDENCE,
             ),
         )
     with pytest.raises(ValidationError, match="duplicate"):
-        ResearchSearchQuery(topic_tags=("a", "a"), case_id=CASE_ID)
+        ResearchSearchQuery(topic_tags=("a", "a"), subject_id=CASE_ID)
     with pytest.raises(ValidationError, match="duplicate"):
         ResearchSearchQuery(
-            case_id=CASE_ID,
+            subject_id=CASE_ID,
             stances=(EvidenceStance.SUPPORTS, EvidenceStance.SUPPORTS),
         )
     with pytest.raises(ValidationError, match="duplicate"):
@@ -715,19 +715,19 @@ def test_search_query_visible_range_and_aware_times() -> None:
 
 def test_search_query_limit_offset_and_id_prefixes() -> None:
     with pytest.raises(ValidationError):
-        ResearchSearchQuery(case_id=CASE_ID, limit=0)
+        ResearchSearchQuery(subject_id=CASE_ID, limit=0)
     with pytest.raises(ValidationError):
-        ResearchSearchQuery(case_id=CASE_ID, limit=101)
+        ResearchSearchQuery(subject_id=CASE_ID, limit=101)
     with pytest.raises(ValidationError):
-        ResearchSearchQuery(case_id=CASE_ID, offset=-1)
-    with pytest.raises(ValidationError, match="case_id"):
-        ResearchSearchQuery(case_id="bad_case")
+        ResearchSearchQuery(subject_id=CASE_ID, offset=-1)
+    with pytest.raises(ValidationError, match="subject_id"):
+        ResearchSearchQuery(subject_id="bad_case")
     with pytest.raises(ValidationError, match="thesis_id"):
         ResearchSearchQuery(thesis_id="thesis_not-uuid7")
 
 
 def test_search_query_extra_and_frozen() -> None:
-    q = ResearchSearchQuery(case_id=CASE_ID)
+    q = ResearchSearchQuery(subject_id=CASE_ID)
     with pytest.raises(ValidationError):
         ResearchSearchQuery.model_validate({**q.model_dump(), "extra": True})
     with pytest.raises(ValidationError):
@@ -736,7 +736,7 @@ def test_search_query_extra_and_frozen() -> None:
 
 def test_search_query_json_enum_wire_output() -> None:
     q = ResearchSearchQuery(
-        case_id=CASE_ID,
+        subject_id=CASE_ID,
         entity_types=(ResearchSearchEntityType.DECISION, ResearchSearchEntityType.EVENT),
         evidence_types=(EvidenceType.SEC_FILING,),
         journal_entry_types=(),
@@ -1020,7 +1020,7 @@ def test_timeline_dto_happy_order_and_rejects_misorder() -> None:
         instrument_ids=(),
         source_name=None,
     )
-    ok = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(a, b, c, d1, d2), total=5)
+    ok = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(a, b, c, d1, d2), total=5)
     assert ok.total == 5
     assert [i.entity_id for i in ok.items] == [
         EVIDENCE_ID,
@@ -1031,17 +1031,17 @@ def test_timeline_dto_happy_order_and_rejects_misorder() -> None:
     ]
 
     with pytest.raises(ValidationError, match="ordered"):
-        ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(b, a), total=2)
+        ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(b, a), total=2)
     with pytest.raises(ValidationError, match="ordered"):
-        ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(c, b), total=2)
+        ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(c, b), total=2)
     with pytest.raises(ValidationError, match="ordered"):
-        ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(d2, d1), total=2)
+        ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(d2, d1), total=2)
 
 
 def test_timeline_dto_rejects_naive_as_of_and_extra() -> None:
     with pytest.raises(ValidationError):
-        ResearchTimelineDTO(case_id=CASE_ID, as_of=NAIVE, items=(), total=0)
-    dto = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(), total=0)
+        ResearchTimelineDTO(subject_id=CASE_ID, as_of=NAIVE, items=(), total=0)
+    dto = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(), total=0)
     with pytest.raises(ValidationError):
         ResearchTimelineDTO.model_validate({**dto.model_dump(), "extra": 1})
     with pytest.raises(ValidationError):
@@ -1051,13 +1051,13 @@ def test_timeline_dto_rejects_naive_as_of_and_extra() -> None:
 def test_timeline_dto_total_must_be_gte_len_items() -> None:
     """§17.1 C1b item 12: ResearchTimelineDTO.total >= len(items)."""
     item = _timeline_item()
-    ok = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(item,), total=1)
+    ok = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(item,), total=1)
     assert ok.total == 1
-    ok_more = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(item,), total=5)
+    ok_more = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(item,), total=5)
     assert ok_more.total == 5
     with pytest.raises(ValidationError, match="total must be >= len\\(items\\)"):
-        ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(item,), total=0)
-    empty = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=(), total=0)
+        ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(item,), total=0)
+    empty = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=(), total=0)
     assert empty.total == 0
 
 
@@ -1074,7 +1074,7 @@ def test_timeline_preserves_caller_order_without_silent_sort() -> None:
             source_name=None,
         ),
     )
-    dto = ResearchTimelineDTO(case_id=CASE_ID, as_of=NOW, items=items, total=2)
+    dto = ResearchTimelineDTO(subject_id=CASE_ID, as_of=NOW, items=items, total=2)
     assert dto.items[0].entity_id == EVIDENCE_ID
     assert dto.items[1].entity_id == JOURNAL_ID
 

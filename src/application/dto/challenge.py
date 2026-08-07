@@ -23,7 +23,7 @@ class _DTO(BaseModel):
 
 
 class ChallengeReviewStartInput(_DTO):
-    case_id: str = Field(min_length=1, max_length=128)
+    subject_id: str = Field(min_length=1, max_length=128)
     trigger: ChallengeTrigger
     proposed_action: str = Field(min_length=1, max_length=4_000)
     related_candidate_id: str | None = Field(default=None, max_length=128)
@@ -78,7 +78,7 @@ class ChallengeFindingDTO(_DTO):
 
 class ChallengeReviewDTO(_DTO):
     review_id: str
-    case_id: str
+    subject_id: str
     mode: ConfirmationMode
     trigger: ChallengeTrigger
     proposed_action: str

@@ -55,7 +55,7 @@ class WatchlistService:
         display_name: str,
         thesis_hint: str,
         triggers: tuple[str, ...],
-        case_id: str | None,
+        subject_id: str | None,
         expires_at: datetime | None,
         created_by: str,
         proposed_by_rationale: str = "Propose watchlist item",
@@ -73,18 +73,18 @@ class WatchlistService:
                 display_name=display_name.strip(),
                 thesis_hint=thesis_hint.strip(),
                 triggers=triggers,
-                case_id=case_id,
+                subject_id=subject_id,
                 expires_at=expires_at,
             )
             with self._uow_factory() as uow:
-                if case_id is not None:
-                    uow.cases.get(case_id)
+                if subject_id is not None:
+                    uow.subjects.get(subject_id)
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.WATCHLIST_ITEM,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
@@ -100,7 +100,7 @@ class WatchlistService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": CandidateKind.WATCHLIST_ITEM.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "proposed_by": created_by,
                         },
                         request_id=request_id,
@@ -126,7 +126,7 @@ class WatchlistService:
         *,
         market: Market | None = None,
         status: WatchlistItemStatus | None = None,
-        case_id: str | None = None,
+        subject_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> ToolEnvelope[WatchlistListDTO]:
@@ -136,7 +136,7 @@ class WatchlistService:
                 items = uow.watchlist.list(
                     market=market,
                     status=status,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     limit=limit,
                     offset=offset,
                 )
@@ -178,7 +178,7 @@ class WatchlistService:
         *,
         new_status: WatchlistItemStatus,
         triggered_reason: str | None,
-        promoted_to_case_id: str | None,
+        promoted_to_subject_id: str | None,
         reviewed_by: str,
         proposed_by_rationale: str = "Propose watchlist status update",
         idempotency_key: str,
@@ -188,9 +188,9 @@ class WatchlistService:
         """Propose a watchlist status update candidate (PROPOSED only)."""
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            if new_status == WatchlistItemStatus.PROMOTED_TO_CASE and not promoted_to_case_id:
+            if new_status == WatchlistItemStatus.PROMOTED_TO_SUBJECT and not promoted_to_subject_id:
                 raise InputValidationError(
-                    "PROMOTED_TO_CASE requires promoted_to_case_id",
+                    "PROMOTED_TO_SUBJECT requires promoted_to_subject_id",
                     details={"item_id": item_id},
                 )
             if new_status == WatchlistItemStatus.TRIGGERED and (
@@ -205,7 +205,7 @@ class WatchlistService:
                 action="update_status",
                 item_id=item_id,
                 new_status=new_status,
-                promoted_to_case_id=promoted_to_case_id,
+                promoted_to_subject_id=promoted_to_subject_id,
                 triggered_reason=triggered_reason,
                 expires_at=expires_at,
             )
@@ -216,7 +216,7 @@ class WatchlistService:
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.WATCHLIST_ITEM,
-                    case_id=item.case_id,
+                    subject_id=item.subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,

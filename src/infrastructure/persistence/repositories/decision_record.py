@@ -17,12 +17,12 @@ from infrastructure.persistence.repositories._mapping import (
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
-    require_case_exists,
     require_evidence_ids_linked_and_visible,
     require_idempotency_storage,
     require_instruments_exist,
     require_report_ids_visible,
-    require_same_case_supersedes,
+    require_same_subject_supersedes,
+    require_subject_exists,
     require_thesis_revision_ids_visible,
     require_visible_not_after,
 )
@@ -31,7 +31,7 @@ from infrastructure.persistence.repositories._research_memory_validation import 
 def _to_domain(row: DecisionRecordRow) -> DecisionRecord:
     return DecisionRecord(
         decision_id=row.decision_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         decision_type=DecisionType(row.decision_type),
         title=row.title,
         rationale=row.rationale,
@@ -57,7 +57,7 @@ def _to_row(
 ) -> DecisionRecordRow:
     return DecisionRecordRow(
         decision_id=decision.decision_id,
-        case_id=decision.case_id,
+        subject_id=decision.subject_id,
         decision_type=decision.decision_type.value,
         title=decision.title,
         rationale=decision.rationale,
@@ -94,36 +94,32 @@ class SqlAlchemyDecisionRecordRepository:
             idempotency_key=idempotency_key,
             idempotency_payload_sha256=idempotency_payload_sha256,
         )
-        require_case_exists(self._session, decision.case_id)
+        require_subject_exists(self._session, decision.subject_id)
         if decision.primary_instrument_id is not None:
-            require_instruments_exist(
-                self._session, (decision.primary_instrument_id,)
-            )
+            require_instruments_exist(self._session, (decision.primary_instrument_id,))
         # position_context_snapshot_id: domain shape only (Phase 1I not landed)
         # Decision visible_at is recorded_at for both evidence observed_at and link.
         require_evidence_ids_linked_and_visible(
             self._session,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             evidence_ids=decision.evidence_ids,
             observed_at_not_after=decision.recorded_at,
             linked_at_not_after=decision.recorded_at,
         )
         require_report_ids_visible(
             self._session,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             report_ids=decision.report_ids,
             visible_at=decision.recorded_at,
         )
         require_thesis_revision_ids_visible(
             self._session,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             thesis_revision_ids=decision.thesis_revision_ids,
             visible_at=decision.recorded_at,
         )
         if decision.supersedes_decision_id is not None:
-            old = self._session.get(
-                DecisionRecordRow, decision.supersedes_decision_id
-            )
+            old = self._session.get(DecisionRecordRow, decision.supersedes_decision_id)
             if old is None:
                 raise InvalidResearchLink(
                     "superseded decision does not exist",
@@ -132,9 +128,9 @@ class SqlAlchemyDecisionRecordRepository:
                         "supersedes_decision_id": decision.supersedes_decision_id,
                     },
                 )
-            require_same_case_supersedes(
-                new_case_id=decision.case_id,
-                old_case_id=old.case_id,
+            require_same_subject_supersedes(
+                new_subject_id=decision.subject_id,
+                old_subject_id=old.subject_id,
                 entity_type="decision",
                 supersedes_id=decision.supersedes_decision_id,
             )
@@ -163,18 +159,16 @@ class SqlAlchemyDecisionRecordRepository:
         return _to_domain(row)
 
     def get_by_idempotency_key(self, idempotency_key: str) -> DecisionRecord | None:
-        stmt = select(DecisionRecordRow).where(
-            DecisionRecordRow.idempotency_key == idempotency_key
-        )
+        stmt = select(DecisionRecordRow).where(DecisionRecordRow.idempotency_key == idempotency_key)
         row = self._session.scalars(stmt).first()
         if row is None:
             return None
         return _to_domain(row)
 
-    def list_by_case(
-        self, case_id: str, *, as_of: datetime | None = None
+    def list_by_subject(
+        self, subject_id: str, *, as_of: datetime | None = None
     ) -> tuple[DecisionRecord, ...]:
-        stmt = select(DecisionRecordRow).where(DecisionRecordRow.case_id == case_id)
+        stmt = select(DecisionRecordRow).where(DecisionRecordRow.subject_id == subject_id)
         if as_of is not None:
             stmt = stmt.where(DecisionRecordRow.recorded_at <= dt_to_db(as_of))
         stmt = stmt.order_by(

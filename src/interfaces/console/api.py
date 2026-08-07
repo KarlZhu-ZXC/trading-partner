@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from application import __version__
+from application.dto.monitoring import MonitorArchiveInput
 from bootstrap import ApplicationContainer, build_default_application
 from interfaces.console.catalog import capability_catalog
 from interfaces.mcp.server import create_capability_registry
@@ -71,6 +72,11 @@ class ToolInvokeRequest(_RequestModel):
     tool_name: str = Field(min_length=1, max_length=100)
     arguments: dict[str, Any] = Field(default_factory=dict)
     confirmation: str | None = Field(default=None, max_length=100)
+
+
+class MonitorArchiveRequest(_RequestModel):
+    expected_version: int = Field(ge=1)
+    confirmation: Literal["monitor_archive"]
 
 
 ConsoleAction = Literal[
@@ -230,13 +236,13 @@ async def run_action(request: Request, payload: ConsoleActionRequest) -> dict[st
             else:
                 result = await container.operations.post_market_sync.catch_up_latest_due()
         elif action == "notification_test":
-            result = await container.operations.monitor_notifications.send_test()
+            result = await container.operations.notifications.send_test()
         elif action == "notification_flush":
             lock = container.resources.monitor_run_lock
             acquired = lock.acquire()
             if not acquired:
                 raise HTTPException(status_code=409, detail="Monitor operation is already active")
-            result = await container.operations.monitor_notifications.flush_pending()
+            result = await container.operations.notifications.flush_pending()
         elif action == "database_backup":
             result = container.operations.maintenance.backup()
         elif action in {"schwab_oauth_renew", "schwab_oauth_renew_confirmed"}:
@@ -269,22 +275,46 @@ async def monitors(
     event_limit: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, Any]:
     return {
-        "dashboard": await _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "dashboard", "status": None}},
+        "dashboard": _canonical_subject_transport(
+            await _invoke_capability(
+                request,
+                "monitor_read",
+                {"request": {"operation": "dashboard", "status": None}},
+            )
         ),
-        "runs": await _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "runs", "limit": run_limit}},
+        "runs": _canonical_subject_transport(
+            await _invoke_capability(
+                request,
+                "monitor_read",
+                {"request": {"operation": "runs", "limit": run_limit}},
+            )
         ),
-        "events": await _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "events", "limit": event_limit}},
+        "events": _canonical_subject_transport(
+            await _invoke_capability(
+                request,
+                "monitor_read",
+                {"request": {"operation": "events", "limit": event_limit}},
+            )
         ),
     }
+
+
+@app.post("/api/monitors/{monitor_id}/archive")
+def archive_monitor(
+    monitor_id: str,
+    payload: MonitorArchiveRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Soft-delete one Monitor through the shared application service."""
+    result = _container(request).services.monitoring.archive(
+        MonitorArchiveInput(
+            monitor_id=monitor_id,
+            expected_version=payload.expected_version,
+            confirmed_by="user",
+            idempotency_key=f"console-monitor-archive-{monitor_id}-{payload.expected_version}",
+        )
+    )
+    return result.model_dump(mode="json")
 
 
 @app.get("/api/accounts")
@@ -344,7 +374,6 @@ async def portfolio(
         "coverage": coverage_result,
         "risk_policy": risk_policy_result,
         "risk_check": risk_check_result,
-        "watchlist": await _watchlist_envelopes(request),
     }
 
 
@@ -430,10 +459,10 @@ async def watchlist(request: Request) -> dict[str, Any]:
 
 
 def _research_state_failure(request: Request, error: Exception) -> dict[str, Any]:
-    """Keep one Case visible when its state read fails.
+    """Keep one Research Subject visible when its state read fails.
 
     The research console is an audit/read surface.  A broken state read for one
-    Case must therefore be represented as a normal failed envelope rather than
+    Research Subject must therefore remain a normal failed envelope rather than
     aborting the whole aggregate.  The exception text is passed through the
     same secret redactor used by the other console endpoints.
     """
@@ -452,21 +481,39 @@ def _research_state_failure(request: Request, error: Exception) -> dict[str, Any
     }
 
 
+def _canonical_subject_transport(value: Any) -> Any:
+    """Translate compact MCP's frozen ``case_*`` fields for the internal Console BFF."""
+
+    if isinstance(value, dict):
+        aliases = {
+            "case_id": "subject_id",
+            "case_type": "subject_type",
+            "linked_case_ids": "linked_subject_ids",
+        }
+        return {
+            aliases.get(key, key): _canonical_subject_transport(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonical_subject_transport(item) for item in value]
+    return value
+
+
 @app.get("/api/research")
 async def research(request: Request) -> dict[str, Any]:
-    """Return every durable Case and its current Thesis state.
+    """Return every durable Research Subject and its current Thesis state.
 
     This endpoint deliberately routes through the same compact capability
     registry exposed to MCP.  It does not refresh providers, read repositories,
-    or create a second research API.  Case listing is paged at the public
-    maximum (200) and each state envelope is retained beside its Case so a
+    or create a second research API. Subject listing is paged at the public
+    maximum (200) and each state envelope is retained beside its subject so a
     partial read remains visible and auditable in the UI.
     """
 
     page_size = 200
     offset = 0
-    case_pages: list[dict[str, Any]] = []
-    cases: list[dict[str, Any]] = []
+    subject_pages: list[dict[str, Any]] = []
+    subjects: list[dict[str, Any]] = []
 
     while True:
         page = await _invoke_capability(
@@ -488,29 +535,29 @@ async def research(request: Request) -> dict[str, Any]:
                 "warnings": [],
                 "errors": [
                     {
-                        "code": "CONSOLE_RESEARCH_CASE_LIST_INVALID",
+                        "code": "CONSOLE_RESEARCH_SUBJECT_LIST_INVALID",
                         "message": "investment_case_read returned a non-object result",
                     }
                 ],
                 "degraded": True,
             }
-        case_pages.append(page)
+        subject_pages.append(_canonical_subject_transport(page))
 
         page_data = page.get("data")
         page_items = page_data.get("items") if isinstance(page_data, dict) else None
         if not isinstance(page_items, list):
             break
-        for case in page_items:
-            if not isinstance(case, dict):
+        for subject_wire in page_items:
+            if not isinstance(subject_wire, dict):
                 continue
-            case_id = case.get("case_id")
+            case_id = subject_wire.get("case_id")
             if not isinstance(case_id, str) or not case_id:
-                cases.append(
+                subjects.append(
                     {
-                        "case": case,
+                        "subject": _canonical_subject_transport(subject_wire),
                         "state": _research_state_failure(
                             request,
-                            ValueError("investment case is missing case_id"),
+                            ValueError("Research Subject is missing legacy case_id"),
                         ),
                     }
                 )
@@ -528,22 +575,27 @@ async def research(request: Request) -> dict[str, Any]:
                         }
                     },
                 )
-            except Exception as error:  # noqa: BLE001 - preserve other Cases
+            except Exception as error:  # noqa: BLE001 - preserve other subjects
                 state = _research_state_failure(request, error)
-            cases.append({"case": case, "state": state})
+            subjects.append(
+                {
+                    "subject": _canonical_subject_transport(subject_wire),
+                    "state": _canonical_subject_transport(state),
+                }
+            )
 
         if len(page_items) < page_size:
             break
         offset += page_size
 
-    # ``InvestmentCaseListDTO.total`` is the page count, not a global count.
+    # ``ResearchSubjectListDTO.total`` is the page count, not a global count.
     # The aggregate has already walked every page, so its durable count is the
-    # number of valid Case records retained below.
-    total = len(cases)
+    # number of valid Research Subject records retained below.
+    total = len(subjects)
     return {
-        "cases": cases,
-        "case_list": {
-            "pages": case_pages,
+        "subjects": subjects,
+        "subject_list": {
+            "pages": subject_pages,
             "total": total,
             "page_size": page_size,
         },
@@ -551,12 +603,59 @@ async def research(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/operations")
-def operations(request: Request) -> dict[str, Any]:
+async def operations(request: Request) -> dict[str, Any]:
     services = _container(request).operations
+    health = await _invoke_capability(request, "system_health", {})
+    monitor_dashboard = await _invoke_capability(
+        request,
+        "monitor_read",
+        {"request": {"operation": "dashboard", "status": None}},
+    )
     return {
         "post_market_sync": services.post_market_sync.status().model_dump(mode="json"),
-        "notifications": services.monitor_notifications.status().model_dump(mode="json"),
+        "notifications": services.notifications.status().model_dump(mode="json"),
         "maintenance": services.maintenance.status().model_dump(mode="json"),
+        "health": health,
+        "monitor_dashboard": _canonical_subject_transport(monitor_dashboard),
+        "sync_receipts": [
+            {
+                "run_id": item.run_id,
+                "market_session_date": item.market_session_date,
+                "scheduled_for": item.scheduled_for,
+                "started_at": item.started_at,
+                "completed_at": item.completed_at,
+                "status": item.status,
+                "portfolio_status": item.portfolio_status,
+                "watchlist_status": item.watchlist_status,
+                "account_snapshot_count": len(item.account_snapshot_ids),
+                "watchlist_groups_synced": item.watchlist_groups_synced,
+                "watchlist_membership_relations_synced": (
+                    item.watchlist_membership_relations_synced
+                ),
+                "warning_codes": item.warning_codes,
+                "error_codes": item.error_codes,
+                "attempt_count": item.attempt_count,
+            }
+            for item in services.post_market_sync.recent_runs(20)
+        ],
+        "outbox_entries": [
+            {
+                "notification_id": item.notification_id,
+                "source_type": item.source_type,
+                "source_id": item.source_id,
+                "channel": item.channel,
+                "title": item.title,
+                "status": item.status,
+                "attempt_count": item.attempt_count,
+                "next_attempt_at": item.next_attempt_at,
+                "created_at": item.created_at,
+                "last_attempt_at": item.last_attempt_at,
+                "delivered_at": item.delivered_at,
+                "last_error_code": item.last_error_code,
+                "expires_at": item.expires_at,
+            }
+            for item in services.notifications.recent_entries(50)
+        ],
     }
 
 
@@ -568,22 +667,67 @@ def schwab_oauth(request: Request) -> dict[str, Any]:
 @app.get("/api/overview")
 async def overview(request: Request) -> dict[str, Any]:
     container = _container(request)
+    research_attention: list[dict[str, Any]] = []
+    subject_page = await _invoke_capability(
+        request,
+        "investment_case_read",
+        {
+            "request": {
+                "operation": "query",
+                "include_archived": False,
+                "limit": 200,
+                "offset": 0,
+            }
+        },
+    )
+    subject_data = subject_page.get("data") if isinstance(subject_page, dict) else None
+    subject_items = subject_data.get("items") if isinstance(subject_data, dict) else None
+    for subject in subject_items if isinstance(subject_items, list) else []:
+        if not isinstance(subject, dict) or not isinstance(subject.get("case_id"), str):
+            continue
+        state = await _durable_console_call(
+            request,
+            "research_judgment_get",
+            {
+                "request": {
+                    "operation": "state",
+                    "case_id": subject["case_id"],
+                    "include_archived_theses": False,
+                    "include_watchlist": False,
+                }
+            },
+        )
+        state_data = state.get("data")
+        pending = state_data.get("pending_candidates") if isinstance(state_data, dict) else None
+        if isinstance(pending, list) and pending:
+            research_attention.append(
+                {
+                    "subject_id": subject["case_id"],
+                    "title": subject.get("title"),
+                    "pending_count": len(pending),
+                }
+            )
     return {
         "health": await _invoke_capability(request, "system_health", {}),
-        "monitor_dashboard": await _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "dashboard", "status": None}},
+        "monitor_dashboard": _canonical_subject_transport(
+            await _invoke_capability(
+                request,
+                "monitor_read",
+                {"request": {"operation": "dashboard", "status": None}},
+            )
         ),
-        "recent_runs": await _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "runs", "limit": 5}},
+        "recent_runs": _canonical_subject_transport(
+            await _invoke_capability(
+                request,
+                "monitor_read",
+                {"request": {"operation": "runs", "limit": 5}},
+            )
         ),
         "post_market_sync": container.operations.post_market_sync.status().model_dump(mode="json"),
-        "notifications": container.operations.monitor_notifications.status().model_dump(
+        "notifications": container.operations.notifications.status().model_dump(
             mode="json"
         ),
         "maintenance": container.operations.maintenance.status().model_dump(mode="json"),
         "capability_count": len(COMPACT_28_TOOL_NAMES),
+        "research_attention": _canonical_subject_transport(research_attention),
     }

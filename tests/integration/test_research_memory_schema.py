@@ -20,23 +20,25 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from infrastructure.persistence.orm import (
-    CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
     JournalEntryRow,
+    NotificationOutboxRow,
     ResearchEventRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    SubjectEvidenceLinkRow,
 )
 
 _BUSINESS_TABLES = {
     "research_evidence": ResearchEvidenceRow,
-    "case_evidence_links": CaseEvidenceLinkRow,
+    "case_evidence_links": SubjectEvidenceLinkRow,
     "evidence_assessments": EvidenceAssessmentRow,
     "research_reports": ResearchReportRow,
     "research_events": ResearchEventRow,
     "decision_records": DecisionRecordRow,
     "journal_entries": JournalEntryRow,
+    "notification_outbox": NotificationOutboxRow,
 }
 
 _SEARCH_TABLES = {
@@ -205,7 +207,7 @@ def test_no_search_orm_rows_exist() -> None:
     assert searchish == [], f"unexpected Search ORM rows: {searchish}"
     for required in (
         "ResearchEvidenceRow",
-        "CaseEvidenceLinkRow",
+        "SubjectEvidenceLinkRow",
         "EvidenceAssessmentRow",
         "ResearchReportRow",
         "ResearchEventRow",

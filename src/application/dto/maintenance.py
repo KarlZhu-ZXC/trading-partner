@@ -34,6 +34,9 @@ class MaintenanceStatusDTO(_DTO):
     backup_files: int = Field(ge=0)
     latest_backup_at: datetime | None
     retention_rules: tuple[RetentionRuleDTO, ...]
+    monitor_scheduler_plist_present: bool = False
+    monitor_scheduler_loaded: bool | None = None
+    monitor_scheduler_last_exit_code: int | None = None
 
 
 class DatabaseBackupReceiptDTO(_DTO):

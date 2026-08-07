@@ -4,19 +4,16 @@ from datetime import datetime
 from typing import Protocol
 
 from domain.monitoring.enums import (
-    MonitorNotificationChannel,
-    MonitorNotificationStatus,
     MonitorStatus,
 )
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
-    MonitorNotificationMessage,
-    MonitorNotificationOutboxEntry,
     MonitorRuleState,
     MonitorRun,
 )
+from domain.notifications.models import NotificationMessage
 
 
 class MonitorRepository(Protocol):
@@ -41,35 +38,8 @@ class MonitorRepository(Protocol):
         run: MonitorRun,
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
-        notifications: tuple[MonitorNotificationMessage, ...],
+        notifications: tuple[NotificationMessage, ...],
     ) -> MonitorRun: ...
-
-    def list_due_notifications(
-        self,
-        channel: MonitorNotificationChannel,
-        as_of: datetime,
-        limit: int,
-    ) -> tuple[MonitorNotificationOutboxEntry, ...]: ...
-
-    def record_notification_attempt(
-        self,
-        notification_id: str,
-        channel: MonitorNotificationChannel,
-        *,
-        status: MonitorNotificationStatus,
-        attempted_at: datetime,
-        next_attempt_at: datetime,
-        provider_message_id: str | None,
-        error_code: str | None,
-    ) -> MonitorNotificationOutboxEntry: ...
-
-    def notification_counts(
-        self, channel: MonitorNotificationChannel
-    ) -> dict[MonitorNotificationStatus, int]: ...
-
-    def last_notification_delivery_at(
-        self, channel: MonitorNotificationChannel
-    ) -> datetime | None: ...
 
     def get_run(self, run_id: str) -> MonitorRun | None: ...
 

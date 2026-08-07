@@ -23,7 +23,7 @@ from infrastructure.persistence.repositories._mapping import (
 def _to_domain(row: ThesisRow) -> Thesis:
     return Thesis(
         thesis_id=row.thesis_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         title=row.title,
         role=ThesisRole(row.role),
         status=ThesisStatus(row.status),
@@ -40,7 +40,7 @@ def _to_domain(row: ThesisRow) -> Thesis:
 def _to_row(thesis: Thesis) -> ThesisRow:
     return ThesisRow(
         thesis_id=thesis.thesis_id,
-        case_id=thesis.case_id,
+        subject_id=thesis.subject_id,
         title=thesis.title,
         role=thesis.role.value,
         status=thesis.status.value,
@@ -68,10 +68,10 @@ class SqlAlchemyThesisRepository:
             )
         return _to_domain(row)
 
-    def list_by_case(self, case_id: str) -> tuple[Thesis, ...]:
+    def list_by_subject(self, subject_id: str) -> tuple[Thesis, ...]:
         stmt = (
             select(ThesisRow)
-            .where(ThesisRow.case_id == case_id)
+            .where(ThesisRow.subject_id == subject_id)
             .order_by(ThesisRow.created_at.asc())
         )
         return tuple(_to_domain(row) for row in self._session.scalars(stmt).all())
@@ -95,13 +95,11 @@ class SqlAlchemyThesisRepository:
             )
         current = _to_domain(row)
         # Non-ARCHIVED must clear residual archived_at before domain validation.
-        effective_archived_at = (
-            archived_at if new_status is ThesisStatus.ARCHIVED else None
-        )
+        effective_archived_at = archived_at if new_status is ThesisStatus.ARCHIVED else None
         now = self._clock.now()
         next_domain = Thesis(
             thesis_id=current.thesis_id,
-            case_id=current.case_id,
+            subject_id=current.subject_id,
             title=current.title,
             role=current.role,
             status=new_status,

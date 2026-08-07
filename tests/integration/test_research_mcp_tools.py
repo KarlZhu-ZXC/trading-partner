@@ -174,7 +174,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
                 },
             )
         )
-        assert created["ok"] is True, created
+        assert created["ok"] is True, json.dumps(created, ensure_ascii=False)
         case_id = created["data"]["case_id"]
         assert case_id.startswith("case_")
         assert created["data"]["status"] == "draft"
@@ -226,6 +226,36 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         assert listed["ok"] is True
         assert listed["data"]["total"] >= 1
         assert any(item["case_id"] == case_id for item in listed["data"]["items"])
+
+        activate = _parse_envelope(
+            await api.call_tool(
+                "research_state_update",
+                {
+                    "case_id": case_id,
+                    "payload": {
+                        "kind": "case_status_change",
+                        "action": "update",
+                        "new_status": "active",
+                    },
+                    "confirmation_mode": "strict_review",
+                    "proposed_by": "codex",
+                    "proposed_by_rationale": "Activate the Research Subject before live judgment",
+                    "idempotency_key": "case-activate-1",
+                },
+            )
+        )
+        assert activate["ok"] is True, activate
+        activated = _parse_envelope(
+            await api.call_tool(
+                "thesis_revision_confirm",
+                {
+                    "candidate_id": activate["data"]["candidate_id"],
+                    "action": "confirm",
+                    "reviewed_by": "user",
+                },
+            )
+        )
+        assert activated["ok"] is True, activated
 
         # ---- thesis_revision propose + confirm ----
         proposed = _parse_envelope(
@@ -418,7 +448,7 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         )
         assert blocked_create["ok"] is False
         assert blocked_create["errors"]
-        assert "investment_case_create" in blocked_create["errors"][0]["message"]
+        assert "research_subject_create" in blocked_create["errors"][0]["message"]
 
         # ---- research_state_update: open_question + watchlist ----
         oq = _parse_envelope(
@@ -504,13 +534,13 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         )
         assert state["ok"] is True, state
         data = state["data"]
-        assert data["case"]["case_id"] == case_id
+        assert data["subject"]["case_id"] == case_id
         assert len(data["theses"]) >= 1
         assert len(data["latest_revisions"]) >= 1
         assert len(data["open_questions"]) >= 1
         assert len(data["watchlist_items"]) >= 1
 
-        # ---- archive ----
+        # ---- archive is blocked while a live Thesis remains ----
         archived = _parse_envelope(
             await api.call_tool(
                 "investment_case_archive",
@@ -522,9 +552,8 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
                 },
             )
         )
-        assert archived["ok"] is True, archived
-        assert archived["data"]["status"] == "archived"
-        assert archived["data"]["archived_reason"] is not None
+        assert archived["ok"] is False, archived
+        assert archived["errors"][0]["code"] == "RESEARCH_STATE_CONFLICT"
 
         # business error still ToolEnvelope (not JSON-RPC)
         missing = _parse_envelope(

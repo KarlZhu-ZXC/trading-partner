@@ -65,7 +65,12 @@ class _Context:
 
     def accinfo_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
         self.calls.append("funds")
-        assert kwargs == {"trd_env": "REAL", "acc_id": 998877, "refresh_cache": True}
+        assert kwargs == {
+            "trd_env": "REAL",
+            "acc_id": 998877,
+            "refresh_cache": True,
+            "currency": "USD",
+        }
         return 0, [{"currency": "USD", "cash": 100, "power": 200, "total_assets": 350}]
 
     def position_list_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
@@ -123,6 +128,7 @@ async def test_moomoo_adapter_calls_only_read_surface_and_redacts_account_id() -
     snapshot = result.value[0]
     assert context.calls == ["accounts", "funds", "positions", "orders", "close"]
     assert snapshot.positions[0].instrument_id == "equity:US:NVDA"
+    assert snapshot.base_currency == "USD"
     assert snapshot.positions[0].market_price is None
     assert "998877" not in repr(result)
     assert [operation for operation, _scope in limiter.calls] == [

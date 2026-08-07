@@ -278,6 +278,8 @@ def test_dto_round_trip_scaffolding() -> None:
     )
     spot_dto = SpotObservationDTO.from_domain(spot)
     assert spot_dto.venue_basis is SpotVenueBasis.DUKASCOPY_SWFX
+    assert spot_dto.display_price == Decimal("2348.25")
+    assert spot_dto.price_basis is PriceBasis.LAST
 
     basis_input = SpotFutureBasisInput(
         left_instrument_id="commodity_spot:OTC:XAUUSD",

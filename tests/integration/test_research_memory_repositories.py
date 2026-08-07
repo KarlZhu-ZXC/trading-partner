@@ -20,13 +20,13 @@ from domain.common.enums import (
     EvidenceQuality,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     JournalEntryType,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
 )
@@ -41,14 +41,14 @@ from domain.common.errors import (
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     EvidenceAssessment,
-    InvestmentCase,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    ResearchSubject,
+    SubjectEvidenceLink,
     Thesis,
     ThesisRevision,
     compute_evidence_content_sha256,
@@ -56,15 +56,15 @@ from domain.research.models import (
 )
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.orm import (
-    CaseEvidenceLinkRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
     InstrumentRow,
-    InvestmentCaseRow,
     JournalEntryRow,
     ResearchEventRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    ResearchSubjectRow,
+    SubjectEvidenceLinkRow,
     ThesisRevisionRow,
 )
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
@@ -154,13 +154,13 @@ def _seed_instruments(session: Session, *, at: datetime = NOW) -> None:
     session.flush()
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> InvestmentCase:
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> ResearchSubject:
     base: dict[str, Any] = {
-        "case_id": ids.new(EntityIdPrefix.CASE),
-        "case_type": InvestmentCaseType.COMPANY,
+        "subject_id": ids.new(EntityIdPrefix.SUBJECT),
+        "subject_type": ResearchSubjectType.COMPANY,
         "title": "NVDA structural",
         "summary": "Long-horizon GPU demand",
-        "status": InvestmentCaseStatus.ACTIVE,
+        "status": ResearchSubjectStatus.ACTIVE,
         "primary_instrument_id": US_INSTRUMENT,
         "topic_tags": ("ai", "gpu"),
         "created_at": clock.now(),
@@ -168,7 +168,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "created_by": "user",
         "archived_at": None,
         "archived_reason": None,
-        "linked_case_ids": (),
+        "linked_subject_ids": (),
         "evidence_ids": (),
         "report_ids": (),
         "event_ids": (),
@@ -176,7 +176,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return InvestmentCase(**base)
+    return ResearchSubject(**base)
 
 
 def _evidence_hash(**overrides: Any) -> str:
@@ -249,13 +249,13 @@ def _make_evidence(ids: SequentialIdGenerator, **overrides: Any) -> Evidence:
 def _make_link(
     ids: SequentialIdGenerator,
     *,
-    case_id: str,
+    subject_id: str,
     evidence_id: str,
     linked_at: datetime = NOW,
-) -> CaseEvidenceLink:
-    return CaseEvidenceLink(
+) -> SubjectEvidenceLink:
+    return SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case_id,
+        subject_id=subject_id,
         evidence_id=evidence_id,
         linked_at=linked_at,
         linked_by="user",
@@ -266,13 +266,13 @@ def _make_link(
 def _make_thesis(
     ids: SequentialIdGenerator,
     *,
-    case_id: str,
+    subject_id: str,
     revision_id: str,
     created_at: datetime = NOW,
 ) -> Thesis:
     return Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
-        case_id=case_id,
+        subject_id=subject_id,
         title="Primary",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -290,7 +290,7 @@ def _make_revision(
     ids: SequentialIdGenerator,
     *,
     thesis_id: str,
-    case_id: str,
+    subject_id: str,
     revision_id: str | None = None,
     revision_no: int = 1,
     confirmed_at: datetime = NOW,
@@ -298,7 +298,7 @@ def _make_revision(
     return ThesisRevision(
         revision_id=revision_id or ids.new(EntityIdPrefix.REV),
         thesis_id=thesis_id,
-        case_id=case_id,
+        subject_id=subject_id,
         revision_no=revision_no,
         supersedes_revision_no=None if revision_no == 1 else revision_no - 1,
         statement="Demand is structural",
@@ -319,7 +319,7 @@ def _make_revision(
 
 def _report_hash(**overrides: Any) -> str:
     base: dict[str, Any] = {
-        "case_id": "case_placeholder",
+        "subject_id": "case_placeholder",
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -335,7 +335,7 @@ def _report_hash(**overrides: Any) -> str:
 def _make_report(
     ids: SequentialIdGenerator,
     *,
-    case_id: str,
+    subject_id: str,
     evidence_ids: tuple[str, ...] = (),
     thesis_revision_ids: tuple[str, ...] = (),
     created_at: datetime = NOW,
@@ -344,7 +344,7 @@ def _make_report(
 ) -> ResearchReport:
     base: dict[str, Any] = {
         "report_id": ids.new(EntityIdPrefix.REPORT),
-        "case_id": case_id,
+        "subject_id": subject_id,
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -364,7 +364,7 @@ def _make_report(
     base.update(overrides)
     if "content_sha256" not in overrides or base["content_sha256"] == "":
         base["content_sha256"] = _report_hash(
-            case_id=base["case_id"],
+            subject_id=base["subject_id"],
             report_type=base["report_type"],
             title=base["title"],
             summary=base["summary"],
@@ -382,14 +382,14 @@ def _bootstrap_case_with_evidence(
     instrument_ids: tuple[str, ...] = (A_SHARE_INSTRUMENT,),
     observed_at: datetime = NOW,
     linked_at: datetime = NOW,
-) -> tuple[InvestmentCase, Evidence, CaseEvidenceLink]:
+) -> tuple[ResearchSubject, Evidence, SubjectEvidenceLink]:
     clock = uow_factory.clock
     ids = uow_factory.ids
     with Session(uow_factory.engine) as session:
         _seed_instruments(session)
         session.commit()
 
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     seq = ids._n
     evidence = _make_evidence(
         ids,
@@ -399,21 +399,21 @@ def _bootstrap_case_with_evidence(
         summary=f"summary-{seq}",
     )
     link = _make_link(
-        ids, case_id=case.case_id, evidence_id=evidence.evidence_id, linked_at=linked_at
+        ids, subject_id=subject.subject_id, evidence_id=evidence.evidence_id, linked_at=linked_at
     )
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.commit()
-    return case, evidence, link
+    return subject, evidence, link
 
 
 # --- Round-trips ---
 
 
 def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _link = _bootstrap_case_with_evidence(
+    subject, evidence, _link = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=EARLIER,
@@ -421,17 +421,17 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=EARLIER,
     )
     r_old = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=NOW,
@@ -442,7 +442,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     r_new = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=LATER,
@@ -453,7 +453,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     d_old = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="old",
         rationale="r",
@@ -471,7 +471,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     d_new = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="new",
         rationale="r",
@@ -489,7 +489,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     j_old = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="old",
         body_markdown="b",
@@ -505,7 +505,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     j_new = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="new",
         body_markdown="b",
@@ -521,7 +521,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     e_mid = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.COMPANY,
         title="mid",
         summary="s",
@@ -538,7 +538,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
     )
     e_early = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.MACRO,
         title="early",
         summary="s",
@@ -573,13 +573,15 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
         assert by_hash is not None
         assert by_hash.evidence_id == evidence.evidence_id
         assert uow.evidence.get_by_content_sha256("0" * 64) is None
-        assert case.case_id  # silence unused when only evidence path used
+        assert subject.subject_id  # silence unused when only evidence path used
 
-        ordered = uow.case_evidence_links.list_evidence(case.case_id)
+        ordered = uow.subject_evidence_links.list_evidence(subject.subject_id)
         assert [e.evidence_id for e in ordered] == [evidence.evidence_id]
-        assert uow.case_evidence_links.list_cases(evidence.evidence_id) == (case.case_id,)
-        assert uow.case_evidence_links.exists(case.case_id, evidence.evidence_id) is True
-        assert uow.case_evidence_links.exists(case.case_id, "missing") is False
+        assert uow.subject_evidence_links.list_subjects(evidence.evidence_id) == (
+            subject.subject_id,
+        )
+        assert uow.subject_evidence_links.exists(subject.subject_id, evidence.evidence_id) is True
+        assert uow.subject_evidence_links.exists(subject.subject_id, "missing") is False
 
         e2 = _make_evidence(
             uow_factory.ids,
@@ -600,44 +602,47 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
         for link in (
             _make_link(
                 uow_factory.ids,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 evidence_id=e2.evidence_id,
                 linked_at=NOW,
             ),
             _make_link(
                 uow_factory.ids,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 evidence_id=e3.evidence_id,
                 linked_at=LATER,
             ),
         ):
-            uow.case_evidence_links.add(link)
+            uow.subject_evidence_links.add(link)
         uow.commit()
 
     with uow_factory() as uow:
-        ordered = uow.case_evidence_links.list_evidence(case.case_id)
+        ordered = uow.subject_evidence_links.list_evidence(subject.subject_id)
         assert [e.evidence_id for e in ordered] == [
             evidence.evidence_id,
             e2.evidence_id,
             e3.evidence_id,
         ]
         assert [
-            e.evidence_id for e in uow.case_evidence_links.list_evidence(case.case_id, as_of=NOW)
+            e.evidence_id
+            for e in uow.subject_evidence_links.list_evidence(subject.subject_id, as_of=NOW)
         ] == [evidence.evidence_id, e2.evidence_id]
 
         rev_id = uow_factory.ids.new(EntityIdPrefix.REV)
-        thesis = _make_thesis(ids=uow_factory.ids, case_id=case.case_id, revision_id=rev_id)
+        thesis = _make_thesis(
+            ids=uow_factory.ids, subject_id=subject.subject_id, revision_id=rev_id
+        )
         revision = _make_revision(
             uow_factory.ids,
             thesis_id=thesis.thesis_id,
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             revision_id=rev_id,
             confirmed_at=EARLIER,
         )
         a1 = EvidenceAssessment(
             assessment_id=uow_factory.ids.new(EntityIdPrefix.REV),
             evidence_id=e2.evidence_id,
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             thesis_id=thesis.thesis_id,
             thesis_revision_id=rev_id,
             stance=EvidenceStance.SUPPORTS,
@@ -651,7 +656,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
         a2 = EvidenceAssessment(
             assessment_id=uow_factory.ids.new(EntityIdPrefix.REV),
             evidence_id=e2.evidence_id,
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             thesis_id=thesis.thesis_id,
             thesis_revision_id=rev_id,
             stance=EvidenceStance.CONTRADICTS,
@@ -681,7 +686,7 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
 
 
 def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _link = _bootstrap_case_with_evidence(
+    subject, evidence, _link = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=EARLIER,
@@ -689,17 +694,17 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=EARLIER,
     )
     r_old = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=NOW,
@@ -710,7 +715,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     r_new = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=LATER,
@@ -721,7 +726,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     d_old = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="old",
         rationale="r",
@@ -739,7 +744,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     d_new = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="new",
         rationale="r",
@@ -757,7 +762,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     j_old = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="old",
         body_markdown="b",
@@ -773,7 +778,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     j_new = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="new",
         body_markdown="b",
@@ -789,7 +794,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     e_mid = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.COMPANY,
         title="mid",
         summary="s",
@@ -806,7 +811,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     e_early = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.MACRO,
         title="early",
         summary="s",
@@ -823,7 +828,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.EARNINGS,
         title="Q2",
         summary="beat",
@@ -840,7 +845,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="Watch",
         rationale="need more",
@@ -858,7 +863,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
     )
     journal = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="note",
         body_markdown="body",
@@ -900,19 +905,19 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         assert uow.reports.get(r_new.report_id) == r_new
         assert uow.reports.get(r_old.report_id) == r_old
         assert uow.reports.get_by_content_sha256(r_old.content_sha256) is not None
-        assert [r.report_id for r in uow.reports.list_by_case(case.case_id)] == [
+        assert [r.report_id for r in uow.reports.list_by_subject(subject.subject_id)] == [
             r_new.report_id,
             r_old.report_id,
         ]
-        assert [r.report_id for r in uow.reports.list_by_case(case.case_id, as_of=NOW)] == [
-            r_old.report_id
-        ]
+        assert [
+            r.report_id for r in uow.reports.list_by_subject(subject.subject_id, as_of=NOW)
+        ] == [r_old.report_id]
 
         assert uow.events.get(event.event_id) == event
         assert (
             len(
                 uow.events.list_timeline(
-                    case.case_id,
+                    subject.subject_id,
                     start=None,
                     end=None,
                     as_of=None,
@@ -924,7 +929,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         assert {
             e.event_id
             for e in uow.events.list_timeline(
-                case.case_id,
+                subject.subject_id,
                 start=EARLIER,
                 end=NOW,
                 as_of=None,
@@ -934,7 +939,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         assert [
             e.event_id
             for e in uow.events.list_timeline(
-                case.case_id,
+                subject.subject_id,
                 start=None,
                 end=None,
                 as_of=NOW,
@@ -946,12 +951,14 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
 
         assert uow.decisions.get(decision.decision_id) == decision
         assert uow.decisions.get_by_idempotency_key("decision-key-1") is not None
-        assert [d.decision_id for d in uow.decisions.list_by_case(case.case_id)] == [
+        assert [d.decision_id for d in uow.decisions.list_by_subject(subject.subject_id)] == [
             d_new.decision_id,
             d_old.decision_id,
             decision.decision_id,
         ]
-        assert [d.decision_id for d in uow.decisions.list_by_case(case.case_id, as_of=NOW)] == [
+        assert [
+            d.decision_id for d in uow.decisions.list_by_subject(subject.subject_id, as_of=NOW)
+        ] == [
             d_old.decision_id,
             decision.decision_id,
         ]
@@ -961,7 +968,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         assert {
             j.journal_id
             for j in uow.journal.list(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 as_of=None,
                 limit=10,
                 offset=0,
@@ -970,7 +977,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         assert {
             j.journal_id
             for j in uow.journal.list(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 as_of=NOW,
                 limit=10,
                 offset=0,
@@ -978,7 +985,7 @@ def test_report_event_decision_journal_round_trips_and_filters(uow_factory) -> N
         } == {j_old.journal_id, journal.journal_id}
         assert [
             j.journal_id
-            for j in uow.journal.list(case_id=case.case_id, as_of=None, limit=1, offset=1)
+            for j in uow.journal.list(subject_id=subject.subject_id, as_of=None, limit=1, offset=1)
         ] == [j_old.journal_id]
 
 
@@ -1007,7 +1014,7 @@ def test_reject_missing_instrument(uow_factory) -> None:  # type: ignore[no-unty
     with Session(uow_factory.engine) as session:
         _seed_instruments(session)
         session.commit()
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     evidence = _make_evidence(
         ids,
         instrument_ids=(MISSING_INSTRUMENT,),
@@ -1015,7 +1022,7 @@ def test_reject_missing_instrument(uow_factory) -> None:  # type: ignore[no-unty
         summary="s",
     )
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         with pytest.raises(InvalidResearchLink, match="instrument"):
             uow.evidence.add(evidence)
 
@@ -1023,19 +1030,21 @@ def test_reject_missing_instrument(uow_factory) -> None:  # type: ignore[no-unty
 def test_reject_duplicate_link_and_missing_link_for_assessment(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, link = _bootstrap_case_with_evidence(uow_factory)
+    subject, evidence, link = _bootstrap_case_with_evidence(uow_factory)
     ids = uow_factory.ids
-    dup = _make_link(ids, case_id=case.case_id, evidence_id=evidence.evidence_id, linked_at=LATER)
+    dup = _make_link(
+        ids, subject_id=subject.subject_id, evidence_id=evidence.evidence_id, linked_at=LATER
+    )
     with uow_factory() as uow, pytest.raises(InvalidResearchLink, match="already exists"):
-        uow.case_evidence_links.add(dup)
+        uow.subject_evidence_links.add(dup)
 
-    # Assessment without link (different case)
+    # Assessment without link (different subject)
     clock = uow_factory.clock
     other = _make_case(ids, clock, title="other case", summary="other")
     assessment = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=evidence.evidence_id,
-        case_id=other.case_id,
+        subject_id=other.subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.NEUTRAL,
@@ -1047,7 +1056,7 @@ def test_reject_duplicate_link_and_missing_link_for_assessment(
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with uow_factory() as uow:
-        uow.cases.add(other)
+        uow.subjects.add(other)
         with pytest.raises(InvalidResearchLink, match="link"):
             uow.evidence_assessments.add(assessment)
     assert link.link_id
@@ -1068,21 +1077,21 @@ def test_reject_cross_case_and_future_references(uow_factory) -> None:  # type: 
         observed_at=EARLIER,
     )
     link_b = _make_link(
-        ids, case_id=case_b.case_id, evidence_id=evidence_b.evidence_id, linked_at=EARLIER
+        ids, subject_id=case_b.subject_id, evidence_id=evidence_b.evidence_id, linked_at=EARLIER
     )
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis_b = _make_thesis(ids, case_id=case_b.case_id, revision_id=rev_id)
+    thesis_b = _make_thesis(ids, subject_id=case_b.subject_id, revision_id=rev_id)
     revision_b = _make_revision(
         ids,
         thesis_id=thesis_b.thesis_id,
-        case_id=case_b.case_id,
+        subject_id=case_b.subject_id,
         revision_id=rev_id,
         confirmed_at=LATER,  # not visible at NOW
     )
     with uow_factory() as uow:
-        uow.cases.add(case_b)
+        uow.subjects.add(case_b)
         uow.evidence.add(evidence_b)
-        uow.case_evidence_links.add(link_b)
+        uow.subject_evidence_links.add(link_b)
         uow.theses.add(thesis_b)
         uow.revisions.append(revision_b)
         uow.commit()
@@ -1090,7 +1099,7 @@ def test_reject_cross_case_and_future_references(uow_factory) -> None:  # type: 
     # Report on case_a referencing case_b evidence
     report = _make_report(
         ids,
-        case_id=case_a.case_id,
+        subject_id=case_a.subject_id,
         evidence_ids=(evidence_b.evidence_id,),
         thesis_revision_ids=(),
         title="cross",
@@ -1103,7 +1112,7 @@ def test_reject_cross_case_and_future_references(uow_factory) -> None:  # type: 
     # Report referencing future thesis revision
     report2 = _make_report(
         ids,
-        case_id=case_b.case_id,
+        subject_id=case_b.subject_id,
         evidence_ids=(evidence_b.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=NOW,
@@ -1117,12 +1126,14 @@ def test_reject_cross_case_and_future_references(uow_factory) -> None:  # type: 
 
 
 def test_reject_assessment_before_observed_or_linked(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _ = _bootstrap_case_with_evidence(uow_factory, observed_at=NOW, linked_at=NOW)
+    subject, evidence, _ = _bootstrap_case_with_evidence(
+        uow_factory, observed_at=NOW, linked_at=NOW
+    )
     ids = uow_factory.ids
     assessment = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=evidence.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.SUPPORTS,
@@ -1138,13 +1149,13 @@ def test_reject_assessment_before_observed_or_linked(uow_factory) -> None:  # ty
 
 
 def test_reject_link_before_evidence_observed_at(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    """CaseEvidenceLink.add must reject linked_at before Evidence.observed_at."""
+    """SubjectEvidenceLink.add must reject linked_at before Evidence.observed_at."""
     clock = uow_factory.clock
     ids = uow_factory.ids
     with Session(uow_factory.engine) as session:
         _seed_instruments(session)
         session.commit()
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     evidence = _make_evidence(
         ids,
         instrument_ids=(US_INSTRUMENT,),
@@ -1154,15 +1165,15 @@ def test_reject_link_before_evidence_observed_at(uow_factory) -> None:  # type: 
     )
     too_early_link = _make_link(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=EARLIER,
     )
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
         with pytest.raises(InvalidResearchLink, match="linked_at"):
-            uow.case_evidence_links.add(too_early_link)
+            uow.subject_evidence_links.add(too_early_link)
 
 
 def test_reject_report_citing_evidence_after_as_of(uow_factory) -> None:  # type: ignore[no-untyped-def]
@@ -1171,7 +1182,7 @@ def test_reject_report_citing_evidence_after_as_of(uow_factory) -> None:  # type
     Membership may already exist by created_at; observed_at must still be
     bounded by report.as_of (not merely link/created_at).
     """
-    case, evidence, _ = _bootstrap_case_with_evidence(
+    subject, evidence, _ = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=NOW,
@@ -1180,7 +1191,7 @@ def test_reject_report_citing_evidence_after_as_of(uow_factory) -> None:  # type
     ids = uow_factory.ids
     report = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(),
         created_at=LATER,
@@ -1197,7 +1208,7 @@ def test_reject_report_citing_revision_confirmed_after_as_of(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
     """Report thesis revisions use confirmed_at <= as_of, not created_at."""
-    case, evidence, _ = _bootstrap_case_with_evidence(
+    subject, evidence, _ = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=EARLIER,
@@ -1205,12 +1216,12 @@ def test_reject_report_citing_revision_confirmed_after_as_of(
     )
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     # confirmed between as_of and created_at: passes created_at, fails as_of
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=NOW,
     )
@@ -1221,7 +1232,7 @@ def test_reject_report_citing_revision_confirmed_after_as_of(
 
     report = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=LATER,
@@ -1238,16 +1249,16 @@ def test_reject_assessment_revision_confirmed_after_assessed_at(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
     """EvidenceAssessment optional revision must have confirmed_at <= assessed_at."""
-    case, evidence, _ = _bootstrap_case_with_evidence(
+    subject, evidence, _ = _bootstrap_case_with_evidence(
         uow_factory, observed_at=EARLIER, linked_at=EARLIER
     )
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=LATER,
     )
@@ -1259,7 +1270,7 @@ def test_reject_assessment_revision_confirmed_after_assessed_at(
     assessment = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=evidence.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=thesis.thesis_id,
         thesis_revision_id=rev_id,
         stance=EvidenceStance.SUPPORTS,
@@ -1278,7 +1289,7 @@ def test_reject_event_decision_evidence_not_visible_at_recorded_at(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
     """Event/Decision require Evidence.observed_at and Link.linked_at <= recorded_at."""
-    case, evidence, _ = _bootstrap_case_with_evidence(
+    subject, evidence, _ = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=LATER,
@@ -1287,7 +1298,7 @@ def test_reject_event_decision_evidence_not_visible_at_recorded_at(
     ids = uow_factory.ids
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.OTHER,
         title="future-evidence",
         summary="s",
@@ -1304,7 +1315,7 @@ def test_reject_event_decision_evidence_not_visible_at_recorded_at(
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="future-evidence",
         rationale="r",
@@ -1351,11 +1362,11 @@ def test_reject_evidence_supersedes_future_observed(uow_factory) -> None:  # typ
 
 
 def test_idempotency_key_storage_shape(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
+    subject, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
     ids = uow_factory.ids
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="w",
         rationale="r",
@@ -1389,17 +1400,17 @@ def test_idempotency_key_storage_shape(uow_factory) -> None:  # type: ignore[no-
 def test_journal_limit_offset_bounds(uow_factory) -> None:  # type: ignore[no-untyped-def]
     with uow_factory() as uow:
         with pytest.raises(DataContractError, match="limit"):
-            uow.journal.list(case_id=None, as_of=None, limit=0, offset=0)
+            uow.journal.list(subject_id=None, as_of=None, limit=0, offset=0)
         with pytest.raises(DataContractError, match="limit"):
-            uow.journal.list(case_id=None, as_of=None, limit=101, offset=0)
+            uow.journal.list(subject_id=None, as_of=None, limit=101, offset=0)
         with pytest.raises(DataContractError, match="offset"):
-            uow.journal.list(case_id=None, as_of=None, limit=10, offset=-1)
+            uow.journal.list(subject_id=None, as_of=None, limit=10, offset=-1)
 
 
 def test_append_only_blocks_update_and_delete_for_seven_rows(
     uow_factory,
 ) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, link = _bootstrap_case_with_evidence(
+    subject, evidence, link = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=EARLIER,
@@ -1407,18 +1418,18 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
     )
     ids = uow_factory.ids
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=EARLIER,
     )
     assessment = EvidenceAssessment(
         assessment_id=ids.new(EntityIdPrefix.REV),
         evidence_id=evidence.evidence_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.SUPPORTS,
@@ -1431,7 +1442,7 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
     )
     report = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         title="imm",
@@ -1440,7 +1451,7 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
     )
     event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.OTHER,
         title="e",
         summary="s",
@@ -1457,7 +1468,7 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="d",
         rationale="r",
@@ -1475,7 +1486,7 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
     )
     journal = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="j",
         body_markdown="b",
@@ -1501,7 +1512,7 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
 
     targets: list[tuple[type, str, str]] = [
         (ResearchEvidenceRow, evidence.evidence_id, "title"),
-        (CaseEvidenceLinkRow, link.link_id, "linked_by"),
+        (SubjectEvidenceLinkRow, link.link_id, "linked_by"),
         (EvidenceAssessmentRow, assessment.assessment_id, "rationale"),
         (ResearchReportRow, report.report_id, "title"),
         (ResearchEventRow, event.event_id, "title"),
@@ -1535,11 +1546,11 @@ def test_append_only_blocks_update_and_delete_for_seven_rows(
 
 
 def test_uow_atomic_commit_and_rollback(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
+    subject, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
     ids = uow_factory.ids
     good_event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.OTHER,
         title="good",
         summary="s",
@@ -1557,7 +1568,7 @@ def test_uow_atomic_commit_and_rollback(uow_factory) -> None:  # type: ignore[no
     # second event references missing report -> fails validation after first add
     bad_event = ResearchEvent(
         event_id=ids.new(EntityIdPrefix.EVENT),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         event_type=ResearchEventType.OTHER,
         title="bad",
         summary="s",
@@ -1580,7 +1591,7 @@ def test_uow_atomic_commit_and_rollback(uow_factory) -> None:  # type: ignore[no
 
     with uow_factory() as uow:
         listed = uow.events.list_timeline(
-            case.case_id,
+            subject.subject_id,
             start=None,
             end=None,
             as_of=None,
@@ -1593,7 +1604,7 @@ def test_uow_atomic_commit_and_rollback(uow_factory) -> None:  # type: ignore[no
         uow.commit()
     with uow_factory() as uow:
         listed = uow.events.list_timeline(
-            case.case_id,
+            subject.subject_id,
             start=None,
             end=None,
             as_of=None,
@@ -1611,9 +1622,9 @@ def test_uow_not_entered_and_reentry(uow_factory) -> None:  # type: ignore[no-un
 
 
 def test_no_implicit_case_json_cache_mutation(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
+    subject, evidence, _ = _bootstrap_case_with_evidence(uow_factory)
     with Session(uow_factory.engine) as session:
-        row = session.get(InvestmentCaseRow, case.case_id)
+        row = session.get(ResearchSubjectRow, subject.subject_id)
         assert row is not None
         assert tuple(row.evidence_ids_json) == ()
         assert evidence.evidence_id  # evidence stored separately
@@ -1621,7 +1632,7 @@ def test_no_implicit_case_json_cache_mutation(uow_factory) -> None:  # type: ign
 
 
 def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    case, evidence, _ = _bootstrap_case_with_evidence(
+    subject, evidence, _ = _bootstrap_case_with_evidence(
         uow_factory,
         instrument_ids=(US_INSTRUMENT,),
         observed_at=EARLIER,
@@ -1631,17 +1642,17 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
     ids = uow_factory.ids
     other = _make_case(ids, clock, title="other", summary="o")
     rev_id = ids.new(EntityIdPrefix.REV)
-    thesis = _make_thesis(ids, case_id=case.case_id, revision_id=rev_id)
+    thesis = _make_thesis(ids, subject_id=subject.subject_id, revision_id=rev_id)
     revision = _make_revision(
         ids,
         thesis_id=thesis.thesis_id,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         revision_id=rev_id,
         confirmed_at=EARLIER,
     )
     report = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         title="base-r",
@@ -1650,7 +1661,7 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
     )
     decision = DecisionRecord(
         decision_id=ids.new(EntityIdPrefix.DECISION),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         decision_type=DecisionType.WATCH,
         title="base-d",
         rationale="r",
@@ -1668,7 +1679,7 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
     )
     journal = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="base-j",
         body_markdown="b",
@@ -1683,7 +1694,7 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with uow_factory() as uow:
-        uow.cases.add(other)
+        uow.subjects.add(other)
         uow.theses.add(thesis)
         uow.revisions.append(revision)
         uow.reports.add(report)
@@ -1694,7 +1705,7 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
     # Cross-case supersedes rejected
     cross_report = _make_report(
         ids,
-        case_id=other.case_id,
+        subject_id=other.subject_id,
         evidence_ids=(),
         thesis_revision_ids=(),
         created_at=LATER,
@@ -1704,13 +1715,13 @@ def test_supersedes_report_decision_journal_same_case(uow_factory) -> None:  # t
         content_markdown="# cross",
         supersedes_report_id=report.report_id,
     )
-    with uow_factory() as uow, pytest.raises(InvalidResearchLink, match="same case"):
+    with uow_factory() as uow, pytest.raises(InvalidResearchLink, match="same research subject"):
         uow.reports.add(cross_report)
 
     # Valid same-case supersedes
     next_report = _make_report(
         ids,
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_ids=(evidence.evidence_id,),
         thesis_revision_ids=(rev_id,),
         created_at=LATER,

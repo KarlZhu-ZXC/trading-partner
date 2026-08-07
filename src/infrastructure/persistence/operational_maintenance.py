@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -67,6 +69,10 @@ class SqliteOperationalMaintenance:
             )
         artifact_files, artifact_bytes, _ = self._files(self._artifact_root, "*")
         backup_files, _, latest_backup = self._files(self._backup_root, "*.db")
+        scheduler_plist = (
+            Path.home() / "Library" / "LaunchAgents" / "com.trading-partner.monitor-hourly.plist"
+        )
+        scheduler_loaded, scheduler_last_exit = self._scheduler_status()
         return MaintenanceStatusDTO(
             generated_at=now,
             database_filename=self._database_path.name,
@@ -81,6 +87,9 @@ class SqliteOperationalMaintenance:
             backup_files=backup_files,
             latest_backup_at=latest_backup,
             retention_rules=_RETENTION_RULES,
+            monitor_scheduler_plist_present=scheduler_plist.is_file(),
+            monitor_scheduler_loaded=scheduler_loaded,
+            monitor_scheduler_last_exit_code=scheduler_last_exit,
         )
 
     def backup(self) -> DatabaseBackupReceiptDTO:
@@ -159,3 +168,26 @@ class SqliteOperationalMaintenance:
             size += stat.st_size
             latest = stat.st_mtime if latest is None else max(latest, stat.st_mtime)
         return count, size, datetime.fromtimestamp(latest, tz=UTC) if latest else None
+
+    @staticmethod
+    def _scheduler_status() -> tuple[bool | None, int | None]:
+        """Inspect the fixed launchd label without mutating scheduler state."""
+
+        try:
+            result = subprocess.run(  # noqa: S603 - fixed local launchctl read
+                [
+                    "/bin/launchctl",
+                    "print",
+                    f"gui/{os.getuid()}/com.trading-partner.monitor-hourly",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None, None
+        if result.returncode != 0:
+            return False, None
+        match = re.search(r"last exit code = (-?\d+)", result.stdout)
+        return True, int(match.group(1)) if match else None

@@ -1,4 +1,4 @@
-"""ResearchTimelineService — unified case timeline projection (Phase 1C C4b1).
+"""ResearchTimelineService — unified subject timeline projection (Phase 1C C4b1).
 
 Projects Evidence / Report / Event / Decision / Journal / ThesisRevision /
 Candidate resolution into a deterministic timeline. Read-only: no ResearchEvent
@@ -57,9 +57,7 @@ def _wire(value: object) -> str:
     return str(getattr(value, "value", value))
 
 
-def _want(
-    selected: frozenset[str], entity_type: ResearchTimelineEntityType
-) -> bool:
+def _want(selected: frozenset[str], entity_type: ResearchTimelineEntityType) -> bool:
     return not selected or entity_type.value in selected
 
 
@@ -135,7 +133,7 @@ class ResearchTimelineService:
     def get_timeline(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         entity_types: tuple[ResearchTimelineEntityType, ...] = (),
         occurred_from: datetime | None = None,
         occurred_to: datetime | None = None,
@@ -144,11 +142,11 @@ class ResearchTimelineService:
     ) -> ToolEnvelope[ResearchTimelineDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            case_id_n = case_id.strip()
-            if not case_id_n:
+            subject_id_n = subject_id.strip()
+            if not subject_id_n:
                 raise InputValidationError(
-                    "case_id must be non-blank",
-                    details={"field": "case_id"},
+                    "subject_id must be non-blank",
+                    details={"field": "subject_id"},
                 )
             if type(limit) is not int or limit < 1 or limit > 500:
                 raise InputValidationError(
@@ -179,9 +177,7 @@ class ResearchTimelineService:
                     },
                 )
             as_of_n = (
-                require_aware_datetime(as_of, field_name="as_of")
-                if as_of is not None
-                else None
+                require_aware_datetime(as_of, field_name="as_of") if as_of is not None else None
             )
 
             selected = frozenset(_wire(t) for t in entity_types)
@@ -193,11 +189,11 @@ class ResearchTimelineService:
                 )
 
             with self._uow_factory() as uow:
-                uow.cases.get(case_id_n)
+                uow.subjects.get(subject_id_n)
                 cutoff = as_of_n if as_of_n is not None else self._clock.now()
                 items = self._collect_items(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     selected=selected,
                     occurred_from=occurred_from_n,
                     occurred_to=occurred_to_n,
@@ -210,7 +206,7 @@ class ResearchTimelineService:
                     request_id=request_id,
                     clock=self._clock,
                     data=ResearchTimelineDTO(
-                        case_id=case_id_n,
+                        subject_id=subject_id_n,
                         as_of=cutoff,
                         items=page,
                         total=total,
@@ -228,7 +224,7 @@ class ResearchTimelineService:
         self,
         uow: ResearchUnitOfWork,
         *,
-        case_id: str,
+        subject_id: str,
         selected: frozenset[str],
         occurred_from: datetime | None,
         occurred_to: datetime | None,
@@ -237,12 +233,10 @@ class ResearchTimelineService:
         items: list[ResearchTimelineItemDTO] = []
 
         if _want(selected, ResearchTimelineEntityType.EVIDENCE):
-            for evidence in uow.case_evidence_links.list_evidence(
-                case_id, as_of=cutoff
-            ):
+            for evidence in uow.subject_evidence_links.list_evidence(subject_id, as_of=cutoff):
                 item = self._from_evidence(
                     evidence,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     occurred_from=occurred_from,
                     occurred_to=occurred_to,
                 )
@@ -250,7 +244,7 @@ class ResearchTimelineService:
                     items.append(item)
 
         if _want(selected, ResearchTimelineEntityType.REPORT):
-            for report in uow.reports.list_by_case(case_id, as_of=cutoff):
+            for report in uow.reports.list_by_subject(subject_id, as_of=cutoff):
                 item = self._from_report(
                     uow,
                     report,
@@ -262,7 +256,7 @@ class ResearchTimelineService:
 
         if _want(selected, ResearchTimelineEntityType.EVENT):
             for event in uow.events.list_timeline(
-                case_id,
+                subject_id,
                 start=occurred_from,
                 end=occurred_to,
                 as_of=cutoff,
@@ -271,7 +265,7 @@ class ResearchTimelineService:
                 items.append(self._from_event(event))
 
         if _want(selected, ResearchTimelineEntityType.DECISION):
-            for decision in uow.decisions.list_by_case(case_id, as_of=cutoff):
+            for decision in uow.decisions.list_by_subject(subject_id, as_of=cutoff):
                 item = self._from_decision(
                     decision,
                     occurred_from=occurred_from,
@@ -281,12 +275,10 @@ class ResearchTimelineService:
                     items.append(item)
 
         if _want(selected, ResearchTimelineEntityType.JOURNAL):
-            for entry in self._list_journal_exhausted(
-                uow, case_id=case_id, as_of=cutoff
-            ):
+            for entry in self._list_journal_exhausted(uow, subject_id=subject_id, as_of=cutoff):
                 item = self._from_journal(
                     entry,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     occurred_from=occurred_from,
                     occurred_to=occurred_to,
                 )
@@ -294,7 +286,7 @@ class ResearchTimelineService:
                     items.append(item)
 
         if _want(selected, ResearchTimelineEntityType.THESIS_REVISION):
-            for thesis in uow.theses.list_by_case(case_id):
+            for thesis in uow.theses.list_by_subject(subject_id):
                 for revision in uow.revisions.list_by_thesis(thesis.thesis_id):
                     if revision.confirmed_at > cutoff:
                         continue
@@ -307,7 +299,7 @@ class ResearchTimelineService:
                         items.append(item)
 
         if _want(selected, ResearchTimelineEntityType.CANDIDATE_RESOLUTION):
-            for candidate in self._list_candidates_exhausted(uow, case_id=case_id):
+            for candidate in self._list_candidates_exhausted(uow, subject_id=subject_id):
                 if candidate.status not in _RESOLUTION_STATUSES:
                     continue
                 if candidate.reviewed_at is None:
@@ -316,7 +308,7 @@ class ResearchTimelineService:
                     continue
                 item = self._from_candidate(
                     candidate,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     occurred_from=occurred_from,
                     occurred_to=occurred_to,
                 )
@@ -329,14 +321,14 @@ class ResearchTimelineService:
         self,
         uow: ResearchUnitOfWork,
         *,
-        case_id: str,
+        subject_id: str,
         as_of: datetime,
     ) -> list[JournalEntry]:
         out: list[JournalEntry] = []
         offset = 0
         while True:
             page = uow.journal.list(
-                case_id=case_id,
+                subject_id=subject_id,
                 as_of=as_of,
                 limit=_JOURNAL_PAGE_SIZE,
                 offset=offset,
@@ -353,13 +345,13 @@ class ResearchTimelineService:
         self,
         uow: ResearchUnitOfWork,
         *,
-        case_id: str,
+        subject_id: str,
     ) -> list[CandidateThesisRevision]:
         out: list[CandidateThesisRevision] = []
         offset = 0
         while True:
             page = uow.candidates.list(
-                case_id=case_id,
+                subject_id=subject_id,
                 limit=_CANDIDATE_PAGE_SIZE,
                 offset=offset,
             )
@@ -376,7 +368,7 @@ class ResearchTimelineService:
         *,
         entity_type: ResearchTimelineEntityType,
         entity_id: str,
-        case_id: str,
+        subject_id: str,
         title: str,
         summary: str,
         occurred_at: datetime,
@@ -387,24 +379,20 @@ class ResearchTimelineService:
         return ResearchTimelineItemDTO(
             entity_type=entity_type,
             entity_id=entity_id,
-            case_id=case_id,
+            subject_id=subject_id,
             title=self._redactor.redact_text(title),
             summary=self._redactor.redact_text(summary),
             occurred_at=occurred_at,
             visible_at=visible_at,
             instrument_ids=instrument_ids,
-            source_name=(
-                None
-                if source_name is None
-                else self._redactor.redact_text(source_name)
-            ),
+            source_name=(None if source_name is None else self._redactor.redact_text(source_name)),
         )
 
     def _from_evidence(
         self,
         evidence: Evidence,
         *,
-        case_id: str,
+        subject_id: str,
         occurred_from: datetime | None,
         occurred_to: datetime | None,
     ) -> ResearchTimelineItemDTO | None:
@@ -416,7 +404,7 @@ class ResearchTimelineService:
         return self._item(
             entity_type=ResearchTimelineEntityType.EVIDENCE,
             entity_id=evidence.evidence_id,
-            case_id=case_id,
+            subject_id=subject_id,
             title=evidence.title,
             summary=evidence.summary,
             occurred_at=occurred_at,
@@ -446,7 +434,7 @@ class ResearchTimelineService:
         return self._item(
             entity_type=ResearchTimelineEntityType.REPORT,
             entity_id=report.report_id,
-            case_id=report.case_id,
+            subject_id=report.subject_id,
             title=report.title,
             summary=report.summary,
             occurred_at=report.as_of,
@@ -459,7 +447,7 @@ class ResearchTimelineService:
         return self._item(
             entity_type=ResearchTimelineEntityType.EVENT,
             entity_id=event.event_id,
-            case_id=event.case_id,
+            subject_id=event.subject_id,
             title=event.title,
             summary=event.summary,
             occurred_at=event.occurred_at,
@@ -480,14 +468,12 @@ class ResearchTimelineService:
         ):
             return None
         instruments = (
-            (decision.primary_instrument_id,)
-            if decision.primary_instrument_id is not None
-            else ()
+            (decision.primary_instrument_id,) if decision.primary_instrument_id is not None else ()
         )
         return self._item(
             entity_type=ResearchTimelineEntityType.DECISION,
             entity_id=decision.decision_id,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             title=decision.title,
             summary=decision.rationale,
             occurred_at=decision.decided_at,
@@ -500,7 +486,7 @@ class ResearchTimelineService:
         self,
         entry: JournalEntry,
         *,
-        case_id: str,
+        subject_id: str,
         occurred_from: datetime | None,
         occurred_to: datetime | None,
     ) -> ResearchTimelineItemDTO | None:
@@ -508,12 +494,12 @@ class ResearchTimelineService:
             entry.created_at, occurred_from=occurred_from, occurred_to=occurred_to
         ):
             return None
-        if entry.case_id is None or entry.case_id != case_id:
+        if entry.subject_id is None or entry.subject_id != subject_id:
             return None
         return self._item(
             entity_type=ResearchTimelineEntityType.JOURNAL,
             entity_id=entry.journal_id,
-            case_id=case_id,
+            subject_id=subject_id,
             title=entry.title,
             summary=entry.body_markdown,
             occurred_at=entry.created_at,
@@ -539,7 +525,7 @@ class ResearchTimelineService:
         return self._item(
             entity_type=ResearchTimelineEntityType.THESIS_REVISION,
             entity_id=revision.revision_id,
-            case_id=revision.case_id,
+            subject_id=revision.subject_id,
             title=f"Thesis revision {revision.revision_no}",
             summary=revision.statement,
             occurred_at=revision.confirmed_at,
@@ -552,7 +538,7 @@ class ResearchTimelineService:
         self,
         candidate: CandidateThesisRevision,
         *,
-        case_id: str,
+        subject_id: str,
         occurred_from: datetime | None,
         occurred_to: datetime | None,
     ) -> ResearchTimelineItemDTO | None:
@@ -566,7 +552,7 @@ class ResearchTimelineService:
         return self._item(
             entity_type=ResearchTimelineEntityType.CANDIDATE_RESOLUTION,
             entity_id=candidate.candidate_id,
-            case_id=case_id,
+            subject_id=subject_id,
             title=_candidate_title(candidate),
             summary=_candidate_summary(candidate),
             occurred_at=candidate.reviewed_at,

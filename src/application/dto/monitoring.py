@@ -110,8 +110,15 @@ class MonitorRuleInput(_DTO):
 
 class MonitorCreateInput(_DTO):
     name: str = Field(min_length=1, max_length=200)
-    case_id: str | None = None
-    primary_instrument_id: str | None = None
+    subject_id: str | None = None
+    primary_instrument_id: str | None = Field(
+        default=None,
+        description=(
+            "Primary observation/display instrument. For a Trade Plan-bound Monitor "
+            "this may be a condition reference instrument rather than the plan's "
+            "execution instrument."
+        ),
+    )
     cadence: MonitorCadenceInput = MonitorCadence.ON_DEMAND
     interval_minutes: int | None = Field(default=None, ge=60, le=10080)
     rules: tuple[MonitorRuleInput, ...] = Field(default=(), max_length=50)
@@ -145,8 +152,14 @@ class MonitorUpdateInput(_DTO):
     monitor_id: str
     expected_version: int = Field(ge=1)
     name: str = Field(min_length=1, max_length=200)
-    case_id: str | None = None
-    primary_instrument_id: str | None = None
+    subject_id: str | None = None
+    primary_instrument_id: str | None = Field(
+        default=None,
+        description=(
+            "Primary observation/display instrument. It may be a condition reference "
+            "instrument distinct from a bound Trade Plan execution instrument."
+        ),
+    )
     cadence: MonitorCadenceInput
     interval_minutes: int | None = Field(default=None, ge=60, le=10080)
     status: MonitorStatusInput
@@ -175,6 +188,15 @@ class MonitorUpdateInput(_DTO):
         if not self.rules and not self.compile_trade_plan_conditions:
             raise ValueError("monitor requires rules or Trade Plan condition compilation")
         return self
+
+
+class MonitorArchiveInput(_DTO):
+    """Explicit, audited soft-delete request for local operator surfaces."""
+
+    monitor_id: str = Field(min_length=1, max_length=128)
+    expected_version: int = Field(ge=1)
+    confirmed_by: Literal["user", "external_agent"]
+    idempotency_key: str = Field(min_length=1, max_length=200)
 
 
 class MonitorGetInput(_DTO):
@@ -248,7 +270,7 @@ class MonitorDefinitionDTO(_DTO):
     monitor_id: str
     version: int
     name: str
-    case_id: str | None
+    subject_id: str | None
     primary_instrument_id: str | None
     cadence: MonitorCadence
     interval_minutes: int | None

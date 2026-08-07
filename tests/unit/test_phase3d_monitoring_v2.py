@@ -127,7 +127,7 @@ async def test_all_monitor_fact_categories_transition_and_deduplicate(tmp_path) 
             monitor_id="monitor_00000000-0000-7000-8000-000000000001",
             version=1,
             name="Phase 3D category acceptance",
-            case_id=None,
+            subject_id=None,
             primary_instrument_id="equity:US:NVDA",
             cadence=MonitorCadence.ON_DEMAND,
             status=MonitorStatus.ACTIVE,

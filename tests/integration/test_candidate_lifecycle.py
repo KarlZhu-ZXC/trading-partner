@@ -8,15 +8,19 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
-from application.dto.research import ThesisRevisionCandidatePayload
-from application.services.investment_case_service import InvestmentCaseService
+from application.dto.research import (
+    SubjectUpdateCandidatePayload,
+    ThesisRevisionCandidatePayload,
+)
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.thesis_revision_service import ThesisRevisionService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
     ConfidenceBand,
     ConfirmationMode,
-    InvestmentCaseType,
     InvestmentRating,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
 )
 from infrastructure.persistence.metadata import Base
@@ -48,7 +52,7 @@ def services(tmp_path):  # type: ignore[no-untyped-def]
         return SqlAlchemyResearchUnitOfWork(eng, clock, ids, redactor)
 
     yield (
-        InvestmentCaseService(factory, clock, ids, redactor),
+        ResearchSubjectService(factory, clock, ids, redactor),
         ThesisRevisionService(factory, clock, ids, redactor),
         factory,
     )
@@ -69,22 +73,22 @@ def _payload(title: str = "Primary") -> ThesisRevisionCandidatePayload:
 
 
 def test_propose_reject_then_same_idempotency_returns_duplicate(services) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, _factory = services
-    created = cases.create_case(
-        case_type=InvestmentCaseType.COMPANY,
+    subjects, thesis, _factory = services
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="GPU",
         primary_instrument_id="equity:US:NVDA",
         topic_tags=(),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key="lc-case",
     )
     assert created.data is not None
-    case_id = created.data.case_id
+    subject_id = created.data.subject_id
 
     p = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -102,7 +106,7 @@ def test_propose_reject_then_same_idempotency_returns_duplicate(services) -> Non
 
     # Same key after reject still returns original candidate (unique key) + warning
     again = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -117,20 +121,33 @@ def test_propose_reject_then_same_idempotency_returns_duplicate(services) -> Non
 
 
 def test_strict_review_user_confirm_lands_revision(services) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, factory = services
-    created = cases.create_case(
-        case_type=InvestmentCaseType.COMPANY,
+    subjects, thesis, factory = services
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="GPU",
         primary_instrument_id="equity:US:NVDA",
         topic_tags=(),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="external_agent",
         idempotency_key="lc-case2",
     )
     assert created.data is not None
+    activate = thesis.propose_state_update(
+        subject_id=created.data.subject_id,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            new_status=ResearchSubjectStatus.ACTIVE,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Activate the Case before confirming live judgment.",
+        idempotency_key="lc-case2-activate",
+    )
+    assert activate.ok and activate.data is not None
+    assert thesis.confirm_candidate(activate.data.candidate_id, reviewed_by="user").ok
     p = thesis.propose_revision(
-        case_id=created.data.case_id,
+        subject_id=created.data.subject_id,
         thesis_id=None,
         payload=_payload("Strict"),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -146,27 +163,27 @@ def test_strict_review_user_confirm_lands_revision(services) -> None:  # type: i
     assert len(conf.data.research_state.theses) == 1
 
     with factory() as uow:
-        theses = uow.theses.list_by_case(created.data.case_id)
+        theses = uow.theses.list_by_subject(created.data.subject_id)
         revs = uow.revisions.list_by_thesis(theses[0].thesis_id)
         assert len(revs) == 1
         assert revs[0].confirmation_mode.value == "strict_review"
 
 
 def test_codex_self_confirm_strict_review_forbidden(services) -> None:  # type: ignore[no-untyped-def]
-    cases, thesis, _ = services
-    created = cases.create_case(
-        case_type=InvestmentCaseType.THEME,
+    subjects, thesis, _ = services
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.THEME,
         title="T",
         summary="S",
         primary_instrument_id=None,
         topic_tags=(),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key="lc-case3",
     )
     assert created.data is not None
     p = thesis.propose_revision(
-        case_id=created.data.case_id,
+        subject_id=created.data.subject_id,
         thesis_id=None,
         payload=_payload("Self"),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,

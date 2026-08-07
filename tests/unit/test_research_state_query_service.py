@@ -8,16 +8,21 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
-from application.dto.research import AssumptionPayload, ThesisRevisionCandidatePayload
-from application.services.investment_case_service import InvestmentCaseService
+from application.dto.research import (
+    AssumptionPayload,
+    SubjectUpdateCandidatePayload,
+    ThesisRevisionCandidatePayload,
+)
 from application.services.research_state_query_service import ResearchStateQueryService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.thesis_revision_service import ThesisRevisionService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
     ConfidenceBand,
     ConfirmationMode,
-    InvestmentCaseType,
     InvestmentRating,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
 )
 from infrastructure.persistence.metadata import Base
@@ -50,7 +55,7 @@ def harness(tmp_path):  # type: ignore[no-untyped-def]
 
     yield (
         ResearchStateQueryService(factory, clock, ids, redactor),
-        InvestmentCaseService(factory, clock, ids, redactor),
+        ResearchSubjectService(factory, clock, ids, redactor),
         ThesisRevisionService(factory, clock, ids, redactor),
     )
     eng.dispose()
@@ -64,22 +69,36 @@ def test_get_state_not_found(harness) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_get_state_includes_children(harness) -> None:  # type: ignore[no-untyped-def]
-    query, cases, thesis = harness
-    created = cases.create_case(
-        case_type=InvestmentCaseType.COMPANY,
+    query, subjects, thesis = harness
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="GPU",
         primary_instrument_id="equity:US:NVDA",
         topic_tags=("ai",),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key="qs-1",
     )
     assert created.data is not None
-    case_id = created.data.case_id
+    subject_id = created.data.subject_id
+
+    activate = thesis.propose_state_update(
+        subject_id=subject_id,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            new_status=ResearchSubjectStatus.ACTIVE,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Activate the Case before confirming live judgment.",
+        idempotency_key="qs-activate",
+    )
+    assert activate.ok and activate.data is not None
+    assert thesis.confirm_candidate(activate.data.candidate_id, reviewed_by="user").ok
 
     proposed = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=ThesisRevisionCandidatePayload(
             kind="thesis_revision",
@@ -108,7 +127,7 @@ def test_get_state_includes_children(harness) -> None:  # type: ignore[no-untype
 
     # pending candidate still visible
     pending = thesis.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=ThesisRevisionCandidatePayload(
             kind="thesis_revision",
@@ -127,10 +146,10 @@ def test_get_state_includes_children(harness) -> None:  # type: ignore[no-untype
     )
     assert pending.ok
 
-    state = query.get_state(case_id)
+    state = query.get_state(subject_id)
     assert state.ok is True
     assert state.data is not None
-    assert state.data.case.case_id == case_id
+    assert state.data.subject.subject_id == subject_id
     assert len(state.data.theses) == 1
     assert len(state.data.latest_revisions) == 1
     assert len(state.data.assumptions) == 1

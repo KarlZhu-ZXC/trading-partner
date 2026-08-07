@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from application.dto.monitoring import (
+    MonitorArchiveInput,
     MonitorCreateInput,
     MonitorDashboardInput,
     MonitorEvaluateInput,
@@ -47,7 +48,7 @@ def _monitor(rule: MonitorRuleInput) -> MonitorDefinition:
         monitor_id="monitor_00000000-0000-7000-8000-000000000001",
         version=1,
         name="NVDA downside",
-        case_id=None,
+        subject_id=None,
         primary_instrument_id="equity:US:NVDA",
         cadence=MonitorCadence.US_POST_MARKET,
         status=MonitorStatus.ACTIVE,
@@ -195,7 +196,7 @@ def test_monitor_repository_keeps_append_only_versions(tmp_path) -> None:
         monitor_id=first.monitor_id,
         version=2,
         name="Paused",
-        case_id=None,
+        subject_id=None,
         primary_instrument_id=first.primary_instrument_id,
         cadence=first.cadence,
         status=MonitorStatus.PAUSED,
@@ -242,6 +243,43 @@ def test_monitor_dashboard_distinguishes_created_and_updated_times(
 
     assert item.monitor_created_at == NOW
     assert item.monitor_updated_at == updated_at
+
+
+def test_monitor_archive_appends_version_and_keeps_legacy_rules(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    rule = MonitorRuleInput(
+        rule_code="price_floor",
+        description="Price fell below the configured floor.",
+        rule_type="PRICE_BELOW",
+        instrument_id="equity:US:NVDA",
+        price_threshold=Decimal("100"),
+    )
+    repository = _repository(tmp_path)
+    first = replace(
+        _monitor(rule),
+        rules=(replace(rule.to_domain(), description=None),),
+        valid_until=NOW + timedelta(hours=1),
+    )
+    repository.create(first)
+    archived_at = NOW + timedelta(days=1)
+    fixed_clock.set(archived_at)
+    service = MonitorService(repository, MagicMock(), fixed_clock, id_generator)
+
+    result = service.archive(
+        MonitorArchiveInput(
+            monitor_id=first.monitor_id,
+            expected_version=1,
+            confirmed_by="user",
+            idempotency_key="monitor-archive-1",
+        )
+    )
+
+    assert result.monitor.version == 2
+    assert result.monitor.status is MonitorStatus.ARCHIVED
+    assert result.monitor.rules[0].description is None
+    assert result.monitor.valid_until is None
+    assert repository.get_created_at(first.monitor_id) == NOW
 
 
 def test_monitor_rule_description_is_required_for_new_inputs() -> None:

@@ -33,16 +33,16 @@ from domain.common.enums import (
     EvidenceQuality,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     LogLevel,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
@@ -109,12 +109,12 @@ def _seed_research_memory(
     journal_svc = JournalService(factory, clock, ids, redactor)
     decision_svc = DecisionRecordService(factory, clock, ids, redactor)
 
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
-        title="C5 dual-market case",
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
+        title="C5 dual-market subject",
         summary="A-share 茅台 + US NVDA research memory seed",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=A_SHARE,
         topic_tags=("a_share", "us", "c5"),
         created_at=clock.now(),
@@ -122,7 +122,7 @@ def _seed_research_memory(
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -130,9 +130,9 @@ def _seed_research_memory(
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    case_id = case.case_id
+    subject_id = subject.subject_id
 
     a_ev = evidence_svc.record_evidence(
         evidence_type=EvidenceType.A_SHARE_ANNOUNCEMENT,
@@ -155,7 +155,7 @@ def _seed_research_memory(
         confidence=Decimal("0.8"),
         supersedes_evidence_id=None,
         recorded_by="provider:eastmoney",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert a_ev.ok and a_ev.data is not None
@@ -181,7 +181,7 @@ def _seed_research_memory(
         confidence=Decimal("0.85"),
         supersedes_evidence_id=None,
         recorded_by="provider:sec_edgar",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert us_ev.ok and us_ev.data is not None
@@ -189,7 +189,7 @@ def _seed_research_memory(
     # Counter-evidence stance for retrieval of opposing views.
     assess = evidence_svc.assess_evidence(
         evidence_id=us_ev.data.evidence_id,
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.CONTRADICTS,
@@ -201,7 +201,7 @@ def _seed_research_memory(
     assert assess.ok
 
     report = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Dual-market deep dive",
         summary="Combined A-share and US structural view",
@@ -218,7 +218,7 @@ def _seed_research_memory(
     assert report.ok and report.data is not None
 
     event = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.EARNINGS,
         title="Earnings window",
         summary="Both names approach earnings season",
@@ -235,7 +235,7 @@ def _seed_research_memory(
     assert event.ok and event.data is not None
 
     journal = journal_svc.append(
-        case_id=case_id,
+        subject_id=subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Seed journal",
         body_markdown="Pre-seeded reflection on dual market setup",
@@ -251,7 +251,7 @@ def _seed_research_memory(
     assert journal.ok and journal.data is not None
 
     decision = decision_svc.append(
-        case_id=case_id,
+        subject_id=subject_id,
         decision_type=DecisionType.WATCH,
         title="Seed watch decision",
         rationale="Hold research stance; no trade intent yet",
@@ -270,7 +270,7 @@ def _seed_research_memory(
 
     eng.dispose()
     return {
-        "case_id": case_id,
+        "subject_id": subject_id,
         "a_evidence_id": a_ev.data.evidence_id,
         "us_evidence_id": us_ev.data.evidence_id,
         "report_id": report.data.report_id,

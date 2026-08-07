@@ -29,14 +29,14 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     ReliabilityLevel,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.persistence.orm import JournalEntryRow, SystemAuditLogRow
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
@@ -97,13 +97,13 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
     eng.dispose()
 
 
-def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+def _create_subject(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="Case",
         summary="Summary",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("ai",),
         created_at=clock.now(),
@@ -111,7 +111,7 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -119,14 +119,14 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
 def _base_append(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "case_id": None,
+        "subject_id": None,
         "entry_type": JournalEntryType.NOTE,
         "title": "Note title",
         "body_markdown": "Body with api_key=should_redact_if_mapped",
@@ -145,8 +145,8 @@ def _base_append(**overrides: Any) -> dict[str, Any]:
 
 def test_append_happy_path_redaction_and_topic_dedupe(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    env = journal.append(**_base_append(case_id=case_id, body_markdown="plain body"))
+    subject_id = _create_subject(factory, ids, clock)
+    env = journal.append(**_base_append(subject_id=subject_id, body_markdown="plain body"))
     assert env.ok and env.data is not None
     assert env.data.topic_tags == ("ai", "gpu")
     assert env.data.created_at == NOW
@@ -166,22 +166,22 @@ def test_append_happy_path_redaction_and_topic_dedupe(harness) -> None:  # type:
 
 def test_confirmed_by_gate_rejects_codex(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    env = journal.append(**_base_append(case_id=case_id, confirmed_by="codex"))
+    subject_id = _create_subject(factory, ids, clock)
+    env = journal.append(**_base_append(subject_id=subject_id, confirmed_by="codex"))
     assert env.ok is False
     assert any(e.code == "UNAUTHORIZED_REVIEWER" for e in env.errors)
 
 
 def test_same_key_same_payload_after_clock_advance(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    first = journal.append(**_base_append(case_id=case_id, body_markdown="stable"))
+    subject_id = _create_subject(factory, ids, clock)
+    first = journal.append(**_base_append(subject_id=subject_id, body_markdown="stable"))
     assert first.ok and first.data is not None
     jid = first.data.journal_id
     created = first.data.created_at
 
     clock.advance(3600)
-    second = journal.append(**_base_append(case_id=case_id, body_markdown="stable"))
+    second = journal.append(**_base_append(subject_id=subject_id, body_markdown="stable"))
     assert second.ok is True
     assert second.degraded is True
     assert DUPLICATE_IDEMPOTENCY_KEY in second.warnings
@@ -197,22 +197,22 @@ def test_same_key_same_payload_after_clock_advance(harness) -> None:  # type: ig
 
 def test_same_key_different_payload_conflicts(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    first = journal.append(**_base_append(case_id=case_id, body_markdown="one"))
+    subject_id = _create_subject(factory, ids, clock)
+    first = journal.append(**_base_append(subject_id=subject_id, body_markdown="one"))
     assert first.ok
-    conflict = journal.append(**_base_append(case_id=case_id, body_markdown="two"))
+    conflict = journal.append(**_base_append(subject_id=subject_id, body_markdown="two"))
     assert conflict.ok is False
     assert any(e.code == "DUPLICATE_IDEMPOTENCY_KEY" for e in conflict.errors)
 
 
 def test_normalized_tuple_and_redaction_hash_coherence(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     # First write redacts password-like free text if redactor maps it;
     # tuple order/dedupe must match stored payload for idempotency recompute.
     env = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             instrument_ids=(US, "  ", US, A_SHARE),
             topic_tags=("Alpha", "alpha", "Beta"),
             body_markdown="password=hunter2 should be scrubbed if mapped",
@@ -222,7 +222,7 @@ def test_normalized_tuple_and_redaction_hash_coherence(harness) -> None:  # type
     assert env.ok and env.data is not None
     stored = env.data
     recomputed = compute_journal_idempotency_payload_sha256(
-        case_id=stored.case_id,
+        subject_id=stored.subject_id,
         entry_type=JournalEntryType(stored.entry_type)
         if not isinstance(stored.entry_type, JournalEntryType)
         else stored.entry_type,
@@ -247,10 +247,10 @@ def test_normalized_tuple_and_redaction_hash_coherence(harness) -> None:  # type
 
 def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type: ignore[no-untyped-def]
     journal, evidence, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     case_j = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="case note",
             idempotency_key="case-j1",
             instrument_ids=(),
@@ -259,7 +259,7 @@ def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type
     assert case_j.ok and case_j.data
     global_a = journal.append(
         **_base_append(
-            case_id=None,
+            subject_id=None,
             body_markdown="global a",
             idempotency_key="global-a",
             instrument_ids=(),
@@ -270,7 +270,7 @@ def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type
     # Global → case-scoped journal rejected
     bad = journal.append(
         **_base_append(
-            case_id=None,
+            subject_id=None,
             body_markdown="global bad",
             idempotency_key="global-bad",
             instrument_ids=(),
@@ -284,12 +284,12 @@ def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type
     # Global → non-journal type rejected
     bad2 = journal.append(
         **_base_append(
-            case_id=None,
+            subject_id=None,
             body_markdown="global bad2",
             idempotency_key="global-bad2",
             instrument_ids=(),
             related_entity_type="case",
-            related_entity_id=case_id,
+            related_entity_id=subject_id,
         )
     )
     assert bad2.ok is False
@@ -297,7 +297,7 @@ def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type
     # Global → global journal ok
     ok = journal.append(
         **_base_append(
-            case_id=None,
+            subject_id=None,
             body_markdown="global b",
             idempotency_key="global-b",
             instrument_ids=(),
@@ -310,8 +310,8 @@ def test_global_journal_only_relates_to_global_journal(harness) -> None:  # type
 
 def test_cross_case_and_future_related_refs_rejected(harness) -> None:  # type: ignore[no-untyped-def]
     journal, evidence, factory, clock, ids, _eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
     ev_b = evidence.record_evidence(
         evidence_type=EvidenceType.MARKET_SNAPSHOT,
         origin=EvidenceOrigin.EXTERNAL_FACT,
@@ -333,14 +333,14 @@ def test_cross_case_and_future_related_refs_rejected(harness) -> None:  # type: 
         confidence=Decimal("0.5"),
         supersedes_evidence_id=None,
         recorded_by="provider:mock_us",
-        case_ids=(case_b,),
+        subject_ids=(case_b,),
         observed_at=EARLIER,
     )
     assert ev_b.ok and ev_b.data
 
     cross = journal.append(
         **_base_append(
-            case_id=case_a,
+            subject_id=case_a,
             body_markdown="cross",
             idempotency_key="cross-ev",
             related_entity_type="evidence",
@@ -373,14 +373,14 @@ def test_cross_case_and_future_related_refs_rejected(harness) -> None:  # type: 
         confidence=Decimal("0.5"),
         supersedes_evidence_id=None,
         recorded_by="provider:mock_us",
-        case_ids=(case_a,),
+        subject_ids=(case_a,),
         observed_at=FUTURE,
     )
     assert ev_future.ok and ev_future.data
     clock.set(NOW)
     future = journal.append(
         **_base_append(
-            case_id=case_a,
+            subject_id=case_a,
             body_markdown="future ref",
             idempotency_key="future-ev",
             related_entity_type="evidence",
@@ -393,10 +393,10 @@ def test_cross_case_and_future_related_refs_rejected(harness) -> None:  # type: 
 
 def test_supersedes_same_case_and_time_rules(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     old = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="old",
             idempotency_key="old-j",
         )
@@ -405,7 +405,7 @@ def test_supersedes_same_case_and_time_rules(harness) -> None:  # type: ignore[n
     clock.advance(10)
     good = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="new",
             idempotency_key="new-j",
             supersedes_journal_id=old.data.journal_id,
@@ -413,10 +413,10 @@ def test_supersedes_same_case_and_time_rules(harness) -> None:  # type: ignore[n
     )
     assert good.ok is True
 
-    other = _create_case(factory, ids, clock)
+    other = _create_subject(factory, ids, clock)
     cross = journal.append(
         **_base_append(
-            case_id=other,
+            subject_id=other,
             body_markdown="cross supersede",
             idempotency_key="cross-sup",
             supersedes_journal_id=old.data.journal_id,
@@ -427,7 +427,7 @@ def test_supersedes_same_case_and_time_rules(harness) -> None:  # type: ignore[n
 
 def test_search_projection_failure_full_rollback(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     real_factory = factory
 
     class BoomUow:
@@ -458,7 +458,7 @@ def test_search_projection_failure_full_rollback(harness) -> None:  # type: igno
     )
     env = boom.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="should vanish",
             title="rollback-journal",
             idempotency_key="rb-j",
@@ -473,7 +473,7 @@ def test_search_projection_failure_full_rollback(harness) -> None:  # type: igno
 
 def test_audit_failure_full_rollback(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     real_factory = factory
 
     class BoomUow:
@@ -504,7 +504,7 @@ def test_audit_failure_full_rollback(harness) -> None:  # type: ignore[no-untype
     )
     env = boom.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             title="audit-rb-journal",
             body_markdown="x",
             idempotency_key="audit-rb-j",
@@ -523,7 +523,7 @@ def test_search_rejects_when_all_effective_filters_absent(harness) -> None:  # t
 
     none_text = journal.search(
         text=None,
-        case_id=None,
+        subject_id=None,
         instrument_id=None,
         entry_types=(),
         as_of=None,
@@ -535,7 +535,7 @@ def test_search_rejects_when_all_effective_filters_absent(harness) -> None:  # t
 
     blank_text = journal.search(
         text="   \t  ",
-        case_id=None,
+        subject_id=None,
         instrument_id=None,
         entry_types=(),
         as_of=None,
@@ -548,7 +548,7 @@ def test_search_rejects_when_all_effective_filters_absent(harness) -> None:  # t
     # as_of alone is a valid effective filter.
     as_of_only = journal.search(
         text=None,
-        case_id=None,
+        subject_id=None,
         instrument_id=None,
         entry_types=(),
         as_of=NOW,
@@ -563,11 +563,11 @@ def test_search_rejects_when_all_effective_filters_absent(harness) -> None:  # t
 def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  # type: ignore[no-untyped-def]
     """instrument_ids/topic_tags order differs only in hash; domain keeps first write."""
     journal, _ev, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
 
     first = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="order-stable body",
             instrument_ids=(US, A_SHARE),
             topic_tags=("gpu", "ai"),
@@ -582,7 +582,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
     with factory() as uow:
         page_before = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.JOURNAL,),
             )
         )
@@ -591,7 +591,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
     clock.advance(60)
     second = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             body_markdown="order-stable body",
             instrument_ids=(A_SHARE, US),
             topic_tags=("ai", "gpu"),
@@ -613,7 +613,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
         assert stored.topic_tags == ("gpu", "ai")
         page_after = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.JOURNAL,),
             )
         )
@@ -631,12 +631,12 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
 
 def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
 
     clock.set(NOW - timedelta(hours=2))
     j1 = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             entry_type=JournalEntryType.NOTE,
             title="alpha note unique",
             body_markdown="body alpha uniquephrase",
@@ -647,7 +647,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
     clock.set(NOW - timedelta(hours=1))
     j2 = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             entry_type=JournalEntryType.POSTMORTEM,
             title="beta postmortem",
             body_markdown="body beta uniquephrase",
@@ -658,7 +658,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
     clock.set(NOW)
     j3 = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             entry_type=JournalEntryType.NOTE,
             title="gamma note",
             body_markdown="body gamma other",
@@ -670,7 +670,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
     by_type = journal.search(
         text=None,
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(JournalEntryType.NOTE,),
         as_of=None,
@@ -683,7 +683,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
     by_text = journal.search(
         text="uniquephrase",
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(),
         as_of=None,
@@ -695,7 +695,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
     as_of_mid = journal.search(
         text=None,
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(),
         as_of=NOW - timedelta(hours=1, minutes=30),
@@ -708,7 +708,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
     page0 = journal.search(
         text=None,
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(),
         as_of=None,
@@ -717,7 +717,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
     )
     page1 = journal.search(
         text=None,
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(),
         as_of=None,
@@ -733,7 +733,7 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
     by_inst = journal.search(
         text=None,
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=A_SHARE,
         entry_types=(),
         as_of=None,
@@ -747,10 +747,10 @@ def test_search_type_text_as_of_pagination(harness) -> None:  # type: ignore[no-
 
 def test_us_and_a_share_instruments_preserved(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _ev, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     env = journal.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             instrument_ids=(A_SHARE, US),
             body_markdown="both markets",
             idempotency_key="markets",

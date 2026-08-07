@@ -66,7 +66,7 @@ class ChallengeFinding:
 @dataclass(frozen=True, slots=True)
 class ChallengeReview:
     review_id: str
-    case_id: str
+    subject_id: str
     mode: ConfirmationMode
     trigger: ChallengeTrigger
     proposed_action: str
@@ -86,7 +86,7 @@ class ChallengeReview:
 
     def __post_init__(self) -> None:
         _text(self.review_id, "review_id", 128)
-        _text(self.case_id, "case_id", 128)
+        _text(self.subject_id, "subject_id", 128)
         if self.mode is not ConfirmationMode.STRICT_REVIEW:
             raise DataContractError("persistent ChallengeReview must be strict_review")
         if (

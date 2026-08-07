@@ -10,7 +10,6 @@ from application.ports.audit_log_writer import AuditLogWriter
 from application.ports.candidate_thesis_revision_repository import (
     CandidateThesisRevisionRepository,
 )
-from application.ports.case_evidence_link_repository import CaseEvidenceLinkRepository
 from application.ports.decision_record_repository import DecisionRecordRepository
 from application.ports.evidence_assessment_repository import (
     EvidenceAssessmentRepository,
@@ -19,12 +18,13 @@ from application.ports.evidence_repository import EvidenceRepository
 from application.ports.invalidation_condition_repository import (
     InvalidationConditionRepository,
 )
-from application.ports.investment_case_repository import InvestmentCaseRepository
 from application.ports.journal_repository import JournalRepository
 from application.ports.open_question_repository import OpenQuestionRepository
 from application.ports.research_event_repository import ResearchEventRepository
 from application.ports.research_report_repository import ResearchReportRepository
 from application.ports.research_search_index import ResearchSearchIndex
+from application.ports.research_subject_repository import ResearchSubjectRepository
+from application.ports.subject_evidence_link_repository import SubjectEvidenceLinkRepository
 from application.ports.thesis_repository import ThesisRepository
 from application.ports.thesis_revision_repository import ThesisRevisionRepository
 from application.ports.trade_plan_repository import TradePlanRepository
@@ -42,7 +42,7 @@ class ResearchUnitOfWork(Protocol):
     ) -> None: ...
 
     @property
-    def cases(self) -> InvestmentCaseRepository: ...
+    def subjects(self) -> ResearchSubjectRepository: ...
 
     @property
     def theses(self) -> ThesisRepository: ...
@@ -69,7 +69,7 @@ class ResearchUnitOfWork(Protocol):
     def evidence(self) -> EvidenceRepository: ...
 
     @property
-    def case_evidence_links(self) -> CaseEvidenceLinkRepository: ...
+    def subject_evidence_links(self) -> SubjectEvidenceLinkRepository: ...
 
     @property
     def evidence_assessments(self) -> EvidenceAssessmentRepository: ...

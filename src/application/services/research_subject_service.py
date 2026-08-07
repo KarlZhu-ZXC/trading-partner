@@ -1,11 +1,11 @@
-"""InvestmentCase application service (create/archive with confirmed candidates)."""
+"""ResearchSubject application service (create/archive with confirmed candidates)."""
 
 from __future__ import annotations
 
 from application.dto.research import (
-    CaseUpdateCandidatePayload,
-    InvestmentCaseDTO,
-    InvestmentCaseListDTO,
+    ResearchSubjectDTO,
+    ResearchSubjectListDTO,
+    SubjectUpdateCandidatePayload,
     candidate_payload_to_json,
     payloads_equal_json,
 )
@@ -21,12 +21,14 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from application.services.research_state_invariants import ensure_subject_can_leave_tracking
+from application.services.subject_metadata_policy import validate_subject_metadata
 from domain.common.enums import (
     CandidateKind,
     CandidateStatus,
     ConfirmationMode,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.errors import (
     DuplicateIdempotencyKey,
@@ -34,10 +36,10 @@ from domain.common.errors import (
     UnauthorizedReviewer,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 
 
-class InvestmentCaseService:
+class ResearchSubjectService:
     def __init__(
         self,
         uow_factory: UowFactory,
@@ -50,40 +52,37 @@ class InvestmentCaseService:
         self._id_generator = id_generator
         self._redactor = secret_redactor
 
-    def create_case(
+    def create_subject(
         self,
         *,
-        case_type: InvestmentCaseType,
+        subject_type: ResearchSubjectType,
         title: str,
         summary: str,
         primary_instrument_id: str | None,
         topic_tags: tuple[str, ...],
-        linked_case_ids: tuple[str, ...],
+        linked_subject_ids: tuple[str, ...],
         confirmed_by: str,
         idempotency_key: str,
-    ) -> ToolEnvelope[InvestmentCaseDTO]:
+    ) -> ToolEnvelope[ResearchSubjectDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            require_confirm_reviewer(confirmed_by, action="create_case")
-            title_n = title.strip()
-            summary_n = summary.strip()
-            if not title_n or len(title_n) > 200:
-                raise InputValidationError("title must be 1..200 characters")
-            if not summary_n or len(summary_n) > 4000:
-                raise InputValidationError("summary must be 1..4000 characters")
+            require_confirm_reviewer(confirmed_by, action="create_subject")
+            metadata = validate_subject_metadata(title=title, summary=summary)
+            title_n = metadata.title
+            summary_n = metadata.summary
             tags = tuple(t.strip().lower() for t in topic_tags if t.strip())
-            linked = tuple(x.strip() for x in linked_case_ids if x.strip())
+            linked = tuple(x.strip() for x in linked_subject_ids if x.strip())
 
-            payload = CaseUpdateCandidatePayload(
+            payload = SubjectUpdateCandidatePayload(
                 kind="case_status_change",
                 action="create",
-                case_type=case_type,
-                new_status=InvestmentCaseStatus.DRAFT,
+                subject_type=subject_type,
+                new_status=ResearchSubjectStatus.DRAFT,
                 title=title_n,
                 summary=summary_n,
                 primary_instrument_id=primary_instrument_id,
                 topic_tags=tags,
-                linked_case_ids=linked,
+                linked_subject_ids=linked,
             )
             payload_json = candidate_payload_to_json(payload)
 
@@ -99,28 +98,28 @@ class InvestmentCaseService:
                                 "existing_candidate_id": existing.candidate_id,
                             },
                         )
-                    if existing.case_id is None:
+                    if existing.subject_id is None:
                         raise InputValidationError(
-                            "existing create candidate missing case_id",
+                            "existing create candidate missing subject_id",
                             details={"candidate_id": existing.candidate_id},
                         )
-                    case = uow.cases.get(existing.case_id)
+                    subject = uow.subjects.get(existing.subject_id)
                     return envelope_success(
                         request_id=request_id,
                         clock=self._clock,
-                        data=InvestmentCaseDTO.from_domain(case),
+                        data=ResearchSubjectDTO.from_domain(subject),
                         warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
                         degraded=True,
                     )
 
                 now = self._clock.now()
-                case_id = self._id_generator.new(EntityIdPrefix.CASE)
-                case = InvestmentCase(
-                    case_id=case_id,
-                    case_type=case_type,
+                subject_id = self._id_generator.new(EntityIdPrefix.SUBJECT)
+                subject = ResearchSubject(
+                    subject_id=subject_id,
+                    subject_type=subject_type,
                     title=title_n,
                     summary=summary_n,
-                    status=InvestmentCaseStatus.DRAFT,
+                    status=ResearchSubjectStatus.DRAFT,
                     primary_instrument_id=primary_instrument_id,
                     topic_tags=tags,
                     created_at=now,
@@ -128,27 +127,27 @@ class InvestmentCaseService:
                     created_by=confirmed_by.strip(),
                     archived_at=None,
                     archived_reason=None,
-                    linked_case_ids=linked,
+                    linked_subject_ids=linked,
                     evidence_ids=(),
                     report_ids=(),
                     event_ids=(),
                     decision_ids=(),
                     schema_version=RESEARCH_SCHEMA_VERSION,
                 )
-                uow.cases.add(case)
+                uow.subjects.add(subject)
 
                 candidate, _dup, _warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
-                    kind=CandidateKind.CASE_STATUS_CHANGE,
-                    case_id=case_id,
+                    kind=CandidateKind.SUBJECT_STATUS_CHANGE,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
                     confirmation_mode=ConfirmationMode.NORMAL,
                     proposed_by=confirmed_by.strip(),
-                    proposed_by_rationale="User-confirmed investment case create",
+                    proposed_by_rationale="User-confirmed investment subject create",
                     idempotency_key=key,
                     status=CandidateStatus.CONFIRMED,
                     reviewed_at=now,
@@ -157,9 +156,9 @@ class InvestmentCaseService:
                 )
 
                 uow.audit.append(
-                    "phase1b.investment_case.created",
+                    "phase1b.research_subject.created",
                     {
-                        "case_id": case_id,
+                        "subject_id": subject_id,
                         "confirmed_by": confirmed_by.strip(),
                         "candidate_id": candidate.candidate_id,
                     },
@@ -169,7 +168,7 @@ class InvestmentCaseService:
                 return envelope_success(
                     request_id=request_id,
                     clock=self._clock,
-                    data=InvestmentCaseDTO.from_domain(case),
+                    data=ResearchSubjectDTO.from_domain(subject),
                 )
         except Exception as exc:  # noqa: BLE001 — map to ToolEnvelope
             return envelope_failure(
@@ -179,15 +178,15 @@ class InvestmentCaseService:
                 exc=exc,
             )
 
-    def get_case(self, case_id: str) -> ToolEnvelope[InvestmentCaseDTO]:
+    def get_subject(self, subject_id: str) -> ToolEnvelope[ResearchSubjectDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
             with self._uow_factory() as uow:
-                case = uow.cases.get(case_id)
+                subject = uow.subjects.get(subject_id)
                 return envelope_success(
                     request_id=request_id,
                     clock=self._clock,
-                    data=InvestmentCaseDTO.from_domain(case),
+                    data=ResearchSubjectDTO.from_domain(subject),
                 )
         except Exception as exc:  # noqa: BLE001
             return envelope_failure(
@@ -197,22 +196,22 @@ class InvestmentCaseService:
                 exc=exc,
             )
 
-    def list_cases(
+    def list_subjects(
         self,
         *,
-        case_type: InvestmentCaseType | None = None,
-        status: InvestmentCaseStatus | None = None,
+        subject_type: ResearchSubjectType | None = None,
+        status: ResearchSubjectStatus | None = None,
         primary_instrument_id: str | None = None,
         topic_tag: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
-    ) -> ToolEnvelope[InvestmentCaseListDTO]:
+    ) -> ToolEnvelope[ResearchSubjectListDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
             with self._uow_factory() as uow:
-                items = uow.cases.list(
-                    case_type=case_type,
+                items = uow.subjects.list(
+                    subject_type=subject_type,
                     status=status,
                     primary_instrument_id=primary_instrument_id,
                     topic_tag=topic_tag,
@@ -220,8 +219,8 @@ class InvestmentCaseService:
                     limit=limit,
                     offset=offset,
                 )
-                data = InvestmentCaseListDTO(
-                    items=InvestmentCaseDTO.from_domain_list(items),
+                data = ResearchSubjectListDTO(
+                    items=ResearchSubjectDTO.from_domain_list(items),
                     total=len(items),
                 )
                 return envelope_success(
@@ -237,30 +236,30 @@ class InvestmentCaseService:
                 exc=exc,
             )
 
-    def archive_case(
+    def archive_subject(
         self,
-        case_id: str,
+        subject_id: str,
         *,
         archived_reason: str,
         reviewed_by: str,
         idempotency_key: str,
-    ) -> ToolEnvelope[InvestmentCaseDTO]:
+    ) -> ToolEnvelope[ResearchSubjectDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            require_confirm_reviewer(reviewed_by, action="archive_case")
+            require_confirm_reviewer(reviewed_by, action="archive_subject")
             reason = archived_reason.strip()
             if not reason or len(reason) > 1000:
                 raise InputValidationError("archived_reason must be 1..1000 characters")
             if reviewed_by.strip() == "codex":
                 raise UnauthorizedReviewer(
-                    "archive_case does not accept reviewed_by=codex",
+                    "archive_subject does not accept reviewed_by=codex",
                     details={"reviewed_by": "codex"},
                 )
 
-            payload = CaseUpdateCandidatePayload(
+            payload = SubjectUpdateCandidatePayload(
                 kind="case_status_change",
                 action="archive",
-                new_status=InvestmentCaseStatus.ARCHIVED,
+                new_status=ResearchSubjectStatus.ARCHIVED,
                 archived_reason=reason,
             )
             payload_json = candidate_payload_to_json(payload)
@@ -277,51 +276,56 @@ class InvestmentCaseService:
                                 "existing_candidate_id": existing.candidate_id,
                             },
                         )
-                    case = uow.cases.get(case_id)
+                    subject = uow.subjects.get(subject_id)
                     return envelope_success(
                         request_id=request_id,
                         clock=self._clock,
-                        data=InvestmentCaseDTO.from_domain(case),
+                        data=ResearchSubjectDTO.from_domain(subject),
                         warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
                         degraded=True,
                     )
 
-                case = uow.cases.get(case_id)
+                subject = uow.subjects.get(subject_id)
+                ensure_subject_can_leave_tracking(
+                    uow,
+                    subject,
+                    attempted_subject_status=ResearchSubjectStatus.ARCHIVED,
+                )
                 now = self._clock.now()
-                archived = InvestmentCase(
-                    case_id=case.case_id,
-                    case_type=case.case_type,
-                    title=case.title,
-                    summary=case.summary,
-                    status=InvestmentCaseStatus.ARCHIVED,
-                    primary_instrument_id=case.primary_instrument_id,
-                    topic_tags=case.topic_tags,
-                    created_at=case.created_at,
+                archived = ResearchSubject(
+                    subject_id=subject.subject_id,
+                    subject_type=subject.subject_type,
+                    title=subject.title,
+                    summary=subject.summary,
+                    status=ResearchSubjectStatus.ARCHIVED,
+                    primary_instrument_id=subject.primary_instrument_id,
+                    topic_tags=subject.topic_tags,
+                    created_at=subject.created_at,
                     updated_at=now,
-                    created_by=case.created_by,
+                    created_by=subject.created_by,
                     archived_at=now,
                     archived_reason=reason,
-                    linked_case_ids=case.linked_case_ids,
-                    evidence_ids=case.evidence_ids,
-                    report_ids=case.report_ids,
-                    event_ids=case.event_ids,
-                    decision_ids=case.decision_ids,
-                    schema_version=case.schema_version,
+                    linked_subject_ids=subject.linked_subject_ids,
+                    evidence_ids=subject.evidence_ids,
+                    report_ids=subject.report_ids,
+                    event_ids=subject.event_ids,
+                    decision_ids=subject.decision_ids,
+                    schema_version=subject.schema_version,
                 )
-                uow.cases.update(archived)
+                uow.subjects.update(archived)
 
                 candidate, _dup, _warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
-                    kind=CandidateKind.CASE_STATUS_CHANGE,
-                    case_id=case_id,
+                    kind=CandidateKind.SUBJECT_STATUS_CHANGE,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
                     confirmation_mode=ConfirmationMode.STRICT_REVIEW,
                     proposed_by=reviewed_by.strip(),
-                    proposed_by_rationale="User-confirmed investment case archive",
+                    proposed_by_rationale="User-confirmed investment subject archive",
                     idempotency_key=key,
                     status=CandidateStatus.CONFIRMED,
                     reviewed_at=now,
@@ -330,9 +334,9 @@ class InvestmentCaseService:
                 )
 
                 uow.audit.append(
-                    "phase1b.investment_case.archived",
+                    "phase1b.research_subject.archived",
                     {
-                        "case_id": case_id,
+                        "subject_id": subject_id,
                         "reviewed_by": reviewed_by.strip(),
                         "candidate_id": candidate.candidate_id,
                         "archived_reason": reason,
@@ -343,7 +347,7 @@ class InvestmentCaseService:
                 return envelope_success(
                     request_id=request_id,
                     clock=self._clock,
-                    data=InvestmentCaseDTO.from_domain(archived),
+                    data=ResearchSubjectDTO.from_domain(archived),
                 )
         except Exception as exc:  # noqa: BLE001
             return envelope_failure(
@@ -353,43 +357,54 @@ class InvestmentCaseService:
                 exc=exc,
             )
 
-    def update_case_metadata(
+    def update_subject_metadata(
         self,
-        case_id: str,
+        subject_id: str,
         *,
         title: str | None = None,
         summary: str | None = None,
         topic_tags: tuple[str, ...] | None = None,
-        linked_case_ids: tuple[str, ...] | None = None,
+        linked_subject_ids: tuple[str, ...] | None = None,
         reviewed_by: str,
         idempotency_key: str,
-    ) -> ToolEnvelope[InvestmentCaseDTO]:
+    ) -> ToolEnvelope[ResearchSubjectDTO]:
         """Confirmed metadata update (user/external_agent only) with audit candidate."""
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            require_confirm_reviewer(reviewed_by, action="update_case_metadata")
-            if title is None and summary is None and topic_tags is None and linked_case_ids is None:
-                raise InputValidationError("update_case_metadata requires at least one field")
-
-            payload = CaseUpdateCandidatePayload(
-                kind="case_status_change",
-                action="update",
-                title=title.strip() if title is not None else None,
-                summary=summary.strip() if summary is not None else None,
-                topic_tags=(
-                    tuple(t.strip().lower() for t in topic_tags if t.strip())
-                    if topic_tags is not None
-                    else None
-                ),
-                linked_case_ids=(
-                    tuple(x.strip() for x in linked_case_ids if x.strip())
-                    if linked_case_ids is not None
-                    else None
-                ),
-            )
-            payload_json = candidate_payload_to_json(payload)
+            require_confirm_reviewer(reviewed_by, action="update_subject_metadata")
+            if (
+                title is None
+                and summary is None
+                and topic_tags is None
+                and linked_subject_ids is None
+            ):
+                raise InputValidationError("update_subject_metadata requires at least one field")
 
             with self._uow_factory() as uow:
+                subject = uow.subjects.get(subject_id)
+                title_n = title.strip() if title is not None else None
+                summary_n = summary.strip() if summary is not None else None
+                metadata = validate_subject_metadata(
+                    title=title_n if title_n is not None else subject.title,
+                    summary=summary_n if summary_n is not None else subject.summary,
+                )
+                payload = SubjectUpdateCandidatePayload(
+                    kind="case_status_change",
+                    action="update",
+                    title=title_n,
+                    summary=summary_n,
+                    topic_tags=(
+                        tuple(t.strip().lower() for t in topic_tags if t.strip())
+                        if topic_tags is not None
+                        else None
+                    ),
+                    linked_subject_ids=(
+                        tuple(x.strip() for x in linked_subject_ids if x.strip())
+                        if linked_subject_ids is not None
+                        else None
+                    ),
+                )
+                payload_json = candidate_payload_to_json(payload)
                 key = normalize_idempotency_key(idempotency_key)
                 existing = uow.candidates.get_by_idempotency_key(key)
                 if existing is not None:
@@ -401,59 +416,57 @@ class InvestmentCaseService:
                                 "existing_candidate_id": existing.candidate_id,
                             },
                         )
-                    case = uow.cases.get(case_id)
                     return envelope_success(
                         request_id=request_id,
                         clock=self._clock,
-                        data=InvestmentCaseDTO.from_domain(case),
+                        data=ResearchSubjectDTO.from_domain(subject),
                         warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
                         degraded=True,
                     )
 
-                case = uow.cases.get(case_id)
                 now = self._clock.now()
-                updated = InvestmentCase(
-                    case_id=case.case_id,
-                    case_type=case.case_type,
-                    title=title.strip() if title is not None else case.title,
-                    summary=summary.strip() if summary is not None else case.summary,
-                    status=case.status,
-                    primary_instrument_id=case.primary_instrument_id,
+                updated = ResearchSubject(
+                    subject_id=subject.subject_id,
+                    subject_type=subject.subject_type,
+                    title=metadata.title,
+                    summary=metadata.summary,
+                    status=subject.status,
+                    primary_instrument_id=subject.primary_instrument_id,
                     topic_tags=(
                         tuple(t.strip().lower() for t in topic_tags if t.strip())
                         if topic_tags is not None
-                        else case.topic_tags
+                        else subject.topic_tags
                     ),
-                    created_at=case.created_at,
+                    created_at=subject.created_at,
                     updated_at=now,
-                    created_by=case.created_by,
-                    archived_at=case.archived_at,
-                    archived_reason=case.archived_reason,
-                    linked_case_ids=(
-                        tuple(x.strip() for x in linked_case_ids if x.strip())
-                        if linked_case_ids is not None
-                        else case.linked_case_ids
+                    created_by=subject.created_by,
+                    archived_at=subject.archived_at,
+                    archived_reason=subject.archived_reason,
+                    linked_subject_ids=(
+                        tuple(x.strip() for x in linked_subject_ids if x.strip())
+                        if linked_subject_ids is not None
+                        else subject.linked_subject_ids
                     ),
-                    evidence_ids=case.evidence_ids,
-                    report_ids=case.report_ids,
-                    event_ids=case.event_ids,
-                    decision_ids=case.decision_ids,
-                    schema_version=case.schema_version,
+                    evidence_ids=subject.evidence_ids,
+                    report_ids=subject.report_ids,
+                    event_ids=subject.event_ids,
+                    decision_ids=subject.decision_ids,
+                    schema_version=subject.schema_version,
                 )
-                uow.cases.update(updated)
+                uow.subjects.update(updated)
 
                 candidate, _dup, _warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
-                    kind=CandidateKind.CASE_STATUS_CHANGE,
-                    case_id=case_id,
+                    kind=CandidateKind.SUBJECT_STATUS_CHANGE,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
                     confirmation_mode=ConfirmationMode.NORMAL,
                     proposed_by=reviewed_by.strip(),
-                    proposed_by_rationale="User-confirmed case metadata update",
+                    proposed_by_rationale="User-confirmed subject metadata update",
                     idempotency_key=key,
                     status=CandidateStatus.CONFIRMED,
                     reviewed_at=now,
@@ -462,9 +475,9 @@ class InvestmentCaseService:
                 )
 
                 uow.audit.append(
-                    "phase1b.investment_case.metadata_updated",
+                    "phase1b.research_subject.metadata_updated",
                     {
-                        "case_id": case_id,
+                        "subject_id": subject_id,
                         "reviewed_by": reviewed_by.strip(),
                         "candidate_id": candidate.candidate_id,
                     },
@@ -474,7 +487,7 @@ class InvestmentCaseService:
                 return envelope_success(
                     request_id=request_id,
                     clock=self._clock,
-                    data=InvestmentCaseDTO.from_domain(updated),
+                    data=ResearchSubjectDTO.from_domain(updated),
                 )
         except Exception as exc:  # noqa: BLE001
             return envelope_failure(

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
 from application.dto.monitoring import (
+    MonitorArchiveInput,
     MonitorCreateInput,
     MonitorDashboardDTO,
     MonitorDashboardInput,
@@ -56,39 +57,32 @@ class MonitorToolCoordinator:
     def update(self, request: MonitorUpdateInput) -> ToolEnvelope[MonitorDetailDTO]:
         return self._database_call(lambda: self._service.update(request))
 
+    def archive(self, request: MonitorArchiveInput) -> ToolEnvelope[MonitorDetailDTO]:
+        return self._database_call(lambda: self._service.archive(request))
+
     def get(self, request: MonitorGetInput) -> ToolEnvelope[MonitorDetailDTO]:
         return self._database_call(lambda: self._service.get(request))
 
     def list(self, request: MonitorListInput) -> ToolEnvelope[MonitorListDTO]:
         return self._database_call(lambda: self._service.list(request))
 
-    def dashboard(
-        self, request: MonitorDashboardInput
-    ) -> ToolEnvelope[MonitorDashboardDTO]:
+    def dashboard(self, request: MonitorDashboardInput) -> ToolEnvelope[MonitorDashboardDTO]:
         return self._database_call(lambda: self._service.dashboard(request))
 
-    def list_runs(
-        self, request: MonitorRunListInput
-    ) -> ToolEnvelope[MonitorRunListDTO]:
+    def list_runs(self, request: MonitorRunListInput) -> ToolEnvelope[MonitorRunListDTO]:
         return self._database_call(lambda: self._service.list_runs(request))
 
-    def list_events(
-        self, request: MonitorEventListInput
-    ) -> ToolEnvelope[MonitorEventListDTO]:
+    def list_events(self, request: MonitorEventListInput) -> ToolEnvelope[MonitorEventListDTO]:
         return self._database_call(lambda: self._service.list_events(request))
 
     def resolve_event(
         self, request: MonitorEventResolveInput
     ) -> ToolEnvelope[MonitorEventResolutionDTO]:
         return self._database_call(
-            lambda: MonitorEventResolutionDTO.from_domain(
-                self._service.resolve_event(request)
-            )
+            lambda: MonitorEventResolutionDTO.from_domain(self._service.resolve_event(request))
         )
 
-    async def evaluate(
-        self, request: MonitorEvaluateInput
-    ) -> ToolEnvelope[MonitorRunDTO]:
+    async def evaluate(self, request: MonitorEvaluateInput) -> ToolEnvelope[MonitorRunDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         as_of = request.as_of or self._clock.now()
         try:
@@ -151,9 +145,7 @@ class MonitorToolCoordinator:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, now, exc)
 
-    def _failure[T](
-        self, request_id: str, as_of: datetime, exc: BaseException
-    ) -> ToolEnvelope[T]:
+    def _failure[T](self, request_id: str, as_of: datetime, exc: BaseException) -> ToolEnvelope[T]:
         error = (
             to_error_info(exc, self._redactor)
             if isinstance(exc, TradingPartnerError)

@@ -5,7 +5,7 @@ implements the dataclass bodies for the 1B subset, and adds a supporting-model
 registry for OpenQuestion / CandidateThesisRevision.
 
 Phase 1C C1a implements the six frozen research-memory records plus
-CaseEvidenceLink (supporting registry only), canonical JSON/hash helpers, and
+SubjectEvidenceLink (supporting registry only), canonical JSON/hash helpers, and
 mechanical domain invariants. No persistence or MCP surface lives here.
 """
 
@@ -33,8 +33,6 @@ from domain.common.enums import (
     EvidenceType,
     InvalidationSeverity,
     InvalidationStatus,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     JournalEntryType,
     Market,
@@ -42,6 +40,8 @@ from domain.common.enums import (
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
     VendorId,
@@ -51,10 +51,10 @@ from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import ensure_utc, require_aware_datetime
 
-# Frozen model names for Investment Case / research state.
+# Frozen model names for Research Subject / research state.
 # Original 12 names must never be removed (Phase 1C placeholders stay).
 FROZEN_RESEARCH_MODEL_NAMES: tuple[str, ...] = (
-    "InvestmentCase",
+    "ResearchSubject",
     "Thesis",
     "ThesisRevision",
     "Assumption",
@@ -73,18 +73,14 @@ FROZEN_PHASE1B_SUPPORTING_MODEL_NAMES: tuple[str, ...] = (
     "CandidateThesisRevision",
 )
 
-# CaseEvidenceLink is not a 13th frozen aggregate; supporting registry only.
-FROZEN_PHASE1C_SUPPORTING_MODEL_NAMES: tuple[str, ...] = ("CaseEvidenceLink",)
+# SubjectEvidenceLink is not a 13th frozen aggregate; supporting registry only.
+FROZEN_PHASE1C_SUPPORTING_MODEL_NAMES: tuple[str, ...] = ("SubjectEvidenceLink",)
 
 RESEARCH_SCHEMA_VERSION: int = 1
 
 # Strict run_<uuid7> (lowercase hex + hyphens, version nibble 7, RFC4122 variant).
-_UUID7_TOKEN = (
-    r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-)
-_RUN_CANDIDATE_ID_RE = re.compile(
-    rf"^{re.escape(EntityIdPrefix.RUN.value)}_{_UUID7_TOKEN}$"
-)
+_UUID7_TOKEN = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+_RUN_CANDIDATE_ID_RE = re.compile(rf"^{re.escape(EntityIdPrefix.RUN.value)}_{_UUID7_TOKEN}$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _TITLE_MAX = 300
@@ -153,9 +149,7 @@ def _require_entity_id(value: str, *, field: str, prefix: EntityIdPrefix) -> Non
         )
 
 
-def _require_optional_entity_id(
-    value: str | None, *, field: str, prefix: EntityIdPrefix
-) -> None:
+def _require_optional_entity_id(value: str | None, *, field: str, prefix: EntityIdPrefix) -> None:
     if value is None:
         return
     _require_entity_id(value, field=field, prefix=prefix)
@@ -214,9 +208,7 @@ def _require_bounded_str(
     return text
 
 
-def _require_optional_str_max(
-    value: str | None, *, field: str, max_len: int
-) -> str | None:
+def _require_optional_str_max(value: str | None, *, field: str, max_len: int) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
@@ -288,9 +280,7 @@ def _require_unit_interval_decimal(value: object, *, field: str) -> Decimal:
     return value
 
 
-def _require_optional_unit_interval_decimal(
-    value: object, *, field: str
-) -> Decimal | None:
+def _require_optional_unit_interval_decimal(value: object, *, field: str) -> Decimal | None:
     if value is None:
         return None
     return _require_unit_interval_decimal(value, field=field)
@@ -340,9 +330,7 @@ def _require_recorded_by(value: object, *, field: str = "recorded_by") -> str:
     )
 
 
-def _require_related_entity_pair(
-    entity_type: str | None, entity_id: str | None
-) -> None:
+def _require_related_entity_pair(entity_type: str | None, entity_id: str | None) -> None:
     if (entity_type is None) ^ (entity_id is None):
         raise DataContractError(
             "related_entity_type and related_entity_id must both be set or both null",
@@ -356,9 +344,7 @@ def _require_related_entity_pair(
         _require_non_blank_str(entity_id, field="related_entity_id")
 
 
-def _require_not_self_supersede(
-    entity_id: str, supersedes_id: str | None, *, field: str
-) -> None:
+def _require_not_self_supersede(entity_id: str, supersedes_id: str | None, *, field: str) -> None:
     if supersedes_id is not None and supersedes_id == entity_id:
         raise DataContractError(
             f"{field} must not equal the entity's own id",
@@ -509,23 +495,15 @@ def compute_evidence_content_sha256(
     if structured_data_json is None:
         structured_value: object | None = None
     else:
-        structured_value = json.loads(
-            canonicalize_research_json_object(structured_data_json)
-        )
+        structured_value = json.loads(canonicalize_research_json_object(structured_data_json))
     payload: dict[str, object] = {
         "content_text": content_text,
-        "effective_from": (
-            None if effective_from is None else _datetime_to_utc_z(effective_from)
-        ),
-        "effective_to": (
-            None if effective_to is None else _datetime_to_utc_z(effective_to)
-        ),
+        "effective_from": (None if effective_from is None else _datetime_to_utc_z(effective_from)),
+        "effective_to": (None if effective_to is None else _datetime_to_utc_z(effective_to)),
         "evidence_type": evidence_type.value,
         "instrument_ids_sorted": sorted(instrument_ids),
         "origin": origin.value,
-        "published_at": (
-            None if published_at is None else _datetime_to_utc_z(published_at)
-        ),
+        "published_at": (None if published_at is None else _datetime_to_utc_z(published_at)),
         "source_name": source_name,
         "source_record_id": source_record_id,
         "source_vendor": source_vendor,
@@ -538,7 +516,7 @@ def compute_evidence_content_sha256(
 
 def compute_report_content_sha256(
     *,
-    case_id: str,
+    subject_id: str,
     report_type: ResearchReportType,
     title: str,
     summary: str,
@@ -550,7 +528,8 @@ def compute_report_content_sha256(
     """Compute ResearchReport content hash per Phase 1C §11.3 field set."""
     payload: dict[str, object] = {
         "as_of": _datetime_to_utc_z(as_of),
-        "case_id": case_id,
+        # Hash ABI: historical report digests used the storage-era key name.
+        "case_id": subject_id,
         "content_markdown": content_markdown,
         "evidence_ids_sorted": sorted(evidence_ids),
         "report_type": report_type.value,
@@ -573,12 +552,12 @@ def _require_matching_content_sha256(
 
 
 @dataclass(frozen=True, slots=True)
-class InvestmentCase:
-    case_id: str
-    case_type: InvestmentCaseType
+class ResearchSubject:
+    subject_id: str
+    subject_type: ResearchSubjectType
     title: str
     summary: str
-    status: InvestmentCaseStatus
+    status: ResearchSubjectStatus
     primary_instrument_id: str | None
     topic_tags: tuple[str, ...]
     created_at: datetime
@@ -586,7 +565,7 @@ class InvestmentCase:
     created_by: str
     archived_at: datetime | None
     archived_reason: str | None
-    linked_case_ids: tuple[str, ...]
+    linked_subject_ids: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     report_ids: tuple[str, ...]
     event_ids: tuple[str, ...]
@@ -600,25 +579,29 @@ class InvestmentCase:
             require_aware_datetime(self.archived_at, field_name="archived_at")
         if self.updated_at < self.created_at:
             raise DataContractError("updated_at must be >= created_at")
-        if self.status is InvestmentCaseStatus.ARCHIVED:
+        if self.status is ResearchSubjectStatus.ARCHIVED:
             if self.archived_at is None or self.archived_reason is None:
-                raise DataContractError("ARCHIVED case requires archived_at and archived_reason")
+                raise DataContractError(
+                    "ARCHIVED research subject requires archived_at and archived_reason"
+                )
         else:
             if self.archived_at is not None or self.archived_reason is not None:
-                raise DataContractError("non-ARCHIVED case must not set archived_* fields")
+                raise DataContractError(
+                    "non-ARCHIVED research subject must not set archived_* fields"
+                )
         if (
-            self.case_type in {InvestmentCaseType.COMPANY, InvestmentCaseType.CATALYST}
+            self.subject_type in {ResearchSubjectType.COMPANY, ResearchSubjectType.CATALYST}
             and self.primary_instrument_id is None
         ):
             raise DataContractError(
-                "COMPANY/CATALYST case requires primary_instrument_id"
+                "COMPANY/CATALYST research subject requires primary_instrument_id"
             )
 
 
 @dataclass(frozen=True, slots=True)
 class Thesis:
     thesis_id: str
-    case_id: str
+    subject_id: str
     title: str
     role: ThesisRole
     status: ThesisStatus
@@ -653,7 +636,7 @@ class Thesis:
 class ThesisRevision:
     revision_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     supersedes_revision_no: int | None
     statement: str
@@ -691,7 +674,7 @@ class ThesisRevision:
 class Assumption:
     assumption_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     statement: str
     basis: str
@@ -731,7 +714,7 @@ class InvalidationCondition:
 
     invalidation_id: str
     thesis_id: str
-    case_id: str
+    subject_id: str
     revision_no: int
     description: str
     observable: str
@@ -768,7 +751,7 @@ class InvalidationCondition:
 @dataclass(frozen=True, slots=True)
 class OpenQuestion:
     question_id: str
-    case_id: str
+    subject_id: str
     text: str
     status: OpenQuestionStatus
     asked_at: datetime
@@ -797,8 +780,7 @@ class OpenQuestion:
                 )
         elif self.closed_without_answer_reason is not None:
             raise DataContractError(
-                "non-CLOSED_WITHOUT_ANSWER open question must not set "
-                "closed_without_answer_reason"
+                "non-CLOSED_WITHOUT_ANSWER open question must not set closed_without_answer_reason"
             )
 
 
@@ -810,12 +792,12 @@ class WatchlistItem:
     display_name: str
     thesis_hint: str
     triggers: tuple[str, ...]
-    case_id: str | None
+    subject_id: str | None
     status: WatchlistItemStatus
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None
-    promoted_to_case_id: str | None
+    promoted_to_subject_id: str | None
     triggered_at: datetime | None
     triggered_reason: str | None
 
@@ -828,18 +810,16 @@ class WatchlistItem:
             require_aware_datetime(self.triggered_at, field_name="triggered_at")
         if self.updated_at < self.created_at:
             raise DataContractError("updated_at must be >= created_at")
-        if self.status is WatchlistItemStatus.PROMOTED_TO_CASE:
-            if self.promoted_to_case_id is None:
-                raise DataContractError("PROMOTED_TO_CASE requires promoted_to_case_id")
-        elif self.promoted_to_case_id is not None:
+        if self.status is WatchlistItemStatus.PROMOTED_TO_SUBJECT:
+            if self.promoted_to_subject_id is None:
+                raise DataContractError("PROMOTED_TO_SUBJECT requires promoted_to_subject_id")
+        elif self.promoted_to_subject_id is not None:
             raise DataContractError(
-                "non-PROMOTED_TO_CASE watchlist item must not set promoted_to_case_id"
+                "non-PROMOTED_TO_SUBJECT watchlist item must not set promoted_to_subject_id"
             )
         if self.status is WatchlistItemStatus.TRIGGERED:
             if self.triggered_at is None or self.triggered_reason is None:
-                raise DataContractError(
-                    "TRIGGERED requires triggered_at and triggered_reason"
-                )
+                raise DataContractError("TRIGGERED requires triggered_at and triggered_reason")
         elif self.triggered_at is not None or self.triggered_reason is not None:
             raise DataContractError(
                 "non-TRIGGERED watchlist item must not set triggered_at/triggered_reason"
@@ -849,7 +829,7 @@ class WatchlistItem:
 @dataclass(frozen=True, slots=True)
 class CandidateThesisRevision:
     candidate_id: str
-    case_id: str | None
+    subject_id: str | None
     thesis_id: str | None
     target_revision_no: int | None
     payload_json: str
@@ -874,29 +854,29 @@ class CandidateThesisRevision:
         _require_run_candidate_id(self.candidate_id)
         if not self.idempotency_key or not self.idempotency_key.strip():
             raise DataContractError("idempotency_key must be non-empty")
-        if self.kind is not CandidateKind.WATCHLIST_ITEM and self.case_id is None:
+        if self.kind is not CandidateKind.WATCHLIST_ITEM and self.subject_id is None:
             raise DataContractError(
-                "case_id is required for non-watchlist candidates",
+                "subject_id is required for non-watchlist candidates",
                 details={"kind": self.kind.value},
             )
-        if self.kind in {
-            CandidateKind.ASSUMPTION,
-            CandidateKind.INVALIDATION_CONDITION,
-        } and self.thesis_id is None:
+        if (
+            self.kind
+            in {
+                CandidateKind.ASSUMPTION,
+                CandidateKind.INVALIDATION_CONDITION,
+            }
+            and self.thesis_id is None
+        ):
             raise DataContractError(
                 "thesis_id is required for assumption/invalidation candidates",
                 details={"kind": self.kind.value},
             )
         if self.status is CandidateStatus.PROPOSED:
             if self.reviewed_at is not None or self.reviewed_by is not None:
-                raise DataContractError(
-                    "PROPOSED candidate must not set reviewed_at/reviewed_by"
-                )
+                raise DataContractError("PROPOSED candidate must not set reviewed_at/reviewed_by")
         elif self.status is CandidateStatus.CONFIRMED:
             if self.reviewed_at is None or self.reviewed_by is None:
-                raise DataContractError(
-                    "CONFIRMED candidate requires reviewed_at and reviewed_by"
-                )
+                raise DataContractError("CONFIRMED candidate requires reviewed_at and reviewed_by")
         elif self.status is CandidateStatus.REJECTED:
             if (
                 self.reviewed_at is None
@@ -907,34 +887,21 @@ class CandidateThesisRevision:
                     "REJECTED candidate requires reviewed_at, reviewed_by, rejection_reason"
                 )
         elif self.status is CandidateStatus.WITHDRAWN:
-            if (
-                self.reviewed_at is None
-                or self.reviewed_by is None
-                or self.review_note is None
-            ):
+            if self.reviewed_at is None or self.reviewed_by is None or self.review_note is None:
                 raise DataContractError(
                     "WITHDRAWN candidate requires reviewed_at, reviewed_by, review_note"
                 )
         elif self.status is CandidateStatus.EXPIRED and (
             self.reviewed_at is not None or self.reviewed_by is not None
         ):
-            raise DataContractError(
-                "EXPIRED candidate must not set reviewed_at/reviewed_by"
-            )
-        if (
-            self.status is not CandidateStatus.REJECTED
-            and self.rejection_reason is not None
-        ):
-            raise DataContractError(
-                "non-REJECTED candidate must not set rejection_reason"
-            )
+            raise DataContractError("EXPIRED candidate must not set reviewed_at/reviewed_by")
+        if self.status is not CandidateStatus.REJECTED and self.rejection_reason is not None:
+            raise DataContractError("non-REJECTED candidate must not set rejection_reason")
         if (
             self.status in {CandidateStatus.PROPOSED, CandidateStatus.EXPIRED}
             and self.review_note is not None
         ):
-            raise DataContractError(
-                "PROPOSED/EXPIRED candidate must not set review_note"
-            )
+            raise DataContractError("PROPOSED/EXPIRED candidate must not set review_note")
 
 
 # --- Phase 1C research-memory models ---
@@ -968,9 +935,7 @@ class Evidence:
     schema_version: int
 
     def __post_init__(self) -> None:
-        _require_entity_id(
-            self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE
-        )
+        _require_entity_id(self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE)
         if not isinstance(self.evidence_type, EvidenceType):
             raise DataContractError(
                 "evidence_type must be EvidenceType",
@@ -982,9 +947,7 @@ class Evidence:
                 details={"type": type(self.origin).__name__},
             )
         _require_bounded_str(self.title, field="title", min_len=1, max_len=_TITLE_MAX)
-        _require_bounded_str(
-            self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX
-        )
+        _require_bounded_str(self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX)
         _require_optional_str_max(
             self.content_text, field="content_text", max_len=_CONTENT_TEXT_MAX
         )
@@ -1068,10 +1031,7 @@ class Evidence:
             self.supersedes_evidence_id,
             field="supersedes_evidence_id",
         )
-        if (
-            self.evidence_type is EvidenceType.CORRECTION
-            and self.supersedes_evidence_id is None
-        ):
+        if self.evidence_type is EvidenceType.CORRECTION and self.supersedes_evidence_id is None:
             raise DataContractError(
                 "CORRECTION evidence requires supersedes_evidence_id",
                 details={"field": "supersedes_evidence_id"},
@@ -1086,9 +1046,9 @@ class Evidence:
 
 
 @dataclass(frozen=True, slots=True)
-class CaseEvidenceLink:
+class SubjectEvidenceLink:
     link_id: str
-    case_id: str
+    subject_id: str
     evidence_id: str
     linked_at: datetime
     linked_by: str
@@ -1096,10 +1056,8 @@ class CaseEvidenceLink:
 
     def __post_init__(self) -> None:
         _require_entity_id(self.link_id, field="link_id", prefix=EntityIdPrefix.REV)
-        _require_entity_id(self.case_id, field="case_id", prefix=EntityIdPrefix.CASE)
-        _require_entity_id(
-            self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE
-        )
+        _require_entity_id(self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
+        _require_entity_id(self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE)
         require_aware_datetime(self.linked_at, field_name="linked_at")
         _require_non_blank_str(self.linked_by, field="linked_by")
         _require_schema_version(self.schema_version)
@@ -1109,7 +1067,7 @@ class CaseEvidenceLink:
 class EvidenceAssessment:
     assessment_id: str
     evidence_id: str
-    case_id: str
+    subject_id: str
     thesis_id: str | None
     thesis_revision_id: str | None
     stance: EvidenceStance
@@ -1121,16 +1079,10 @@ class EvidenceAssessment:
     schema_version: int
 
     def __post_init__(self) -> None:
-        _require_entity_id(
-            self.assessment_id, field="assessment_id", prefix=EntityIdPrefix.REV
-        )
-        _require_entity_id(
-            self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE
-        )
-        _require_entity_id(self.case_id, field="case_id", prefix=EntityIdPrefix.CASE)
-        _require_optional_entity_id(
-            self.thesis_id, field="thesis_id", prefix=EntityIdPrefix.THESIS
-        )
+        _require_entity_id(self.assessment_id, field="assessment_id", prefix=EntityIdPrefix.REV)
+        _require_entity_id(self.evidence_id, field="evidence_id", prefix=EntityIdPrefix.EVIDENCE)
+        _require_entity_id(self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
+        _require_optional_entity_id(self.thesis_id, field="thesis_id", prefix=EntityIdPrefix.THESIS)
         _require_optional_entity_id(
             self.thesis_revision_id,
             field="thesis_revision_id",
@@ -1142,13 +1094,9 @@ class EvidenceAssessment:
                 details={"type": type(self.stance).__name__},
             )
         _require_unit_interval_decimal(self.materiality, field="materiality")
-        _require_bounded_str(
-            self.rationale, field="rationale", min_len=1, max_len=_RATIONALE_MAX
-        )
+        _require_bounded_str(self.rationale, field="rationale", min_len=1, max_len=_RATIONALE_MAX)
         require_aware_datetime(self.assessed_at, field_name="assessed_at")
-        _require_actor(
-            self.assessed_by, field="assessed_by", allowed=_USER_AGENT_OR_CODEX
-        )
+        _require_actor(self.assessed_by, field="assessed_by", allowed=_USER_AGENT_OR_CODEX)
         _require_actor(self.confirmed_by, field="confirmed_by", allowed=_USER_OR_AGENT)
         _require_schema_version(self.schema_version)
 
@@ -1156,7 +1104,7 @@ class EvidenceAssessment:
 @dataclass(frozen=True, slots=True)
 class ResearchReport:
     report_id: str
-    case_id: str
+    subject_id: str
     report_type: ResearchReportType
     title: str
     summary: str
@@ -1174,19 +1122,15 @@ class ResearchReport:
     schema_version: int
 
     def __post_init__(self) -> None:
-        _require_entity_id(
-            self.report_id, field="report_id", prefix=EntityIdPrefix.REPORT
-        )
-        _require_entity_id(self.case_id, field="case_id", prefix=EntityIdPrefix.CASE)
+        _require_entity_id(self.report_id, field="report_id", prefix=EntityIdPrefix.REPORT)
+        _require_entity_id(self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
         if not isinstance(self.report_type, ResearchReportType):
             raise DataContractError(
                 "report_type must be ResearchReportType",
                 details={"type": type(self.report_type).__name__},
             )
         _require_bounded_str(self.title, field="title", min_len=1, max_len=_TITLE_MAX)
-        _require_bounded_str(
-            self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX
-        )
+        _require_bounded_str(self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX)
         _require_bounded_str(
             self.content_markdown,
             field="content_markdown",
@@ -1204,9 +1148,7 @@ class ResearchReport:
         _require_optional_entity_id(
             self.research_run_id, field="research_run_id", prefix=EntityIdPrefix.RUN
         )
-        _require_id_tuple(
-            self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
+        _require_id_tuple(self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
         _require_id_tuple(
             self.thesis_revision_ids,
             field="thesis_revision_ids",
@@ -1223,7 +1165,7 @@ class ResearchReport:
             field="supersedes_report_id",
         )
         expected_hash = compute_report_content_sha256(
-            case_id=self.case_id,
+            subject_id=self.subject_id,
             report_type=self.report_type,
             title=self.title,
             summary=self.summary,
@@ -1243,7 +1185,7 @@ class ResearchReport:
 @dataclass(frozen=True, slots=True)
 class ResearchEvent:
     event_id: str
-    case_id: str
+    subject_id: str
     event_type: ResearchEventType
     title: str
     summary: str
@@ -1260,27 +1202,21 @@ class ResearchEvent:
 
     def __post_init__(self) -> None:
         _require_entity_id(self.event_id, field="event_id", prefix=EntityIdPrefix.EVENT)
-        _require_entity_id(self.case_id, field="case_id", prefix=EntityIdPrefix.CASE)
+        _require_entity_id(self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
         if not isinstance(self.event_type, ResearchEventType):
             raise DataContractError(
                 "event_type must be ResearchEventType",
                 details={"type": type(self.event_type).__name__},
             )
         _require_bounded_str(self.title, field="title", min_len=1, max_len=_TITLE_MAX)
-        _require_bounded_str(
-            self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX
-        )
+        _require_bounded_str(self.summary, field="summary", min_len=1, max_len=_SUMMARY_MAX)
         require_aware_datetime(self.occurred_at, field_name="occurred_at")
         require_aware_datetime(self.recorded_at, field_name="recorded_at")
         if self.published_at is not None:
             require_aware_datetime(self.published_at, field_name="published_at")
         _require_string_tuple(self.instrument_ids, field="instrument_ids")
-        _require_id_tuple(
-            self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
-        _require_id_tuple(
-            self.report_ids, field="report_ids", prefix=EntityIdPrefix.REPORT
-        )
+        _require_id_tuple(self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
+        _require_id_tuple(self.report_ids, field="report_ids", prefix=EntityIdPrefix.REPORT)
         _require_related_entity_pair(self.related_entity_type, self.related_entity_id)
         _require_bounded_str(
             self.source_name, field="source_name", min_len=1, max_len=_SOURCE_NAME_MAX
@@ -1291,7 +1227,7 @@ class ResearchEvent:
 @dataclass(frozen=True, slots=True)
 class DecisionRecord:
     decision_id: str
-    case_id: str
+    subject_id: str
     decision_type: DecisionType
     title: str
     rationale: str
@@ -1308,10 +1244,8 @@ class DecisionRecord:
     schema_version: int
 
     def __post_init__(self) -> None:
-        _require_entity_id(
-            self.decision_id, field="decision_id", prefix=EntityIdPrefix.DECISION
-        )
-        _require_entity_id(self.case_id, field="case_id", prefix=EntityIdPrefix.CASE)
+        _require_entity_id(self.decision_id, field="decision_id", prefix=EntityIdPrefix.DECISION)
+        _require_entity_id(self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT)
         if not isinstance(self.decision_type, DecisionType):
             raise DataContractError(
                 "decision_type must be DecisionType",
@@ -1360,20 +1294,14 @@ class DecisionRecord:
                 },
             )
         if self.primary_instrument_id is not None:
-            _require_non_blank_str(
-                self.primary_instrument_id, field="primary_instrument_id"
-            )
+            _require_non_blank_str(self.primary_instrument_id, field="primary_instrument_id")
         _require_id_tuple(
             self.thesis_revision_ids,
             field="thesis_revision_ids",
             prefix=EntityIdPrefix.REV,
         )
-        _require_id_tuple(
-            self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE
-        )
-        _require_id_tuple(
-            self.report_ids, field="report_ids", prefix=EntityIdPrefix.REPORT
-        )
+        _require_id_tuple(self.evidence_ids, field="evidence_ids", prefix=EntityIdPrefix.EVIDENCE)
+        _require_id_tuple(self.report_ids, field="report_ids", prefix=EntityIdPrefix.REPORT)
         _require_optional_entity_id(
             self.supersedes_decision_id,
             field="supersedes_decision_id",
@@ -1395,7 +1323,7 @@ class DecisionRecord:
 @dataclass(frozen=True, slots=True)
 class JournalEntry:
     journal_id: str
-    case_id: str | None
+    subject_id: str | None
     entry_type: JournalEntryType
     title: str
     body_markdown: str
@@ -1410,11 +1338,9 @@ class JournalEntry:
     schema_version: int
 
     def __post_init__(self) -> None:
-        _require_entity_id(
-            self.journal_id, field="journal_id", prefix=EntityIdPrefix.JOURNAL
-        )
+        _require_entity_id(self.journal_id, field="journal_id", prefix=EntityIdPrefix.JOURNAL)
         _require_optional_entity_id(
-            self.case_id, field="case_id", prefix=EntityIdPrefix.CASE
+            self.subject_id, field="subject_id", prefix=EntityIdPrefix.SUBJECT
         )
         if not isinstance(self.entry_type, JournalEntryType):
             raise DataContractError(
@@ -1429,9 +1355,7 @@ class JournalEntry:
             max_len=_JOURNAL_BODY_MAX,
         )
         require_aware_datetime(self.created_at, field_name="created_at")
-        _require_actor(
-            self.authored_by, field="authored_by", allowed=_USER_AGENT_OR_CODEX
-        )
+        _require_actor(self.authored_by, field="authored_by", allowed=_USER_AGENT_OR_CODEX)
         _require_actor(self.confirmed_by, field="confirmed_by", allowed=_USER_OR_AGENT)
         _require_string_tuple(self.instrument_ids, field="instrument_ids")
         _require_string_tuple(self.topic_tags, field="topic_tags")

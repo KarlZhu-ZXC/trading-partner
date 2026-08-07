@@ -224,11 +224,11 @@ integration in Phase 3A.
 
 - A 股中文全名可通过腾讯名称目录发现候选，并须再经腾讯报价接口校验后才写入
   Instrument Master；本地 Master 仍是缓存/注册表，不是允许名单。
-- `create_case=false` 的 ad-hoc Deep Dive 不再调用仅适用于 Investment Case 的
+- `create_case=false` 的 ad-hoc Deep Dive 不再调用仅适用于研究档案的
   `investment_case_read` 的 `context` operation，因此不会制造预期内的
   `INPUT_VALIDATION_ERROR` 或把
   成功研究错误标成 Partial。
-- A 股 Case 工作流按步骤串行进入 Provider Router，避免同一研究流程把多个
+- A 股研究标的工作流按步骤串行进入 Provider Router，避免同一研究流程把多个
   Eastmoney 家族请求同时压入共享队列；Provider 内部的缓存、限流、熔断和
   fallback 语义保持不变。
 
@@ -330,6 +330,12 @@ Candidate lifecycle, sizing is returned by
 conditions compile only through explicit `monitor_manage` `create` / `update` calls.
 Trade Plan identities and versions are append-only and linked Monitors preserve the exact
 plan version. A plan update never silently rewrites an existing Monitor.
+The plan-level `instrument_id` identifies the execution/position instrument used by
+sizing and portfolio risk. Each monitorable condition independently identifies the
+instrument whose fact drives that condition. A linked Monitor may therefore observe
+USOIL (`cfd:OTC:LIGHT_CMD_USD`) for a UCO execution plan. The relationship is only a
+declared decision reference: the engine never substitutes the CFD price, return,
+currency, or multiplier for UCO and does not assume one-to-one tracking.
 
 A-share sizing rounds down to 100-share lots; US equity/ETF sizing supports four-decimal
 fractional quantities. Plan, policy, cash, stop-distance, freshness, optional liquidity,

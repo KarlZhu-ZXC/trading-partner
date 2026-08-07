@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from application.ports.a_share_trading_calendar import AShareTradingCalendar
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpTransport
-from application.ports.monitor_notification_sender import MonitorNotificationSender
+from application.ports.notification_sender import NotificationSender
 from application.ports.watchlist_source_provider import WatchlistSourceProvider
 from infrastructure.persistence.database import SqlAlchemyDatabase
 from infrastructure.providers.a_share.eastmoney_gate import EastmoneyRequestGate
@@ -23,7 +23,9 @@ class CompositionOverrides:
     eastmoney_gate: EastmoneyRequestGate | None = None
     a_share_calendar: AShareTradingCalendar | None = None
     watchlist_provider: WatchlistSourceProvider | None = None
-    monitor_notification_sender: MonitorNotificationSender | None = None
+    notification_sender: NotificationSender | None = None
+    # Legacy override name remains accepted for old test fixtures and scripts.
+    monitor_notification_sender: NotificationSender | None = None
 
 
 @dataclass(slots=True)
@@ -35,8 +37,13 @@ class RuntimeResources:
     post_market_sync_lock: ProcessFileLock
     a_share_transport: HttpTransport | None = None
     cross_asset_transport: HttpTransport | None = None
-    monitor_notification_sender: MonitorNotificationSender | None = None
+    notification_sender: NotificationSender | None = None
     _closed: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def monitor_notification_sender(self) -> NotificationSender | None:
+        """Compatibility accessor for pre-0030 composition callers."""
+        return self.notification_sender
 
     async def aclose(self) -> None:
         if self._closed:
@@ -47,7 +54,7 @@ class RuntimeResources:
             for transport in (
                 self.a_share_transport,
                 self.cross_asset_transport,
-                self.monitor_notification_sender,
+                self.notification_sender,
             ):
                 if transport is None or id(transport) in closed:
                     continue

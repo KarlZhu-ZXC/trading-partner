@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from application.dto.monitoring import (
+    MonitorArchiveInput,
     MonitorCreateInput,
     MonitorDashboardDTO,
     MonitorDashboardInput,
@@ -69,23 +70,23 @@ class MonitorService:
         self._schedule = schedule or MonitorScheduleService()
 
     def create(self, request: MonitorCreateInput) -> MonitorDetailDTO:
-        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
+        rules, subject_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
         existing = self._repository.get_by_idempotency_key(request.idempotency_key)
         if existing is not None:
             if not self._matches_create(
-                existing, request, rules, case_id, instrument_id, valid_until
+                existing, request, rules, subject_id, instrument_id, valid_until
             ):
                 raise IdempotencyConflict(
                     "idempotency_key belongs to a different monitor definition"
                 )
             return self.get(MonitorGetInput(monitor_id=existing.monitor_id))
-        self._validate_case(case_id)
+        self._validate_subject(subject_id)
         now = self._clock.now()
         value = MonitorDefinition(
             monitor_id=self._ids.new(EntityIdPrefix.MONITOR),
             version=1,
             name=request.name.strip(),
-            case_id=case_id,
+            subject_id=subject_id,
             primary_instrument_id=instrument_id,
             trade_plan_id=request.trade_plan_id,
             trade_plan_version=request.trade_plan_version,
@@ -105,11 +106,11 @@ class MonitorService:
         )
 
     def update(self, request: MonitorUpdateInput) -> MonitorDetailDTO:
-        rules, case_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
+        rules, subject_id, instrument_id, valid_until = self._resolve_definition_inputs(request)
         replay = self._repository.get_by_idempotency_key(request.idempotency_key)
         if replay is not None:
             if replay.monitor_id != request.monitor_id or not self._matches_update(
-                replay, request, rules, case_id, instrument_id, valid_until
+                replay, request, rules, subject_id, instrument_id, valid_until
             ):
                 raise IdempotencyConflict("idempotency_key belongs to a different monitor update")
             return self.get(MonitorGetInput(monitor_id=replay.monitor_id))
@@ -122,12 +123,12 @@ class MonitorService:
                     "current_version": current.version,
                 },
             )
-        self._validate_case(case_id)
+        self._validate_subject(subject_id)
         value = MonitorDefinition(
             monitor_id=current.monitor_id,
             version=current.version + 1,
             name=request.name.strip(),
-            case_id=case_id,
+            subject_id=subject_id,
             primary_instrument_id=instrument_id,
             trade_plan_id=request.trade_plan_id,
             trade_plan_version=request.trade_plan_version,
@@ -139,6 +140,55 @@ class MonitorService:
             idempotency_key=request.idempotency_key.strip(),
             created_at=self._clock.now(),
             valid_until=valid_until,
+        )
+        self._repository.append_version(value)
+        return self.get(MonitorGetInput(monitor_id=value.monitor_id))
+
+    def archive(self, request: MonitorArchiveInput) -> MonitorDetailDTO:
+        """Append an ARCHIVED version while retaining every prior definition and run."""
+        replay = self._repository.get_by_idempotency_key(request.idempotency_key)
+        if replay is not None:
+            if (
+                replay.monitor_id != request.monitor_id
+                or replay.status is not MonitorStatus.ARCHIVED
+            ):
+                raise IdempotencyConflict("idempotency_key belongs to a different monitor archive")
+            return self.get(MonitorGetInput(monitor_id=replay.monitor_id))
+
+        current = self._require(request.monitor_id)
+        if current.version != request.expected_version:
+            raise MonitorVersionConflict(
+                "expected_version does not match current monitor",
+                details={
+                    "expected_version": request.expected_version,
+                    "current_version": current.version,
+                },
+            )
+        now = self._clock.now()
+        value = MonitorDefinition(
+            monitor_id=current.monitor_id,
+            version=current.version + 1,
+            name=current.name,
+            subject_id=current.subject_id,
+            primary_instrument_id=current.primary_instrument_id,
+            trade_plan_id=current.trade_plan_id,
+            trade_plan_version=current.trade_plan_version,
+            cadence=current.cadence,
+            interval_minutes=current.interval_minutes,
+            status=MonitorStatus.ARCHIVED,
+            rules=current.rules,
+            confirmed_by=request.confirmed_by,
+            idempotency_key=request.idempotency_key.strip(),
+            created_at=now,
+            # A superseded expiry may be in the past relative to this new version.
+            # The archived status is the effective lifetime boundary; history retains
+            # the original valid_until on its prior immutable version.
+            valid_until=(
+                current.valid_until
+                if current.valid_until is not None and current.valid_until > now
+                else None
+            ),
+            schema_version=current.schema_version,
         )
         self._repository.append_version(value)
         return self.get(MonitorGetInput(monitor_id=value.monitor_id))
@@ -255,17 +305,17 @@ class MonitorService:
             raise MonitorNotFound("Monitor was not found", details={"monitor_id": monitor_id})
         return value
 
-    def _validate_case(self, case_id: str | None) -> None:
-        if case_id is None:
+    def _validate_subject(self, subject_id: str | None) -> None:
+        if subject_id is None:
             return
         with self._research_uow_factory() as uow:
-            uow.cases.get(case_id)
+            uow.subjects.get(subject_id)
 
     def _resolve_definition_inputs(
         self, request: MonitorCreateInput | MonitorUpdateInput
     ) -> tuple[tuple[MonitorRule, ...], str | None, str | None, datetime | None]:
         rules = list(item.to_domain() for item in request.rules)
-        case_id = request.case_id
+        subject_id = request.subject_id
         instrument_id = request.primary_instrument_id
         valid_until = request.valid_until
         if request.trade_plan_id is not None:
@@ -278,12 +328,9 @@ class MonitorService:
                 raise DataContractError("Specified Trade Plan version was not found")
             if plan.status is not TradePlanStatus.ACTIVE:
                 raise DataContractError("Monitor compilation requires an ACTIVE Trade Plan")
-            if case_id is not None and case_id != plan.case_id:
-                raise DataContractError("Monitor case_id conflicts with Trade Plan")
-            if instrument_id is not None and instrument_id != plan.instrument_id:
-                raise DataContractError("Monitor primary_instrument_id conflicts with Trade Plan")
-            case_id = plan.case_id
-            instrument_id = plan.instrument_id
+            if subject_id is not None and subject_id != plan.subject_id:
+                raise DataContractError("Monitor subject_id conflicts with Trade Plan")
+            subject_id = plan.subject_id
             if plan.valid_until is not None and (
                 valid_until is None or plan.valid_until < valid_until
             ):
@@ -313,6 +360,20 @@ class MonitorService:
                             event_after=condition.event_after,
                         )
                     )
+            reference_instrument_ids = {
+                rule.instrument_id for rule in rules if rule.instrument_id is not None
+            }
+            if instrument_id is None:
+                instrument_id = (
+                    next(iter(reference_instrument_ids))
+                    if len(reference_instrument_ids) == 1
+                    else plan.instrument_id
+                )
+            elif instrument_id not in {plan.instrument_id, *reference_instrument_ids}:
+                raise DataContractError(
+                    "Monitor primary_instrument_id must be the Trade Plan execution "
+                    "instrument or an instrument observed by one of its rules"
+                )
         if not rules:
             raise DataContractError("Monitor has no machine-evaluable rules")
         if len(rules) > 50:
@@ -320,21 +381,21 @@ class MonitorService:
         codes = [item.rule_code for item in rules]
         if len(codes) != len(set(codes)):
             raise DataContractError("Monitor rule_code values must be unique")
-        return tuple(rules), case_id, instrument_id, valid_until
+        return tuple(rules), subject_id, instrument_id, valid_until
 
     @staticmethod
     def _matches_create(
         value: MonitorDefinition,
         request: MonitorCreateInput,
         rules: tuple[MonitorRule, ...],
-        case_id: str | None,
+        subject_id: str | None,
         instrument_id: str | None,
         valid_until: datetime | None,
     ) -> bool:
         return (
             value.version == 1
             and value.name == request.name.strip()
-            and value.case_id == case_id
+            and value.subject_id == subject_id
             and value.primary_instrument_id == instrument_id
             and value.trade_plan_id == request.trade_plan_id
             and value.trade_plan_version == request.trade_plan_version
@@ -350,14 +411,14 @@ class MonitorService:
         value: MonitorDefinition,
         request: MonitorUpdateInput,
         rules: tuple[MonitorRule, ...],
-        case_id: str | None,
+        subject_id: str | None,
         instrument_id: str | None,
         valid_until: datetime | None,
     ) -> bool:
         return (
             value.version == request.expected_version + 1
             and value.name == request.name.strip()
-            and value.case_id == case_id
+            and value.subject_id == subject_id
             and value.primary_instrument_id == instrument_id
             and value.trade_plan_id == request.trade_plan_id
             and value.trade_plan_version == request.trade_plan_version

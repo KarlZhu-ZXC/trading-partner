@@ -19,7 +19,7 @@ _UUID7_TOKEN = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 def test_format_entity_id_phase1b_prefixes() -> None:
     gen = Uuid7IdGenerator()
     for prefix in (
-        EntityIdPrefix.CASE,
+        EntityIdPrefix.SUBJECT,
         EntityIdPrefix.THESIS,
         EntityIdPrefix.REV,
         EntityIdPrefix.RUN,
@@ -46,7 +46,7 @@ def test_candidate_id_must_match_run_prefix_regex() -> None:
     with pytest.raises(DataContractError, match="run_<uuid7>"):
         CandidateThesisRevision(
             candidate_id="run_x",
-            case_id="case_00000000-0000-7000-8000-000000000001",
+            subject_id="case_00000000-0000-7000-8000-000000000001",
             thesis_id=None,
             target_revision_no=None,
             payload_json="{}",

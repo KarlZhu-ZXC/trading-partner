@@ -64,7 +64,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
             )
             query = ResearchSearchQuery(
                 text=inp.text,
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 thesis_id=inp.thesis_id,
                 instrument_id=inp.instrument_id,
                 entity_types=inp.entity_types,
@@ -105,7 +105,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         as_of: datetime | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
-        """Unified case research timeline projection."""
+        """Unified Research Subject (标的) timeline projection."""
         try:
             inp = ResearchTimelineGetInput.model_validate(
                 {
@@ -118,7 +118,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                 }
             )
             envelope = container.services.research_timeline.get_timeline(
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 entity_types=inp.entity_types,
                 occurred_from=inp.occurred_from,
                 occurred_to=inp.occurred_to,
@@ -164,7 +164,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                 }
             )
             envelope = container.services.journal.append(
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 entry_type=inp.entry_type,
                 title=inp.title,
                 body_markdown=inp.body_markdown,
@@ -220,7 +220,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                 }
             )
             envelope = container.services.decisions.append(
-                case_id=inp.case_id,
+                subject_id=inp.case_id,
                 decision_type=inp.decision_type,
                 title=inp.title,
                 rationale=inp.rationale,

@@ -109,22 +109,24 @@ class TradePlanCondition:
         if not isinstance(self.comparator, TradePlanComparator):
             raise DataContractError("MONITORABLE condition requires comparator")
         if type(self.max_fact_age_seconds) is not int or self.max_fact_age_seconds <= 0:
-            raise DataContractError(
-                "MONITORABLE condition requires positive max_fact_age_seconds"
-            )
+            raise DataContractError("MONITORABLE condition requires positive max_fact_age_seconds")
         numeric = self.comparator is not TradePlanComparator.OCCURRED
         if numeric and self.threshold is None:
             raise DataContractError("numeric condition requires threshold")
         if not numeric and self.threshold is not None:
             raise DataContractError("OCCURRED condition cannot set threshold")
-        if self.fact_type in {
-            TradePlanFactType.PRICE,
-            TradePlanFactType.VOLUME,
-            TradePlanFactType.TECHNICAL,
-            TradePlanFactType.FUNDAMENTAL,
-            TradePlanFactType.COMPANY_EVENT,
-            TradePlanFactType.SENTIMENT,
-        } and self.instrument_id is None:
+        if (
+            self.fact_type
+            in {
+                TradePlanFactType.PRICE,
+                TradePlanFactType.VOLUME,
+                TradePlanFactType.TECHNICAL,
+                TradePlanFactType.FUNDAMENTAL,
+                TradePlanFactType.COMPANY_EVENT,
+                TradePlanFactType.SENTIMENT,
+            }
+            and self.instrument_id is None
+        ):
             raise DataContractError(f"{self.fact_type.value} condition requires instrument_id")
         if self.fact_type is TradePlanFactType.COMPANY_EVENT and (
             self.comparator is not TradePlanComparator.OCCURRED
@@ -136,7 +138,7 @@ class TradePlanCondition:
 class TradePlan:
     plan_id: str
     version: int
-    case_id: str
+    subject_id: str
     thesis_id: str
     instrument_id: str
     status: TradePlanStatus
@@ -161,8 +163,8 @@ class TradePlan:
             raise DataContractError("plan_id must match trade_plan_<uuid7>")
         if type(self.version) is not int or self.version <= 0:
             raise DataContractError("trade plan version must be positive")
-        if not _CASE_ID_RE.fullmatch(self.case_id):
-            raise DataContractError("case_id must match case_<uuid7>")
+        if not _CASE_ID_RE.fullmatch(self.subject_id):
+            raise DataContractError("subject_id must match case_<uuid7>")
         if not _THESIS_ID_RE.fullmatch(self.thesis_id):
             raise DataContractError("thesis_id must match thesis_<uuid7>")
         parse_instrument_id(self.instrument_id)
@@ -185,9 +187,7 @@ class TradePlan:
         ):
             _decimal(value, name, minimum=Decimal("0"), maximum=Decimal("100"))
         if self.target_position_percent > self.max_position_percent:
-            raise DataContractError(
-                "target_position_percent must not exceed max_position_percent"
-            )
+            raise DataContractError("target_position_percent must not exceed max_position_percent")
         _decimal(self.stop_price, "stop_price", minimum=Decimal("0.00000001"))
         if not isinstance(self.conditions, tuple) or len(self.conditions) > 100:
             raise DataContractError("conditions must be a tuple with at most 100 items")

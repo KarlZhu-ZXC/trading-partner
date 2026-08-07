@@ -191,8 +191,8 @@ _INTRADAY_QUOTE_RECOVERY = WarningInfo(
 _INTRADAY_QUOTE_UNAVAILABLE = WarningInfo(
     code="INTRADAY_QUOTE_UNAVAILABLE",
     message=(
-        "Yahoo intraday quote recovery was unavailable; the regular-session "
-        "latest-known value remains."
+        "Yahoo provided no usable current-session minute observation; the "
+        "latest timestamped value remains and may belong to the prior session."
     ),
     details={},
 )

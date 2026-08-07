@@ -9,8 +9,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from conftest import FixedClock, SequentialIdGenerator
-from domain.common.enums import InvestmentCaseStatus, InvestmentCaseType
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.common.enums import ResearchSubjectStatus, ResearchSubjectType
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.persistence.audit_log_writer import SqlAlchemySessionAuditLogWriter
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
@@ -63,12 +63,12 @@ def test_uow_commits_business_and_audit_together(tmp_path) -> None:  # type: ign
 
     from domain.common.ids import EntityIdPrefix
 
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.THEME,
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.THEME,
         title="AI infra",
         summary="Theme case without primary instrument",
-        status=InvestmentCaseStatus.DRAFT,
+        status=ResearchSubjectStatus.DRAFT,
         primary_instrument_id=None,
         topic_tags=("ai",),
         created_at=clock.now(),
@@ -76,7 +76,7 @@ def test_uow_commits_business_and_audit_together(tmp_path) -> None:  # type: ign
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -85,24 +85,24 @@ def test_uow_commits_business_and_audit_together(tmp_path) -> None:  # type: ign
     )
 
     with SqlAlchemyResearchUnitOfWork(engine, clock, ids, redactor) as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         audit_id = uow.audit.append(
-            event_type="phase1b.case.created",
-            payload={"case_id": case.case_id, "token": "secret-token-value"},
+            event_type="phase1b.subject.created",
+            payload={"subject_id": subject.subject_id, "token": "secret-token-value"},
             request_id="req_test",
         )
         uow.commit()
 
     with Session(engine) as session:
-        cases = session.execute(text("SELECT case_id FROM investment_cases")).all()
-        assert len(cases) == 1
+        subjects = session.execute(text("SELECT case_id FROM investment_cases")).all()
+        assert len(subjects) == 1
         row = session.execute(
             text("SELECT audit_id, payload_json FROM system_audit_log WHERE audit_id = :aid"),
             {"aid": audit_id},
         ).one()
         payload = json.loads(row[1])
         assert "secret-token-value" not in row[1]
-        assert payload["case_id"] == case.case_id
+        assert payload["subject_id"] == subject.subject_id
     engine.dispose()
 
 
@@ -117,13 +117,13 @@ def test_uow_rollback_drops_audit_and_business(tmp_path) -> None:  # type: ignor
     from domain.common.ids import EntityIdPrefix
 
     with SqlAlchemyResearchUnitOfWork(engine, clock, ids, redactor) as uow:
-        uow.cases.add(
-            InvestmentCase(
-                case_id=ids.new(EntityIdPrefix.CASE),
-                case_type=InvestmentCaseType.MACRO,
+        uow.subjects.add(
+            ResearchSubject(
+                subject_id=ids.new(EntityIdPrefix.SUBJECT),
+                subject_type=ResearchSubjectType.MACRO,
                 title="Rates",
                 summary="Macro view",
-                status=InvestmentCaseStatus.DRAFT,
+                status=ResearchSubjectStatus.DRAFT,
                 primary_instrument_id=None,
                 topic_tags=(),
                 created_at=clock.now(),
@@ -131,7 +131,7 @@ def test_uow_rollback_drops_audit_and_business(tmp_path) -> None:  # type: ignor
                 created_by="user",
                 archived_at=None,
                 archived_reason=None,
-                linked_case_ids=(),
+                linked_subject_ids=(),
                 evidence_ids=(),
                 report_ids=(),
                 event_ids=(),
@@ -139,7 +139,7 @@ def test_uow_rollback_drops_audit_and_business(tmp_path) -> None:  # type: ignor
                 schema_version=RESEARCH_SCHEMA_VERSION,
             )
         )
-        uow.audit.append(event_type="phase1b.case.created", payload={"x": 1})
+        uow.audit.append(event_type="phase1b.subject.created", payload={"x": 1})
         uow.rollback()
 
     with Session(engine) as session:

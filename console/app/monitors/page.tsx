@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { ConsoleShell } from "../components/console-shell";
 import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
@@ -137,18 +138,31 @@ export default function MonitorsPage() {
   const [runReceipt, setRunReceipt] = useState<unknown>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Dict | null | undefined>(undefined);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [resolutionDraft, setResolutionDraft] = useState<{ eventId: string; action: "ACKNOWLEDGE" | "RESOLVE"; note: string; idempotencyKey: string } | null>(null);
   const [resolvingEvent, setResolvingEvent] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
   const [instrumentFilter, setInstrumentFilter] = useState("");
+  const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const dashboard = envelopeData<Dict>((result.data?.dashboard as Dict | undefined));
   const runs = envelopeData<Dict>((result.data?.runs as Dict | undefined));
   const events = envelopeData<Dict>((result.data?.events as Dict | undefined));
-  const items = listOf<Dict>(dashboard, "items");
+  const dashboardItems = listOf<Dict>(dashboard, "items");
+  const items = dashboardItems.filter((item) => {
+    const monitor = (item.monitor ?? {}) as Dict;
+    return String(monitor.status ?? "").toUpperCase() !== "ARCHIVED";
+  });
   const normalizedInstrumentFilter = instrumentFilter.trim().toLocaleLowerCase();
   const filteredItems = items.filter((item) => monitorMatchesInstrument(item, normalizedInstrumentFilter));
   const runItems = listOf<Dict>(runs, "runs");
   const eventItems = listOf<Dict>(events, "events");
+  const selectedMonitor = items.find((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId) ?? null;
+  const visibleRuns = selectedMonitorId ? runItems.filter((run) => [
+    ...listOf<string>(run, "requested_monitor_ids"),
+    ...listOf<string>(run, "selected_monitor_ids"),
+    ...listOf<Dict>(run, "observations").map((observation) => String(observation.monitor_id ?? "")),
+  ].includes(selectedMonitorId)) : runItems;
+  const visibleEvents = selectedMonitorId ? eventItems.filter((event) => String(event.monitor_id ?? "") === selectedMonitorId) : eventItems;
 
   useEffect(() => {
     if (items.length === 0 || !window.location.hash) return;
@@ -176,6 +190,31 @@ export default function MonitorsPage() {
       setRunError(error instanceof Error ? error.message : "运行失败");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function archiveMonitor(monitor: Dict) {
+    const monitorId = String(monitor.monitor_id ?? "");
+    const name = String(monitor.name ?? "未命名 Monitor");
+    if (!monitorId || !window.confirm(`确认删除「${name}」？\n\n系统会将它归档并从列表隐藏；历史版本、运行记录和事件不会被删除。`)) return;
+    setArchivingId(monitorId);
+    setRunError(null);
+    try {
+      const response = await postApi<Dict>(`/api/monitors/${encodeURIComponent(monitorId)}/archive`, {
+        expected_version: Number(monitor.version),
+        confirmation: "monitor_archive",
+      });
+      if (response.ok === false) {
+        const first = Array.isArray(response.errors) ? response.errors[0] as Dict | undefined : undefined;
+        throw new Error(String(first?.message ?? "Monitor 删除失败"));
+      }
+      if (String(editingMonitor?.monitor_id ?? "") === monitorId) setEditingMonitor(undefined);
+      setRunReceipt(response);
+      await result.refresh();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Monitor 删除失败");
+    } finally {
+      setArchivingId(null);
     }
   }
 
@@ -279,7 +318,12 @@ export default function MonitorsPage() {
                     <h2>{String(monitor.name ?? "未命名 Monitor")}</h2>
                     <span className="mono">{String(monitor.monitor_id)} · v{String(monitor.version ?? "—")}</span>
                   </div>
-                  <div className="monitor-title-actions"><button type="button" onClick={() => setEditingMonitor(monitor)}>编辑</button><Badge value={String(monitor.status ?? "—")} /></div>
+                  <div className="monitor-title-actions">
+                    <button type="button" className={selectedMonitorId === String(monitor.monitor_id) ? "selected" : ""} onClick={() => setSelectedMonitorId((current) => current === String(monitor.monitor_id) ? null : String(monitor.monitor_id))}>{selectedMonitorId === String(monitor.monitor_id) ? "关闭详情" : "运行详情"}</button>
+                    <button type="button" onClick={() => setEditingMonitor(monitor)}>编辑</button>
+                    <button className="monitor-delete-button" type="button" disabled={archivingId === String(monitor.monitor_id)} onClick={() => { void archiveMonitor(monitor); }}>{archivingId === String(monitor.monitor_id) ? "删除中…" : "删除"}</button>
+                    <Badge value={String(monitor.status ?? "—")} />
+                  </div>
                 </div>
                 <div className="monitor-runtime-strip">
                   {priceObservation && (
@@ -353,18 +397,26 @@ export default function MonitorsPage() {
           })}
           </div>
         </Card>
-        <div className="two-column">
-          <Card kicker="IMMUTABLE OBSERVATIONS" title="最近运行">
-            {runItems.length === 0 ? <Empty>暂无运行。</Empty> : (
+        <div className="monitor-detail-heading">
+          <div><p className="card-kicker">RUN & EVENT DRILL-DOWN</p><h2>{selectedMonitor ? `${shortId(((selectedMonitor.monitor ?? {}) as Dict).primary_instrument_id)} · ${String(((selectedMonitor.monitor ?? {}) as Dict).name ?? "Monitor")}` : "全部 Monitor"}</h2></div>
+          {selectedMonitorId && <button className="close-button" type="button" onClick={() => setSelectedMonitorId(null)}>清除筛选</button>}
+        </div>
+        <div className="two-column monitor-drilldown">
+          <Card kicker="IMMUTABLE OBSERVATIONS" title={`最近运行 · ${visibleRuns.length}`}>
+            {visibleRuns.length === 0 ? <Empty>当前筛选没有运行。</Empty> : (
               <div className="timeline-list">
-                {runItems.slice(0, 12).map((run) => {
-                  const identity = monitorRunPresentation(run, items);
+                {visibleRuns.slice(0, 20).map((run) => {
+                    const identity = monitorRunPresentation(run, dashboardItems);
+                    const observations = listOf<Dict>(run, "observations").filter((observation) => !selectedMonitorId || String(observation.monitor_id ?? "") === selectedMonitorId);
+                    const warningCodes = listOf<string>(run, "warning_codes");
+                    const errorCodes = listOf<string>(run, "error_codes");
                   return (
-                    <article key={String(run.run_id)}>
+                    <article className="monitor-run-detail-row" key={String(run.run_id)}>
                       <i className={`timeline-dot ${String(run.status ?? "").toLowerCase()}`} />
                       <div className="run-identity">
-                        <strong>{identity.symbolLabel} · {identity.nameLabel}</strong>
+                        {identity.targets.length === 1 ? <Link className="monitor-run-link" href={`#${monitorAnchorId(identity.targets[0].monitorId)}`}>{identity.symbolLabel} · {identity.nameLabel}</Link> : <strong>{identity.symbolLabel} · {identity.nameLabel}</strong>}
                         <span>{String(run.cadence ?? "MANUAL")} · {formatDate(run.completed_at)} · {String(run.rules_evaluated ?? 0)} rules</span>
+                        <details className="run-error-drilldown"><summary>Run receipt · {String(run.run_id)}</summary><div className="run-code-groups">{warningCodes.length > 0 && <div><strong>Warnings</strong><span>{warningCodes.join(" · ")}</span></div>}{errorCodes.length > 0 && <div><strong>Errors</strong><span>{errorCodes.join(" · ")}</span></div>}{warningCodes.length === 0 && errorCodes.length === 0 && <span>无 run-level warning/error code。</span>}</div><div className="run-observations">{observations.map((observation) => <div key={`${String(observation.monitor_id)}-${String(observation.rule_code)}`}><header><strong>{String(observation.rule_code)}</strong><Badge value={String(observation.state ?? "—")} /></header><span>{String(observation.message ?? "")}</span><small>事实 {formatDate(observation.fact_as_of)} · observed {String(observation.observed_value ?? "N/A")} · threshold {String(observation.threshold_value ?? "N/A")}</small>{listOf<string>(observation, "warning_codes").length > 0 && <code>{listOf<string>(observation, "warning_codes").join(" · ")}</code>}{listOf<string>(observation, "error_codes").length > 0 && <code className="text-red">{listOf<string>(observation, "error_codes").join(" · ")}</code>}</div>)}</div></details>
                       </div>
                       <Badge value={String(run.status ?? "—")} />
                     </article>
@@ -373,10 +425,10 @@ export default function MonitorsPage() {
               </div>
             )}
           </Card>
-          <Card kicker="STATE TRANSITIONS" title="事件流">
-            {eventItems.length === 0 ? <Empty>当前没有状态转换事件。</Empty> : (
+          <Card kicker="STATE TRANSITIONS" title={`事件流 · ${visibleEvents.length}`}>
+            {visibleEvents.length === 0 ? <Empty>当前筛选没有状态转换事件。</Empty> : (
               <div className="timeline-list">
-                {eventItems.slice(0, 12).map((event) => (
+                {visibleEvents.slice(0, 20).map((event) => (
                   <article key={String(event.event_id)}>
                     <i className={`timeline-dot ${String(event.event_type ?? "").toLowerCase()}`} />
                     <div className="event-copy">

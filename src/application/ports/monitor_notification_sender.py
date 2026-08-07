@@ -1,12 +1,7 @@
-"""Outbound Monitor notification provider port."""
+"""Compatibility import for the generic outbound notification port."""
 
-from typing import Protocol
+from application.ports.notification_sender import NotificationSender
 
-from application.dto.monitor_notifications import NotificationSendReceipt
-from domain.monitoring.models import MonitorNotificationOutboxEntry
+MonitorNotificationSender = NotificationSender
 
-
-class MonitorNotificationSender(Protocol):
-    async def send(
-        self, notification: MonitorNotificationOutboxEntry
-    ) -> NotificationSendReceipt: ...
+__all__ = ["MonitorNotificationSender"]

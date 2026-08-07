@@ -1,16 +1,23 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-04
+> Updated: 2026-08-07
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
 ## Active queue
 
-There are no confirmed open runtime defects at this revision.
+The 2026-08-07 durable-data audit found no existing cross-subject child references or
+illegal Research Subject → Thesis → Trade Plan combinations. The items below are reachable
+prevention gaps or explicit model debt; they are not claims that stored data is
+already corrupt.
 
 | ID | Status | Boundary | Summary |
 |---|---|---|---|
 | `AUTH-001` | deferred | Confirmation identity | Local stdio confirmation fields are caller assertions. Authenticated principal binding must be supplied by a future authenticated MCP host/transport. |
+| `RESEARCH-STATE-002` | open / P0 | Candidate scope | Generic Assumption, Invalidation, and Open Question candidate paths verify that referenced IDs exist but do not consistently prove that they belong to the candidate's Research Subject, Thesis, and revision at both proposal and confirmation. Relaxed Invalidation targets need the same owner check. |
+| `RESEARCH-STATE-003` | open / P1 | Research graph | Parent/rival Thesis IDs and `linked_case_ids` need uniform existence, same-scope/self-link, and confirmation-time validation. JSON-held references do not receive relational-FK protection. |
+| `RESEARCH-STATE-004` | open / P1 | Monitor lifecycle | A Monitor can be created against a non-tracking Research Subject, and a bound Monitor is not automatically reconciled when its Research Subject or Trade Plan retires. The intended fix is an explicit lifecycle guard, not a hidden cascade. |
+| `RESEARCH-MODEL-001` | compatibility debt | Research Subject status | Research Subject still exposes legacy `STRENGTHENED`, `WEAKENED`, and `INVALIDATED` values that duplicate Thesis conviction semantics. New writes should use DRAFT/ACTIVE/ARCHIVED until a migration can retain historical readability while narrowing the public enum. |
 
 `ActorContext` already distinguishes `CALLER_ASSERTED` from `AUTHENTICATED` and
 rejects trusted-principal/`confirmed_by` mismatches. The local stdio server cannot

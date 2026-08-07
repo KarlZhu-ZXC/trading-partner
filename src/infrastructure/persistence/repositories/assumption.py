@@ -23,7 +23,7 @@ def _to_domain(row: AssumptionRow) -> Assumption:
     return Assumption(
         assumption_id=row.assumption_id,
         thesis_id=row.thesis_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         revision_no=row.revision_no,
         statement=row.statement,
         basis=row.basis,
@@ -42,7 +42,7 @@ def _to_row(assumption: Assumption) -> AssumptionRow:
     return AssumptionRow(
         assumption_id=assumption.assumption_id,
         thesis_id=assumption.thesis_id,
-        case_id=assumption.case_id,
+        subject_id=assumption.subject_id,
         revision_no=assumption.revision_no,
         statement=assumption.statement,
         basis=assumption.basis,
@@ -100,7 +100,7 @@ class SqlAlchemyAssumptionRepository:
         next_domain = Assumption(
             assumption_id=current.assumption_id,
             thesis_id=current.thesis_id,
-            case_id=current.case_id,
+            subject_id=current.subject_id,
             revision_no=current.revision_no,
             statement=current.statement,
             basis=current.basis,

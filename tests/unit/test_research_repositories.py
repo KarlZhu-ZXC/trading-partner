@@ -18,11 +18,11 @@ from domain.common.enums import (
     ConfirmationMode,
     InvalidationSeverity,
     InvalidationStatus,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     Market,
     OpenQuestionStatus,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
     WatchlistItemStatus,
@@ -31,7 +31,7 @@ from domain.common.errors import (
     AppendOnlyViolation,
     CandidateAlreadyResolved,
     DataContractError,
-    InvestmentCaseNotFound,
+    ResearchSubjectNotFound,
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
@@ -39,8 +39,8 @@ from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
     InvalidationCondition,
-    InvestmentCase,
     OpenQuestion,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
     WatchlistItem,
@@ -88,13 +88,13 @@ def uow_factory(engine: Engine):  # type: ignore[no-untyped-def]
     return factory
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> InvestmentCase:
-    return InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> ResearchSubject:
+    return ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA structural",
         summary="Long-horizon GPU demand",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id="equity:US:NVDA",
         topic_tags=("ai", "gpu"),
         created_at=clock.now(),
@@ -102,7 +102,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> InvestmentCase:
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -114,38 +114,38 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock) -> InvestmentCase:
 def test_case_round_trip_and_list(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
 
     with uow_factory() as uow:
-        loaded = uow.cases.get(case.case_id)
-        assert loaded.title == case.title
+        loaded = uow.subjects.get(subject.subject_id)
+        assert loaded.title == subject.title
         assert loaded.topic_tags == ("ai", "gpu")
-        listed = uow.cases.list(topic_tag="ai")
+        listed = uow.subjects.list(topic_tag="ai")
         assert len(listed) == 1
-        assert listed[0].case_id == case.case_id
+        assert listed[0].subject_id == subject.subject_id
 
 
 def test_case_not_found(uow_factory) -> None:  # type: ignore[no-untyped-def]
-    with uow_factory() as uow, pytest.raises(InvestmentCaseNotFound):
-        uow.cases.get("case_missing")
+    with uow_factory() as uow, pytest.raises(ResearchSubjectNotFound):
+        uow.subjects.get("case_missing")
 
 
 def test_thesis_revision_append_and_advance(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev1_id = ids.new(EntityIdPrefix.REV)
 
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Primary",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -162,7 +162,7 @@ def test_thesis_revision_append_and_advance(uow_factory) -> None:  # type: ignor
             ThesisRevision(
                 revision_id=rev1_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="Demand is structural",
@@ -189,7 +189,7 @@ def test_thesis_revision_append_and_advance(uow_factory) -> None:  # type: ignor
             ThesisRevision(
                 revision_id=rev2_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=2,
                 supersedes_revision_no=1,
                 statement="Demand is still structural",
@@ -225,15 +225,15 @@ def test_thesis_revision_append_and_advance(uow_factory) -> None:  # type: ignor
 def test_advance_revision_rejects_non_monotonic(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev_id = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Primary",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -270,15 +270,15 @@ def test_thesis_revision_repository_has_no_update_or_delete_methods() -> None:
 def test_thesis_revision_append_only_listener_blocks_update(engine: Engine, uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev_id = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Primary",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -295,7 +295,7 @@ def test_thesis_revision_append_only_listener_blocks_update(engine: Engine, uow_
             ThesisRevision(
                 revision_id=rev_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -327,15 +327,15 @@ def test_thesis_revision_append_only_listener_blocks_update(engine: Engine, uow_
 def test_thesis_revision_append_only_listener_blocks_delete(engine: Engine, uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev_id = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Primary",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -352,7 +352,7 @@ def test_thesis_revision_append_only_listener_blocks_delete(engine: Engine, uow_
             ThesisRevision(
                 revision_id=rev_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -384,18 +384,18 @@ def test_thesis_revision_append_only_listener_blocks_delete(engine: Engine, uow_
 def test_assumption_and_invalidation_lifecycle(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev_id = ids.new(EntityIdPrefix.REV)
     assumption_id = ids.new(EntityIdPrefix.REV)
     inv_id = ids.new(EntityIdPrefix.REV)
 
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Primary",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -412,7 +412,7 @@ def test_assumption_and_invalidation_lifecycle(uow_factory) -> None:  # type: ig
             ThesisRevision(
                 revision_id=rev_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -434,7 +434,7 @@ def test_assumption_and_invalidation_lifecycle(uow_factory) -> None:  # type: ig
             Assumption(
                 assumption_id=assumption_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 statement="Capex grows",
                 basis="Guidance",
@@ -452,7 +452,7 @@ def test_assumption_and_invalidation_lifecycle(uow_factory) -> None:  # type: ig
             InvalidationCondition(
                 invalidation_id=inv_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 description="GM collapse",
                 observable="GM < 50%",
@@ -499,16 +499,16 @@ def test_assumption_and_invalidation_lifecycle(uow_factory) -> None:  # type: ig
 def test_open_question_and_watchlist(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     q_id = ids.new(EntityIdPrefix.REV)
     item_id = ids.new(EntityIdPrefix.SNAPSHOT)
 
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.questions.add(
             OpenQuestion(
                 question_id=q_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 text="What is 2027 HBM supply?",
                 status=OpenQuestionStatus.OPEN,
                 asked_at=clock.now(),
@@ -526,12 +526,12 @@ def test_open_question_and_watchlist(uow_factory) -> None:  # type: ignore[no-un
                 display_name="NVIDIA",
                 thesis_hint="earnings watch",
                 triggers=("eps miss",),
-                case_id=None,
+                subject_id=None,
                 status=WatchlistItemStatus.WATCHING,
                 created_at=clock.now(),
                 updated_at=clock.now(),
                 expires_at=None,
-                promoted_to_case_id=None,
+                promoted_to_subject_id=None,
                 triggered_at=None,
                 triggered_reason=None,
             )
@@ -546,10 +546,10 @@ def test_open_question_and_watchlist(uow_factory) -> None:  # type: ignore[no-un
         )
         uow.watchlist.update_status(
             item_id,
-            new_status=WatchlistItemStatus.PROMOTED_TO_CASE,
+            new_status=WatchlistItemStatus.PROMOTED_TO_SUBJECT,
             triggered_at=None,
             triggered_reason=None,
-            promoted_to_case_id=case.case_id,
+            promoted_to_subject_id=subject.subject_id,
             expires_at=None,
         )
         uow.commit()
@@ -558,23 +558,23 @@ def test_open_question_and_watchlist(uow_factory) -> None:  # type: ignore[no-un
         q = uow.questions.get(q_id)
         assert q.status is OpenQuestionStatus.ANSWERED
         item = uow.watchlist.get(item_id)
-        assert item.status is WatchlistItemStatus.PROMOTED_TO_CASE
-        assert item.promoted_to_case_id == case.case_id
+        assert item.status is WatchlistItemStatus.PROMOTED_TO_SUBJECT
+        assert item.promoted_to_subject_id == subject.subject_id
 
 
 def test_candidate_payload_frozen_after_status_change(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     candidate_id = ids.new(EntityIdPrefix.RUN)
     payload = '{"kind":"thesis_revision","statement":"original"}'
 
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.candidates.add(
             CandidateThesisRevision(
                 candidate_id=candidate_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 thesis_id=None,
                 target_revision_no=None,
                 payload_json=payload,
@@ -623,14 +623,14 @@ def test_candidate_payload_frozen_after_status_change(uow_factory) -> None:  # t
 def test_candidate_expire_due(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     candidate_id = ids.new(EntityIdPrefix.RUN)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.candidates.add(
             CandidateThesisRevision(
                 candidate_id=candidate_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 thesis_id=None,
                 target_revision_no=None,
                 payload_json='{"kind":"thesis_revision"}',
@@ -667,7 +667,7 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
     """Offset pagination is safe when proposed_at ties: candidate_id ASC breaks ties."""
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     tied_at = clock.now()
     # Deliberately non-monotonic insert order vs id order to prove SQL ordering.
     id_high = "run_00000000-0000-7000-8000-000000000099"
@@ -678,7 +678,7 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
     def _cand(candidate_id: str, *, proposed_at: datetime, key: str) -> CandidateThesisRevision:
         return CandidateThesisRevision(
             candidate_id=candidate_id,
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             thesis_id=None,
             target_revision_no=None,
             payload_json='{"kind":"thesis_revision"}',
@@ -697,7 +697,7 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
         )
 
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.candidates.add(_cand(id_high, proposed_at=tied_at, key="tie-high"))
         uow.candidates.add(_cand(id_low, proposed_at=tied_at, key="tie-low"))
         uow.candidates.add(_cand(id_mid, proposed_at=tied_at, key="tie-mid"))
@@ -711,9 +711,9 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
         uow.commit()
 
     with uow_factory() as uow:
-        page1 = uow.candidates.list(case_id=case.case_id, limit=2, offset=0)
-        page2 = uow.candidates.list(case_id=case.case_id, limit=2, offset=2)
-        full = uow.candidates.list(case_id=case.case_id, limit=50, offset=0)
+        page1 = uow.candidates.list(subject_id=subject.subject_id, limit=2, offset=0)
+        page2 = uow.candidates.list(subject_id=subject.subject_id, limit=2, offset=2)
+        full = uow.candidates.list(subject_id=subject.subject_id, limit=50, offset=0)
 
     # proposed_at DESC then candidate_id ASC among ties.
     assert [c.candidate_id for c in full] == [
@@ -737,16 +737,16 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
 def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     t1 = ids.new(EntityIdPrefix.THESIS)
     t2 = ids.new(EntityIdPrefix.THESIS)
     rev = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=t1,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="P1",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -762,7 +762,7 @@ def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no
         uow.theses.add(
             Thesis(
                 thesis_id=t2,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="Bear",
                 role=ThesisRole.BEAR,
                 status=ThesisStatus.ACTIVE,
@@ -778,7 +778,7 @@ def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no
         uow.commit()
 
     with uow_factory() as uow:
-        active_primary = uow.cases.list_active_primary_thesis_ids(case.case_id)
+        active_primary = uow.subjects.list_active_primary_thesis_ids(subject.subject_id)
         assert active_primary == (t1,)
 
 
@@ -801,16 +801,16 @@ def test_orm_models_registered() -> None:
 
 
 def test_candidate_sql_scope_checks_via_uow(engine: Engine, uow_factory) -> None:  # type: ignore[no-untyped-def]
-    """Candidate scope CHECKs: non-watchlist requires case_id (domain + SQL)."""
+    """Candidate scope CHECKs: non-watchlist requires subject_id (domain + SQL)."""
     from sqlalchemy.exc import IntegrityError
 
     clock = uow_factory.clock
     ids = uow_factory.ids
-    # Domain rejects before SQL for missing case_id on thesis_revision.
-    with pytest.raises(DataContractError, match="case_id is required"):
+    # Domain rejects before SQL for missing subject_id on thesis_revision.
+    with pytest.raises(DataContractError, match="subject_id is required"):
         CandidateThesisRevision(
             candidate_id=ids.new(EntityIdPrefix.RUN),
-            case_id=None,
+            subject_id=None,
             thesis_id=None,
             target_revision_no=None,
             payload_json="{}",
@@ -865,14 +865,14 @@ def test_candidate_sql_scope_checks_via_uow(engine: Engine, uow_factory) -> None
 def test_open_question_mark_stale_only_from_open(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     q_id = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.questions.add(
             OpenQuestion(
                 question_id=q_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 text="Q?",
                 status=OpenQuestionStatus.OPEN,
                 asked_at=clock.now(),
@@ -900,16 +900,16 @@ def test_open_question_mark_stale_only_from_open(uow_factory) -> None:  # type: 
 def test_open_question_answer_and_close_only_from_open(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     q1 = ids.new(EntityIdPrefix.REV)
     q2 = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         for qid in (q1, q2):
             uow.questions.add(
                 OpenQuestion(
                     question_id=qid,
-                    case_id=case.case_id,
+                    subject_id=subject.subject_id,
                     text="Q?",
                     status=OpenQuestionStatus.OPEN,
                     asked_at=clock.now(),
@@ -947,15 +947,15 @@ def test_open_question_answer_and_close_only_from_open(uow_factory) -> None:  # 
 def test_revision_append_rejects_gap(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev1 = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="P",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -972,7 +972,7 @@ def test_revision_append_rejects_gap(uow_factory) -> None:  # type: ignore[no-un
             ThesisRevision(
                 revision_id=rev1,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -997,7 +997,7 @@ def test_revision_append_rejects_gap(uow_factory) -> None:  # type: ignore[no-un
             ThesisRevision(
                 revision_id=ids.new(EntityIdPrefix.REV),
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=3,
                 supersedes_revision_no=1,
                 statement="gap",
@@ -1020,15 +1020,15 @@ def test_revision_append_rejects_gap(uow_factory) -> None:  # type: ignore[no-un
 def test_advance_revision_requires_existing_revision_for_thesis(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev1 = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="P",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -1045,7 +1045,7 @@ def test_advance_revision_requires_existing_revision_for_thesis(uow_factory) -> 
             ThesisRevision(
                 revision_id=rev1,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -1080,20 +1080,20 @@ def test_advance_revision_requires_existing_revision_for_thesis(uow_factory) -> 
 def test_case_update_forces_updated_at_from_clock(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
 
     later = NOW + timedelta(hours=2)
     clock.set(later)
 
     with uow_factory() as uow:
-        loaded = uow.cases.get(case.case_id)
+        loaded = uow.subjects.get(subject.subject_id)
         stale_updated = loaded.updated_at
-        updated = InvestmentCase(
-            case_id=loaded.case_id,
-            case_type=loaded.case_type,
+        updated = ResearchSubject(
+            subject_id=loaded.subject_id,
+            subject_type=loaded.subject_type,
             title="Updated title",
             summary=loaded.summary,
             status=loaded.status,
@@ -1104,18 +1104,18 @@ def test_case_update_forces_updated_at_from_clock(uow_factory) -> None:  # type:
             created_by=loaded.created_by,
             archived_at=None,
             archived_reason=None,
-            linked_case_ids=loaded.linked_case_ids,
+            linked_subject_ids=loaded.linked_subject_ids,
             evidence_ids=loaded.evidence_ids,
             report_ids=loaded.report_ids,
             event_ids=loaded.event_ids,
             decision_ids=loaded.decision_ids,
             schema_version=loaded.schema_version,
         )
-        uow.cases.update(updated)
+        uow.subjects.update(updated)
         uow.commit()
 
     with uow_factory() as uow:
-        again = uow.cases.get(case.case_id)
+        again = uow.subjects.get(subject.subject_id)
         assert again.title == "Updated title"
         assert again.updated_at == later
 
@@ -1123,16 +1123,16 @@ def test_case_update_forces_updated_at_from_clock(uow_factory) -> None:  # type:
 def test_topic_tag_list_pages_after_full_filter(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    # Create more cases than a 4x over-fetch of limit=1 would cover incorrectly
+    # Create more subjects than a 4x over-fetch of limit=1 would cover incorrectly
     # if it applied SQL limit first.
-    cases: list[InvestmentCase] = []
+    subjects: list[ResearchSubject] = []
     for i in range(6):
-        c = InvestmentCase(
-            case_id=ids.new(EntityIdPrefix.CASE),
-            case_type=InvestmentCaseType.THEME,
+        c = ResearchSubject(
+            subject_id=ids.new(EntityIdPrefix.SUBJECT),
+            subject_type=ResearchSubjectType.THEME,
             title=f"case-{i}",
             summary="s",
-            status=InvestmentCaseStatus.ACTIVE,
+            status=ResearchSubjectStatus.ACTIVE,
             primary_instrument_id=None,
             topic_tags=("ai",) if i % 2 == 0 else ("other",),
             created_at=clock.now() + timedelta(seconds=i),
@@ -1140,44 +1140,46 @@ def test_topic_tag_list_pages_after_full_filter(uow_factory) -> None:  # type: i
             created_by="user",
             archived_at=None,
             archived_reason=None,
-            linked_case_ids=(),
+            linked_subject_ids=(),
             evidence_ids=(),
             report_ids=(),
             event_ids=(),
             decision_ids=(),
             schema_version=RESEARCH_SCHEMA_VERSION,
         )
-        cases.append(c)
+        subjects.append(c)
 
     with uow_factory() as uow:
-        for c in cases:
-            uow.cases.add(c)
+        for c in subjects:
+            uow.subjects.add(c)
         uow.commit()
 
     with uow_factory() as uow:
-        page0 = uow.cases.list(topic_tag="ai", limit=1, offset=0)
-        page1 = uow.cases.list(topic_tag="ai", limit=1, offset=1)
-        page2 = uow.cases.list(topic_tag="ai", limit=1, offset=2)
-        all_ai = uow.cases.list(topic_tag="ai", limit=50, offset=0)
+        page0 = uow.subjects.list(topic_tag="ai", limit=1, offset=0)
+        page1 = uow.subjects.list(topic_tag="ai", limit=1, offset=1)
+        page2 = uow.subjects.list(topic_tag="ai", limit=1, offset=2)
+        all_ai = uow.subjects.list(topic_tag="ai", limit=50, offset=0)
         assert len(all_ai) == 3
         assert len(page0) == 1
         assert len(page1) == 1
         assert len(page2) == 1
-        assert {page0[0].case_id, page1[0].case_id, page2[0].case_id} == {c.case_id for c in all_ai}
+        assert {page0[0].subject_id, page1[0].subject_id, page2[0].subject_id} == {
+            c.subject_id for c in all_ai
+        }
 
 
 def test_candidate_payload_immutable_after_leaving_proposed(engine: Engine, uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     candidate_id = ids.new(EntityIdPrefix.RUN)
     payload = '{"kind":"thesis_revision","statement":"original"}'
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.candidates.add(
             CandidateThesisRevision(
                 candidate_id=candidate_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 thesis_id=None,
                 target_revision_no=None,
                 payload_json=payload,
@@ -1222,10 +1224,10 @@ def test_candidate_payload_immutable_after_leaving_proposed(engine: Engine, uow_
 def test_watchlist_clears_residuals_when_leaving_triggered(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     item_id = ids.new(EntityIdPrefix.SNAPSHOT)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.watchlist.add(
             WatchlistItem(
                 item_id=item_id,
@@ -1234,12 +1236,12 @@ def test_watchlist_clears_residuals_when_leaving_triggered(uow_factory) -> None:
                 display_name="NVIDIA",
                 thesis_hint="hint",
                 triggers=("t",),
-                case_id=None,
+                subject_id=None,
                 status=WatchlistItemStatus.WATCHING,
                 created_at=clock.now(),
                 updated_at=clock.now(),
                 expires_at=None,
-                promoted_to_case_id=None,
+                promoted_to_subject_id=None,
                 triggered_at=None,
                 triggered_reason=None,
             )
@@ -1252,7 +1254,7 @@ def test_watchlist_clears_residuals_when_leaving_triggered(uow_factory) -> None:
             new_status=WatchlistItemStatus.TRIGGERED,
             triggered_at=clock.now() + timedelta(seconds=1),
             triggered_reason="hit",
-            promoted_to_case_id=None,
+            promoted_to_subject_id=None,
             expires_at=None,
         )
         uow.commit()
@@ -1263,7 +1265,7 @@ def test_watchlist_clears_residuals_when_leaving_triggered(uow_factory) -> None:
             new_status=WatchlistItemStatus.ARCHIVED,
             triggered_at=clock.now() + timedelta(seconds=2),  # residual attempt
             triggered_reason="should clear",
-            promoted_to_case_id=case.case_id,  # residual attempt
+            promoted_to_subject_id=subject.subject_id,  # residual attempt
             expires_at=None,
         )
         uow.commit()
@@ -1273,22 +1275,22 @@ def test_watchlist_clears_residuals_when_leaving_triggered(uow_factory) -> None:
         assert item.status is WatchlistItemStatus.ARCHIVED
         assert item.triggered_at is None
         assert item.triggered_reason is None
-        assert item.promoted_to_case_id is None
+        assert item.promoted_to_subject_id is None
 
 
 def test_invalidation_clears_residuals_when_leaving_triggered(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     rev_id = ids.new(EntityIdPrefix.REV)
     inv_id = ids.new(EntityIdPrefix.REV)
     with uow_factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.theses.add(
             Thesis(
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 title="P",
                 role=ThesisRole.PRIMARY,
                 status=ThesisStatus.ACTIVE,
@@ -1305,7 +1307,7 @@ def test_invalidation_clears_residuals_when_leaving_triggered(uow_factory) -> No
             ThesisRevision(
                 revision_id=rev_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 supersedes_revision_no=None,
                 statement="s",
@@ -1327,7 +1329,7 @@ def test_invalidation_clears_residuals_when_leaving_triggered(uow_factory) -> No
             InvalidationCondition(
                 invalidation_id=inv_id,
                 thesis_id=thesis_id,
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 revision_no=1,
                 description="d",
                 observable="o",

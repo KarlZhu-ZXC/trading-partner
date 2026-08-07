@@ -65,8 +65,8 @@ class MonitorVersionRow(Base):
     )
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    case_id: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT")
+    subject_id: Mapped[str | None] = mapped_column(
+        "case_id", Text, ForeignKey("investment_cases.case_id", ondelete="RESTRICT")
     )
     primary_instrument_id: Mapped[str | None] = mapped_column(Text)
     trade_plan_id: Mapped[str | None] = mapped_column(Text)
@@ -243,38 +243,53 @@ class MonitorRunObservationRow(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class MonitorNotificationOutboxRow(Base):
-    __tablename__ = "monitor_notification_outbox"
+class NotificationOutboxRow(Base):
+    """Canonical generic outbox persisted by migration 0030."""
+
+    __tablename__ = "notification_outbox"
     __table_args__ = (
         CheckConstraint(
             "channel IN ('TELEGRAM')",
-            name="ck_monitor_notification_outbox_channel",
+            name="ck_notification_outbox_channel",
+        ),
+        CheckConstraint(
+            "source_type IN ('MONITOR_EVENT','MONITOR_RUN','MANUAL','SYSTEM')",
+            name="ck_notification_outbox_source_type",
+        ),
+        CheckConstraint(
+            "source_type <> 'MANUAL' OR ("
+            "idempotency_key IS NOT NULL AND length(trim(idempotency_key)) > 0 AND "
+            "source_id = idempotency_key AND "
+            "confirmed_by IN ('user','external_agent') AND "
+            "authorization_note IS NOT NULL AND length(trim(authorization_note)) > 0 AND "
+            "expires_at IS NOT NULL AND length(trim(expires_at)) > 0"
+            ")",
+            name="ck_notification_outbox_manual_metadata",
+        ),
+        CheckConstraint(
+            "source_type = 'MANUAL' OR (confirmed_by IS NULL AND authorization_note IS NULL)",
+            name="ck_notification_outbox_non_manual_authorization",
         ),
         CheckConstraint(
             "status IN ('PENDING','DELIVERED','DEAD_LETTER','EXPIRED')",
-            name="ck_monitor_notification_outbox_status",
+            name="ck_notification_outbox_status",
         ),
         CheckConstraint(
             "attempt_count >= 0",
-            name="ck_monitor_notification_outbox_attempt_count",
-        ),
-        CheckConstraint(
-            "(source_event_id IS NOT NULL AND source_run_id IS NULL) OR "
-            "(source_event_id IS NULL AND source_run_id IS NOT NULL)",
-            name="ck_monitor_notification_outbox_source",
+            name="ck_notification_outbox_attempt_count",
         ),
         UniqueConstraint(
-            "source_event_id",
+            "source_type",
+            "source_id",
             "channel",
-            name="uq_monitor_notification_outbox_event_channel",
+            name="uq_notification_outbox_source_channel",
         ),
         UniqueConstraint(
-            "source_run_id",
-            "channel",
-            name="uq_monitor_notification_outbox_run_channel",
+            "idempotency_key",
+            name="uq_notification_outbox_idempotency_key",
         ),
         Index(
-            "ix_monitor_notification_outbox_due",
+            "ix_notification_outbox_due",
             "channel",
             "status",
             "next_attempt_at",
@@ -282,14 +297,8 @@ class MonitorNotificationOutboxRow(Base):
     )
 
     notification_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    source_event_id: Mapped[str | None] = mapped_column(
-        Text,
-        ForeignKey("monitor_events.event_id", ondelete="CASCADE"),
-    )
-    source_run_id: Mapped[str | None] = mapped_column(
-        Text,
-        ForeignKey("monitor_runs.run_id", ondelete="CASCADE"),
-    )
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[str] = mapped_column(Text, nullable=False)
     channel: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -301,6 +310,10 @@ class MonitorNotificationOutboxRow(Base):
     delivered_at: Mapped[str | None] = mapped_column(Text)
     provider_message_id: Mapped[str | None] = mapped_column(Text)
     last_error_code: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    confirmed_by: Mapped[str | None] = mapped_column(Text)
+    authorization_note: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[str | None] = mapped_column(Text)
 
 
 # --- Phase 1K persistent Challenge Reviews ---

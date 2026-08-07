@@ -62,7 +62,7 @@ class WorkflowStepReceipt:
 class WorkflowRun:
     run_id: str
     workflow_type: WorkflowType
-    case_id: str | None
+    subject_id: str | None
     instrument_id: str | None
     requested_as_of: datetime
     started_at: datetime
@@ -78,8 +78,8 @@ class WorkflowRun:
             self.status, WorkflowRunStatus
         ):
             raise DataContractError("workflow enums are invalid")
-        if self.case_id is not None:
-            _text(self.case_id, "case_id", 128)
+        if self.subject_id is not None:
+            _text(self.subject_id, "subject_id", 128)
         if self.instrument_id is not None:
             parse_instrument_id(self.instrument_id)
         require_aware_datetime(self.requested_as_of, field_name="requested_as_of")

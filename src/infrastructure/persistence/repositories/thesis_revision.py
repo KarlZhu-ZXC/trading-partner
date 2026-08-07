@@ -22,7 +22,7 @@ def _to_domain(row: ThesisRevisionRow) -> ThesisRevision:
     return ThesisRevision(
         revision_id=row.revision_id,
         thesis_id=row.thesis_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         revision_no=row.revision_no,
         supersedes_revision_no=row.supersedes_revision_no,
         statement=row.statement,
@@ -45,7 +45,7 @@ def _to_row(revision: ThesisRevision) -> ThesisRevisionRow:
     return ThesisRevisionRow(
         revision_id=revision.revision_id,
         thesis_id=revision.thesis_id,
-        case_id=revision.case_id,
+        subject_id=revision.subject_id,
         revision_no=revision.revision_no,
         supersedes_revision_no=revision.supersedes_revision_no,
         statement=revision.statement,
@@ -131,9 +131,7 @@ class SqlAlchemyThesisRevisionRepository:
             exists_stmt = (
                 select(ThesisRevisionRow.revision_id)
                 .where(ThesisRevisionRow.thesis_id == revision.thesis_id)
-                .where(
-                    ThesisRevisionRow.revision_no == revision.supersedes_revision_no
-                )
+                .where(ThesisRevisionRow.revision_no == revision.supersedes_revision_no)
                 .limit(1)
             )
             if self._session.scalar(exists_stmt) is None:

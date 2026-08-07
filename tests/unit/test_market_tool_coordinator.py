@@ -434,6 +434,8 @@ async def test_snapshot_routes_otc_to_commodity_spot() -> None:
         ask=Decimal("2401"),
         mid=Decimal("2400.5"),
         last=None,
+        display_price=Decimal("2400.5"),
+        price_basis=PriceBasis.MID,
         delivery_location=None,
     )
     commodity.get_quote = AsyncMock(

@@ -17,9 +17,9 @@ from infrastructure.persistence.repositories._mapping import (
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
-    require_case_exists,
     require_evidence_ids_linked_and_visible,
-    require_same_case_supersedes,
+    require_same_subject_supersedes,
+    require_subject_exists,
     require_thesis_revision_ids_visible,
     require_visible_not_after,
 )
@@ -28,7 +28,7 @@ from infrastructure.persistence.repositories._research_memory_validation import 
 def _to_domain(row: ResearchReportRow) -> ResearchReport:
     return ResearchReport(
         report_id=row.report_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         report_type=ResearchReportType(row.report_type),
         title=row.title,
         summary=row.summary,
@@ -50,7 +50,7 @@ def _to_domain(row: ResearchReportRow) -> ResearchReport:
 def _to_row(report: ResearchReport) -> ResearchReportRow:
     return ResearchReportRow(
         report_id=report.report_id,
-        case_id=report.case_id,
+        subject_id=report.subject_id,
         report_type=report.report_type.value,
         title=report.title,
         summary=report.summary,
@@ -76,19 +76,19 @@ class SqlAlchemyResearchReportRepository:
         self._session = session
 
     def add(self, report: ResearchReport) -> None:
-        require_case_exists(self._session, report.case_id)
+        require_subject_exists(self._session, report.subject_id)
         # Report hindsight: observed_at <= as_of; membership/link <= created_at;
         # thesis revision confirmed_at <= as_of (not merely created_at).
         require_evidence_ids_linked_and_visible(
             self._session,
-            case_id=report.case_id,
+            subject_id=report.subject_id,
             evidence_ids=report.evidence_ids,
             observed_at_not_after=report.as_of,
             linked_at_not_after=report.created_at,
         )
         require_thesis_revision_ids_visible(
             self._session,
-            case_id=report.case_id,
+            subject_id=report.subject_id,
             thesis_revision_ids=report.thesis_revision_ids,
             visible_at=report.as_of,
         )
@@ -102,9 +102,9 @@ class SqlAlchemyResearchReportRepository:
                         "supersedes_report_id": report.supersedes_report_id,
                     },
                 )
-            require_same_case_supersedes(
-                new_case_id=report.case_id,
-                old_case_id=old.case_id,
+            require_same_subject_supersedes(
+                new_subject_id=report.subject_id,
+                old_subject_id=old.subject_id,
                 entity_type="report",
                 supersedes_id=report.supersedes_report_id,
             )
@@ -127,18 +127,16 @@ class SqlAlchemyResearchReportRepository:
         return _to_domain(row)
 
     def get_by_content_sha256(self, content_sha256: str) -> ResearchReport | None:
-        stmt = select(ResearchReportRow).where(
-            ResearchReportRow.content_sha256 == content_sha256
-        )
+        stmt = select(ResearchReportRow).where(ResearchReportRow.content_sha256 == content_sha256)
         row = self._session.scalars(stmt).first()
         if row is None:
             return None
         return _to_domain(row)
 
-    def list_by_case(
-        self, case_id: str, *, as_of: datetime | None = None
+    def list_by_subject(
+        self, subject_id: str, *, as_of: datetime | None = None
     ) -> tuple[ResearchReport, ...]:
-        stmt = select(ResearchReportRow).where(ResearchReportRow.case_id == case_id)
+        stmt = select(ResearchReportRow).where(ResearchReportRow.subject_id == subject_id)
         if as_of is not None:
             as_of_text = dt_to_db(as_of)
             stmt = stmt.where(

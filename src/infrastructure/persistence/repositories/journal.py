@@ -17,11 +17,11 @@ from infrastructure.persistence.repositories._mapping import (
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
-    require_case_exists,
     require_idempotency_storage,
     require_instruments_exist,
     require_journal_page_bounds,
-    require_same_case_supersedes,
+    require_same_subject_supersedes,
+    require_subject_exists,
     require_visible_not_after,
 )
 
@@ -29,7 +29,7 @@ from infrastructure.persistence.repositories._research_memory_validation import 
 def _to_domain(row: JournalEntryRow) -> JournalEntry:
     return JournalEntry(
         journal_id=row.journal_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         entry_type=JournalEntryType(row.entry_type),
         title=row.title,
         body_markdown=row.body_markdown,
@@ -53,7 +53,7 @@ def _to_row(
 ) -> JournalEntryRow:
     return JournalEntryRow(
         journal_id=entry.journal_id,
-        case_id=entry.case_id,
+        subject_id=entry.subject_id,
         entry_type=entry.entry_type.value,
         title=entry.title,
         body_markdown=entry.body_markdown,
@@ -88,8 +88,8 @@ class SqlAlchemyJournalRepository:
             idempotency_key=idempotency_key,
             idempotency_payload_sha256=idempotency_payload_sha256,
         )
-        if entry.case_id is not None:
-            require_case_exists(self._session, entry.case_id)
+        if entry.subject_id is not None:
+            require_subject_exists(self._session, entry.subject_id)
         require_instruments_exist(self._session, entry.instrument_ids)
         # related entity pair: domain-only; no string-based cross-table resolution
         if entry.supersedes_journal_id is not None:
@@ -102,9 +102,9 @@ class SqlAlchemyJournalRepository:
                         "supersedes_journal_id": entry.supersedes_journal_id,
                     },
                 )
-            require_same_case_supersedes(
-                new_case_id=entry.case_id,
-                old_case_id=old.case_id,
+            require_same_subject_supersedes(
+                new_subject_id=entry.subject_id,
+                old_subject_id=old.subject_id,
                 entity_type="journal",
                 supersedes_id=entry.supersedes_journal_id,
             )
@@ -133,9 +133,7 @@ class SqlAlchemyJournalRepository:
         return _to_domain(row)
 
     def get_by_idempotency_key(self, idempotency_key: str) -> JournalEntry | None:
-        stmt = select(JournalEntryRow).where(
-            JournalEntryRow.idempotency_key == idempotency_key
-        )
+        stmt = select(JournalEntryRow).where(JournalEntryRow.idempotency_key == idempotency_key)
         row = self._session.scalars(stmt).first()
         if row is None:
             return None
@@ -144,15 +142,15 @@ class SqlAlchemyJournalRepository:
     def list(
         self,
         *,
-        case_id: str | None,
+        subject_id: str | None,
         as_of: datetime | None,
         limit: int,
         offset: int,
     ) -> tuple[JournalEntry, ...]:
         require_journal_page_bounds(limit=limit, offset=offset)
         stmt = select(JournalEntryRow)
-        if case_id is not None:
-            stmt = stmt.where(JournalEntryRow.case_id == case_id)
+        if subject_id is not None:
+            stmt = stmt.where(JournalEntryRow.subject_id == subject_id)
         if as_of is not None:
             stmt = stmt.where(JournalEntryRow.created_at <= dt_to_db(as_of))
         stmt = stmt.order_by(

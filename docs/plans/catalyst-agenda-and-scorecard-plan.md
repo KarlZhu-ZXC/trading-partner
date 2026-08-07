@@ -8,7 +8,7 @@
 
 Catalyst Agenda 回答的不是“最近有什么新闻”，而是：
 
-> 在一个明确的未来窗口内，我持有、关注或已建立 Investment Case 的标的，有哪些已知事件
+> 在一个明确的未来窗口内，我持有、关注或已建立研究档案的标的，有哪些已知事件
 > 值得提前准备；日期有多确定，来自哪里，上次何时核验，事件发生后需要回看什么判断？
 
 Judgment Scorecard 随后回答：
@@ -56,8 +56,8 @@ Agenda 查询在读取时把事项与 durable scope 合并，不把 scope 复制
 
 - `PORTFOLIO`：最新 durable account snapshot 中存在该 instrument；
 - `WATCHLIST`：当前 durable Watchlist membership 中存在该 instrument；
-- `CASE`：非归档 Investment Case 以该 instrument 为 primary；
-- `EXPLICIT`：调用方明确指定 instrument/case。
+- `SUBJECT`：非归档研究档案以该 instrument 为 primary；
+- `EXPLICIT`：调用方明确指定 instrument/subject。
 
 同一事项可同时属于多个 scope，只返回一条并携带全部 `scope_reasons`。普通查询不刷新账户、
 Watchlist 或 Provider。
@@ -78,7 +78,7 @@ Watchlist 或 Provider。
 不增加工具数量：
 
 1. `research_memory_get(request={"operation":"agenda", ...})`
-   - durable-only；按窗口、scope、instrument、case、kind、status 查询；
+   - durable-only；按窗口、scope、instrument、subject、kind、status 查询；
    - 返回 items、每标的 coverage、分页和 limitation；
    - 不隐式访问 Yahoo、FRED、巨潮或券商。
 2. `research_memory_append(request={"operation":"agenda_item", ...})`
@@ -125,7 +125,7 @@ API 明确说明默认会排除尚无数据的未来 release date，必须显式
 
 ### C1 — Scope 与 coverage
 
-- 合并最新 durable Portfolio、Watchlist、active Case；
+- 合并最新 durable Portfolio、Watchlist、active 研究档案；
 - 去重 `scope_reasons`，返回无覆盖标的；
 - 已过期未核验事项显式报警；
 - Console 首页只增加未来 7 天摘要和 coverage 缺口。
@@ -187,4 +187,3 @@ Scorecard 必须晚于 C3：
 - [yfinance Ticker calendar](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.html)
 - [yfinance Calendars](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Calendars.html)
 - [FRED release dates](https://fred.stlouisfed.org/docs/api/fred/release_dates.html)
-
