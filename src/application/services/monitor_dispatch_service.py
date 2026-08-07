@@ -10,8 +10,8 @@ from application.dto.monitoring import MonitorEvaluateInput, MonitorRunDTO
 from application.ports.clock import Clock
 from application.ports.monitor_repository import MonitorRepository
 from application.services.monitor_evaluation_service import MonitorEvaluationService
-from application.services.monitor_notification_service import MonitorNotificationService
 from application.services.monitor_schedule_service import MonitorScheduleService
+from application.services.notification_service import NotificationService
 from domain.monitoring.enums import MonitorCadence, MonitorStatus
 
 _SCHEDULED_CADENCES = (
@@ -27,7 +27,7 @@ class MonitorDispatchService:
         self,
         repository: MonitorRepository,
         evaluator: MonitorEvaluationService,
-        notifications: MonitorNotificationService,
+        notifications: NotificationService,
         schedule: MonitorScheduleService,
         clock: Clock,
     ) -> None:
@@ -52,8 +52,7 @@ class MonitorDispatchService:
         candidates = tuple(
             item
             for item in self._repository.list_current(MonitorStatus.ACTIVE)
-            if item.cadence in cadences
-            and (item.valid_until is None or now <= item.valid_until)
+            if item.cadence in cadences and (item.valid_until is None or now <= item.valid_until)
         )
         due = tuple(
             item
@@ -68,9 +67,7 @@ class MonitorDispatchService:
         for cadence in _SCHEDULED_CADENCES:
             if cadence not in cadences:
                 continue
-            monitor_ids = tuple(
-                item.monitor_id for item in due if item.cadence is cadence
-            )
+            monitor_ids = tuple(item.monitor_id for item in due if item.cadence is cadence)
             if not monitor_ids:
                 continue
             run = await self._evaluator.evaluate(

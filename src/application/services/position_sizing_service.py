@@ -46,7 +46,7 @@ class PositionSizingService:
         the current-intent set.
         """
         with self._uow_factory() as uow:
-            decisions = uow.decisions.list_by_case(plan.case_id)
+            decisions = uow.decisions.list_by_subject(plan.subject_id)
         superseded_ids = {
             item.supersedes_decision_id
             for item in decisions
@@ -57,8 +57,7 @@ class PositionSizingService:
             for item in decisions
             if item.decision_id not in superseded_ids
             and item.primary_instrument_id == plan.instrument_id
-            and item.decision_type
-            in {DecisionType.INITIATE_INTENT, DecisionType.ADD_INTENT}
+            and item.decision_type in {DecisionType.INITIATE_INTENT, DecisionType.ADD_INTENT}
         )
 
     def calculate(
@@ -120,9 +119,7 @@ class PositionSizingService:
                 )
             )
 
-        plan_max = self._percent_quantity(
-            nav, plan.max_position_percent, plan.reference_price
-        )
+        plan_max = self._percent_quantity(nav, plan.max_position_percent, plan.reference_price)
         constraints.append(
             self._quantity_constraint(
                 "PLAN_MAX_POSITION",
@@ -156,17 +153,13 @@ class PositionSizingService:
         )
 
         per_unit_loss = (
-            abs(plan.reference_price - plan.stop_price)
-            if plan.stop_price is not None
-            else None
+            abs(plan.reference_price - plan.stop_price) if plan.stop_price is not None else None
         )
         if per_unit_loss is None or per_unit_loss == 0 or nav is None:
             quality.append("TRADE_PLAN_STOP_OR_NAV_UNAVAILABLE")
             risk_max = None
         else:
-            effective_risk_percent = min(
-                plan.risk_budget_percent, policy.risk_budget_max_percent
-            )
+            effective_risk_percent = min(plan.risk_budget_percent, policy.risk_budget_max_percent)
             risk_budget_amount = nav * effective_risk_percent / _HUNDRED
             risk_max = risk_budget_amount / per_unit_loss
         constraints.append(
@@ -174,9 +167,7 @@ class PositionSizingService:
                 "PLAN_RISK_BUDGET",
                 risk_max,
                 (
-                    nav
-                    * min(plan.risk_budget_percent, policy.risk_budget_max_percent)
-                    / _HUNDRED
+                    nav * min(plan.risk_budget_percent, policy.risk_budget_max_percent) / _HUNDRED
                     if nav is not None
                     else None
                 ),
@@ -199,11 +190,7 @@ class PositionSizingService:
                 request.max_liquidity_participation_percent,
                 policy.liquidity_participation_max_percent,
             )
-            liquid_value = (
-                request.average_daily_value
-                * effective_participation
-                / _HUNDRED
-            )
+            liquid_value = request.average_daily_value * effective_participation / _HUNDRED
             constraints.append(
                 self._quantity_constraint(
                     "LIQUIDITY_PARTICIPATION",
@@ -223,9 +210,7 @@ class PositionSizingService:
             )
         else:
             atr_risk_amount = (
-                nav
-                * min(plan.risk_budget_percent, policy.risk_budget_max_percent)
-                / _HUNDRED
+                nav * min(plan.risk_budget_percent, policy.risk_budget_max_percent) / _HUNDRED
             )
             constraints.append(
                 self._quantity_constraint(
@@ -247,9 +232,7 @@ class PositionSizingService:
         else:
             assert request.target_volatility_percent is not None
             volatility_value = (
-                nav
-                * request.target_volatility_percent
-                / request.annualized_volatility_percent
+                nav * request.target_volatility_percent / request.annualized_volatility_percent
             )
             constraints.append(
                 self._quantity_constraint(
@@ -276,7 +259,8 @@ class PositionSizingService:
             optional_limits = tuple(
                 item.max_quantity
                 for item in constraints
-                if item.constraint_code in {
+                if item.constraint_code
+                in {
                     "LIQUIDITY_PARTICIPATION",
                     "ATR_RISK_BUDGET",
                     "VOLATILITY_TARGET",
@@ -295,9 +279,7 @@ class PositionSizingService:
                 max(Decimal(0), target_total - current_quantity), lot_size
             )
             min_additional = min(min_additional, max_additional)
-            estimated_loss = (
-                max_total * per_unit_loss if per_unit_loss is not None else None
-            )
+            estimated_loss = max_total * per_unit_loss if per_unit_loss is not None else None
 
         return PositionSizingResult(
             plan_id=plan.plan_id,
@@ -320,9 +302,7 @@ class PositionSizingService:
         )
 
     @staticmethod
-    def _sum_complete(
-        snapshots: tuple[AccountSnapshot, ...], field: str
-    ) -> Decimal | None:
+    def _sum_complete(snapshots: tuple[AccountSnapshot, ...], field: str) -> Decimal | None:
         if not snapshots:
             return None
         values = tuple(getattr(snapshot, field) for snapshot in snapshots)
@@ -331,9 +311,7 @@ class PositionSizingService:
         return sum((value for value in values if value is not None), Decimal(0))
 
     @staticmethod
-    def _percent_quantity(
-        nav: Decimal | None, percent: Decimal, price: Decimal
-    ) -> Decimal | None:
+    def _percent_quantity(nav: Decimal | None, percent: Decimal, price: Decimal) -> Decimal | None:
         return None if nav is None else nav * percent / _HUNDRED / price
 
     @staticmethod

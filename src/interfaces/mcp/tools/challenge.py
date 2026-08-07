@@ -30,7 +30,7 @@ def build_challenge_adapters(container: ApplicationContainer) -> SimpleNamespace
         try:
             request = ChallengeReviewStartInput.model_validate(
                 {
-                    "case_id": case_id,
+                    "subject_id": case_id,
                     "trigger": trigger,
                     "proposed_action": proposed_action,
                     "related_candidate_id": related_candidate_id,

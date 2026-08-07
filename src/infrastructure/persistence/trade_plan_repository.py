@@ -40,7 +40,7 @@ def _plan_from_row(
     return TradePlan(
         plan_id=row.plan_id,
         version=row.version,
-        case_id=identity.case_id,
+        subject_id=identity.subject_id,
         thesis_id=row.thesis_id,
         instrument_id=row.instrument_id,
         status=TradePlanStatus(row.status),
@@ -52,9 +52,7 @@ def _plan_from_row(
         ),
         currency=row.currency,
         reference_price=Decimal(row.reference_price),
-        reference_price_at=dt_from_db(
-            row.reference_price_at, field_name="reference_price_at"
-        ),
+        reference_price_at=dt_from_db(row.reference_price_at, field_name="reference_price_at"),
         target_position_percent=Decimal(row.target_position_percent),
         max_position_percent=Decimal(row.max_position_percent),
         risk_budget_percent=Decimal(row.risk_budget_percent),
@@ -68,9 +66,7 @@ def _plan_from_row(
                 severity=item.severity,
                 fact_type=(TradePlanFactType(item.fact_type) if item.fact_type else None),
                 metric_key=item.metric_key,
-                comparator=(
-                    TradePlanComparator(item.comparator) if item.comparator else None
-                ),
+                comparator=(TradePlanComparator(item.comparator) if item.comparator else None),
                 threshold=_dec(item.threshold),
                 unit=item.unit,
                 instrument_id=item.instrument_id,
@@ -120,9 +116,9 @@ class SqlAlchemyTradePlanRepository:
         )
         return self._hydrate(row) if row is not None else None
 
-    def get_current_by_case(self, case_id: str) -> TradePlan | None:
+    def get_current_by_subject(self, subject_id: str) -> TradePlan | None:
         identity = self._session.scalar(
-            select(TradePlanIdentityRow).where(TradePlanIdentityRow.case_id == case_id)
+            select(TradePlanIdentityRow).where(TradePlanIdentityRow.subject_id == subject_id)
         )
         return self.get_current(identity.plan_id) if identity is not None else None
 
@@ -157,24 +153,24 @@ class SqlAlchemyTradePlanRepository:
         if identity is None:
             if plan.version != 1:
                 raise TradePlanVersionConflict("New Trade Plan must start at version 1")
-            existing_case = self._session.scalar(
+            existing_subject = self._session.scalar(
                 select(TradePlanIdentityRow).where(
-                    TradePlanIdentityRow.case_id == plan.case_id
+                    TradePlanIdentityRow.subject_id == plan.subject_id
                 )
             )
-            if existing_case is not None:
+            if existing_subject is not None:
                 raise TradePlanVersionConflict(
-                    "Investment Case already has a Trade Plan identity",
-                    details={"case_id": plan.case_id},
+                    "Research Subject already has a Trade Plan identity",
+                    details={"subject_id": plan.subject_id},
                 )
             identity = TradePlanIdentityRow(
                 plan_id=plan.plan_id,
-                case_id=plan.case_id,
+                subject_id=plan.subject_id,
                 created_at=dt_to_db(plan.created_at),
             )
             self._session.add(identity)
-        elif identity.case_id != plan.case_id:
-            raise TradePlanVersionConflict("Trade Plan case_id cannot change")
+        elif identity.subject_id != plan.subject_id:
+            raise TradePlanVersionConflict("Trade Plan subject_id cannot change")
         else:
             current = self._session.scalar(
                 select(func.max(TradePlanVersionRow.version)).where(
@@ -188,26 +184,26 @@ class SqlAlchemyTradePlanRepository:
                 )
 
         version_row = TradePlanVersionRow(
-                plan_id=plan.plan_id,
-                version=plan.version,
-                thesis_id=plan.thesis_id,
-                instrument_id=plan.instrument_id,
-                status=plan.status.value,
-                valid_from=dt_to_db(plan.valid_from),
-                valid_until=dt_to_db(plan.valid_until) if plan.valid_until else None,
-                currency=plan.currency,
-                reference_price=str(plan.reference_price),
-                reference_price_at=dt_to_db(plan.reference_price_at),
-                target_position_percent=str(plan.target_position_percent),
-                max_position_percent=str(plan.max_position_percent),
-                risk_budget_percent=str(plan.risk_budget_percent),
-                stop_price=str(plan.stop_price) if plan.stop_price is not None else None,
-                notes=plan.notes,
-                confirmed_by=plan.confirmed_by,
-                created_at=dt_to_db(plan.created_at),
-                idempotency_key=plan.idempotency_key,
-                schema_version=plan.schema_version,
-            )
+            plan_id=plan.plan_id,
+            version=plan.version,
+            thesis_id=plan.thesis_id,
+            instrument_id=plan.instrument_id,
+            status=plan.status.value,
+            valid_from=dt_to_db(plan.valid_from),
+            valid_until=dt_to_db(plan.valid_until) if plan.valid_until else None,
+            currency=plan.currency,
+            reference_price=str(plan.reference_price),
+            reference_price_at=dt_to_db(plan.reference_price_at),
+            target_position_percent=str(plan.target_position_percent),
+            max_position_percent=str(plan.max_position_percent),
+            risk_budget_percent=str(plan.risk_budget_percent),
+            stop_price=str(plan.stop_price) if plan.stop_price is not None else None,
+            notes=plan.notes,
+            confirmed_by=plan.confirmed_by,
+            created_at=dt_to_db(plan.created_at),
+            idempotency_key=plan.idempotency_key,
+            schema_version=plan.schema_version,
+        )
         self._session.add(version_row)
         # The condition table uses a composite FK. Flush the identity/version
         # before inserting children so SQLite foreign-key enforcement does not

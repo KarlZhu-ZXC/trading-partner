@@ -100,14 +100,14 @@ def test_post_market_sync_lock_path_rejects_outside_data_and_blank() -> None:
         _base_settings(post_market_sync_lock_path="data/../README.md")
 
 
-def test_telegram_monitor_notifications_are_optional_but_complete_when_enabled() -> None:
+def test_telegram_notifications_are_optional_but_complete_when_enabled() -> None:
     disabled = _base_settings()
-    assert disabled.monitor_notifications_enabled is False
+    assert disabled.notifications_enabled is False
     assert disabled.telegram_bot_token is None
     assert disabled.telegram_chat_id is None
 
     enabled = _base_settings(
-        monitor_notifications_enabled=True,
+        notifications_enabled=True,
         telegram_bot_token="123456:example_bot_token",
         telegram_chat_id="-1001234567890",
         telegram_message_thread_id=42,
@@ -116,13 +116,29 @@ def test_telegram_monitor_notifications_are_optional_but_complete_when_enabled()
     assert enabled.telegram_message_thread_id == 42
 
     with pytest.raises(ValidationError, match="token and chat id"):
-        _base_settings(monitor_notifications_enabled=True)
+        _base_settings(notifications_enabled=True)
     with pytest.raises(ValidationError, match="numeric id"):
         _base_settings(
-            monitor_notifications_enabled=True,
+            notifications_enabled=True,
             telegram_bot_token="123456:example_bot_token",
             telegram_chat_id="not a chat",
         )
+
+
+def test_legacy_monitor_notification_setting_names_remain_readable() -> None:
+    settings = _base_settings(
+        MONITOR_NOTIFICATIONS_ENABLED=True,
+        MONITOR_NOTIFICATION_MAX_ATTEMPTS=4,
+        MONITOR_NOTIFICATION_EVENT_TTL_HOURS=12,
+        MONITOR_NOTIFICATION_BATCH_SIZE=9,
+        telegram_bot_token="123456:example_bot_token",
+        telegram_chat_id="-1001234567890",
+    )
+
+    assert settings.notifications_enabled is True
+    assert settings.notification_max_attempts == 4
+    assert settings.notification_ttl_hours == 12
+    assert settings.notification_batch_size == 9
 
 
 def test_env_example_contains_required_keys() -> None:
@@ -154,13 +170,13 @@ def test_env_example_contains_required_keys() -> None:
         "A_SHARE_MAX_FRESH_SECONDS=30",
         "A_SHARE_MAX_DELAYED_SECONDS=900",
         "PROVIDER_PROXY_URL=",
-        "MONITOR_NOTIFICATIONS_ENABLED=false",
+        "NOTIFICATIONS_ENABLED=false",
         "TELEGRAM_BOT_TOKEN=",
         "TELEGRAM_CHAT_ID=",
         "TELEGRAM_MESSAGE_THREAD_ID=",
-        "MONITOR_NOTIFICATION_MAX_ATTEMPTS=5",
-        "MONITOR_NOTIFICATION_EVENT_TTL_HOURS=24",
-        "MONITOR_NOTIFICATION_BATCH_SIZE=20",
+        "NOTIFICATION_MAX_ATTEMPTS=5",
+        "NOTIFICATION_TTL_HOURS=24",
+        "NOTIFICATION_BATCH_SIZE=20",
     ):
         assert line in text, f"missing .env.example key line: {line}"
 

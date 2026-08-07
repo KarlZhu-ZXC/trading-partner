@@ -13,11 +13,11 @@ from application.services.research_context_builder import ResearchContextBuilder
 from domain.common.enums import (
     EvidenceStance,
     Freshness,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.system.redactor import DefaultSecretRedactor
 from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
 
@@ -42,13 +42,13 @@ class _Accounts:
         return ()
 
 
-def _case(case_id: str = CASE_ID) -> InvestmentCase:
-    return InvestmentCase(
-        case_id=case_id,
-        case_type=InvestmentCaseType.COMPANY,
+def _case(subject_id: str = CASE_ID) -> ResearchSubject:
+    return ResearchSubject(
+        subject_id=subject_id,
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="Long horizon AI case",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=IID,
         topic_tags=("ai",),
         created_at=NOW,
@@ -56,7 +56,7 @@ def _case(case_id: str = CASE_ID) -> InvestmentCase:
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -65,18 +65,18 @@ def _case(case_id: str = CASE_ID) -> InvestmentCase:
     )
 
 
-def _uow(case: InvestmentCase) -> MagicMock:
+def _uow(subject: ResearchSubject) -> MagicMock:
     uow = MagicMock()
     uow.__enter__.return_value = uow
     uow.__exit__.return_value = None
-    uow.cases.get.return_value = case
-    uow.theses.list_by_case.return_value = ()
-    uow.questions.list_by_case.return_value = ()
+    uow.subjects.get.return_value = subject
+    uow.theses.list_by_subject.return_value = ()
+    uow.questions.list_by_subject.return_value = ()
     uow.watchlist.list.return_value = ()
     uow.candidates.list.return_value = ()
-    uow.reports.list_by_case.return_value = ()
+    uow.reports.list_by_subject.return_value = ()
     uow.events.list_timeline.return_value = ()
-    uow.decisions.list_by_case.return_value = ()
+    uow.decisions.list_by_subject.return_value = ()
     uow.journal.list.return_value = tuple(
         SimpleNamespace(
             journal_id=f"journal_{index}",
@@ -101,8 +101,8 @@ def _uow(case: InvestmentCase) -> MagicMock:
         source_name="source",
         observed_at=NOW,
     )
-    uow.case_evidence_links.list_evidence.return_value = (support, contrary)
-    uow.trade_plans.get_current_by_case.return_value = None
+    uow.subject_evidence_links.list_evidence.return_value = (support, contrary)
+    uow.trade_plans.get_current_by_subject.return_value = None
 
     def assessments(evidence_id: str, **_kwargs: object) -> tuple[SimpleNamespace, ...]:
         stance = (
@@ -112,7 +112,7 @@ def _uow(case: InvestmentCase) -> MagicMock:
         )
         return (
             SimpleNamespace(
-                case_id=case.case_id,
+                subject_id=subject.subject_id,
                 stance=stance,
                 materiality=Decimal("0.9"),
                 rationale=stance.value,
@@ -136,7 +136,7 @@ def _service(uow: MagicMock) -> ResearchContextBuilder:
 def test_context_is_contrary_first_and_budget_trims_journal_not_evidence() -> None:
     service = _service(_uow(_case()))
 
-    result = service.build(ResearchContextBuildInput(case_id=CASE_ID, token_budget=2_000))
+    result = service.build(ResearchContextBuildInput(subject_id=CASE_ID, token_budget=2_000))
 
     assert result.ok is True
     assert result.data is not None
@@ -156,14 +156,14 @@ def test_context_is_contrary_first_and_budget_trims_journal_not_evidence() -> No
 
 def test_instrument_selection_requires_explicit_case_disambiguation() -> None:
     uow = _uow(_case())
-    uow.cases.list.return_value = (_case(), _case(CASE_ID_2))
+    uow.subjects.list.return_value = (_case(), _case(CASE_ID_2))
     service = _service(uow)
 
     result = service.build(ResearchContextBuildInput(instrument_id=IID))
 
     assert result.ok is False
     assert result.errors[0].code == "INPUT_VALIDATION_ERROR"
-    assert result.errors[0].details["candidate_case_ids"] == [CASE_ID, CASE_ID_2]
+    assert result.errors[0].details["candidate_subject_ids"] == [CASE_ID, CASE_ID_2]
 
 
 @pytest.mark.asyncio
@@ -193,3 +193,4 @@ async def test_context_mcp_is_compact_read_operation() -> None:
     assert result["request_id"] == "req_context"
     request = container.services.research_context.build.call_args.args[0]
     assert isinstance(request, ResearchContextBuildInput)
+    assert request.subject_id == CASE_ID

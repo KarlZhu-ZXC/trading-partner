@@ -34,19 +34,19 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     ReliabilityLevel,
     ResearchReportType,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    InvestmentCase,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
 )
@@ -116,13 +116,13 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
     eng.dispose()
 
 
-def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+def _create_subject(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="Case",
         summary="Summary",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("ai",),
         created_at=clock.now(),
@@ -130,7 +130,7 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -138,12 +138,12 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
-def _link_evidence(evidence: EvidenceService, *, case_id: str, title: str = "ev") -> str:
+def _link_evidence(evidence: EvidenceService, *, subject_id: str, title: str = "ev") -> str:
     env = evidence.record_evidence(
         evidence_type=EvidenceType.MARKET_SNAPSHOT,
         origin=EvidenceOrigin.EXTERNAL_FACT,
@@ -165,19 +165,19 @@ def _link_evidence(evidence: EvidenceService, *, case_id: str, title: str = "ev"
         confidence=Decimal("0.9"),
         supersedes_evidence_id=None,
         recorded_by="provider:mock_us",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert env.ok and env.data is not None
     return env.data.evidence_id
 
 
-def _add_revision(factory, ids, *, case_id: str, confirmed_at: datetime = EARLIER) -> str:  # type: ignore[no-untyped-def]
+def _add_revision(factory, ids, *, subject_id: str, confirmed_at: datetime = EARLIER) -> str:  # type: ignore[no-untyped-def]
     rev_id = ids.new(EntityIdPrefix.REV)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     thesis = Thesis(
         thesis_id=thesis_id,
-        case_id=case_id,
+        subject_id=subject_id,
         title="Primary",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -192,7 +192,7 @@ def _add_revision(factory, ids, *, case_id: str, confirmed_at: datetime = EARLIE
     revision = ThesisRevision(
         revision_id=rev_id,
         thesis_id=thesis_id,
-        case_id=case_id,
+        subject_id=subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Demand structural",
@@ -218,7 +218,7 @@ def _add_revision(factory, ids, *, case_id: str, confirmed_at: datetime = EARLIE
 
 def _base_append(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "case_id": "case_placeholder",
+        "subject_id": "case_placeholder",
         "decision_type": DecisionType.WATCH,
         "title": "Watch NVDA",
         "rationale": "Need more evidence",
@@ -239,11 +239,11 @@ def _base_append(**overrides: Any) -> dict[str, Any]:
 
 def test_append_happy_path_cache_and_execution_effect_false(harness) -> None:  # type: ignore[no-untyped-def]
     decision, evidence, _archive, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _link_evidence(evidence, case_id=case_id)
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _link_evidence(evidence, subject_id=subject_id)
     env = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             evidence_ids=(eid,),
             rationale="RATIONALE_SECRET_BODY",
         )
@@ -254,9 +254,9 @@ def test_append_happy_path_cache_and_execution_effect_false(harness) -> None:  #
     assert env.data.decided_at == EARLIER
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert env.data.decision_id in case.decision_ids
-        assert case.updated_at == NOW
+        subject = uow.subjects.get(subject_id)
+        assert env.data.decision_id in subject.decision_ids
+        assert subject.updated_at == NOW
 
     with Session(eng) as session:
         audits = session.scalars(select(SystemAuditLogRow)).all()
@@ -271,18 +271,18 @@ def test_append_happy_path_cache_and_execution_effect_false(harness) -> None:  #
 
 def test_decided_by_gate_rejects_codex(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    env = decision.append(**_base_append(case_id=case_id, decided_by="codex"))
+    subject_id = _create_subject(factory, ids, clock)
+    env = decision.append(**_base_append(subject_id=subject_id, decided_by="codex"))
     assert env.ok is False
     assert any(e.code == "UNAUTHORIZED_REVIEWER" for e in env.errors)
 
 
 def test_strict_review_required_for_trading_intent(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     bad = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             decision_type=DecisionType.INITIATE_INTENT,
             confirmation_mode=ConfirmationMode.NORMAL,
             idempotency_key="strict-bad",
@@ -294,7 +294,7 @@ def test_strict_review_required_for_trading_intent(harness) -> None:  # type: ig
 
     good = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             decision_type=DecisionType.INITIATE_INTENT,
             confirmation_mode=ConfirmationMode.STRICT_REVIEW,
             idempotency_key="strict-good",
@@ -311,10 +311,10 @@ def test_strict_review_required_for_trading_intent(harness) -> None:  # type: ig
 
 def test_normal_only_types_reject_strict(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     env = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             decision_type=DecisionType.WATCH,
             confirmation_mode=ConfirmationMode.STRICT_REVIEW,
             idempotency_key="watch-strict",
@@ -325,26 +325,26 @@ def test_normal_only_types_reject_strict(harness) -> None:  # type: ignore[no-un
 
 def test_same_key_same_payload_after_clock_no_reindex_or_cache(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    first = decision.append(**_base_append(case_id=case_id, rationale="stable"))
+    subject_id = _create_subject(factory, ids, clock)
+    first = decision.append(**_base_append(subject_id=subject_id, rationale="stable"))
     assert first.ok and first.data is not None
     did = first.data.decision_id
     recorded = first.data.recorded_at
 
     with factory() as uow:
-        case_before = uow.cases.get(case_id)
+        case_before = uow.subjects.get(subject_id)
         assert case_before.decision_ids == (did,)
         assert case_before.updated_at == recorded
         page_before = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.DECISION,),
             )
         )
         total_before = page_before.total
 
     clock.advance(7200)
-    second = decision.append(**_base_append(case_id=case_id, rationale="stable"))
+    second = decision.append(**_base_append(subject_id=subject_id, rationale="stable"))
     assert second.ok is True
     assert second.degraded is True
     assert DUPLICATE_IDEMPOTENCY_KEY in second.warnings
@@ -353,12 +353,12 @@ def test_same_key_same_payload_after_clock_no_reindex_or_cache(harness) -> None:
     assert second.data.recorded_at == recorded
 
     with factory() as uow:
-        case_after = uow.cases.get(case_id)
+        case_after = uow.subjects.get(subject_id)
         assert case_after.decision_ids == (did,)
         assert case_after.updated_at == recorded  # not advanced clock
         page_after = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.DECISION,),
             )
         )
@@ -376,10 +376,10 @@ def test_same_key_same_payload_after_clock_no_reindex_or_cache(harness) -> None:
 
 def test_same_key_different_payload_conflicts(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    first = decision.append(**_base_append(case_id=case_id, rationale="one"))
+    subject_id = _create_subject(factory, ids, clock)
+    first = decision.append(**_base_append(subject_id=subject_id, rationale="one"))
     assert first.ok
-    conflict = decision.append(**_base_append(case_id=case_id, rationale="two"))
+    conflict = decision.append(**_base_append(subject_id=subject_id, rationale="two"))
     assert conflict.ok is False
     assert any(e.code == "DUPLICATE_IDEMPOTENCY_KEY" for e in conflict.errors)
 
@@ -387,14 +387,14 @@ def test_same_key_different_payload_conflicts(harness) -> None:  # type: ignore[
 def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  # type: ignore[no-untyped-def]
     """Set id tuples differ only in order → same hash; domain keeps first-seen."""
     decision, evidence, archive, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid1 = _link_evidence(evidence, case_id=case_id, title="ev-a")
-    eid2 = _link_evidence(evidence, case_id=case_id, title="ev-b")
-    rid1 = _add_revision(factory, ids, case_id=case_id)
+    subject_id = _create_subject(factory, ids, clock)
+    eid1 = _link_evidence(evidence, subject_id=subject_id, title="ev-a")
+    eid2 = _link_evidence(evidence, subject_id=subject_id, title="ev-b")
+    rid1 = _add_revision(factory, ids, subject_id=subject_id)
     # Second revision needs distinct thesis ids from helper (new each call).
-    rid2 = _add_revision(factory, ids, case_id=case_id)
+    rid2 = _add_revision(factory, ids, subject_id=subject_id)
     rep1 = archive.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="rep-a",
         summary="s",
@@ -409,7 +409,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
         prompt_version=None,
     )
     rep2 = archive.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="rep-b",
         summary="s",
@@ -429,7 +429,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
 
     first = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             rationale="order-stable",
             evidence_ids=(eid1, eid2),
             thesis_revision_ids=(rid1, rid2),
@@ -445,11 +445,11 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
     assert first.data.report_ids == (report_a, report_b)
 
     with factory() as uow:
-        case_before = uow.cases.get(case_id)
+        case_before = uow.subjects.get(subject_id)
         assert case_before.decision_ids == (did,)
         page_before = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.DECISION,),
             )
         )
@@ -458,7 +458,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
     clock.advance(120)
     second = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             rationale="order-stable",
             evidence_ids=(eid2, eid1),
             thesis_revision_ids=(rid2, rid1),
@@ -482,12 +482,12 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
         assert stored.evidence_ids == (eid1, eid2)
         assert stored.thesis_revision_ids == (rid1, rid2)
         assert stored.report_ids == (report_a, report_b)
-        case_after = uow.cases.get(case_id)
+        case_after = uow.subjects.get(subject_id)
         assert case_after.decision_ids == (did,)
         assert case_after.updated_at == recorded
         page_after = uow.search_index.search(
             ResearchSearchQuery(
-                case_id=case_id,
+                subject_id=subject_id,
                 entity_types=(ResearchSearchEntityType.DECISION,),
             )
         )
@@ -505,11 +505,11 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
 
 def test_hash_coherence_with_redaction_and_normalized_tuples(harness) -> None:  # type: ignore[no-untyped-def]
     decision, evidence, archive, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _link_evidence(evidence, case_id=case_id, title="hash-ev")
-    rid = _add_revision(factory, ids, case_id=case_id)
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _link_evidence(evidence, subject_id=subject_id, title="hash-ev")
+    rid = _add_revision(factory, ids, subject_id=subject_id)
     rep = archive.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="hash-rep",
         summary="s",
@@ -527,7 +527,7 @@ def test_hash_coherence_with_redaction_and_normalized_tuples(harness) -> None:  
 
     env = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             evidence_ids=(eid, eid, "  "),
             thesis_revision_ids=(rid,),
             report_ids=(rep.data.report_id,),
@@ -548,7 +548,7 @@ def test_hash_coherence_with_redaction_and_normalized_tuples(harness) -> None:  
         else stored.confirmation_mode
     )
     recomputed = compute_decision_idempotency_payload_sha256(
-        case_id=stored.case_id,
+        subject_id=stored.subject_id,
         decision_type=entry_type,
         title=stored.title,
         rationale=stored.rationale,
@@ -572,12 +572,12 @@ def test_hash_coherence_with_redaction_and_normalized_tuples(harness) -> None:  
 
 def test_cross_case_and_future_refs_rejected(harness) -> None:  # type: ignore[no-untyped-def]
     decision, evidence, _ar, factory, clock, ids, _eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
-    eid_b = _link_evidence(evidence, case_id=case_b, title="b-ev")
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
+    eid_b = _link_evidence(evidence, subject_id=case_b, title="b-ev")
     cross = decision.append(
         **_base_append(
-            case_id=case_a,
+            subject_id=case_a,
             evidence_ids=(eid_b,),
             idempotency_key="cross-ev",
         )
@@ -585,10 +585,10 @@ def test_cross_case_and_future_refs_rejected(harness) -> None:  # type: ignore[n
     assert cross.ok is False
     assert any(e.code == "INVALID_RESEARCH_LINK" for e in cross.errors)
 
-    future_rev = _add_revision(factory, ids, case_id=case_a, confirmed_at=FUTURE)
+    future_rev = _add_revision(factory, ids, subject_id=case_a, confirmed_at=FUTURE)
     future = decision.append(
         **_base_append(
-            case_id=case_a,
+            subject_id=case_a,
             thesis_revision_ids=(future_rev,),
             idempotency_key="future-rev",
         )
@@ -599,10 +599,10 @@ def test_cross_case_and_future_refs_rejected(harness) -> None:  # type: ignore[n
 
 def test_decided_at_after_recorded_at_rejected(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     env = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             decided_at=FUTURE,
             idempotency_key="future-decided",
         )
@@ -613,7 +613,7 @@ def test_decided_at_after_recorded_at_rejected(harness) -> None:  # type: ignore
 
 def test_search_and_audit_failure_rollback(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     real_factory = factory
 
     class BoomSearchUow:
@@ -644,7 +644,7 @@ def test_search_and_audit_failure_rollback(harness) -> None:  # type: ignore[no-
     )
     env = boom.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             title="rollback-decision",
             idempotency_key="rb-d",
         )
@@ -653,8 +653,8 @@ def test_search_and_audit_failure_rollback(harness) -> None:  # type: ignore[no-
     with Session(eng) as session:
         assert "rollback-decision" not in session.scalars(select(DecisionRecordRow.title)).all()
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.decision_ids == ()
+        subject = uow.subjects.get(subject_id)
+        assert subject.decision_ids == ()
 
     class BoomAuditUow:
         def __init__(self, inner: SqlAlchemyResearchUnitOfWork) -> None:
@@ -684,7 +684,7 @@ def test_search_and_audit_failure_rollback(harness) -> None:  # type: ignore[no-
     )
     env2 = boom2.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             title="audit-rb-decision",
             idempotency_key="audit-rb-d",
         )
@@ -697,8 +697,8 @@ def test_search_and_audit_failure_rollback(harness) -> None:  # type: ignore[no-
         ).scalar_one()
         assert count == 0
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.decision_ids == ()
+        subject = uow.subjects.get(subject_id)
+        assert subject.decision_ids == ()
 
 
 def test_no_trading_or_order_imports() -> None:
@@ -726,10 +726,10 @@ def test_no_trading_or_order_imports() -> None:
 
 def test_a_share_primary_instrument(harness) -> None:  # type: ignore[no-untyped-def]
     decision, _ev, _ar, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     env = decision.append(
         **_base_append(
-            case_id=case_id,
+            subject_id=subject_id,
             primary_instrument_id=A_SHARE,
             idempotency_key="a-share-d",
         )

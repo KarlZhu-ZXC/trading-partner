@@ -42,7 +42,7 @@ DUPLICATE_IDEMPOTENCY_KEY = WarningInfo(
     details={},
 )
 
-# Phase 1C: returned when Evidence/Report content hash or CaseEvidenceLink already exists.
+# Phase 1C: returned when Evidence/Report content hash or SubjectEvidenceLink already exists.
 DUPLICATE_CONTENT = WarningInfo(
     code="DUPLICATE_CONTENT",
     message="Content already exists; returning existing immutable record.",

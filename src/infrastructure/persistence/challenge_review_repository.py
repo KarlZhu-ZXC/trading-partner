@@ -54,7 +54,7 @@ class SqlAlchemyChallengeReviewRepository:
                 session.add(
                     ChallengeReviewRow(
                         review_id=review.review_id,
-                        case_id=review.case_id,
+                        subject_id=review.subject_id,
                         mode=review.mode.value,
                         trigger=review.trigger.value,
                         proposed_action=review.proposed_action,
@@ -102,9 +102,7 @@ class SqlAlchemyChallengeReviewRepository:
                     ]
                 )
         except IntegrityError as exc:
-            raise IdempotencyConflict(
-                "Challenge Review start idempotency key was reused"
-            ) from exc
+            raise IdempotencyConflict("Challenge Review start idempotency key was reused") from exc
         return review
 
     def get_by_start_idempotency_key(
@@ -190,9 +188,7 @@ class SqlAlchemyChallengeReviewRepository:
                     existing = session.get(ChallengeReviewRow, review_id)
                     if existing is None:
                         raise ChallengeReviewNotFound("Challenge Review was not found")
-                    raise ChallengeReviewAlreadyResolved(
-                        "Challenge Review is already resolved"
-                    )
+                    raise ChallengeReviewAlreadyResolved("Challenge Review is already resolved")
                 session.add(
                     ChallengeReviewResolutionRow(
                         resolution_id=resolution_id,
@@ -230,9 +226,7 @@ class SqlAlchemyChallengeReviewRepository:
             )
         )
         resolution = (
-            persisted_resolution.resolution
-            if persisted_resolution is not None
-            else row.resolution
+            persisted_resolution.resolution if persisted_resolution is not None else row.resolution
         )
         rationale = (
             persisted_resolution.rationale
@@ -251,7 +245,7 @@ class SqlAlchemyChallengeReviewRepository:
         )
         return ChallengeReview(
             review_id=row.review_id,
-            case_id=row.case_id,
+            subject_id=row.subject_id,
             mode=ConfirmationMode(row.mode),
             trigger=ChallengeTrigger(row.trigger),
             proposed_action=row.proposed_action,

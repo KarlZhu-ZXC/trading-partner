@@ -19,6 +19,7 @@ type Capability = {
 };
 
 type JsonSchema = Record<string, unknown>;
+type Dict = Record<string, unknown>;
 
 function dereference(schema: JsonSchema, root: JsonSchema): JsonSchema {
   const reference = schema.$ref;
@@ -96,6 +97,33 @@ function toolImages(value: unknown): Array<{ data: string; mimeType: string }> {
   return images;
 }
 
+function MarketLens() {
+  const [market, setMarket] = useState("US");
+  const [query, setQuery] = useState("TTWO");
+  const [instrumentId, setInstrumentId] = useState("equity:US:TTWO");
+  const [running, setRunning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<unknown>(null);
+  const images = useMemo(() => toolImages(result), [result]);
+
+  async function invoke(toolName: string, argumentsValue: Dict) {
+    setRunning(toolName); setError(null);
+    try {
+      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: toolName, arguments: argumentsValue });
+      setResult(response);
+      if (toolName === "instrument_resolve") {
+        const envelope = response.result as Dict | undefined;
+        const data = envelope?.data as Dict | undefined;
+        const resolved = data?.instrument_id ?? (data?.instrument as Dict | undefined)?.instrument_id;
+        if (typeof resolved === "string") setInstrumentId(resolved);
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "事实读取失败"); }
+    finally { setRunning(null); }
+  }
+
+  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="快速事实工作区"><p className="card-note">解析标的后可直接读取当前报价、日/周技术快照或渲染图表。所有结果保留来源、事实时间和 warnings；不会生成交易指令。</p><div className="market-lens-controls"><label><span>Market</span><select value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Symbol / query</span><input value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>解析标的</ActionButton><label className="market-lens-instrument"><span>Instrument ID</span><input value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div>{error && <div className="inline-error">{error}</div>}{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>事实回执</summary><pre>{displayJson(result)}</pre></details>}</Card>;
+}
+
 export default function CapabilitiesPage() {
   const result = useApi<{ count: number; items: Capability[] }>("/api/capabilities");
   const [query, setQuery] = useState("");
@@ -169,6 +197,7 @@ export default function CapabilitiesPage() {
   return (
     <ConsoleShell active="capabilities" eyebrow="Compact MCP surface" title="全部 MCP 能力">
       <DataBoundary loading={result.loading} error={result.error}>
+        <MarketLens />
         {selected && (
           <Card className="workbench" kicker="MCP TOOL WORKBENCH" title={selected.name} action={<button className="close-button" type="button" onClick={() => setSelected(null)}>关闭</button>}>
             <div className="workbench-grid">

@@ -15,6 +15,6 @@ class ResearchReportRepository(Protocol):
 
     def get_by_content_sha256(self, content_sha256: str) -> ResearchReport | None: ...
 
-    def list_by_case(
-        self, case_id: str, *, as_of: datetime | None = None
+    def list_by_subject(
+        self, subject_id: str, *, as_of: datetime | None = None
     ) -> tuple[ResearchReport, ...]: ...

@@ -10,7 +10,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-_HEADS = frozenset({"0029_dukascopy_light_oil_cfd"})
+_HEADS = frozenset({"0030_generic_notification_outbox"})
 _PREV = "0004_phase1c_research_memory"
 
 

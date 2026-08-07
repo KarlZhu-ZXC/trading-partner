@@ -25,12 +25,12 @@ from domain.common.enums import (
     EvidenceQuality,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     ReliabilityLevel,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.persistence.orm import (
     ResearchEvidenceRow,
     SystemAuditLogRow,
@@ -72,13 +72,13 @@ def _enable_fk(engine: Engine) -> None:
         cursor.close()
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> InvestmentCase:
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> ResearchSubject:
     base: dict[str, Any] = {
-        "case_id": ids.new(EntityIdPrefix.CASE),
-        "case_type": InvestmentCaseType.COMPANY,
+        "subject_id": ids.new(EntityIdPrefix.SUBJECT),
+        "subject_type": ResearchSubjectType.COMPANY,
         "title": "Case",
         "summary": "Summary",
-        "status": InvestmentCaseStatus.ACTIVE,
+        "status": ResearchSubjectStatus.ACTIVE,
         "primary_instrument_id": US,
         "topic_tags": ("ai",),
         "created_at": clock.now(),
@@ -86,7 +86,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "created_by": "user",
         "archived_at": None,
         "archived_reason": None,
-        "linked_case_ids": (),
+        "linked_subject_ids": (),
         "evidence_ids": (),
         "report_ids": (),
         "event_ids": (),
@@ -94,7 +94,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return InvestmentCase(**base)
+    return ResearchSubject(**base)
 
 
 @pytest.fixture
@@ -118,12 +118,12 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
     eng.dispose()
 
 
-def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = _make_case(ids, clock)
+def _create_subject(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
+    subject = _make_case(ids, clock)
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
 def _base_record_kwargs(**overrides: Any) -> dict[str, Any]:
@@ -148,7 +148,7 @@ def _base_record_kwargs(**overrides: Any) -> dict[str, Any]:
         "confidence": Decimal("0.8"),
         "supersedes_evidence_id": None,
         "recorded_by": "provider:eastmoney",
-        "case_ids": (),
+        "subject_ids": (),
         "observed_at": None,
     }
     base.update(overrides)
@@ -157,8 +157,8 @@ def _base_record_kwargs(**overrides: Any) -> dict[str, Any]:
 
 def test_record_evidence_happy_path_and_topic_dedupe(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    env = service.record_evidence(**_base_record_kwargs(case_ids=(case_id,)))
+    subject_id = _create_subject(factory, ids, clock)
+    env = service.record_evidence(**_base_record_kwargs(subject_ids=(subject_id,)))
     assert env.ok is True
     assert env.data is not None
     assert env.degraded is False
@@ -168,24 +168,24 @@ def test_record_evidence_happy_path_and_topic_dedupe(harness) -> None:  # type: 
     assert env.data.instrument_ids == (A_SHARE,)
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert env.data.evidence_id in case.evidence_ids
-        assert uow.case_evidence_links.exists(case_id, env.data.evidence_id)
+        subject = uow.subjects.get(subject_id)
+        assert env.data.evidence_id in subject.evidence_ids
+        assert uow.subject_evidence_links.exists(subject_id, env.data.evidence_id)
         from application.dto.research_memory import ResearchSearchQuery
 
-        hits = uow.search_index.search(ResearchSearchQuery(text="Dividend", case_id=case_id))
+        hits = uow.search_index.search(ResearchSearchQuery(text="Dividend", subject_id=subject_id))
         assert hits.total >= 1
 
 
 def test_duplicate_content_adds_new_case_links(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
-    first = service.record_evidence(**_base_record_kwargs(case_ids=(case_a,)))
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
+    first = service.record_evidence(**_base_record_kwargs(subject_ids=(case_a,)))
     assert first.ok and first.data is not None
     eid = first.data.evidence_id
 
-    second = service.record_evidence(**_base_record_kwargs(case_ids=(case_a, case_b)))
+    second = service.record_evidence(**_base_record_kwargs(subject_ids=(case_a, case_b)))
     assert second.ok is True
     assert second.degraded is True
     assert DUPLICATE_CONTENT in second.warnings
@@ -193,9 +193,9 @@ def test_duplicate_content_adds_new_case_links(harness) -> None:  # type: ignore
     assert second.data.evidence_id == eid
 
     with factory() as uow:
-        assert uow.case_evidence_links.exists(case_a, eid)
-        assert uow.case_evidence_links.exists(case_b, eid)
-        case_b_row = uow.cases.get(case_b)
+        assert uow.subject_evidence_links.exists(case_a, eid)
+        assert uow.subject_evidence_links.exists(case_b, eid)
+        case_b_row = uow.subjects.get(case_b)
         assert eid in case_b_row.evidence_ids
 
     with Session(eng) as session:
@@ -205,13 +205,17 @@ def test_duplicate_content_adds_new_case_links(harness) -> None:  # type: ignore
 
 def test_link_duplicate_returns_warning(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    rec = service.record_evidence(**_base_record_kwargs(case_ids=()))
+    subject_id = _create_subject(factory, ids, clock)
+    rec = service.record_evidence(**_base_record_kwargs(subject_ids=()))
     assert rec.ok and rec.data
     eid = rec.data.evidence_id
-    link1 = service.link_evidence_to_case(evidence_id=eid, case_id=case_id, linked_by="user")
+    link1 = service.link_evidence_to_subject(
+        evidence_id=eid, subject_id=subject_id, linked_by="user"
+    )
     assert link1.ok and link1.data and link1.degraded is False
-    link2 = service.link_evidence_to_case(evidence_id=eid, case_id=case_id, linked_by="user")
+    link2 = service.link_evidence_to_subject(
+        evidence_id=eid, subject_id=subject_id, linked_by="user"
+    )
     assert link2.ok is True
     assert link2.degraded is True
     assert DUPLICATE_CONTENT in link2.warnings
@@ -221,12 +225,12 @@ def test_link_duplicate_returns_warning(harness) -> None:  # type: ignore[no-unt
 
 def test_assess_requires_user_or_external_confirmation(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    rec = service.record_evidence(**_base_record_kwargs(case_ids=(case_id,)))
+    subject_id = _create_subject(factory, ids, clock)
+    rec = service.record_evidence(**_base_record_kwargs(subject_ids=(subject_id,)))
     assert rec.ok and rec.data
     bad = service.assess_evidence(
         evidence_id=rec.data.evidence_id,
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.SUPPORTS,
@@ -240,7 +244,7 @@ def test_assess_requires_user_or_external_confirmation(harness) -> None:  # type
 
     good = service.assess_evidence(
         evidence_id=rec.data.evidence_id,
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.CONTRADICTS,
@@ -257,7 +261,7 @@ def test_assess_requires_user_or_external_confirmation(harness) -> None:  # type
 
 def test_url_scheme_userinfo_fragment_query_secret(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, _eng = harness
-    _create_case(factory, ids, clock)
+    _create_subject(factory, ids, clock)
 
     ftp = service.record_evidence(**_base_record_kwargs(source_url="ftp://example.com/a"))
     assert ftp.ok is False
@@ -344,10 +348,10 @@ def test_us_and_a_share_evidence_types_preserved(harness) -> None:  # type: igno
 
 def test_audit_summary_excludes_body_url_rationale(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     env = service.record_evidence(
         **_base_record_kwargs(
-            case_ids=(case_id,),
+            subject_ids=(subject_id,),
             content_text="SECRET_BODY_SHOULD_NOT_AUDIT",
             source_url="https://example.com/?token=abc",
         )
@@ -355,7 +359,7 @@ def test_audit_summary_excludes_body_url_rationale(harness) -> None:  # type: ig
     assert env.ok and env.data is not None
     assess = service.assess_evidence(
         evidence_id=env.data.evidence_id,
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.NEUTRAL,
@@ -380,7 +384,7 @@ def test_audit_summary_excludes_body_url_rationale(harness) -> None:  # type: ig
                 "action",
                 "entity_type",
                 "entity_id",
-                "case_id",
+                "subject_id",
                 "actor",
                 "confirmed_by",
                 "idempotency_key",
@@ -393,7 +397,7 @@ def test_audit_summary_excludes_body_url_rationale(harness) -> None:  # type: ig
 
 def test_projection_failure_full_rollback(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
 
     real_factory = factory
 
@@ -425,7 +429,7 @@ def test_projection_failure_full_rollback(harness) -> None:  # type: ignore[no-u
         boom_factory, clock, SequentialIdGenerator(start=9000), DefaultSecretRedactor()
     )
     env = boom_service.record_evidence(
-        **_base_record_kwargs(title="rollback-test", case_ids=(case_id,))
+        **_base_record_kwargs(title="rollback-test", subject_ids=(subject_id,))
     )
     assert env.ok is False
 
@@ -438,34 +442,36 @@ def test_projection_failure_full_rollback(harness) -> None:  # type: ignore[no-u
         assert audit_count == []
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.evidence_ids == ()
+        subject = uow.subjects.get(subject_id)
+        assert subject.evidence_ids == ()
 
 
 def test_case_cache_updated_at_matches_link_write_timestamp(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, _eng = harness
     old = NOW - timedelta(days=3)
-    case = _make_case(ids, clock, created_at=old, updated_at=old)
+    subject = _make_case(ids, clock, created_at=old, updated_at=old)
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    case_id = case.case_id
+    subject_id = subject.subject_id
 
     clock.set(NOW)
-    rec = service.record_evidence(**_base_record_kwargs(case_ids=(), title="cache-ts"))
+    rec = service.record_evidence(**_base_record_kwargs(subject_ids=(), title="cache-ts"))
     assert rec.ok and rec.data
     eid = rec.data.evidence_id
 
-    link = service.link_evidence_to_case(evidence_id=eid, case_id=case_id, linked_by="user")
+    link = service.link_evidence_to_subject(
+        evidence_id=eid, subject_id=subject_id, linked_by="user"
+    )
     assert link.ok and link.data is not None
     assert link.data.linked_at == NOW
 
     with factory() as uow:
-        loaded = uow.cases.get(case_id)
+        loaded = uow.subjects.get(subject_id)
         assert loaded.updated_at == NOW
         assert loaded.updated_at != old
         assert eid in loaded.evidence_ids
-        stored_link = uow.case_evidence_links.get(case_id, eid)
+        stored_link = uow.subject_evidence_links.get(subject_id, eid)
         assert stored_link.linked_at == loaded.updated_at == NOW
 
 
@@ -501,26 +507,30 @@ def _delete_search_projection(eng: Engine, entity_id: str) -> None:
 
 def test_link_rebuilds_deleted_search_projection(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    rec = service.record_evidence(**_base_record_kwargs(case_ids=(), title="heal-projection"))
+    subject_id = _create_subject(factory, ids, clock)
+    rec = service.record_evidence(**_base_record_kwargs(subject_ids=(), title="heal-projection"))
     assert rec.ok and rec.data
     eid = rec.data.evidence_id
 
     with factory() as uow:
         from application.dto.research_memory import ResearchSearchQuery
 
-        page = uow.search_index.search(ResearchSearchQuery(text="heal-projection", case_id=None))
+        page = uow.search_index.search(ResearchSearchQuery(text="heal-projection", subject_id=None))
         assert page.total >= 1
 
     _delete_search_projection(eng, eid)
 
-    link = service.link_evidence_to_case(evidence_id=eid, case_id=case_id, linked_by="user")
+    link = service.link_evidence_to_subject(
+        evidence_id=eid, subject_id=subject_id, linked_by="user"
+    )
     assert link.ok is True
 
     with factory() as uow:
         from application.dto.research_memory import ResearchSearchQuery
 
-        page = uow.search_index.search(ResearchSearchQuery(text="heal-projection", case_id=case_id))
+        page = uow.search_index.search(
+            ResearchSearchQuery(text="heal-projection", subject_id=subject_id)
+        )
         assert page.total >= 1
         entity_ids = {hit.entity_id for hit in page.items}
         assert eid in entity_ids
@@ -528,15 +538,15 @@ def test_link_rebuilds_deleted_search_projection(harness) -> None:  # type: igno
 
 def test_duplicate_evidence_new_link_rebuilds_projection(harness) -> None:  # type: ignore[no-untyped-def]
     service, factory, clock, ids, eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
-    first = service.record_evidence(**_base_record_kwargs(case_ids=(case_a,), title="dup-heal"))
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
+    first = service.record_evidence(**_base_record_kwargs(subject_ids=(case_a,), title="dup-heal"))
     assert first.ok and first.data
     eid = first.data.evidence_id
 
     _delete_search_projection(eng, eid)
 
-    second = service.record_evidence(**_base_record_kwargs(case_ids=(case_b,), title="dup-heal"))
+    second = service.record_evidence(**_base_record_kwargs(subject_ids=(case_b,), title="dup-heal"))
     assert second.ok is True
     assert second.degraded is True
     assert DUPLICATE_CONTENT in second.warnings
@@ -544,7 +554,7 @@ def test_duplicate_evidence_new_link_rebuilds_projection(harness) -> None:  # ty
     with factory() as uow:
         from application.dto.research_memory import ResearchSearchQuery
 
-        page = uow.search_index.search(ResearchSearchQuery(text="dup-heal", case_id=case_b))
+        page = uow.search_index.search(ResearchSearchQuery(text="dup-heal", subject_id=case_b))
         assert page.total >= 1
         assert any(hit.entity_id == eid for hit in page.items)
 
@@ -603,7 +613,7 @@ def test_audit_writer_failure_rolls_back_evidence_path(harness) -> None:  # type
     any earlier audit row all roll back when a later audit append fails.
     """
     service, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     real_factory = factory
 
     class _SelectiveBoomAudit:
@@ -646,7 +656,9 @@ def test_audit_writer_failure_rolls_back_evidence_path(harness) -> None:  # type
     boom = EvidenceService(
         boom_factory, clock, SequentialIdGenerator(start=9100), DefaultSecretRedactor()
     )
-    env = boom.record_evidence(**_base_record_kwargs(title="audit-fail-ev", case_ids=(case_id,)))
+    env = boom.record_evidence(
+        **_base_record_kwargs(title="audit-fail-ev", subject_ids=(subject_id,))
+    )
     assert env.ok is False
 
     with Session(eng) as session:
@@ -660,9 +672,9 @@ def test_audit_writer_failure_rolls_back_evidence_path(harness) -> None:  # type
         assert link_count == 0
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.evidence_ids == ()
-        assert case.updated_at == NOW  # unchanged from create
+        subject = uow.subjects.get(subject_id)
+        assert subject.evidence_ids == ()
+        assert subject.updated_at == NOW  # unchanged from create
 
 
 def test_duplicate_evidence_link_audit_failure_rolls_back_new_link(
@@ -674,10 +686,10 @@ def test_duplicate_evidence_link_audit_failure_rolls_back_new_link(
     Case cache mutation, Search projection mutation, and audit are rolled back.
     """
     service, factory, clock, ids, eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
     first = service.record_evidence(
-        **_base_record_kwargs(case_ids=(case_a,), title="dup-audit-fail")
+        **_base_record_kwargs(subject_ids=(case_a,), title="dup-audit-fail")
     )
     assert first.ok and first.data is not None
     eid = first.data.evidence_id
@@ -686,10 +698,10 @@ def test_duplicate_evidence_link_audit_failure_rolls_back_new_link(
         from application.dto.research_memory import ResearchSearchQuery
 
         page_before = uow.search_index.search(
-            ResearchSearchQuery(text="dup-audit-fail", case_id=case_a)
+            ResearchSearchQuery(text="dup-audit-fail", subject_id=case_a)
         )
         assert page_before.total >= 1
-        case_a_before = uow.cases.get(case_a)
+        case_a_before = uow.subjects.get(case_a)
         case_a_evidence_ids = case_a_before.evidence_ids
         case_a_updated_at = case_a_before.updated_at
 
@@ -740,7 +752,9 @@ def test_duplicate_evidence_link_audit_failure_rolls_back_new_link(
     boom = EvidenceService(
         boom_factory, clock, SequentialIdGenerator(start=9200), DefaultSecretRedactor()
     )
-    second = boom.record_evidence(**_base_record_kwargs(case_ids=(case_b,), title="dup-audit-fail"))
+    second = boom.record_evidence(
+        **_base_record_kwargs(subject_ids=(case_b,), title="dup-audit-fail")
+    )
     assert second.ok is False
 
     with Session(eng) as session:
@@ -791,11 +805,11 @@ def test_duplicate_evidence_link_audit_failure_rolls_back_new_link(
         assert case_b not in membership_after
 
     with factory() as uow:
-        case_a_after = uow.cases.get(case_a)
+        case_a_after = uow.subjects.get(case_a)
         assert case_a_after.evidence_ids == case_a_evidence_ids
         assert case_a_after.updated_at == case_a_updated_at
-        case_b_after = uow.cases.get(case_b)
+        case_b_after = uow.subjects.get(case_b)
         assert eid not in case_b_after.evidence_ids
         assert case_b_after.evidence_ids == ()
-        assert uow.case_evidence_links.exists(case_a, eid)
-        assert not uow.case_evidence_links.exists(case_b, eid)
+        assert uow.subject_evidence_links.exists(case_a, eid)
+        assert not uow.subject_evidence_links.exists(case_b, eid)

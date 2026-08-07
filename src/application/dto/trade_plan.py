@@ -45,7 +45,7 @@ class TradePlanConditionDTO(_DTO):
 class TradePlanDTO(_DTO):
     plan_id: str
     version: int
-    case_id: str
+    subject_id: str
     thesis_id: str
     instrument_id: str
     status: TradePlanStatus

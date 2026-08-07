@@ -100,7 +100,7 @@ class ResearchEvidenceRow(Base):
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
-class CaseEvidenceLinkRow(Base):
+class SubjectEvidenceLinkRow(Base):
     __tablename__ = "case_evidence_links"
     __table_args__ = (
         UniqueConstraint(
@@ -116,7 +116,8 @@ class CaseEvidenceLinkRow(Base):
     )
 
     link_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -161,7 +162,8 @@ class EvidenceAssessmentRow(Base):
         ForeignKey("research_evidence.evidence_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -212,7 +214,8 @@ class ResearchReportRow(Base):
     )
 
     report_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -265,7 +268,8 @@ class ResearchEventRow(Base):
     )
 
     event_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -334,7 +338,8 @@ class DecisionRecordRow(Base):
     )
 
     decision_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -392,7 +397,8 @@ class JournalEntryRow(Base):
     )
 
     journal_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str | None] = mapped_column(
+    subject_id: Mapped[str | None] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=True,

@@ -1,4 +1,4 @@
-"""Secret-safe Telegram Bot sender for deterministic Monitor notifications."""
+"""Secret-safe Telegram Bot sender for deterministic notifications."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from typing import Any
 
 import httpx
 
-from application.dto.monitor_notifications import NotificationSendReceipt
-from domain.monitoring.models import MonitorNotificationOutboxEntry
+from application.dto.notifications import NotificationSendReceipt
+from domain.notifications.enums import NotificationSourceType
+from domain.notifications.models import NotificationOutboxEntry
+from domain.notifications.rendering import render_plain_text_html
 
 _MAX_RESPONSE_BYTES = 64_000
 _RULE_ROW_PATTERN = re.compile(r"\s{2,}")
@@ -29,7 +31,7 @@ _COMPACT_CARD_PATTERN = re.compile(
 )
 
 
-class TelegramMonitorNotificationAdapter:
+class TelegramNotificationAdapter:
     def __init__(
         self,
         *,
@@ -58,10 +60,10 @@ class TelegramMonitorNotificationAdapter:
         if self._owns_client:
             await self._client.aclose()
 
-    async def send(self, notification: MonitorNotificationOutboxEntry) -> NotificationSendReceipt:
+    async def send(self, notification: NotificationOutboxEntry) -> NotificationSendReceipt:
         payload: dict[str, object] = {
             "chat_id": self._chat_id,
-            "text": _format_notification_html(notification.title, notification.body),
+            "text": _render_notification_html(notification),
             "parse_mode": "HTML",
             "disable_notification": False,
         }
@@ -143,6 +145,16 @@ def _retry_after_seconds(data: dict[str, Any]) -> int | None:
     return None
 
 
+def _render_notification_html(notification: NotificationOutboxEntry) -> str:
+    """Render the formatter selected by the closed notification source type."""
+    if notification.source_type in {
+        NotificationSourceType.MONITOR_EVENT,
+        NotificationSourceType.MONITOR_RUN,
+    }:
+        return _format_notification_html(notification.title, notification.body)
+    return render_plain_text_html(notification.title, notification.body)
+
+
 def _format_notification_html(title: str, body: str) -> str:
     """Render a mobile-first Telegram rule card; Telegram has no table markup."""
     lines = body.splitlines()
@@ -151,9 +163,9 @@ def _format_notification_html(title: str, body: str) -> str:
     try:
         rules_index = lines.index("RULES")
     except ValueError:
-        return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
+        return render_plain_text_html(title, body)
     if rules_index + 1 >= len(lines):
-        return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
+        return render_plain_text_html(title, body)
 
     monitor_name = lines[0].strip() if lines else ""
     symbol = _prefixed_value(lines, "标的：")
@@ -168,16 +180,14 @@ def _format_notification_html(title: str, body: str) -> str:
     changes = lines[changes_start:rules_index]
     rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
     if not rows:
-        return f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}"
+        return render_plain_text_html(title, body)
     compact_cards = any(len(row) >= 7 and not row[0] for row in rows)
 
     display_price = price
     if display_price in {None, "不可用", "N/A", "—"} and previous_valid_price is not None:
         display_price = previous_valid_price
         price_basis = price_basis or "上一有效价格（当前不可用）"
-    sections = [
-        f"<b>{html.escape(_headline_with_symbol_price(title, symbol, display_price))}</b>"
-    ]
+    sections = [f"<b>{html.escape(_headline_with_symbol_price(title, symbol, display_price))}</b>"]
     if monitor_name and monitor_name != symbol and len(monitor_name) <= 48:
         sections.append(f"<i>{html.escape(monitor_name)}</i>")
 
@@ -203,9 +213,7 @@ def _format_notification_html(title: str, body: str) -> str:
     if price_time is not None:
         price_lines.append(f"🕒 价格时间：{html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        price_lines.append(
-            f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>"
-        )
+        price_lines.append(f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>")
     if previous_price is not None:
         price_lines.append(f"↩️ 上次价格：{html.escape(previous_price)}")
     if price_change is not None:
@@ -229,9 +237,7 @@ def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
     if change_count == "0":
         summary.append("✅ 本轮无状态变化")
     elif change_count is not None:
-        summary.append(
-            f"🚨 <b>本轮出现 {html.escape(change_count)} 项新状态变化</b>"
-        )
+        summary.append(f"🚨 <b>本轮出现 {html.escape(change_count)} 项新状态变化</b>")
     if summary:
         sections.append("\n".join(summary))
 
@@ -303,9 +309,7 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     if price_time is not None:
         parts.append(f"🕒 {html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        parts.append(
-            f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>"
-        )
+        parts.append(f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>")
     if price_basis is not None:
         parts.append(f"⚠️ {html.escape(price_basis)}")
     if previous_price is not None:
@@ -448,8 +452,7 @@ def _format_rule_cards(
         rule, condition, value, distance, state, level = row[:6]
         meaning = row[6] if len(row) >= 7 else None
         header = (
-            f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
-            f" · <b>{html.escape(state)}</b>"
+            f"{_state_emoji(state)} <b>{html.escape(condition)}</b> · <b>{html.escape(state)}</b>"
         )
         if level != "INFO":
             header += f" · {html.escape(level)}"
@@ -494,9 +497,7 @@ def _headline_with_symbol_price(
     if symbol is not None and symbol.strip() and symbol.strip() not in title:
         prefix, separator, event = title.rpartition(" · ")
         headline = (
-            f"{prefix} · {symbol.strip()} · {event}"
-            if separator
-            else f"{title} · {symbol.strip()}"
+            f"{prefix} · {symbol.strip()} · {event}" if separator else f"{title} · {symbol.strip()}"
         )
     return _headline_with_price(headline, price)
 
@@ -568,3 +569,8 @@ def _prefixed_value(lines: list[str], prefix: str) -> str | None:
         (line.removeprefix(prefix).strip() for line in lines if line.startswith(prefix)),
         None,
     )
+
+
+# Compatibility name retained for Monitor-only callers and old operational
+# scripts. The adapter itself accepts any generic NotificationOutboxEntry.
+TelegramMonitorNotificationAdapter = TelegramNotificationAdapter

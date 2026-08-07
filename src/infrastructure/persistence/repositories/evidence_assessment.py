@@ -19,8 +19,8 @@ from infrastructure.persistence.repositories._mapping import (
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
-    require_case_evidence_link,
     require_evidence_exists,
+    require_subject_evidence_link,
     require_thesis_optional,
 )
 
@@ -35,7 +35,7 @@ def _to_domain(row: EvidenceAssessmentRow) -> EvidenceAssessment:
     return EvidenceAssessment(
         assessment_id=row.assessment_id,
         evidence_id=row.evidence_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         thesis_id=row.thesis_id,
         thesis_revision_id=row.thesis_revision_id,
         stance=EvidenceStance(row.stance),
@@ -52,7 +52,7 @@ def _to_row(assessment: EvidenceAssessment) -> EvidenceAssessmentRow:
     return EvidenceAssessmentRow(
         assessment_id=assessment.assessment_id,
         evidence_id=assessment.evidence_id,
-        case_id=assessment.case_id,
+        subject_id=assessment.subject_id,
         thesis_id=assessment.thesis_id,
         thesis_revision_id=assessment.thesis_revision_id,
         stance=assessment.stance.value,
@@ -73,9 +73,9 @@ class SqlAlchemyEvidenceAssessmentRepository:
 
     def add(self, assessment: EvidenceAssessment) -> None:
         evidence = require_evidence_exists(self._session, assessment.evidence_id)
-        link = require_case_evidence_link(
+        link = require_subject_evidence_link(
             self._session,
-            case_id=assessment.case_id,
+            subject_id=assessment.subject_id,
             evidence_id=assessment.evidence_id,
         )
         evidence_observed = dt_from_db(evidence.observed_at, field_name="observed_at")
@@ -90,7 +90,7 @@ class SqlAlchemyEvidenceAssessmentRepository:
             )
         if assessment.assessed_at < link_linked_at:
             raise InvalidResearchLink(
-                "assessed_at must be >= case evidence link linked_at",
+                "assessed_at must be >= subject evidence link linked_at",
                 details={
                     "entity_type": "evidence_assessment",
                     "assessment_id": assessment.assessment_id,
@@ -98,7 +98,7 @@ class SqlAlchemyEvidenceAssessmentRepository:
             )
         require_thesis_optional(
             self._session,
-            case_id=assessment.case_id,
+            subject_id=assessment.subject_id,
             thesis_id=assessment.thesis_id,
             thesis_revision_id=assessment.thesis_revision_id,
             assessed_at=assessment.assessed_at,
@@ -109,9 +109,7 @@ class SqlAlchemyEvidenceAssessmentRepository:
     def list_for_evidence(
         self, evidence_id: str, *, as_of: datetime | None = None
     ) -> tuple[EvidenceAssessment, ...]:
-        stmt = select(EvidenceAssessmentRow).where(
-            EvidenceAssessmentRow.evidence_id == evidence_id
-        )
+        stmt = select(EvidenceAssessmentRow).where(EvidenceAssessmentRow.evidence_id == evidence_id)
         if as_of is not None:
             stmt = stmt.where(EvidenceAssessmentRow.assessed_at <= dt_to_db(as_of))
         stmt = stmt.order_by(
@@ -127,9 +125,7 @@ class SqlAlchemyEvidenceAssessmentRepository:
         stance: EvidenceStance | None = None,
         as_of: datetime | None = None,
     ) -> tuple[EvidenceAssessment, ...]:
-        stmt = select(EvidenceAssessmentRow).where(
-            EvidenceAssessmentRow.thesis_id == thesis_id
-        )
+        stmt = select(EvidenceAssessmentRow).where(EvidenceAssessmentRow.thesis_id == thesis_id)
         if stance is not None:
             stmt = stmt.where(EvidenceAssessmentRow.stance == stance.value)
         if as_of is not None:

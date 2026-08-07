@@ -64,7 +64,7 @@ def _run(status: WorkflowRunStatus = WorkflowRunStatus.SUCCEEDED) -> WorkflowRun
     return WorkflowRun(
         run_id="run_1",
         workflow_type=WorkflowType.US_MARKET_REVIEW,
-        case_id=None,
+        subject_id=None,
         instrument_id=None,
         requested_as_of=NOW,
         started_at=NOW,

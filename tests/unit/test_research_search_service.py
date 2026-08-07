@@ -23,20 +23,20 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     ReliabilityLevel,
     ResearchReportType,
     ResearchSearchEntityType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     Evidence,
-    InvestmentCase,
     JournalEntry,
+    ResearchSubject,
+    SubjectEvidenceLink,
     compute_evidence_content_sha256,
 )
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
@@ -76,13 +76,13 @@ def _enable_fk(engine: Engine) -> None:
         cursor.close()
 
 
-def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> InvestmentCase:
+def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) -> ResearchSubject:
     base: dict[str, Any] = {
-        "case_id": ids.new(EntityIdPrefix.CASE),
-        "case_type": InvestmentCaseType.COMPANY,
+        "subject_id": ids.new(EntityIdPrefix.SUBJECT),
+        "subject_type": ResearchSubjectType.COMPANY,
         "title": "Case",
         "summary": "Summary",
-        "status": InvestmentCaseStatus.ACTIVE,
+        "status": ResearchSubjectStatus.ACTIVE,
         "primary_instrument_id": US,
         "topic_tags": ("ai",),
         "created_at": clock.now(),
@@ -90,7 +90,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "created_by": "user",
         "archived_at": None,
         "archived_reason": None,
-        "linked_case_ids": (),
+        "linked_subject_ids": (),
         "evidence_ids": (),
         "report_ids": (),
         "event_ids": (),
@@ -98,7 +98,7 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return InvestmentCase(**base)
+    return ResearchSubject(**base)
 
 
 def _evidence_hash(**overrides: Any) -> str:
@@ -191,7 +191,7 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_search_delegates_to_index_and_returns_page(harness) -> None:  # type: ignore[no-untyped-def]
     search, _archive, factory, clock, ids, _eng = harness
-    case = _make_case(ids, clock, primary_instrument_id=A_SHARE)
+    subject = _make_case(ids, clock, primary_instrument_id=A_SHARE)
     evidence = _make_evidence(
         ids,
         title="贵州茅台发布业绩预告",
@@ -201,22 +201,22 @@ def test_search_delegates_to_index_and_returns_page(harness) -> None:  # type: i
         source_name="mock_a_share",
         source_vendor="mock_a_share",
     )
-    link = CaseEvidenceLink(
+    link = SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
         linked_by="user",
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, evidence.evidence_id)
         uow.commit()
 
-    env = search.search(ResearchSearchQuery(text="茅台", case_id=case.case_id))
+    env = search.search(ResearchSearchQuery(text="茅台", subject_id=subject.subject_id))
     assert env.ok is True
     assert env.data is not None
     assert env.data.total >= 1
@@ -226,10 +226,10 @@ def test_search_delegates_to_index_and_returns_page(harness) -> None:  # type: i
 
 def test_search_journal_entry_types_filter(harness) -> None:  # type: ignore[no-untyped-def]
     search, _archive, factory, clock, ids, _eng = harness
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     note = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.NOTE,
         title="Note",
         body_markdown="body note",
@@ -245,7 +245,7 @@ def test_search_journal_entry_types_filter(harness) -> None:  # type: ignore[no-
     )
     pm = JournalEntry(
         journal_id=ids.new(EntityIdPrefix.JOURNAL),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         entry_type=JournalEntryType.POSTMORTEM,
         title="Postmortem",
         body_markdown="body pm",
@@ -260,7 +260,7 @@ def test_search_journal_entry_types_filter(harness) -> None:  # type: ignore[no-
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.journal.add(note, idempotency_key="jn", idempotency_payload_sha256="a" * 64)
         uow.journal.add(pm, idempotency_key="jp", idempotency_payload_sha256="b" * 64)
         uow.search_index.index(ResearchSearchEntityType.JOURNAL, note.journal_id)
@@ -269,7 +269,7 @@ def test_search_journal_entry_types_filter(harness) -> None:  # type: ignore[no-
 
     env = search.search(
         ResearchSearchQuery(
-            case_id=case.case_id,
+            subject_id=subject.subject_id,
             journal_entry_types=(JournalEntryType.NOTE,),
         )
     )
@@ -281,24 +281,24 @@ def test_search_journal_entry_types_filter(harness) -> None:  # type: ignore[no-
 
 def test_get_report_hydrates_from_repository(harness) -> None:  # type: ignore[no-untyped-def]
     search, archive, factory, clock, ids, _eng = harness
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     evidence = _make_evidence(ids)
-    link = CaseEvidenceLink(
+    link = SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
         linked_by="user",
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.commit()
 
     report_env = archive.archive_report(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Structural view",
@@ -335,25 +335,25 @@ def test_get_report_not_found_is_envelope_failure(harness) -> None:  # type: ign
 
 def test_search_and_get_report_do_not_commit_or_audit(harness) -> None:  # type: ignore[no-untyped-def]
     search, archive, factory, clock, ids, _eng = harness
-    case = _make_case(ids, clock)
+    subject = _make_case(ids, clock)
     evidence = _make_evidence(ids)
-    link = CaseEvidenceLink(
+    link = SubjectEvidenceLink(
         link_id=ids.new(EntityIdPrefix.REV),
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
         linked_by="user",
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.evidence.add(evidence)
-        uow.case_evidence_links.add(link)
+        uow.subject_evidence_links.add(link)
         uow.search_index.index(ResearchSearchEntityType.EVIDENCE, evidence.evidence_id)
         uow.commit()
 
     report_env = archive.archive_report(
-        case_id=case.case_id,
+        subject_id=subject.subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="R",
         summary="S",
@@ -386,7 +386,7 @@ def test_search_and_get_report_do_not_commit_or_audit(harness) -> None:  # type:
         return uow
 
     search_ro = ResearchSearchService(spying_factory, clock, ids, DefaultSecretRedactor())
-    env_search = search_ro.search(ResearchSearchQuery(case_id=case.case_id))
+    env_search = search_ro.search(ResearchSearchQuery(subject_id=subject.subject_id))
     env_report = search_ro.get_report(report_env.data.report_id)
     assert env_search.ok is True
     assert env_report.ok is True
@@ -417,7 +417,7 @@ def test_search_maps_domain_errors(harness) -> None:  # type: ignore[no-untyped-
     )
     query = ResearchSearchQuery(
         text="x",
-        case_id="case_00000000-0000-7000-8000-000000000001",
+        subject_id="case_00000000-0000-7000-8000-000000000001",
     )
     env = svc.search(query)
     assert env.ok is False

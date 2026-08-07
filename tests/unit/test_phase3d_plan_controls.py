@@ -55,7 +55,7 @@ def _plan(instrument_id: str, currency: str, price: str, stop: str) -> TradePlan
     return TradePlan(
         plan_id="trade_plan_00000000-0000-7000-8000-000000000001",
         version=1,
-        case_id="case_00000000-0000-7000-8000-000000000002",
+        subject_id="case_00000000-0000-7000-8000-000000000002",
         thesis_id="thesis_00000000-0000-7000-8000-000000000003",
         instrument_id=instrument_id,
         status=TradePlanStatus.ACTIVE,
@@ -253,14 +253,14 @@ def test_monitor_compiles_only_machine_conditions_and_inherits_plan_expiry() -> 
         def get_version(self, plan_id: str, version: int) -> TradePlan | None:
             return plan if (plan_id, version) == (plan.plan_id, plan.version) else None
 
-    class Cases:
-        def get(self, case_id: str) -> object:
-            assert case_id == plan.case_id
+    class Subjects:
+        def get(self, subject_id: str) -> object:
+            assert subject_id == plan.subject_id
             return object()
 
     class Uow:
         trade_plans = Plans()
-        cases = Cases()
+        subjects = Subjects()
 
         def __enter__(self):  # type: ignore[no-untyped-def]
             return self
@@ -295,6 +295,61 @@ def test_monitor_compiles_only_machine_conditions_and_inherits_plan_expiry() -> 
     repository.create.assert_called_once()
 
 
+@pytest.mark.parametrize("explicit_reference", [False, True])
+def test_uco_trade_plan_monitor_can_observe_usoil_reference(
+    explicit_reference: bool,
+) -> None:
+    execution_instrument = "etf:US:UCO"
+    reference_instrument = "cfd:OTC:LIGHT_CMD_USD"
+    plan = replace(
+        _plan(execution_instrument, "USD", "25", "20"),
+        conditions=(_condition(reference_instrument),),
+    )
+
+    class Plans:
+        def get_version(self, plan_id: str, version: int) -> TradePlan | None:
+            return plan if (plan_id, version) == (plan.plan_id, plan.version) else None
+
+    class Subjects:
+        def get(self, subject_id: str) -> object:
+            assert subject_id == plan.subject_id
+            return object()
+
+    class Uow:
+        trade_plans = Plans()
+        subjects = Subjects()
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    repository = MagicMock()
+    repository.get_by_idempotency_key.return_value = None
+    service = MonitorService(
+        repository,
+        lambda: Uow(),  # type: ignore[arg-type,return-value]
+        FixedClock(NOW),
+        SequentialIdGenerator(),
+    )
+    result = service.create(
+        MonitorCreateInput(
+            name="USOIL reference for UCO plan",
+            primary_instrument_id=(reference_instrument if explicit_reference else None),
+            trade_plan_id=plan.plan_id,
+            trade_plan_version=plan.version,
+            compile_trade_plan_conditions=True,
+            confirmed_by="user",
+            idempotency_key=f"uco-usoil-{explicit_reference}",
+        )
+    )
+
+    assert plan.instrument_id == execution_instrument
+    assert result.monitor.primary_instrument_id == reference_instrument
+    assert result.monitor.rules[0].instrument_id == reference_instrument
+
+
 def test_duplicate_intent_check_uses_only_unsuperseded_durable_decisions() -> None:
     plan = _plan("equity:US:NVDA", "USD", "100", "90")
     old = SimpleNamespace(
@@ -311,8 +366,8 @@ def test_duplicate_intent_check_uses_only_unsuperseded_durable_decisions() -> No
     )
 
     class Decisions:
-        def list_by_case(self, case_id: str):  # type: ignore[no-untyped-def]
-            assert case_id == plan.case_id
+        def list_by_subject(self, subject_id: str):  # type: ignore[no-untyped-def]
+            assert subject_id == plan.subject_id
             return (old, replacement)
 
     class Uow:

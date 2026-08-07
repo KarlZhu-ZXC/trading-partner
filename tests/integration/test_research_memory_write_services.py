@@ -25,14 +25,14 @@ from domain.common.enums import (
     EvidenceQuality,
     EvidenceStance,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.persistence.orm import SystemAuditLogRow
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
@@ -99,12 +99,12 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="Integration case",
         summary="C4a flow",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("integration",),
         created_at=clock.now(),
@@ -112,7 +112,7 @@ def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -120,14 +120,14 @@ def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
 def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, eng = harness
-    case_id = _seed_case(factory, ids, clock)
+    subject_id = _seed_case(factory, ids, clock)
 
     ev = evidence_svc.record_evidence(
         evidence_type=EvidenceType.A_SHARE_ANNOUNCEMENT,
@@ -150,7 +150,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
         confidence=Decimal("0.75"),
         supersedes_evidence_id=None,
         recorded_by="provider:eastmoney",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert ev.ok and ev.data is not None
@@ -183,7 +183,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
         confidence=Decimal("0.75"),
         supersedes_evidence_id=None,
         recorded_by="provider:eastmoney",
-        case_ids=(case_id, case2),
+        subject_ids=(subject_id, case2),
         observed_at=EARLIER,
     )
     assert dup.ok and dup.degraded and DUPLICATE_CONTENT in dup.warnings
@@ -192,7 +192,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
 
     assess = evidence_svc.assess_evidence(
         evidence_id=ev.data.evidence_id,
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         thesis_revision_id=None,
         stance=EvidenceStance.SUPPORTS,
@@ -204,7 +204,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
     assert assess.ok
 
     report = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.A_SHARE_MARKET_REVIEW,
         title="A-share review",
         summary="茅台仍是核心",
@@ -221,7 +221,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
     assert report.ok and report.data is not None
 
     event = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.COMPANY,
         title="Company event",
         summary="announcement day",
@@ -238,13 +238,13 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
     assert event.ok and event.data is not None
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert ev.data.evidence_id in case.evidence_ids
-        assert report.data.report_id in case.report_ids
-        assert event.data.event_id in case.event_ids
-        page = uow.search_index.search(ResearchSearchQuery(text="茅台", case_id=case_id))
+        subject = uow.subjects.get(subject_id)
+        assert ev.data.evidence_id in subject.evidence_ids
+        assert report.data.report_id in subject.report_ids
+        assert event.data.event_id in subject.event_ids
+        page = uow.search_index.search(ResearchSearchQuery(text="茅台", subject_id=subject_id))
         assert page.total >= 1
-        page2 = uow.search_index.search(ResearchSearchQuery(text="review", case_id=case_id))
+        page2 = uow.search_index.search(ResearchSearchQuery(text="review", subject_id=subject_id))
         assert page2.total >= 1
 
     with Session(eng) as session:
@@ -266,7 +266,7 @@ def test_full_write_pipeline_evidence_report_event(harness) -> None:  # type: ig
 
 def test_us_sec_and_a_share_capital_flow_types(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, _archive, factory, clock, ids, _eng = harness
-    case_id = _seed_case(factory, ids, clock)
+    subject_id = _seed_case(factory, ids, clock)
     a = evidence_svc.record_evidence(
         evidence_type=EvidenceType.A_SHARE_CAPITAL_FLOW,
         origin=EvidenceOrigin.EXTERNAL_FACT,
@@ -288,7 +288,7 @@ def test_us_sec_and_a_share_capital_flow_types(harness) -> None:  # type: ignore
         confidence=None,
         supersedes_evidence_id=None,
         recorded_by="provider:eastmoney",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
     )
     u = evidence_svc.record_evidence(
         evidence_type=EvidenceType.US_INSIDER_ACTIVITY,
@@ -311,11 +311,11 @@ def test_us_sec_and_a_share_capital_flow_types(harness) -> None:  # type: ignore
         confidence=None,
         supersedes_evidence_id=None,
         recorded_by="provider:sec_edgar",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
     )
     assert a.ok and u.ok
     assert a.data is not None and u.data is not None
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert a.data.evidence_id in case.evidence_ids
-        assert u.data.evidence_id in case.evidence_ids
+        subject = uow.subjects.get(subject_id)
+        assert a.data.evidence_id in subject.evidence_ids
+        assert u.data.evidence_id in subject.evidence_ids

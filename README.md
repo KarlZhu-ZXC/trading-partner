@@ -15,12 +15,16 @@
 Trading Partner is a durable research and portfolio context service exposed through
 the [Model Context Protocol](https://modelcontextprotocol.io/). Connect it to Codex
 or another MCP host and the conversation can retrieve your positions, Watchlist,
-past research, research files (instrument-centered Investment Cases by default), investment-judgment
+past research, research files (instrument-centered Research Subjects by default), investment-judgment
 revisions (Thesis revisions), challenge reviews, monitoring
 events, and current market facts without rebuilding context from scratch.
 
 The MCP supplies structured facts and durable state. Your AI host remains responsible
 for interpretation, debate, and the final answer.
+
+The durable research object is called a **Research Subject**（研究标的/研究档案）.
+Legacy `InvestmentCase`, `investment_case_*`, `case_id`, and opaque `case_…` names
+remain only at compatibility boundaries; Equity refers only to actual stocks.
 
 ## <img src="docs/assets/readme/sections/why.svg" alt="" width="24" /> Why Trading Partner?
 
@@ -77,9 +81,11 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   same-market peer-comparison workflows while keeping the AI host as the synthesizer.
 - Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
   backtests and import downloaded result JSON with explicit reproducibility gaps.
-- Browse system health, a durable-only Data Quality Center, every Investment Case
-  and Thesis, all 28 MCP capabilities, Monitor runs/events, accounts/Watchlists,
-  and operational state in an LLM-free local web console.
+- Browse system health, a durable-only Data Quality Center, every Research Subject
+  and Thesis, all 28 MCP capabilities, Monitor runs/events, accounts, and
+  operational state in an LLM-free local web console. Its Attention Queue links
+  pending research candidates, failed Monitor runs, data-quality gaps, and
+  notification failures to the relevant workspace.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -98,6 +104,7 @@ Requirements:
 
 - Python 3.13
 - [uv](https://docs.astral.sh/uv/)
+- Node.js 22.13 or newer when running the optional local Console
 
 ```bash
 git clone https://github.com/KarlZhu-ZXC/trading-partner.git
@@ -151,6 +158,46 @@ coverage receipts, latest Monitor blind spots, and recent secret-safe Provider
 route/fallback outcomes; it never refreshes a broker or market-data Provider.
 Operational health and evidence quality keep separate statuses.
 The local Console renders both on its overview page.
+
+## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Local Console
+
+The optional Console is a loopback-only, LLM-free control room over the same
+application services and compact-28 capability registry used by MCP. Start the API
+and frontend in separate terminals:
+
+```bash
+# Terminal 1
+uv sync --extra console
+uv run trading-partner-console
+
+# Terminal 2
+cd console
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`. The Console provides:
+
+- an Attention Queue for pending candidates, failed Monitor runs, data-quality
+  gaps, and notification dead letters;
+- Research Subject lifecycle controls, Thesis revisions, versioned Trade Plans,
+  unified Timeline, confirmed Journal/Decision append, Challenge Review, and
+  research workflows;
+- durable Holdings, Activity, Performance, and Risk views without an implicit
+  broker refresh;
+- Monitor definition editing plus per-Monitor Run, event, warning, error, and
+  rule-observation drill-down;
+- operational receipts for post-market sync, notification delivery, Provider
+  routing/admission, scheduler installation/load/last-exit state, and next-due
+  Monitor timing; and
+- a Market & Technical Lens for instrument resolution, quotes, technical snapshots,
+  and chart rendering, alongside the generic 28-tool capability workbench.
+
+Page loads are durable-only and do not contact Providers. Writes and external
+actions require an explicit click and retain the underlying confirmation,
+expected-version, actor, and idempotency gates. The Console has no order surface.
+See the [local Console and maintenance guide](docs/operations/local-console-and-maintenance.md)
+for the detailed boundary.
 
 ## <img src="docs/assets/readme/sections/operations.svg" alt="" width="24" /> Operational commands
 
@@ -216,11 +263,11 @@ symbol-level FIFO-after-fee residuals and typed gaps in an owner-only JSON draft
 Neither a matching draft nor the command itself constitutes sign-off.
 
 Telegram delivery is opt-in. Create a bot with Telegram's `@BotFather`, send the
-bot one message, then set `MONITOR_NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`,
-and `TELEGRAM_CHAT_ID` in the gitignored `.env`. Only Monitor state-transition
-events are pushed; repeat observations remain in run history without notifying
-again. The hourly local dispatcher retries the durable outbox without opening a
-Codex task or consuming LLM tokens.
+bot one message, then set `NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`, and
+`TELEGRAM_CHAT_ID` in the gitignored `.env`. The durable generic Outbox carries
+Monitor alerts plus explicitly authorized manual text; repeat Monitor observations
+remain in run history without notifying again. The hourly local dispatcher retries
+pending messages without opening a Codex task or consuming LLM tokens.
 The unified dispatcher also owns A-share, US, and KR post-market Monitor execution;
 Codex market-review Automations must not duplicate Monitor evaluation or alerts.
 
@@ -232,7 +279,7 @@ src/
 ├── application/          # ports, DTOs, use cases
 ├── domain/               # pure domain model
 ├── infrastructure/       # composition builders, persistence, providers, config
-└── interfaces/           # MCP adapters
+└── interfaces/           # MCP, Console, and CLI adapters
 ```
 
 ```text
@@ -262,7 +309,7 @@ flowchart TB
     Host[Codex or another MCP host] --> MCP[Trading Partner MCP<br/>28 compact research tools]
     MCP --> App[Application services<br/>cutoffs · freshness · typed degradation]
     App --> Router[Asset-aware Provider Router<br/>cache · limiter · fallback policy]
-    App <--> Store[(SQLite / configured DB<br/>research memory · cases · plans<br/>snapshots · watchlists · monitors)]
+    App <--> Store[(SQLite / configured DB<br/>research memory · subjects · plans<br/>snapshots · watchlists · monitors)]
 
     subgraph CN[A-share facts]
         CNMarket[Tencent · Eastmoney · Sina<br/>quotes · bars · capital]
@@ -345,6 +392,7 @@ per-minute quota.
 ## <img src="docs/assets/readme/sections/documentation.svg" alt="" width="24" /> Documentation
 
 - [MCP capability and trust boundary](docs/guide/mcp-capability-boundary.md)
+- [Local Console and maintenance](docs/operations/local-console-and-maintenance.md)
 - [Documentation index](docs/README.md)
 - [Known operational issues](docs/operations/known-issues.md)
 - [Product roadmap](docs/roadmap/global-roadmap-cn-us.md)

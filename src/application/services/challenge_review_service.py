@@ -65,9 +65,7 @@ class ChallengeReviewService:
         self._ids = id_generator
         self._redactor = secret_redactor
 
-    def start(
-        self, request: ChallengeReviewStartInput
-    ) -> ToolEnvelope[ChallengeReviewStartDTO]:
+    def start(self, request: ChallengeReviewStartInput) -> ToolEnvelope[ChallengeReviewStartDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         try:
             if request.trigger is ChallengeTrigger.DISCUSSION:
@@ -84,15 +82,11 @@ class ChallengeReviewService:
             payload_sha256 = canonical_payload_sha256(
                 request.model_dump(mode="json", exclude={"idempotency_key"})
             )
-            existing = self._repository.get_by_start_idempotency_key(
-                request.idempotency_key
-            )
+            existing = self._repository.get_by_start_idempotency_key(request.idempotency_key)
             if existing is not None:
                 review, existing_sha256 = existing
                 if existing_sha256 != payload_sha256:
-                    raise IdempotencyConflict(
-                        "Challenge Review start idempotency key was reused"
-                    )
+                    raise IdempotencyConflict("Challenge Review start idempotency key was reused")
                 return envelope_success(
                     request_id=request_id,
                     clock=self._clock,
@@ -103,7 +97,7 @@ class ChallengeReviewService:
                     ),
                 )
             context_envelope = self._context.build(
-                ResearchContextBuildInput(case_id=request.case_id, token_budget=4_000)
+                ResearchContextBuildInput(subject_id=request.subject_id, token_budget=4_000)
             )
             if not context_envelope.ok or context_envelope.data is None:
                 raise InputValidationError("Durable research context is unavailable")
@@ -124,7 +118,7 @@ class ChallengeReviewService:
             review = self._repository.append(
                 ChallengeReview(
                     review_id=review_id,
-                    case_id=request.case_id,
+                    subject_id=request.subject_id,
                     mode=ConfirmationMode.STRICT_REVIEW,
                     trigger=request.trigger,
                     proposed_action=request.proposed_action.strip(),
@@ -194,9 +188,7 @@ class ChallengeReviewService:
             payload_sha256 = canonical_payload_sha256(
                 request.model_dump(mode="json", exclude={"idempotency_key"})
             )
-            existing = self._repository.get_by_resolution_idempotency_key(
-                request.idempotency_key
-            )
+            existing = self._repository.get_by_resolution_idempotency_key(request.idempotency_key)
             if existing is not None:
                 review, existing_sha256 = existing
                 if existing_sha256 != payload_sha256:
@@ -263,15 +255,13 @@ class ChallengeReviewService:
                 "No active invalidation condition is present in durable context.",
             )
         contrary = tuple(
-            item.evidence_id
-            for item in evidence
-            if EvidenceStance.CONTRADICTS in item.stances
+            item.evidence_id for item in evidence if EvidenceStance.CONTRADICTS in item.stances
         )
         if not contrary:
             add(
                 ChallengeDimension.CONTRARY_EVIDENCE,
                 ChallengeFindingSeverity.WARNING,
-                "No contrary evidence is linked to the current case.",
+                "No contrary evidence is linked to the current subject.",
             )
         if not positions:
             add(

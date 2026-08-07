@@ -216,7 +216,7 @@ async def test_watchlist_hub_refresh_restart_mutate_and_stale_fallback(
     membership_id = added.data.membership.membership_id
     assert added.data.membership.provider_code == "US.MSFT"
     assert added.data.membership.research_watchlist_item_ids == ("research_watch_msft",)
-    assert added.data.membership.investment_case_ids == ("case_phase2_separation",)
+    assert added.data.membership.research_subject_ids == ("case_phase2_separation",)
 
     duplicate = await service.add(
         WatchlistAddInput(

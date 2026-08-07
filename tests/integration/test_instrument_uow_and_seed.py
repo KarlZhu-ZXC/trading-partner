@@ -58,7 +58,7 @@ RUNTIME_SEED_ALIAS_COUNT = 8
 PHASE1D_MINIMUM_SEED_INSTRUMENT_COUNT = 8
 PHASE1D_MINIMUM_SEED_ALIAS_COUNT = 6
 PHASE1F_SEED_TS = "2026-07-18T00:00:00+00:00"
-_HEADS = frozenset({"0029_dukascopy_light_oil_cfd"})
+_HEADS = frozenset({"0030_generic_notification_outbox"})
 
 
 def _enable_fk(engine: Engine) -> None:

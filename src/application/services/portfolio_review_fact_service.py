@@ -256,7 +256,7 @@ class PortfolioReviewFactService:
             ResearchContextBuildInput(instrument_id=instrument_id, token_budget=2_000)
         )
         if context.ok and context.data is not None:
-            themes = context.data.case.topic_tags
+            themes = context.data.subject.topic_tags
         industry: str | None = None
         sources: tuple[SourceReference, ...] = ()
         if market is Market.US and asset_type is AssetType.EQUITY:

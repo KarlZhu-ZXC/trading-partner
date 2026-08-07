@@ -14,19 +14,24 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
-    MonitorNotificationChannel,
-    MonitorNotificationStatus,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
     MonitorSeverity,
     MonitorStatus,
 )
+from domain.notifications.models import NotificationMessage, NotificationOutboxEntry
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import (
     TradePlanComparator,
     TradePlanFactType,
 )
+
+# Compatibility re-exports for Monitor-only imports. Both names point to the
+# canonical generic notification domain models; the old duplicate dataclasses
+# no longer exist.
+MonitorNotificationMessage = NotificationMessage
+MonitorNotificationOutboxEntry = NotificationOutboxEntry
 
 MONITORING_SCHEMA_VERSION = 2
 
@@ -184,7 +189,7 @@ class MonitorDefinition:
     monitor_id: str
     version: int
     name: str
-    case_id: str | None
+    subject_id: str | None
     primary_instrument_id: str | None
     cadence: MonitorCadence
     status: MonitorStatus
@@ -203,8 +208,8 @@ class MonitorDefinition:
         if type(self.version) is not int or self.version <= 0:
             raise DataContractError("monitor version must be positive")
         _text(self.name, "name", 200)
-        if self.case_id is not None:
-            _text(self.case_id, "case_id", 128)
+        if self.subject_id is not None:
+            _text(self.subject_id, "subject_id", 128)
         if self.primary_instrument_id is not None:
             parse_instrument_id(self.primary_instrument_id)
         if (self.trade_plan_id is None) != (self.trade_plan_version is None):
@@ -340,76 +345,6 @@ class MonitorEventResolution:
             raise DataContractError("confirmed_by is invalid")
         _text(self.idempotency_key, "idempotency_key", 200)
         _aware(self.created_at, "created_at")
-
-
-@dataclass(frozen=True, slots=True)
-class MonitorNotificationMessage:
-    notification_id: str
-    source_event_id: str | None
-    source_run_id: str | None
-    channel: MonitorNotificationChannel
-    title: str
-    body: str
-    created_at: datetime
-
-    def __post_init__(self) -> None:
-        _text(self.notification_id, "notification_id", 128)
-        if (self.source_event_id is None) == (self.source_run_id is None):
-            raise DataContractError("monitor notification requires exactly one event or run source")
-        if self.source_event_id is not None:
-            _text(self.source_event_id, "source_event_id", 128)
-        if self.source_run_id is not None:
-            _text(self.source_run_id, "source_run_id", 128)
-        if not isinstance(self.channel, MonitorNotificationChannel):
-            raise DataContractError("monitor notification channel is invalid")
-        _text(self.title, "title", 200)
-        _text(self.body, "body", 4000)
-        _aware(self.created_at, "created_at")
-
-
-@dataclass(frozen=True, slots=True)
-class MonitorNotificationOutboxEntry:
-    notification_id: str
-    source_event_id: str | None
-    source_run_id: str | None
-    channel: MonitorNotificationChannel
-    title: str
-    body: str
-    status: MonitorNotificationStatus
-    attempt_count: int
-    next_attempt_at: datetime
-    created_at: datetime
-    last_attempt_at: datetime | None = None
-    delivered_at: datetime | None = None
-    provider_message_id: str | None = None
-    last_error_code: str | None = None
-
-    def __post_init__(self) -> None:
-        _text(self.notification_id, "notification_id", 128)
-        if (self.source_event_id is None) == (self.source_run_id is None):
-            raise DataContractError("monitor notification requires exactly one event or run source")
-        if self.source_event_id is not None:
-            _text(self.source_event_id, "source_event_id", 128)
-        if self.source_run_id is not None:
-            _text(self.source_run_id, "source_run_id", 128)
-        if not isinstance(self.channel, MonitorNotificationChannel):
-            raise DataContractError("monitor notification channel is invalid")
-        if not isinstance(self.status, MonitorNotificationStatus):
-            raise DataContractError("monitor notification status is invalid")
-        _text(self.title, "title", 200)
-        _text(self.body, "body", 4000)
-        if type(self.attempt_count) is not int or self.attempt_count < 0:
-            raise DataContractError("notification attempt_count must be nonnegative")
-        _aware(self.next_attempt_at, "next_attempt_at")
-        _aware(self.created_at, "created_at")
-        if self.last_attempt_at is not None:
-            _aware(self.last_attempt_at, "last_attempt_at")
-        if self.delivered_at is not None:
-            _aware(self.delivered_at, "delivered_at")
-        if self.provider_message_id is not None:
-            _text(self.provider_message_id, "provider_message_id", 128)
-        if self.last_error_code is not None:
-            _text(self.last_error_code, "last_error_code", 128)
 
 
 @dataclass(frozen=True, slots=True)

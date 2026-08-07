@@ -19,17 +19,17 @@ from infrastructure.persistence.repositories._mapping import (
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
-    require_case_exists,
     require_evidence_ids_linked_and_visible,
     require_instruments_exist,
     require_report_ids_visible,
+    require_subject_exists,
 )
 
 
 def _to_domain(row: ResearchEventRow) -> ResearchEvent:
     return ResearchEvent(
         event_id=row.event_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         event_type=ResearchEventType(row.event_type),
         title=row.title,
         summary=row.summary,
@@ -49,7 +49,7 @@ def _to_domain(row: ResearchEventRow) -> ResearchEvent:
 def _to_row(event: ResearchEvent) -> ResearchEventRow:
     return ResearchEventRow(
         event_id=event.event_id,
-        case_id=event.case_id,
+        subject_id=event.subject_id,
         event_type=event.event_type.value,
         title=event.title,
         summary=event.summary,
@@ -73,19 +73,19 @@ class SqlAlchemyResearchEventRepository:
         self._session = session
 
     def add(self, event: ResearchEvent) -> None:
-        require_case_exists(self._session, event.case_id)
+        require_subject_exists(self._session, event.subject_id)
         require_instruments_exist(self._session, event.instrument_ids)
         # Event visible_at is recorded_at for both evidence observed_at and link.
         require_evidence_ids_linked_and_visible(
             self._session,
-            case_id=event.case_id,
+            subject_id=event.subject_id,
             evidence_ids=event.evidence_ids,
             observed_at_not_after=event.recorded_at,
             linked_at_not_after=event.recorded_at,
         )
         require_report_ids_visible(
             self._session,
-            case_id=event.case_id,
+            subject_id=event.subject_id,
             report_ids=event.report_ids,
             visible_at=event.recorded_at,
         )
@@ -104,14 +104,14 @@ class SqlAlchemyResearchEventRepository:
 
     def list_timeline(
         self,
-        case_id: str,
+        subject_id: str,
         *,
         start: datetime | None,
         end: datetime | None,
         as_of: datetime | None,
         event_types: tuple[ResearchEventType, ...],
     ) -> tuple[ResearchEvent, ...]:
-        stmt = select(ResearchEventRow).where(ResearchEventRow.case_id == case_id)
+        stmt = select(ResearchEventRow).where(ResearchEventRow.subject_id == subject_id)
         if start is not None:
             stmt = stmt.where(ResearchEventRow.occurred_at >= dt_to_db(start))
         if end is not None:
@@ -119,9 +119,7 @@ class SqlAlchemyResearchEventRepository:
         if as_of is not None:
             stmt = stmt.where(ResearchEventRow.recorded_at <= dt_to_db(as_of))
         if event_types:
-            stmt = stmt.where(
-                ResearchEventRow.event_type.in_([t.value for t in event_types])
-            )
+            stmt = stmt.where(ResearchEventRow.event_type.in_([t.value for t in event_types]))
         stmt = stmt.order_by(
             ResearchEventRow.occurred_at.desc(),
             ResearchEventRow.recorded_at.desc(),

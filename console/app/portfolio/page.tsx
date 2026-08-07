@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ConsoleShell } from "../components/console-shell";
 import {
   ActionButton,
@@ -17,7 +17,7 @@ import {
 import { listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
-type Tab = "holdings" | "activity" | "performance" | "risk" | "watchlist";
+type Tab = "holdings" | "activity" | "performance" | "risk";
 type PositionSortKey =
   | "instrument_id"
   | "market_price"
@@ -34,7 +34,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "activity", label: "Activity" },
   { id: "performance", label: "Performance" },
   { id: "risk", label: "Risk" },
-  { id: "watchlist", label: "Watchlist" },
 ];
 const DEFAULT_POSITION_SORT: PositionSort = { key: null, direction: "asc" };
 const NUMERIC_POSITION_KEYS = new Set<PositionSortKey>([
@@ -390,70 +389,6 @@ function RiskTab({ policyEnvelope, riskEnvelope, onRefresh }: { policyEnvelope: 
   </div>;
 }
 
-function WatchlistTab({
-  watchlist,
-  onRefresh,
-  onMessage,
-}: {
-  watchlist: Dict | null;
-  onRefresh: () => void;
-  onMessage: (message: string, error?: boolean) => void;
-}) {
-  const groupsEnvelope = asDict(watchlist?.groups);
-  const itemsEnvelope = asDict(watchlist?.items);
-  const groupsData = data<Dict>(groupsEnvelope);
-  const itemsData = data<Dict>(itemsEnvelope);
-  const groups = listOf<Dict>(groupsData, "groups");
-  const defaultGroup = text(asDict(watchlist?.scope).group_name, "");
-  const [groupName, setGroupName] = useState(defaultGroup);
-  const [items, setItems] = useState(listOf<Dict>(itemsData, "items"));
-  const [selectedGroup, setSelectedGroup] = useState<Dict | null>(groups.find((item) => text(item.name) === groupName) ?? groups[0] ?? null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [instrument, setInstrument] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const writable = Boolean(selectedGroup?.writable) && Boolean(selectedGroup?.active);
-  useEffect(() => {
-    setItems(listOf<Dict>(itemsData, "items"));
-  }, [itemsData]);
-  async function selectGroup(value: string) {
-    setGroupName(value); const next = groups.find((group) => text(group.name) === value) ?? null; setSelectedGroup(next);
-    if (!value || value === defaultGroup) { setItems(listOf<Dict>(itemsData, "items")); return; }
-    setBusy("read");
-    try {
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "watchlist_get", arguments: { request: { operation: "items", group_name: value, limit: 500, offset: 0 } } });
-      const result = invocationResult(response); if (envelope(result).ok === false) throw new Error(errorMessage(result, "读取 Watchlist 失败"));
-      setItems(listOf<Dict>(data<Dict>(result), "items"));
-    } catch (cause) { onMessage(cause instanceof Error ? cause.message : "读取 Watchlist 失败", true); }
-    finally { setBusy(null); }
-  }
-  async function mutate(operation: "add" | "remove", item?: Dict) {
-    if (!writable) { onMessage("当前分组不可写，不能修改 Watchlist。", true); return; }
-    const label = operation === "add" ? instrument.trim() : text(item?.display_name, text(item?.provider_code));
-    if (!window.confirm(`确认${operation === "add" ? "添加" : "移除"} ${label}？`)) return;
-    setBusy(operation);
-    try {
-      const request: Dict = operation === "add"
-        ? { operation: "add", instrument_id: instrument.trim(), group_name: text(selectedGroup?.name, ""), display_name: displayName.trim() || null, confirmed_by: "user", idempotency_key: idempotencyKey("watchlist-add") }
-        : { operation: "remove", membership_id: text(item?.membership_id), confirmed_by: "user", idempotency_key: idempotencyKey("watchlist-remove") };
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "watchlist_manage", arguments: { request }, confirmation: "watchlist_manage" });
-      const result = invocationResult(response); if (envelope(result).ok === false) throw new Error(errorMessage(result, "Watchlist 写入失败"));
-      onMessage("Watchlist 已更新，正在刷新 durable state。"); setInstrument(""); setDisplayName(""); onRefresh();
-      await selectGroup(text(selectedGroup?.name, ""));
-    } catch (cause) { onMessage(cause instanceof Error ? cause.message : "Watchlist 写入失败", true); }
-    finally { setBusy(null); }
-  }
-  return <div className="portfolio-tab-stack">
-    <Card kicker="WATCHLIST · DURABLE HUB" title="自选清单" action={<Badge value={text(groupsData?.source, "UNKNOWN")} />}>
-      <p className="card-note">读取来自数据库的完整分组与成员关系。只有显式同步才接触 Moomoo；研究 Case 不会因外部删除而被删除。</p>
-      <div className="watchlist-toolbar"><Field label="分组"><select value={groupName} onChange={(event) => { void selectGroup(event.target.value); }} disabled={busy === "read"}><option value="">选择分组</option>{groups.map((group) => <option key={text(group.group_id)} value={text(group.name)}>{text(group.name)}{group.writable ? " · 可写" : " · 只读"}</option>)}</select></Field><span className="muted">{items.length} 个成员 · {text(itemsData?.total_count, String(items.length))}</span></div>
-      {groups.length === 0 ? <Empty>没有持久化 Watchlist 分组。请显式同步自选。</Empty> : <div className="watchlist-groups">{groups.map((group) => <button type="button" key={text(group.group_id)} className={text(group.name) === text(selectedGroup?.name) ? "selected" : ""} onClick={() => { void selectGroup(text(group.name)); }}><strong>{text(group.name)}</strong><small>{group.writable ? "可写" : "只读"} · {group.active ? "active" : "inactive"}</small></button>)}</div>}
-      {items.length === 0 ? <Empty>该分组没有成员。</Empty> : <div className="watchlist-items">{items.map((item, index) => <article key={`${text(item.membership_id, "membership")}-${index}`}><div><strong>{text(item.display_name, text(item.provider_code))}</strong><small className="mono">{text(item.instrument_id, "INVALID_INSTRUMENT")} · {text(item.provider_asset_type, "asset type unknown")}</small><div className="watchlist-links">{stringList(item.investment_case_ids).map((caseId) => <a href="/research" key={caseId}>Case {shortId(caseId)}</a>)}{item.research_supported === false && <span className="warning-text">unsupported instrument</span>}</div></div><div className="watchlist-item-action">{Boolean(item.active) && <Badge value={text(item.source, "UNKNOWN")} />}{writable && <button type="button" className="close-button" onClick={() => { void mutate("remove", item); }} disabled={busy === "remove"}>移除</button>}</div></article>)}</div>}
-      {writable && <details className="watchlist-editor"><summary>添加成员</summary><div className="portfolio-form-grid"><Field label="Instrument ID"><input value={instrument} onChange={(event) => setInstrument(event.target.value)} placeholder="equity:US:NVDA" /></Field><Field label="显示名称（可选）"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="NVDA" /></Field></div><div className="portfolio-form-actions"><ActionButton onClick={() => { void mutate("add"); }} busy={busy === "add"}>添加到当前分组</ActionButton></div></details>}
-      <WarningList value={watchlist} />
-    </Card>
-  </div>;
-}
-
 export default function PortfolioPage() {
   const result = useApi<Dict>("/api/portfolio?transaction_limit=500&coverage_limit=100");
   const [tab, setTab] = useState<Tab>("holdings");
@@ -467,7 +402,6 @@ export default function PortfolioPage() {
   const coverageEnvelope = asDict(aggregate.coverage);
   const riskPolicyEnvelope = asDict(aggregate.risk_policy);
   const riskCheckEnvelope = asDict(aggregate.risk_check);
-  const watchlist = asDict(aggregate.watchlist);
   const accountsData = data<Dict>(accountsEnvelope);
   const accounts = listOf<Dict>(accountsData, "accounts");
 
@@ -481,12 +415,24 @@ export default function PortfolioPage() {
   function selectTab(next: Tab) {
     setTab(next); window.history.replaceState(null, "", `#${next}`);
   }
+  function moveTab(event: KeyboardEvent<HTMLButtonElement>, current: Tab) {
+    const index = TABS.findIndex((item) => item.id === current);
+    let next: number;
+    if (event.key === "ArrowRight") next = (index + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = TABS.length - 1;
+    else return;
+    event.preventDefault();
+    selectTab(TABS[next].id);
+    document.getElementById(`portfolio-tab-${TABS[next].id}`)?.focus();
+  }
   function changePositionSort(tableId: string, column: PositionSortKey) {
     setPositionSorts((current) => { const previous = current[tableId] ?? DEFAULT_POSITION_SORT; return { ...current, [tableId]: { key: column, direction: previous.key === column && previous.direction === "asc" ? "desc" : "asc" } }; });
   }
   async function refreshAggregate() { result.refresh(); }
-  async function sync(operation: "accounts" | "transactions" | "watchlist") {
-    const labels = { accounts: "账户", transactions: "交易", watchlist: "Watchlist" };
+  async function sync(operation: "accounts" | "transactions") {
+    const labels = { accounts: "账户", transactions: "交易" };
     if (!window.confirm(`确认连接已配置上游并同步${labels[operation]}？`)) return;
     setSyncing(operation); setMessage(null);
     try {
@@ -498,15 +444,14 @@ export default function PortfolioPage() {
   }
   return <ConsoleShell active="portfolio" eyebrow="Durable portfolio hub" title="Portfolio">
     <DataBoundary loading={result.loading} error={result.error}>
-      <div className="toolbar portfolio-toolbar"><p>页面加载只读取持久化快照、活动、Risk 和 Watchlist；不会隐式刷新 Provider。账户、交易、Watchlist 同步均需显式确认。</p><div className="toolbar-actions"><ActionButton onClick={() => { void sync("accounts"); }} busy={syncing === "accounts"}>同步账户</ActionButton><ActionButton onClick={() => { void sync("transactions"); }} busy={syncing === "transactions"}>同步交易</ActionButton><ActionButton onClick={() => { void sync("watchlist"); }} busy={syncing === "watchlist"}>同步 Watchlist</ActionButton><RefreshButton onClick={refreshAggregate} loading={result.loading} /></div></div>
+      <div className="toolbar portfolio-toolbar"><p>页面加载只读取持久化账户快照、活动与 Risk；不会隐式刷新 Provider。账户和交易同步均需显式确认。</p><div className="toolbar-actions"><ActionButton onClick={() => { void sync("accounts"); }} busy={syncing === "accounts"}>同步账户</ActionButton><ActionButton onClick={() => { void sync("transactions"); }} busy={syncing === "transactions"}>同步交易</ActionButton><RefreshButton onClick={refreshAggregate} loading={result.loading} /></div></div>
       {message && <div className={message.error ? "inline-error" : "inline-success"} role="status">{message.text}</div>}
-      <nav className="portfolio-tabs" aria-label="Portfolio sections" role="tablist">{TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item.id} className={tab === item.id ? "selected" : ""} onClick={() => selectTab(item.id)} key={item.id}>{item.label}</button>)}</nav>
-      <div className="portfolio-tab-content">
+      <nav className="portfolio-tabs" aria-label="Portfolio sections" role="tablist">{TABS.map((item) => <button id={`portfolio-tab-${item.id}`} type="button" role="tab" tabIndex={tab === item.id ? 0 : -1} aria-selected={tab === item.id} aria-controls={`portfolio-panel-${item.id}`} className={tab === item.id ? "selected" : ""} onKeyDown={(event) => moveTab(event, item.id)} onClick={() => selectTab(item.id)} key={item.id}>{item.label}</button>)}</nav>
+      <div className="portfolio-tab-content" id={`portfolio-panel-${tab}`} role="tabpanel" tabIndex={0} aria-labelledby={`portfolio-tab-${tab}`}>
         {tab === "holdings" && <HoldingsTab accounts={accounts} exposure={exposureEnvelope} positionSorts={positionSorts} onSort={changePositionSort} />}
         {tab === "activity" && <ActivityTab transactions={transactionsEnvelope} coverage={coverageEnvelope} />}
         {tab === "performance" && <PerformanceTab />}
         {tab === "risk" && <RiskTab policyEnvelope={riskPolicyEnvelope} riskEnvelope={riskCheckEnvelope} onRefresh={result.refresh} />}
-        {tab === "watchlist" && <WatchlistTab watchlist={watchlist} onRefresh={refreshAggregate} onMessage={(textValue, error) => setMessage({ text: textValue, error })} />}
       </div>
     </DataBoundary>
   </ConsoleShell>;

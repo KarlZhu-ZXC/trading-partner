@@ -134,6 +134,7 @@ class MoomooAccountAdapter:
         host: str,
         port: int,
         account_ids: Sequence[str] = (),
+        base_currency: str = "USD",
         clock: Clock | None = None,
         context_factory: ContextFactory | None = None,
         opend_rate_limiter: OpenDRequestLimiter | None = None,
@@ -143,6 +144,9 @@ class MoomooAccountAdapter:
         self._host = host
         self._port = port
         self._account_ids = frozenset(item.strip() for item in account_ids if item.strip())
+        self._base_currency = base_currency.strip().upper()
+        if self._base_currency not in {"USD", "HKD", "CNH", "JPY", "SGD"}:
+            raise DataContractError("Moomoo account base_currency is unsupported")
         self._clock = clock or SystemClock()
         self._factory = context_factory or _default_factory
         self._opend_rate_limiter = opend_rate_limiter
@@ -278,10 +282,7 @@ class MoomooAccountAdapter:
                 self._read_account(context, row)
                 for row in accounts
                 if str(row.get("trd_env", "")).upper() == "REAL"
-                and (
-                    not self._account_ids
-                    or str(row.get("acc_id", "")) in self._account_ids
-                )
+                and (not self._account_ids or str(row.get("acc_id", "")) in self._account_ids)
             )
         finally:
             context.close()
@@ -343,6 +344,9 @@ class MoomooAccountAdapter:
             "trd_env": "REAL",
             "acc_id": raw_id,
             "refresh_cache": True,
+            # OpenD otherwise defaults this query to HKD, even for US-only
+            # accounts. Keep account-level funds in one explicit base currency.
+            "currency": self._base_currency,
         }
         self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_FUNDS, raw_id)
         info_rows = self._query(context.accinfo_query(**kwargs))
@@ -366,7 +370,7 @@ class MoomooAccountAdapter:
             account_ref=_account_ref(raw_id),
             provider=self.vendor_id,
             environment=AccountEnvironment.REAL,
-            base_currency=str(info.get("currency") or "USD").upper(),
+            base_currency=str(info.get("currency") or self._base_currency).upper(),
             account_as_of=self._clock.now(),
             fetched_at=self._clock.now(),
             cash=_decimal(info.get("cash")),

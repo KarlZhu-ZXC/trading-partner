@@ -35,7 +35,7 @@ class OpenQuestionService:
     def propose_question(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         text: str,
         proposed_by: str,
         proposed_by_rationale: str,
@@ -53,13 +53,13 @@ class OpenQuestionService:
                 text=body,
             )
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.OPEN_QUESTION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
@@ -75,7 +75,7 @@ class OpenQuestionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": CandidateKind.OPEN_QUESTION.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "action": "create",
                         },
                         request_id=request_id,
@@ -99,7 +99,7 @@ class OpenQuestionService:
     def propose_answer(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         question_id: str,
         answer_summary: str,
         proposed_by: str,
@@ -119,19 +119,19 @@ class OpenQuestionService:
                 answer_summary=summary,
             )
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 question = uow.questions.get(question_id)
-                if question.case_id != case_id:
+                if question.subject_id != subject_id:
                     raise InputValidationError(
-                        "question_id does not belong to case_id",
-                        details={"question_id": question_id, "case_id": case_id},
+                        "question_id does not belong to subject_id",
+                        details={"question_id": question_id, "subject_id": subject_id},
                     )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.OPEN_QUESTION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
@@ -147,7 +147,7 @@ class OpenQuestionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": CandidateKind.OPEN_QUESTION.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "action": "answer",
                             "question_id": question_id,
                         },
@@ -172,7 +172,7 @@ class OpenQuestionService:
     def propose_mark_stale(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         question_id: str,
         proposed_by: str,
         proposed_by_rationale: str,
@@ -187,14 +187,14 @@ class OpenQuestionService:
                 question_id=question_id,
             )
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 uow.questions.get(question_id)
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.OPEN_QUESTION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,
@@ -234,7 +234,7 @@ class OpenQuestionService:
     def propose_close(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         question_id: str,
         closed_reason: str,
         proposed_by: str,
@@ -254,14 +254,14 @@ class OpenQuestionService:
                 closed_reason=reason,
             )
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 uow.questions.get(question_id)
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.OPEN_QUESTION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=None,
                     target_revision_no=None,
                     payload_model=payload,

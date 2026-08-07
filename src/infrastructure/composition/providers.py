@@ -435,6 +435,7 @@ def build_provider_infrastructure(
         account_ids=tuple(
             item.strip() for item in settings.moomoo_account_ids.split(",") if item.strip()
         ),
+        base_currency=settings.moomoo_account_base_currency,
         clock=clock,
         opend_rate_limiter=moomoo_limiter,
     )

@@ -11,20 +11,23 @@ from sqlalchemy.engine import Engine
 
 from application.dto.monitoring import MonitorCreateInput
 from application.dto.research import (
+    SubjectUpdateCandidatePayload,
     ThesisRevisionCandidatePayload,
     TradePlanCandidatePayload,
     TradePlanConditionPayload,
 )
-from application.services.investment_case_service import InvestmentCaseService
 from application.services.monitor_service import MonitorService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.thesis_revision_service import ThesisRevisionService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import (
     ConfidenceBand,
     ConfirmationMode,
-    InvestmentCaseType,
     InvestmentRating,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
+    ThesisStatus,
 )
 from domain.trade_plan.enums import (
     TradePlanComparator,
@@ -62,7 +65,7 @@ def services(tmp_path):  # type: ignore[no-untyped-def]
         return SqlAlchemyResearchUnitOfWork(engine, clock, ids, redactor)
 
     yield (
-        InvestmentCaseService(factory, clock, ids, redactor),
+        ResearchSubjectService(factory, clock, ids, redactor),
         ThesisRevisionService(factory, clock, ids, redactor),
         factory,
         engine,
@@ -134,23 +137,110 @@ def _plan_payload(
     )
 
 
+def _create_subject(subjects: ResearchSubjectService, key: str) -> str:
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
+        title="NVDA",
+        summary="Phase 3D invariant fixture",
+        primary_instrument_id="equity:US:NVDA",
+        topic_tags=(),
+        linked_subject_ids=(),
+        confirmed_by="user",
+        idempotency_key=key,
+    )
+    assert created.ok and created.data is not None
+    return created.data.subject_id
+
+
+def _activate_case(
+    revisions: ThesisRevisionService,
+    subject_id: str,
+    key: str,
+) -> None:
+    proposed = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            new_status=ResearchSubjectStatus.ACTIVE,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Activate the Case for live judgment.",
+        idempotency_key=key,
+    )
+    assert proposed.ok and proposed.data is not None
+    confirmed = revisions.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert confirmed.ok
+
+
+def _confirm_thesis(
+    revisions: ThesisRevisionService,
+    subject_id: str,
+    *,
+    key: str,
+    status: ThesisStatus | None = None,
+) -> str:
+    payload = _thesis_payload()
+    if status is not None:
+        payload = payload.model_copy(update={"thesis_status": status})
+    proposed = revisions.propose_revision(
+        subject_id=subject_id,
+        thesis_id=None,
+        payload=payload,
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Create a test Thesis.",
+        idempotency_key=key,
+    )
+    assert proposed.ok and proposed.data is not None
+    confirmed = revisions.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert confirmed.ok and confirmed.data is not None
+    state = confirmed.data.research_state
+    assert state is not None
+    return state.theses[0].thesis_id
+
+
 def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:  # type: ignore[no-untyped-def]
-    cases, revisions, factory, engine, clock, ids = services
-    created = cases.create_case(
-        case_type=InvestmentCaseType.COMPANY,
+    subjects, revisions, factory, engine, clock, ids = services
+    created = subjects.create_subject(
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA",
         summary="Phase 3D lifecycle fixture",
         primary_instrument_id="equity:US:NVDA",
         topic_tags=(),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key="phase3d-case",
     )
     assert created.ok and created.data is not None
-    case_id = created.data.case_id
+    subject_id = created.data.subject_id
+
+    activate_case = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            new_status=ResearchSubjectStatus.ACTIVE,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Activate the Case before confirming live judgment.",
+        idempotency_key="phase3d-case-activate",
+    )
+    assert activate_case.ok and activate_case.data is not None
+    activated = revisions.confirm_candidate(
+        activate_case.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert activated.ok and activated.data is not None
 
     thesis_candidate = revisions.propose_revision(
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=None,
         payload=_thesis_payload(),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
@@ -167,7 +257,7 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
     thesis_id = thesis_confirmed.data.research_state.theses[0].thesis_id
 
     proposed = revisions.propose_state_update(
-        case_id=case_id,
+        subject_id=subject_id,
         payload=_plan_payload(thesis_id, status=TradePlanStatus.ACTIVE),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
         proposed_by="codex",
@@ -212,7 +302,7 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
 
     for version, status in ((1, TradePlanStatus.PAUSED), (2, TradePlanStatus.ARCHIVED)):
         update = revisions.propose_state_update(
-            case_id=case_id,
+            subject_id=subject_id,
             payload=_plan_payload(
                 thesis_id,
                 status=status,
@@ -242,3 +332,192 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
             TradePlanStatus.PAUSED,
             TradePlanStatus.ARCHIVED,
         ]
+
+
+def test_live_thesis_confirmation_rejected_until_case_is_active(services) -> None:  # type: ignore[no-untyped-def]
+    subjects, revisions, factory, *_ = services
+    subject_id = _create_subject(subjects, "phase3d-draft-thesis-case")
+    proposed = revisions.propose_revision(
+        subject_id=subject_id,
+        thesis_id=None,
+        payload=_thesis_payload(),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Attempt a live Thesis in a Draft Case.",
+        idempotency_key="phase3d-draft-thesis",
+    )
+    assert proposed.ok and proposed.data is not None
+
+    confirmed = revisions.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+    )
+
+    assert not confirmed.ok
+    assert confirmed.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert confirmed.errors[0].details == {
+        "subject_id": subject_id,
+        "subject_status": "draft",
+        "attempted_child_status": "active",
+    }
+    with factory() as uow:
+        assert uow.theses.list_by_subject(subject_id) == ()
+
+
+def test_active_trade_plan_requires_live_thesis(services) -> None:  # type: ignore[no-untyped-def]
+    subjects, revisions, factory, *_ = services
+    subject_id = _create_subject(subjects, "phase3d-draft-plan-case")
+    _activate_case(revisions, subject_id, "phase3d-draft-plan-case-activate")
+    thesis_id = _confirm_thesis(
+        revisions,
+        subject_id,
+        key="phase3d-draft-thesis-confirmed",
+        status=ThesisStatus.DRAFT,
+    )
+
+    proposed = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=_plan_payload(thesis_id, status=TradePlanStatus.ACTIVE),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Attempt an ACTIVE plan against a Draft Thesis.",
+        idempotency_key="phase3d-active-plan-draft-thesis",
+    )
+    assert proposed.ok and proposed.data is not None
+    confirmed = revisions.confirm_candidate(
+        proposed.data.candidate_id,
+        reviewed_by="user",
+    )
+
+    assert not confirmed.ok
+    assert confirmed.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert confirmed.errors[0].details["thesis_id"] == thesis_id
+    assert confirmed.errors[0].details["thesis_status"] == ThesisStatus.DRAFT.value
+    with factory() as uow:
+        assert uow.trade_plans.get_current_by_subject(subject_id) is None
+
+
+def test_direct_archive_rejected_while_live_thesis_remains(services) -> None:  # type: ignore[no-untyped-def]
+    subjects, revisions, factory, *_ = services
+    subject_id = _create_subject(subjects, "phase3d-archive-case")
+    _activate_case(revisions, subject_id, "phase3d-archive-case-activate")
+    _confirm_thesis(revisions, subject_id, key="phase3d-archive-live-thesis")
+
+    archived = subjects.archive_subject(
+        subject_id,
+        archived_reason="close the case",
+        reviewed_by="user",
+        idempotency_key="phase3d-archive-live-case",
+    )
+
+    assert not archived.ok
+    assert archived.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    with factory() as uow:
+        assert uow.subjects.get(subject_id).status is ResearchSubjectStatus.ACTIVE
+
+
+def test_live_plan_blocks_thesis_retirement_until_plan_archived(services) -> None:  # type: ignore[no-untyped-def]
+    subjects, revisions, factory, *_ = services
+    subject_id = _create_subject(subjects, "phase3d-retirement-case")
+    _activate_case(revisions, subject_id, "phase3d-retirement-case-activate")
+    thesis_id = _confirm_thesis(revisions, subject_id, key="phase3d-retirement-thesis")
+
+    retirement_payload = _thesis_payload().model_copy(
+        update={
+            "replaces_revision_no": 1,
+            "thesis_status": ThesisStatus.ARCHIVED,
+        }
+    )
+    normal_retirement = revisions.propose_revision(
+        subject_id=subject_id,
+        thesis_id=thesis_id,
+        payload=retirement_payload,
+        confirmation_mode=ConfirmationMode.NORMAL,
+        proposed_by="codex",
+        proposed_by_rationale="Retire the Thesis after review.",
+        idempotency_key="phase3d-retirement-normal",  # gitleaks:allow
+    )
+    assert normal_retirement.ok and normal_retirement.data is not None
+    normal_landed = revisions.confirm_candidate(
+        normal_retirement.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert not normal_landed.ok
+    assert normal_landed.errors[0].code == "STRICT_REVIEW_REQUIRED"
+
+    active_plan = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=_plan_payload(thesis_id, status=TradePlanStatus.ACTIVE),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Create the live plan before retiring the Thesis.",
+        idempotency_key="phase3d-retirement-plan",  # gitleaks:allow
+    )
+    assert active_plan.ok and active_plan.data is not None
+    active_plan_landed = revisions.confirm_candidate(
+        active_plan.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert active_plan_landed.ok and active_plan_landed.data is not None
+    state = active_plan_landed.data.research_state
+    assert state is not None and state.current_trade_plan is not None
+    plan = state.current_trade_plan
+
+    strict_retirement = revisions.propose_revision(
+        subject_id=subject_id,
+        thesis_id=thesis_id,
+        payload=retirement_payload,
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Retire the Thesis after the live plan is closed.",
+        idempotency_key="phase3d-retirement-strict",  # gitleaks:allow
+    )
+    assert strict_retirement.ok and strict_retirement.data is not None
+    blocked = revisions.confirm_candidate(
+        strict_retirement.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert not blocked.ok
+    assert blocked.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert blocked.errors[0].details["live_trade_plan_id"] == plan.plan_id
+
+    archive_plan = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=_plan_payload(
+            thesis_id,
+            status=TradePlanStatus.ARCHIVED,
+            plan_id=plan.plan_id,
+            expected_version=plan.version,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Explicitly archive the live plan first.",
+        idempotency_key="phase3d-retirement-plan-archive",
+    )
+    assert archive_plan.ok and archive_plan.data is not None
+    archived_plan = revisions.confirm_candidate(
+        archive_plan.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert archived_plan.ok
+
+    retired = revisions.confirm_candidate(
+        strict_retirement.data.candidate_id,
+        reviewed_by="user",
+    )
+    assert retired.ok
+    with factory() as uow:
+        thesis = uow.theses.get(thesis_id)
+        assert thesis.status is ThesisStatus.ARCHIVED
+        assert thesis.archived_at is not None
+        assert uow.trade_plans.get_current_by_subject(subject_id).status is TradePlanStatus.ARCHIVED  # type: ignore[union-attr]
+
+    archived_case = subjects.archive_subject(
+        subject_id,
+        archived_reason="Thesis and plan explicitly retired",
+        reviewed_by="user",
+        idempotency_key="phase3d-retirement-case-archive",
+    )
+    assert archived_case.ok
+    assert archived_case.data is not None
+    assert archived_case.data.status in {ResearchSubjectStatus.ARCHIVED, "archived"}

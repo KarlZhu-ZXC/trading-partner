@@ -19,7 +19,7 @@ class CandidateThesisRevisionRepository(Protocol):
     def list(
         self,
         *,
-        case_id: str | None = None,
+        subject_id: str | None = None,
         kind: CandidateKind | None = None,
         status: CandidateStatus | None = None,
         confirmation_mode: ConfirmationMode | None = None,

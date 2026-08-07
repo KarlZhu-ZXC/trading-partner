@@ -147,7 +147,7 @@ class WatchlistMembershipDTO(_FrozenDTO):
     removed_at: datetime | None
     last_synced_at: datetime
     research_watchlist_item_ids: tuple[str, ...] = ()
-    investment_case_ids: tuple[str, ...] = ()
+    research_subject_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _aware_times(self) -> Self:
@@ -163,7 +163,7 @@ class WatchlistMembershipDTO(_FrozenDTO):
         value: WatchlistMembership,
         *,
         research_watchlist_item_ids: tuple[str, ...] = (),
-        investment_case_ids: tuple[str, ...] = (),
+        research_subject_ids: tuple[str, ...] = (),
     ) -> WatchlistMembershipDTO:
         return cls(
             membership_id=value.membership_id,
@@ -180,7 +180,7 @@ class WatchlistMembershipDTO(_FrozenDTO):
             removed_at=value.removed_at,
             last_synced_at=value.last_synced_at,
             research_watchlist_item_ids=research_watchlist_item_ids,
-            investment_case_ids=investment_case_ids,
+            research_subject_ids=research_subject_ids,
         )
 
 

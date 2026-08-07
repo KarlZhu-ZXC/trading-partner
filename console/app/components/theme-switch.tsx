@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 
 type Theme = "light" | "dark";
 
@@ -26,26 +27,26 @@ export function ThemeSwitch() {
   }
 
   return (
-    <div className="theme-switch" role="group" aria-label="界面主题">
+    <div className="theme-switch" role="group" aria-label="Theme">
       <button
-        aria-label="浅色"
+        aria-label="Light theme"
         aria-pressed={theme === "light"}
         className={theme === "light" ? "active" : ""}
         onClick={() => selectTheme("light")}
         type="button"
       >
-        <span aria-hidden="true">☀</span>
-        <span>浅色</span>
+        <Sun aria-hidden="true" className="theme-icon" strokeWidth={1.7} />
+        <span className="theme-switch-label">Light</span>
       </button>
       <button
-        aria-label="深色"
+        aria-label="Dark theme"
         aria-pressed={theme === "dark"}
         className={theme === "dark" ? "active" : ""}
         onClick={() => selectTheme("dark")}
         type="button"
       >
-        <span aria-hidden="true">◐</span>
-        <span>深色</span>
+        <Moon aria-hidden="true" className="theme-icon" strokeWidth={1.7} />
+        <span className="theme-switch-label">Dark</span>
       </button>
     </div>
   );

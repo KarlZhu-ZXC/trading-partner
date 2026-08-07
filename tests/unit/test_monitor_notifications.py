@@ -37,6 +37,7 @@ from domain.monitoring.models import (
     MonitorEvent,
     MonitorNotificationOutboxEntry,
 )
+from domain.notifications.enums import NotificationSourceType
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 from infrastructure.providers.notifications.telegram import (
@@ -49,9 +50,9 @@ NOW = datetime(2026, 7, 29, 12, tzinfo=UTC)
 
 def _outbox_entry() -> MonitorNotificationOutboxEntry:
     return MonitorNotificationOutboxEntry(
-        notification_id="monitor_notification_00000000-0000-7000-8000-000000000001",
-        source_event_id="monitor_event_00000000-0000-7000-8000-000000000001",
-        source_run_id=None,
+        notification_id="notification_00000000-0000-7000-8000-000000000001",
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id="monitor_event_00000000-0000-7000-8000-000000000001",
         channel=MonitorNotificationChannel.TELEGRAM,
         title="🚨 GC=F · TRIGGERED",
         body="规则：GC_PULLBACK_ALERT_4080 < 4080",
@@ -392,7 +393,7 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
             monitor_id="monitor_00000000-0000-7000-8000-000000000001",
             version=1,
             name="黄金回落提醒",
-            case_id=None,
+            subject_id=None,
             primary_instrument_id="future:US:GC=F",
             cadence=MonitorCadence.US_POST_MARKET,
             status=MonitorStatus.ACTIVE,
@@ -536,7 +537,7 @@ async def test_interval_transition_still_enqueues_event_notification(
             monitor_id="monitor_00000000-0000-7000-8000-000000000010",
             version=1,
             name="Interval price alert",
-            case_id=None,
+            subject_id=None,
             primary_instrument_id="equity:US:TEST",
             cadence=MonitorCadence.INTERVAL,
             interval_minutes=60,

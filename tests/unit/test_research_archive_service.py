@@ -28,19 +28,19 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
 )
 from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    InvestmentCase,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
 )
@@ -109,13 +109,13 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
     eng.dispose()
 
 
-def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+def _create_subject(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="NVDA case",
         summary="GPU demand",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("ai",),
         created_at=clock.now(),
@@ -123,7 +123,7 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -131,15 +131,15 @@ def _create_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
 def _record_linked_evidence(
     evidence_svc: EvidenceService,
     *,
-    case_id: str,
+    subject_id: str,
     title: str = "ev-1",
     instrument_ids: tuple[str, ...] = (US,),
 ) -> str:
@@ -164,7 +164,7 @@ def _record_linked_evidence(
         confidence=Decimal("0.9"),
         supersedes_evidence_id=None,
         recorded_by="provider:mock_us",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert env.ok and env.data is not None
@@ -172,13 +172,13 @@ def _record_linked_evidence(
 
 
 def _add_thesis_revision(
-    factory, ids, clock, *, case_id: str, confirmed_at: datetime = EARLIER
+    factory, ids, clock, *, subject_id: str, confirmed_at: datetime = EARLIER
 ) -> str:  # type: ignore[no-untyped-def]
     rev_id = ids.new(EntityIdPrefix.REV)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     thesis = Thesis(
         thesis_id=thesis_id,
-        case_id=case_id,
+        subject_id=subject_id,
         title="Primary",
         role=ThesisRole.PRIMARY,
         status=ThesisStatus.ACTIVE,
@@ -193,7 +193,7 @@ def _add_thesis_revision(
     revision = ThesisRevision(
         revision_id=rev_id,
         thesis_id=thesis_id,
-        case_id=case_id,
+        subject_id=subject_id,
         revision_no=1,
         supersedes_revision_no=None,
         statement="Demand structural",
@@ -219,12 +219,12 @@ def _add_thesis_revision(
 
 def test_archive_report_happy_path_and_duplicate(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id)
-    rev_id = _add_thesis_revision(factory, ids, clock, case_id=case_id)
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id)
+    rev_id = _add_thesis_revision(factory, ids, clock, subject_id=subject_id)
 
     first = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Structural demand intact",
@@ -243,13 +243,15 @@ def test_archive_report_happy_path_and_duplicate(harness) -> None:  # type: igno
     report_id = first.data.report_id
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert report_id in case.report_ids
-        page = uow.search_index.search(ResearchSearchQuery(text="Structural", case_id=case_id))
+        subject = uow.subjects.get(subject_id)
+        assert report_id in subject.report_ids
+        page = uow.search_index.search(
+            ResearchSearchQuery(text="Structural", subject_id=subject_id)
+        )
         assert page.total >= 1
 
     second = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Deep dive",
         summary="Structural demand intact",
@@ -272,7 +274,7 @@ def test_archive_report_happy_path_and_duplicate(harness) -> None:  # type: igno
 
 def test_report_as_of_future_leakage_rejected(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
+    subject_id = _create_subject(factory, ids, clock)
     # Evidence observed_at = NOW (default clock) while report as_of is EARLIER
     eid = evidence_svc.record_evidence(
         evidence_type=EvidenceType.MARKET_SNAPSHOT,
@@ -295,12 +297,12 @@ def test_report_as_of_future_leakage_rejected(harness) -> None:  # type: ignore[
         confidence=None,
         supersedes_evidence_id=None,
         recorded_by="provider:mock_us",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=NOW,
     )
     assert eid.ok and eid.data
     env = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="leaky",
         summary="should fail",
@@ -321,11 +323,11 @@ def test_report_as_of_future_leakage_rejected(harness) -> None:  # type: ignore[
 
 def test_cross_case_reference_rejected(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
-    eid_b = _record_linked_evidence(evidence_svc, case_id=case_b, title="other-case-ev")
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
+    eid_b = _record_linked_evidence(evidence_svc, subject_id=case_b, title="other-case-ev")
     env = archive_svc.archive_report(
-        case_id=case_a,
+        subject_id=case_a,
         report_type=ResearchReportType.AD_HOC,
         title="cross",
         summary="should fail",
@@ -344,7 +346,7 @@ def test_cross_case_reference_rejected(harness) -> None:  # type: ignore[no-unty
 
     # Event cross-case report reference
     rep = archive_svc.archive_report(
-        case_id=case_b,
+        subject_id=case_b,
         report_type=ResearchReportType.AD_HOC,
         title="b-report",
         summary="ok",
@@ -360,7 +362,7 @@ def test_cross_case_reference_rejected(harness) -> None:  # type: ignore[no-unty
     )
     assert rep.ok and rep.data
     bad_event = archive_svc.record_event(
-        case_id=case_a,
+        subject_id=case_a,
         event_type=ResearchEventType.COMPANY,
         title="cross event",
         summary="refs other case report",
@@ -380,11 +382,11 @@ def test_cross_case_reference_rejected(harness) -> None:  # type: ignore[no-unty
 
 def test_record_event_updates_case_cache_and_search(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="ev-for-event")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="ev-for-event")
 
     first = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.EARNINGS,
         title="Earnings beat",
         summary="Beat consensus",
@@ -405,7 +407,7 @@ def test_record_event_updates_case_cache_and_search(harness) -> None:  # type: i
 
     # Events have no content hash — second call is a new event
     second = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.EARNINGS,
         title="Earnings beat",
         summary="Beat consensus",
@@ -423,10 +425,10 @@ def test_record_event_updates_case_cache_and_search(harness) -> None:  # type: i
     assert second.data.event_id != event_id
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert event_id in case.event_ids
-        assert second.data.event_id in case.event_ids
-        page = uow.search_index.search(ResearchSearchQuery(text="Earnings", case_id=case_id))
+        subject = uow.subjects.get(subject_id)
+        assert event_id in subject.event_ids
+        assert second.data.event_id in subject.event_ids
+        page = uow.search_index.search(ResearchSearchQuery(text="Earnings", subject_id=subject_id))
         assert page.total >= 2
 
     with Session(eng) as session:
@@ -436,10 +438,10 @@ def test_record_event_updates_case_cache_and_search(harness) -> None:  # type: i
 
 def test_audit_excludes_report_markdown_and_event_summary(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="audit-ev")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="audit-ev")
     rep = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.US_MARKET_REVIEW,
         title="US review",
         summary="short",
@@ -455,7 +457,7 @@ def test_audit_excludes_report_markdown_and_event_summary(harness) -> None:  # t
     )
     assert rep.ok
     ev = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.MACRO,
         title="Macro",
         summary="EVENT_SUMMARY_MUST_NOT_AUDIT",
@@ -484,8 +486,8 @@ def test_audit_excludes_report_markdown_and_event_summary(harness) -> None:  # t
 
 def test_projection_failure_rolls_back_report(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="rb-ev")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="rb-ev")
 
     real_factory = factory
 
@@ -516,7 +518,7 @@ def test_projection_failure_rolls_back_report(harness) -> None:  # type: ignore[
         boom_factory, clock, SequentialIdGenerator(start=8000), DefaultSecretRedactor()
     )
     env = boom.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="rollback-report",
         summary="should vanish",
@@ -541,22 +543,22 @@ def test_projection_failure_rolls_back_report(harness) -> None:  # type: ignore[
             assert "rollback-report" not in row.payload_json
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.report_ids == ()
+        subject = uow.subjects.get(subject_id)
+        assert subject.report_ids == ()
 
 
 def test_report_case_cache_updated_at_matches_created_at(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
     old = NOW - timedelta(days=5)
-    case_id = ids.new(EntityIdPrefix.CASE)
+    subject_id = ids.new(EntityIdPrefix.SUBJECT)
     with factory() as uow:
-        uow.cases.add(
-            InvestmentCase(
-                case_id=case_id,
-                case_type=InvestmentCaseType.COMPANY,
+        uow.subjects.add(
+            ResearchSubject(
+                subject_id=subject_id,
+                subject_type=ResearchSubjectType.COMPANY,
                 title="old-case",
                 summary="s",
-                status=InvestmentCaseStatus.ACTIVE,
+                status=ResearchSubjectStatus.ACTIVE,
                 primary_instrument_id=US,
                 topic_tags=("ai",),
                 created_at=old,
@@ -564,7 +566,7 @@ def test_report_case_cache_updated_at_matches_created_at(harness) -> None:  # ty
                 created_by="user",
                 archived_at=None,
                 archived_reason=None,
-                linked_case_ids=(),
+                linked_subject_ids=(),
                 evidence_ids=(),
                 report_ids=(),
                 event_ids=(),
@@ -575,9 +577,9 @@ def test_report_case_cache_updated_at_matches_created_at(harness) -> None:  # ty
         uow.commit()
 
     clock.set(NOW)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="cache-rep-ev")
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="cache-rep-ev")
     env = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="cache-rep",
         summary="s",
@@ -594,19 +596,19 @@ def test_report_case_cache_updated_at_matches_created_at(harness) -> None:  # ty
     assert env.ok and env.data is not None
     assert env.data.created_at == NOW
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.updated_at == NOW
-        assert env.data.report_id in case.report_ids
-        assert case.updated_at == env.data.created_at
+        subject = uow.subjects.get(subject_id)
+        assert subject.updated_at == NOW
+        assert env.data.report_id in subject.report_ids
+        assert subject.updated_at == env.data.created_at
 
 
 def test_event_related_entity_valid_case_and_evidence(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="rel-ev")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="rel-ev")
 
     ok_case = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.COMPANY,
         title="rel-case",
         summary="ok",
@@ -616,17 +618,17 @@ def test_event_related_entity_valid_case_and_evidence(harness) -> None:  # type:
         evidence_ids=(),
         report_ids=(),
         related_entity_type="case",
-        related_entity_id=case_id,
+        related_entity_id=subject_id,
         source_name="news",
         recorded_by="user",
     )
     assert ok_case.ok is True
     assert ok_case.data is not None
     assert ok_case.data.related_entity_type == "case"
-    assert ok_case.data.related_entity_id == case_id
+    assert ok_case.data.related_entity_id == subject_id
 
     ok_ev = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.COMPANY,
         title="rel-evidence",
         summary="ok",
@@ -649,13 +651,13 @@ def test_event_related_entity_rejects_unknown_event_cross_case_future(
     harness,
 ) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_a = _create_case(factory, ids, clock)
-    case_b = _create_case(factory, ids, clock)
-    eid_b = _record_linked_evidence(evidence_svc, case_id=case_b, title="other-case-related")
-    rev_future = _add_thesis_revision(factory, ids, clock, case_id=case_a, confirmed_at=FUTURE)
+    case_a = _create_subject(factory, ids, clock)
+    case_b = _create_subject(factory, ids, clock)
+    eid_b = _record_linked_evidence(evidence_svc, subject_id=case_b, title="other-case-related")
+    rev_future = _add_thesis_revision(factory, ids, clock, subject_id=case_a, confirmed_at=FUTURE)
 
     unknown = archive_svc.record_event(
-        case_id=case_a,
+        subject_id=case_a,
         event_type=ResearchEventType.MACRO,
         title="unknown-rel",
         summary="s",
@@ -673,7 +675,7 @@ def test_event_related_entity_rejects_unknown_event_cross_case_future(
     assert any(e.code == "INVALID_RESEARCH_LINK" for e in unknown.errors)
 
     event_type = archive_svc.record_event(
-        case_id=case_a,
+        subject_id=case_a,
         event_type=ResearchEventType.MACRO,
         title="event-rel",
         summary="s",
@@ -691,7 +693,7 @@ def test_event_related_entity_rejects_unknown_event_cross_case_future(
     assert any(e.code == "INVALID_RESEARCH_LINK" for e in event_type.errors)
 
     cross = archive_svc.record_event(
-        case_id=case_a,
+        subject_id=case_a,
         event_type=ResearchEventType.MACRO,
         title="cross-rel",
         summary="s",
@@ -709,7 +711,7 @@ def test_event_related_entity_rejects_unknown_event_cross_case_future(
     assert any(e.code == "INVALID_RESEARCH_LINK" for e in cross.errors)
 
     future = archive_svc.record_event(
-        case_id=case_a,
+        subject_id=case_a,
         event_type=ResearchEventType.MACRO,
         title="future-rel",
         summary="s",
@@ -730,10 +732,10 @@ def test_event_related_entity_rejects_unknown_event_cross_case_future(
 
 def test_event_related_entity_report_decision_journal(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, _eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="rdj-ev")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="rdj-ev")
     rep = archive_svc.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="rdj-report",
         summary="s",
@@ -763,7 +765,7 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
         uow.decisions.add(
             DecisionRecord(
                 decision_id=decision_id,
-                case_id=case_id,
+                subject_id=subject_id,
                 decision_type=DecisionType.WATCH,
                 title="Watch",
                 rationale="need more",
@@ -785,7 +787,7 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
         uow.journal.add(
             JournalEntry(
                 journal_id=journal_id,
-                case_id=case_id,
+                subject_id=subject_id,
                 entry_type=JournalEntryType.NOTE,
                 title="note",
                 body_markdown="body",
@@ -805,7 +807,7 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
         uow.journal.add(
             JournalEntry(
                 journal_id=global_journal_id,
-                case_id=None,
+                subject_id=None,
                 entry_type=JournalEntryType.NOTE,
                 title="global",
                 body_markdown="body",
@@ -830,7 +832,7 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
         ("journal", journal_id),
     ):
         env = archive_svc.record_event(
-            case_id=case_id,
+            subject_id=subject_id,
             event_type=ResearchEventType.COMPANY,
             title=f"rel-{rel_type}",
             summary="ok",
@@ -847,7 +849,7 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
         assert env.ok is True, (rel_type, env.errors)
 
     bad_global = archive_svc.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.COMPANY,
         title="rel-global-j",
         summary="fail",
@@ -867,8 +869,8 @@ def test_event_related_entity_report_decision_journal(harness) -> None:  # type:
 
 def test_audit_writer_failure_rolls_back_report_and_event(harness) -> None:  # type: ignore[no-untyped-def]
     evidence_svc, archive_svc, factory, clock, ids, eng = harness
-    case_id = _create_case(factory, ids, clock)
-    eid = _record_linked_evidence(evidence_svc, case_id=case_id, title="audit-rb-ev")
+    subject_id = _create_subject(factory, ids, clock)
+    eid = _record_linked_evidence(evidence_svc, subject_id=subject_id, title="audit-rb-ev")
 
     # Snapshot residue counters before failed writes.
     with Session(eng) as session:
@@ -908,7 +910,7 @@ def test_audit_writer_failure_rolls_back_report_and_event(harness) -> None:  # t
         boom_factory, clock, SequentialIdGenerator(start=8200), DefaultSecretRedactor()
     )
     rep = boom.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="audit-fail-report",
         summary="should vanish",
@@ -925,7 +927,7 @@ def test_audit_writer_failure_rolls_back_report_and_event(harness) -> None:  # t
     assert rep.ok is False
 
     evt = boom.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.MACRO,
         title="audit-fail-event",
         summary="should vanish",
@@ -955,6 +957,6 @@ def test_audit_writer_failure_rolls_back_report_and_event(harness) -> None:  # t
         assert proj_after == proj_before
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert case.report_ids == ()
-        assert case.event_ids == ()
+        subject = uow.subjects.get(subject_id)
+        assert subject.report_ids == ()
+        assert subject.event_ids == ()

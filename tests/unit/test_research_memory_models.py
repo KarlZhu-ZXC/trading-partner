@@ -36,13 +36,13 @@ from domain.research.models import (
     FROZEN_PHASE1C_SUPPORTING_MODEL_NAMES,
     FROZEN_RESEARCH_MODEL_NAMES,
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     EvidenceAssessment,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    SubjectEvidenceLink,
     canonicalize_research_json_object,
     compute_evidence_content_sha256,
     compute_report_content_sha256,
@@ -140,7 +140,7 @@ def _evidence(**overrides: Any) -> Evidence:
 
 def _report_hash(**overrides: Any) -> str:
     base: dict[str, Any] = {
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -156,7 +156,7 @@ def _report_hash(**overrides: Any) -> str:
 def _report(**overrides: Any) -> ResearchReport:
     base: dict[str, Any] = {
         "report_id": REPORT_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "report_type": ResearchReportType.DEEP_DIVE,
         "title": "NVDA thesis review",
         "summary": "Structural demand intact",
@@ -176,7 +176,7 @@ def _report(**overrides: Any) -> ResearchReport:
     base.update(overrides)
     if "content_sha256" not in overrides or base["content_sha256"] == "":
         base["content_sha256"] = _report_hash(
-            case_id=base["case_id"],
+            subject_id=base["subject_id"],
             report_type=base["report_type"],
             title=base["title"],
             summary=base["summary"],
@@ -192,7 +192,7 @@ def _assessment(**overrides: Any) -> EvidenceAssessment:
     base: dict[str, Any] = {
         "assessment_id": REV_ID,
         "evidence_id": EVIDENCE_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "thesis_id": THESIS_ID,
         "thesis_revision_id": REV_ID_2,
         "stance": EvidenceStance.SUPPORTS,
@@ -207,23 +207,23 @@ def _assessment(**overrides: Any) -> EvidenceAssessment:
     return EvidenceAssessment(**base)
 
 
-def _link(**overrides: Any) -> CaseEvidenceLink:
+def _link(**overrides: Any) -> SubjectEvidenceLink:
     base: dict[str, Any] = {
         "link_id": REV_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "evidence_id": EVIDENCE_ID,
         "linked_at": NOW,
         "linked_by": "user",
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return CaseEvidenceLink(**base)
+    return SubjectEvidenceLink(**base)
 
 
 def _event(**overrides: Any) -> ResearchEvent:
     base: dict[str, Any] = {
         "event_id": EVENT_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "event_type": ResearchEventType.EARNINGS,
         "title": "Q2 earnings",
         "summary": "Beat consensus",
@@ -245,7 +245,7 @@ def _event(**overrides: Any) -> ResearchEvent:
 def _decision(**overrides: Any) -> DecisionRecord:
     base: dict[str, Any] = {
         "decision_id": DECISION_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "decision_type": DecisionType.WATCH,
         "title": "Keep watching",
         "rationale": "Need more evidence",
@@ -268,7 +268,7 @@ def _decision(**overrides: Any) -> DecisionRecord:
 def _journal(**overrides: Any) -> JournalEntry:
     base: dict[str, Any] = {
         "journal_id": JOURNAL_ID,
-        "case_id": CASE_ID,
+        "subject_id": CASE_ID,
         "entry_type": JournalEntryType.NOTE,
         "title": "Personal note",
         "body_markdown": "Watching margin trends",
@@ -291,7 +291,7 @@ def _journal(**overrides: Any) -> JournalEntry:
 
 def test_frozen_research_registry_non_regression() -> None:
     assert FROZEN_RESEARCH_MODEL_NAMES == (
-        "InvestmentCase",
+        "ResearchSubject",
         "Thesis",
         "ThesisRevision",
         "Assumption",
@@ -309,8 +309,8 @@ def test_frozen_research_registry_non_regression() -> None:
         "OpenQuestion",
         "CandidateThesisRevision",
     )
-    assert FROZEN_PHASE1C_SUPPORTING_MODEL_NAMES == ("CaseEvidenceLink",)
-    assert "CaseEvidenceLink" not in FROZEN_RESEARCH_MODEL_NAMES
+    assert FROZEN_PHASE1C_SUPPORTING_MODEL_NAMES == ("SubjectEvidenceLink",)
+    assert "SubjectEvidenceLink" not in FROZEN_RESEARCH_MODEL_NAMES
 
 
 def test_phase1c_enum_wire_values_complete() -> None:
@@ -421,7 +421,7 @@ def test_phase1c_enum_wire_values_complete() -> None:
 
 
 def test_phase1c_error_codes_and_retryability() -> None:
-    cases: list[tuple[type, str, bool]] = [
+    subjects: list[tuple[type, str, bool]] = [
         (ResearchMemoryNotFound, "RESEARCH_MEMORY_NOT_FOUND", False),
         (ImmutableResearchRecord, "IMMUTABLE_RESEARCH_RECORD", False),
         (InvalidResearchLink, "INVALID_RESEARCH_LINK", False),
@@ -429,7 +429,7 @@ def test_phase1c_error_codes_and_retryability() -> None:
         (HistoricalVisibilityViolation, "HISTORICAL_VISIBILITY_VIOLATION", False),
         (UnauthorizedResearchWrite, "UNAUTHORIZED_RESEARCH_WRITE", False),
     ]
-    for cls, code, retryable in cases:
+    for cls, code, retryable in subjects:
         exc = cls("msg")
         assert exc.code == code
         assert exc.retryable is retryable
@@ -440,7 +440,7 @@ def test_phase1c_error_codes_and_retryability() -> None:
 
 def test_evidence_happy_paths() -> None:
     structured = canonicalize_research_json_object('{"close":"1505.00","currency":"CNY"}')
-    cases = [
+    subjects = [
         dict(
             evidence_type=EvidenceType.A_SHARE_ANNOUNCEMENT,
             evidence_id=EVIDENCE_ID,
@@ -467,7 +467,7 @@ def test_evidence_happy_paths() -> None:
             recorded_by="provider:sec_edgar",
         ),
     ]
-    for overrides in cases:
+    for overrides in subjects:
         ev = _evidence(**overrides)
         assert ev.instrument_ids == overrides["instrument_ids"]
         assert ev.evidence_id.startswith("evidence_")
@@ -490,16 +490,16 @@ def test_all_memory_models_smoke_checks() -> None:
 
 
 def test_canonicalize_research_json_object_normalizes() -> None:
-    cases = (
+    subjects = (
         ('{\n  "b": 2,\n  "a": 1\n}', '{"a":1,"b":2}'),
         ('{"name":"贵州茅台"}', '{"name":"贵州茅台"}'),
     )
-    for raw, expected in cases:
+    for raw, expected in subjects:
         assert canonicalize_research_json_object(raw) == expected, raw
 
 
 def test_canonicalize_research_json_object_rejects_invalid_inputs() -> None:
-    cases = (
+    subjects = (
         ('{"a":1,"a":2}', "duplicate keys|strict_json"),
         ("[1,2]", "JSON object"),
         ('"x"', "JSON object"),
@@ -508,7 +508,7 @@ def test_canonicalize_research_json_object_rejects_invalid_inputs() -> None:
         ('{"x":Infinity}', "duplicate keys, NaN, or Infinity"),
         ("{", "malformed_json|is not valid JSON"),
     )
-    for raw, match in cases:
+    for raw, match in subjects:
         with pytest.raises(DataContractError, match=match):
             canonicalize_research_json_object(raw)
 
@@ -580,8 +580,8 @@ def test_identity_and_fk_prefix_validation() -> None:
             confirmation_mode=ConfirmationMode.STRICT_REVIEW,
             position_context_snapshot_id="snap_00000000-0000-7000-8000-000000000001",
         )
-    with pytest.raises(DataContractError, match="case_id"):
-        _assessment(case_id="not-a-case")
+    with pytest.raises(DataContractError, match="subject_id"):
+        _assessment(subject_id="not-a-case")
     with pytest.raises(DataContractError, match="thesis_id"):
         _assessment(thesis_id="rev_00000000-0000-7000-8000-000000000099")
     with pytest.raises(DataContractError, match="evidence_ids"):

@@ -233,8 +233,7 @@ class FuturesCurveSnapshotDTO(_FrozenForbid):
             as_of=value.as_of,
             price_basis=value.price_basis,
             contracts=tuple(
-                FuturesCurveContractPointDTO.from_domain(item)
-                for item in value.contracts
+                FuturesCurveContractPointDTO.from_domain(item) for item in value.contracts
             ),
             curve_shape=value.curve_shape,
             completeness=value.completeness,
@@ -253,10 +252,20 @@ class SpotObservationDTO(_FrozenForbid):
     ask: DecimalWire | None = None
     mid: DecimalWire | None = None
     last: DecimalWire | None = None
+    display_price: DecimalWire | None = None
+    price_basis: PriceBasis | None = None
     delivery_location: str | None = None
 
     @classmethod
     def from_domain(cls, value: SpotObservation) -> Self:
+        display_price = value.mid if value.mid is not None else value.last
+        price_basis = (
+            PriceBasis.MID
+            if value.mid is not None
+            else PriceBasis.LAST
+            if value.last is not None
+            else None
+        )
         return cls(
             instrument_id=value.instrument_id,
             currency=value.currency,
@@ -268,6 +277,8 @@ class SpotObservationDTO(_FrozenForbid):
             ask=value.ask,
             mid=value.mid,
             last=value.last,
+            display_price=display_price,
+            price_basis=price_basis,
             delivery_location=value.delivery_location,
         )
 

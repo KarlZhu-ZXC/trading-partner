@@ -8,11 +8,11 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
-from application.services.investment_case_service import InvestmentCaseService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.watchlist_service import WatchlistService
 from conftest import FixedClock, SequentialIdGenerator
-from domain.common.enums import InvestmentCaseType, Market, WatchlistItemStatus
+from domain.common.enums import Market, ResearchSubjectType, WatchlistItemStatus
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
@@ -44,25 +44,25 @@ def harness(tmp_path):  # type: ignore[no-untyped-def]
     yield (
         WatchlistService(factory, clock, ids, redactor),
         ThesisRevisionService(factory, clock, ids, redactor),
-        InvestmentCaseService(factory, clock, ids, redactor),
+        ResearchSubjectService(factory, clock, ids, redactor),
         factory,
     )
     eng.dispose()
 
 
 def test_add_list_and_confirm_then_update_status(harness) -> None:  # type: ignore[no-untyped-def]
-    wl, thesis, cases, _factory = harness
-    case = cases.create_case(
-        case_type=InvestmentCaseType.THEME,
+    wl, thesis, subjects, _factory = harness
+    subject = subjects.create_subject(
+        subject_type=ResearchSubjectType.THEME,
         title="Theme",
         summary="Summary",
         primary_instrument_id=None,
         topic_tags=(),
-        linked_case_ids=(),
+        linked_subject_ids=(),
         confirmed_by="user",
         idempotency_key="c-wl",
     )
-    assert case.data is not None
+    assert subject.data is not None
 
     proposed = wl.add_item(
         market=Market.US,
@@ -70,7 +70,7 @@ def test_add_list_and_confirm_then_update_status(harness) -> None:  # type: igno
         display_name="NVIDIA",
         thesis_hint="Watch earnings",
         triggers=("EPS beat",),
-        case_id=case.data.case_id,
+        subject_id=subject.data.subject_id,
         expires_at=None,
         created_by="codex",
         idempotency_key="wl-add-1",
@@ -81,24 +81,24 @@ def test_add_list_and_confirm_then_update_status(harness) -> None:  # type: igno
     assert status in {"proposed", "PROPOSED"} or str(status) == "proposed"
 
     # Not formal yet
-    listed = wl.list_items(case_id=case.data.case_id)
+    listed = wl.list_items(subject_id=subject.data.subject_id)
     assert listed.ok and listed.data is not None
     assert listed.data.items == ()
 
     confirmed = thesis.confirm_candidate(proposed.data.candidate_id, reviewed_by="user")
     assert confirmed.ok is True
 
-    listed2 = wl.list_items(case_id=case.data.case_id)
+    listed2 = wl.list_items(subject_id=subject.data.subject_id)
     assert listed2.data is not None
     assert len(listed2.data.items) == 1
     item_id = listed2.data.items[0].item_id
 
-    # PROMOTED requires promoted_to_case_id
+    # PROMOTED requires promoted_to_subject_id
     bad = wl.update_status(
         item_id,
-        new_status=WatchlistItemStatus.PROMOTED_TO_CASE,
+        new_status=WatchlistItemStatus.PROMOTED_TO_SUBJECT,
         triggered_reason=None,
-        promoted_to_case_id=None,
+        promoted_to_subject_id=None,
         reviewed_by="user",
         idempotency_key="wl-bad",
     )
@@ -107,9 +107,9 @@ def test_add_list_and_confirm_then_update_status(harness) -> None:  # type: igno
 
     upd = wl.update_status(
         item_id,
-        new_status=WatchlistItemStatus.PROMOTED_TO_CASE,
+        new_status=WatchlistItemStatus.PROMOTED_TO_SUBJECT,
         triggered_reason=None,
-        promoted_to_case_id=case.data.case_id,
+        promoted_to_subject_id=subject.data.subject_id,
         reviewed_by="user",
         idempotency_key="wl-prom",
     )
@@ -120,4 +120,4 @@ def test_add_list_and_confirm_then_update_status(harness) -> None:  # type: igno
 
     got = wl.get_item(item_id)
     assert got.ok and got.data is not None
-    assert got.data.status in {WatchlistItemStatus.PROMOTED_TO_CASE, "promoted_to_case"}
+    assert got.data.status in {WatchlistItemStatus.PROMOTED_TO_SUBJECT, "promoted_to_subject"}

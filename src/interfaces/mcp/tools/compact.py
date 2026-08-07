@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from functools import cache, reduce
+from functools import cache, reduce, wraps
 from operator import or_
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Protocol, cast, get_type_hints
@@ -376,7 +376,8 @@ def _register_dispatch_tool(
             arguments["operation"] = spec.adapter_operation
         arguments.update(spec.overrides)
         result = spec.adapter(**arguments)
-        return await result if inspect.isawaitable(result) else result
+        resolved = await result if inspect.isawaitable(result) else result
+        return _legacy_subject_transport(resolved)
 
     dispatch.__name__ = name
     dispatch.__doc__ = description
@@ -396,12 +397,44 @@ def _copy_handler(
     target_name: str | None = None,
     policy: CapabilityPolicy,
 ) -> None:
+    @wraps(adapter)
+    async def legacy_transport_adapter(*args: Any, **kwargs: Any) -> Any:
+        result = adapter(*args, **kwargs)
+        resolved = await result if inspect.isawaitable(result) else result
+        return _legacy_subject_transport(resolved)
+
     registry.add_capability(
-        adapter,
+        legacy_transport_adapter,
         name=target_name or adapter.__name__,
         description=inspect.getdoc(adapter) or "",
         policy=policy,
     )
+
+
+def _legacy_subject_transport(value: Any) -> Any:
+    """Keep the compact-v15 legacy ``case_*`` vocabulary at the MCP boundary.
+
+    Research Subject is the canonical product/domain term. Existing MCP clients
+    nevertheless discover and send ``case_id``, ``case_type``, and
+    ``linked_case_ids``. Translate only those frozen transport keys; all other
+    Research Subject terminology remains canonical.
+    """
+
+    if isinstance(value, dict):
+        aliases = {
+            "subject_id": "case_id",
+            "subject_type": "case_type",
+            "linked_subject_ids": "linked_case_ids",
+        }
+        return {
+            aliases.get(key, key): _legacy_subject_transport(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_legacy_subject_transport(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_legacy_subject_transport(item) for item in value)
+    return value
 
 
 def _all_fields(adapter: Any, *, exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -411,16 +444,18 @@ def _all_fields(adapter: Any, *, exclude: tuple[str, ...] = ()) -> tuple[str, ..
 def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Render a validation-equivalent, compact JSON Schema 2020-12 contract."""
 
-    def clean(value: Any) -> Any:
+    def clean(value: Any, *, property_map: bool = False) -> Any:
         if isinstance(value, dict):
             # ``oneOf`` plus each variant's required literal operation already
             # carries the dispatch contract. Pydantic's discriminator ``mapping``
             # repeats those refs and is optional JSON Schema metadata.
-            cleaned = {
-                key: clean(item)
-                for key, item in value.items()
-                if key not in {"title", "mapping", "default"}
-            }
+            cleaned = {}
+            for key, item in value.items():
+                # Schema annotations are expendable, but a user field can itself
+                # legitimately be named ``title``, ``mapping``, or ``default``.
+                if not property_map and key in {"title", "mapping", "default"}:
+                    continue
+                cleaned[key] = clean(item, property_map=key == "properties")
             # ``const`` and ``enum`` already constrain both value and JSON type.
             # Pydantic emits a redundant string type beside them.
             if cleaned.get("type") == "string" and (
@@ -568,7 +603,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v14",
+            surface_schema_version="compact-v15",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -600,7 +635,10 @@ def create_compact_capability_registry(
     _register_dispatch_tool(
         registry,
         name="investment_case_read",
-        description="Query durable research files or build one bounded current research context.",
+        description=(
+            "Read durable Research Subjects (标的) or build one bounded current research "
+            "context. Legacy transport keeps investment_case_read plus case_id/case_type."
+        ),
         variants=(
             _spec(
                 "query",
@@ -619,7 +657,11 @@ def create_compact_capability_registry(
         registry,
         name="investment_case_manage",
         description=(
-            "Create, update, or archive a durable research file with confirmation and idempotency."
+            "Create, update, or archive a durable Research Subject (标的) with confirmation "
+            "and idempotency. Legacy transport keeps investment_case_manage plus case_id, "
+            "case_type, and linked_case_ids. "
+            "Title identifies the research object/question; summary defines research scope. "
+            "Action levels, sizing, and entry/exit belong to the Thesis or Trade Plan."
         ),
         variants=(
             _spec(
@@ -688,7 +730,10 @@ def create_compact_capability_registry(
     _register_dispatch_tool(
         registry,
         name="research_memory_get",
-        description="Search durable research memory, read one report, or restore a Case timeline.",
+        description=(
+            "Search durable research memory, read one report, or restore a Research Subject "
+            "(标的) timeline."
+        ),
         variants=(
             _spec(
                 "search",
@@ -1132,7 +1177,7 @@ def _register_portfolio_challenge_workflows(
                     "company_operating_lookback_months",
                     "company_operating_document_limit",
                 ),
-                overrides={"create_case": False},
+                overrides={"create_subject": False},
             ),
             _spec(
                 "catalyst_review",
@@ -1282,7 +1327,8 @@ def _register_watchlist_risk_monitoring(
         name="monitor_manage",
         description=(
             "Create/update a versioned Monitor or resolve one event; never mutate Thesis "
-            "or positions."
+            "or positions. A Trade Plan-bound Monitor may observe a condition reference "
+            "instrument distinct from the plan execution instrument."
         ),
         variants=(
             _spec(

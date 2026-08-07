@@ -17,7 +17,7 @@ from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.orm.common import JsonStringTuple
 
 
-class InvestmentCaseRow(Base):
+class ResearchSubjectRow(Base):
     __tablename__ = "investment_cases"
     __table_args__ = (
         CheckConstraint(
@@ -39,8 +39,8 @@ class InvestmentCaseRow(Base):
         Index("ix_investment_cases_primary_instrument_id", "primary_instrument_id"),
     )
 
-    case_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_type: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[str] = mapped_column("case_id", Text, primary_key=True)
+    subject_type: Mapped[str] = mapped_column("case_type", Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -53,8 +53,8 @@ class InvestmentCaseRow(Base):
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
     archived_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    linked_case_ids_json: Mapped[tuple[str, ...]] = mapped_column(
-        JsonStringTuple(), nullable=False, default=()
+    linked_subject_ids_json: Mapped[tuple[str, ...]] = mapped_column(
+        "linked_case_ids_json", JsonStringTuple(), nullable=False, default=()
     )
     evidence_ids_json: Mapped[tuple[str, ...]] = mapped_column(
         JsonStringTuple(), nullable=False, default=()
@@ -98,7 +98,8 @@ class ThesisRow(Base):
     )
 
     thesis_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -158,7 +159,8 @@ class ThesisRevisionRow(Base):
         ForeignKey("theses.thesis_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -216,7 +218,8 @@ class AssumptionRow(Base):
         ForeignKey("theses.thesis_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -271,7 +274,8 @@ class InvalidationConditionRow(Base):
         ForeignKey("theses.thesis_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -318,7 +322,8 @@ class OpenQuestionRow(Base):
     )
 
     question_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,
@@ -366,7 +371,8 @@ class WatchlistItemRow(Base):
     triggers_json: Mapped[tuple[str, ...]] = mapped_column(
         JsonStringTuple(), nullable=False, default=()
     )
-    case_id: Mapped[str | None] = mapped_column(
+    subject_id: Mapped[str | None] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="SET NULL"),
         nullable=True,
@@ -375,7 +381,8 @@ class WatchlistItemRow(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    promoted_to_case_id: Mapped[str | None] = mapped_column(
+    promoted_to_subject_id: Mapped[str | None] = mapped_column(
+        "promoted_to_case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="SET NULL"),
         nullable=True,
@@ -600,7 +607,8 @@ class CandidateThesisRevisionRow(Base):
     )
 
     candidate_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str | None] = mapped_column(
+    subject_id: Mapped[str | None] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=True,

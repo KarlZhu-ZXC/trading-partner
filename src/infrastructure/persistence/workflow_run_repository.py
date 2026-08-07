@@ -57,7 +57,7 @@ class SqlAlchemyWorkflowRunRepository:
                     WorkflowRunRow(
                         run_id=run.run_id,
                         workflow_type=run.workflow_type.value,
-                        case_id=run.case_id,
+                        subject_id=run.subject_id,
                         instrument_id=run.instrument_id,
                         requested_as_of=run.requested_as_of.isoformat(),
                         started_at=run.started_at.isoformat(),
@@ -265,7 +265,7 @@ class SqlAlchemyWorkflowRunRepository:
         run = WorkflowRun(
             run_id=row.run_id,
             workflow_type=WorkflowType(row.workflow_type),
-            case_id=row.case_id,
+            subject_id=row.subject_id,
             instrument_id=row.instrument_id,
             requested_as_of=datetime.fromisoformat(row.requested_as_of),
             started_at=datetime.fromisoformat(row.started_at),

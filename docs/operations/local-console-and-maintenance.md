@@ -3,7 +3,7 @@
 ## 控制台
 
 控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。它不调用 Codex/LLM，
-但不是只读看板：用户可以主动运行到期 Monitor、账户/交易/自选同步、收盘后任务、通知、
+但不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
 备份和缓存清理，也可以从 MCP 工作台调用全部 28 个公开工具。它不会在页面加载时隐式
 访问 Provider，也不提供订单能力。
 
@@ -23,22 +23,23 @@ npm run dev
 ```
 
 打开 `http://localhost:3000`（端口占用时以终端输出为准）。页面包括：总览、全部
-Investment Case/Thesis、Monitor 定义/Run/事件、28 个 MCP 能力、持久化账户与自选、
+研究档案/Thesis、Monitor 定义/Run/事件、28 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
 
-Research 页面使用 Case 索引和单个 Case 工作区：默认包含归档 Case，并展示所选 Case 的
+Research 页面使用研究标的索引和单个研究档案工作区：默认包含已归档研究档案，并展示所选研究标的的
 Thesis、当前版本、假设、失效条件、开放问题、Trade Plan 与待审候选。读取只通过现有
 `investment_case_read/query` 与 `research_judgment_get/state` 聚合，不会请求行情 Provider。
-用户可以创建、编辑或归档 Case；Case 编辑只修改标题、摘要、标签和关联 Case。Thesis
-修改始终先产生候选，再由用户显式确认或拒绝，不能覆盖已确认 revision。单个 Case 的研究
-状态读取失败时，该 Case 仍保留并显示局部错误，不会让其他研究档案从页面消失。
+用户可以创建、编辑或归档研究档案；研究档案编辑只修改标题、摘要、标签和关联研究档案。Thesis
+修改始终先产生候选，再由用户显式确认或拒绝，不能覆盖已确认 revision。单个研究档案的研究
+状态读取失败时，该研究档案仍保留并显示局部错误，不会让其他研究档案从页面消失。
 
-Portfolio 页面使用 Holdings、Activity、Performance、Risk、Watchlist 五个稳定标签页。初始
-加载只聚合持久化账户快照、交易、暴露、覆盖回执、风险状态和自选分组，不访问券商或其他
-上游。账户、交易和 Watchlist 各有独立的显式同步按钮；同步失败只影响对应区域。Holdings
+Portfolio 页面使用 Holdings、Activity、Performance、Risk 四个稳定标签页。初始加载只聚合
+持久化账户快照、交易、暴露、覆盖回执和风险状态，不访问券商或其他上游。账户和交易各有
+独立的显式同步按钮；同步失败只影响对应区域。Holdings
 按账户展示原币种现金、净资产、购买力、融资、快照时点、警告和持仓；Activity 保留交易与
 覆盖缺口；Performance 只做可追溯的 FIFO/券商成本口径计算；Risk 支持当前政策、确定性检查、
-手工假设新增或已确认 Trade Plan 试算；Watchlist 支持分组读取及可写分组的确认式增删。
+手工假设新增或已确认 Trade Plan 试算。Watchlist 暂不在 Portfolio 前端展示，相关 MCP 能力
+仍可在 Capabilities 工作台中使用。
 所有写入继续经过 compact Registry 的 expected-version、confirmation 与 idempotency 校验，
 页面不提供订单、隐含 FX 汇总或后台自动刷新。
 
@@ -68,6 +69,13 @@ compact-28 Capability Registry 提供 handler、请求 schema 和 effect policy�
 `research`、`monitors` 等路由
 只负责把多项读取合并成适合页面的 BFF 响应。收盘任务、通知、备份和缓存维护仍是
 Console/CLI 专用 operational capability，不会为了接口对称而扩入公开 MCP。
+
+通知同样保持在 operational CLI 边界：`trading-partner-notifications` 提供
+`status`、`test`、`flush`，以及从 stdin 读取 UTF-8 正文的显式授权
+`enqueue`；旧的 `trading-partner-monitor-notifications` 仍是别名。MANUAL
+enqueue 必须带 `title`、幂等键、`user`/`external_agent` 确认者和授权说明，
+JSON 回执不会回显正文或授权说明，也不会产生订单或其他交易状态效果。
+内部确定性生产者使用封闭的 `SYSTEM` source；`MANUAL` 仅用于显式授权的调用者写入。
 
 ## 数据维护
 

@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from application.dto.market import DecimalWire
-from application.dto.research import InvestmentCaseDTO, ResearchStateDTO
+from application.dto.research import ResearchStateDTO, ResearchSubjectDTO
 from domain.common.enums import (
     ConfirmationMode,
     DecisionType,
@@ -28,7 +28,7 @@ class _DTO(BaseModel):
 
 
 class ResearchContextBuildInput(_DTO):
-    case_id: str | None = Field(default=None, min_length=1, max_length=128)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
     instrument_id: str | None = None
     since: datetime | None = None
     token_budget: int = Field(default=4_000, ge=2_000, le=12_000)
@@ -49,8 +49,8 @@ class ResearchContextBuildInput(_DTO):
 
     @model_validator(mode="after")
     def one_selector(self) -> Self:
-        if (self.case_id is None) == (self.instrument_id is None):
-            raise ValueError("exactly one of case_id or instrument_id is required")
+        if (self.subject_id is None) == (self.instrument_id is None):
+            raise ValueError("exactly one of subject_id or instrument_id is required")
         return self
 
 
@@ -119,7 +119,7 @@ class ContextBudgetDTO(_DTO):
 
 
 class ResearchContextDTO(_DTO):
-    case: InvestmentCaseDTO
+    subject: ResearchSubjectDTO
     research_state: ResearchStateDTO
     evidence: tuple[ContextEvidenceDTO, ...]
     reports: tuple[ContextReportDTO, ...]

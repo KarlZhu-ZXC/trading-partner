@@ -9,6 +9,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 
 def _alembic_config(database_url: str, project_root: Path) -> Config:
@@ -84,7 +85,7 @@ _PHASE2_TABLES = {
     "monitor_event_resolutions",
     "monitor_runs",
     "monitor_run_observations",
-    "monitor_notification_outbox",
+    "notification_outbox",
 }
 
 _HARDENING_TABLES = {
@@ -109,7 +110,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0029_dukascopy_light_oil_cfd"})
+_HEAD_REVISIONS = frozenset({"0030_generic_notification_outbox"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -142,6 +143,7 @@ _EXPECTED_SCHEMA_VERSIONS = {
     "0027_account_activity_coverage",
     "0028_provider_route_history",
     "0029_dukascopy_light_oil_cfd",
+    "0030_generic_notification_outbox",
 }
 
 
@@ -198,6 +200,136 @@ def test_migration_round_trip(
     assert _PHASE2_TABLES.issubset(tables_after_second)
     assert _HARDENING_TABLES.issubset(tables_after_second)
     assert tables_after_second == tables_after_first
+    engine.dispose()
+
+
+def test_generic_notification_migration_preserves_monitor_event_and_run_rows(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0030 maps both legacy source columns and reconstructs them on downgrade."""
+
+    db_path = tmp_path / "notification-migrate.db"
+    database_url = f"sqlite:///{db_path}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0029_dukascopy_light_oil_cfd")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO monitor_notification_outbox("
+                "notification_id, source_event_id, source_run_id, channel, title, body, "
+                "status, attempt_count, next_attempt_at, created_at"
+                ") VALUES "
+                "('legacy-event', 'event-1', NULL, 'TELEGRAM', 'event title', 'event body', "
+                "'PENDING', 1, '2026-08-06T00:00:00+00:00', '2026-08-06T00:00:00+00:00'),"
+                "('legacy-run', NULL, 'run-1', 'TELEGRAM', 'run title', 'run body', "
+                "'DELIVERED', 2, '2026-08-06T00:00:00+00:00', '2026-08-06T00:00:00+00:00')"
+            )
+        )
+    command.upgrade(cfg, _HEAD_TARGET)
+    assert "notification_outbox" in inspect(engine).get_table_names()
+    assert "monitor_notification_outbox" not in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT notification_id, source_type, source_id, title, body, status, "
+                "attempt_count FROM notification_outbox ORDER BY notification_id"
+            )
+        ).all()
+    assert rows == [
+        ("legacy-event", "MONITOR_EVENT", "event-1", "event title", "event body", "PENDING", 1),
+        ("legacy-run", "MONITOR_RUN", "run-1", "run title", "run body", "DELIVERED", 2),
+    ]
+
+    command.downgrade(cfg, "0029_dukascopy_light_oil_cfd")
+    assert "monitor_notification_outbox" in inspect(engine).get_table_names()
+    assert "notification_outbox" not in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT notification_id, source_event_id, source_run_id, title, body, "
+                "status, attempt_count FROM monitor_notification_outbox ORDER BY notification_id"
+            )
+        ).all()
+    assert rows == [
+        ("legacy-event", "event-1", None, "event title", "event body", "PENDING", 1),
+        ("legacy-run", None, "run-1", "run title", "run body", "DELIVERED", 2),
+    ]
+    engine.dispose()
+
+
+def test_generic_notification_outbox_source_metadata_constraints(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "notification-constraints.db"
+    database_url = f"sqlite:///{db_path}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, _HEAD_TARGET)
+    engine = create_engine(database_url)
+    insert_sql = text(
+        "INSERT INTO notification_outbox ("
+        "notification_id, source_type, source_id, channel, title, body, status, "
+        "attempt_count, next_attempt_at, created_at, idempotency_key, confirmed_by, "
+        "authorization_note, expires_at"
+        ") VALUES ("
+        ":notification_id, :source_type, :source_id, :channel, :title, :body, :status, "
+        ":attempt_count, :next_attempt_at, :created_at, :idempotency_key, :confirmed_by, "
+        ":authorization_note, :expires_at"
+        ")"
+    )
+    valid = {
+        "notification_id": "manual-valid",
+        "source_type": "MANUAL",
+        "source_id": "manual-valid-key",
+        "channel": "TELEGRAM",
+        "title": "title",
+        "body": "body",
+        "status": "PENDING",
+        "attempt_count": 0,
+        "next_attempt_at": "2026-08-06T00:00:00+00:00",
+        "created_at": "2026-08-06T00:00:00+00:00",
+        "idempotency_key": "manual-valid-key",
+        "confirmed_by": "user",
+        "authorization_note": "authorized",
+        "expires_at": "2026-08-07T00:00:00+00:00",
+    }
+    with engine.begin() as conn:
+        conn.execute(insert_sql, valid)
+
+    invalid_rows = (
+        {"idempotency_key": None},
+        {"source_id": "different-key"},
+        {"confirmed_by": "codex"},
+        {"authorization_note": "   "},
+        {"expires_at": None},
+        {
+            "notification_id": "system-auth-invalid",
+            "source_type": "SYSTEM",
+            "source_id": "system-test",
+            "idempotency_key": None,
+            "confirmed_by": "user",
+            "authorization_note": "not allowed",
+            "expires_at": None,
+        },
+    )
+    for index, override in enumerate(invalid_rows):
+        candidate = {**valid, **override, "notification_id": f"invalid-{index}"}
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(insert_sql, candidate)
+
+    constraints = {
+        item["name"]
+        for item in inspect(engine).get_check_constraints("notification_outbox")
+        if item.get("name")
+    }
+    assert any(name.endswith("_manual_metadata") for name in constraints)
+    assert any(name.endswith("_non_manual_authorization") for name in constraints)
     engine.dispose()
 
 

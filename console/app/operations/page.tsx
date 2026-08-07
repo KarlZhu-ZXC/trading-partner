@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
 import { ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
-import { listOf, postApi, useApi } from "../lib/api";
+import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
 
@@ -24,6 +24,16 @@ export default function OperationsPage() {
   const maintenance = result.data?.maintenance as Dict | undefined;
   const tableCounts = listOf<Dict>(maintenance, "table_counts");
   const retention = listOf<Dict>(maintenance, "retention_rules");
+  const health = envelopeData<Dict>(result.data?.health);
+  const healthComponents = Object.entries((health?.components as Dict | undefined) ?? {});
+  const quality = health?.data_quality as Dict | undefined;
+  const providerRoutes = listOf<Dict>(quality, "provider_routes");
+  const monitorDashboard = envelopeData<Dict>(result.data?.monitor_dashboard);
+  const monitorSchedules = listOf<Dict>(monitorDashboard, "items")
+    .map((item) => ({ monitor: (item.monitor ?? {}) as Dict, item }))
+    .sort((left, right) => String(left.item.next_due_at ?? "").localeCompare(String(right.item.next_due_at ?? "")));
+  const syncReceipts = listOf<Dict>(result.data, "sync_receipts");
+  const outboxEntries = listOf<Dict>(result.data, "outbox_entries");
 
   useEffect(() => {
     if (oauthFlowState !== "ACTIVE") return;
@@ -146,6 +156,28 @@ export default function OperationsPage() {
           </Card>
           <Card className="span-12" kicker="TABLE INVENTORY" title="持久化数据量">
             <div className="table-inventory">{tableCounts.map((item) => <div key={String(item.table)}><span className="mono">{String(item.table)}</span><strong>{String(item.rows)}</strong></div>)}</div>
+          </Card>
+          <Card className="span-12" kicker="SYNC RECEIPTS" title="收盘后同步历史">
+            <div className="table-wrap"><table><thead><tr><th>Session</th><th>完成时间</th><th>账户</th><th>自选</th><th>快照</th><th>尝试</th><th>错误</th><th>状态</th></tr></thead><tbody>{syncReceipts.map((receipt) => <tr key={String(receipt.run_id)}><td><strong>{String(receipt.market_session_date)}</strong><small className="mono">{String(receipt.run_id)}</small></td><td>{formatDate(receipt.completed_at)}</td><td>{String(receipt.portfolio_status)}</td><td>{String(receipt.watchlist_status)}</td><td>{String(receipt.account_snapshot_count ?? 0)}</td><td>{String(receipt.attempt_count ?? 0)}</td><td className="mono">{listOf<string>(receipt, "error_codes").join(" · ") || "—"}</td><td><Badge value={String(receipt.status)} /></td></tr>)}</tbody></table></div>
+          </Card>
+          <Card className="span-12" kicker="OUTBOX DELIVERY" title="通知投递与 dead-letter">
+            <p className="card-note">为避免泄露通知正文与授权说明，此处只展示标题、来源和投递元数据。</p>
+            <div className="table-wrap"><table><thead><tr><th>通知</th><th>来源</th><th>创建</th><th>最后尝试 / 送达</th><th>Attempts</th><th>错误</th><th>状态</th></tr></thead><tbody>{outboxEntries.map((entry) => <tr key={String(entry.notification_id)}><td><strong>{String(entry.title)}</strong><small className="mono">{String(entry.notification_id)}</small></td><td><strong>{String(entry.source_type)}</strong><small className="mono">{String(entry.source_id)}</small></td><td>{formatDate(entry.created_at)}</td><td>{formatDate(entry.delivered_at ?? entry.last_attempt_at)}</td><td>{String(entry.attempt_count ?? 0)}</td><td className="mono">{String(entry.last_error_code ?? "—")}</td><td><Badge value={String(entry.status)} /></td></tr>)}</tbody></table></div>
+          </Card>
+          <Card className="span-6" kicker="SCHEDULER" title="Monitor 调度与下次到期" action={<Badge value={monitorSchedules.some(({ item }) => item.schedule_health !== "OK") ? "ATTENTION" : "READY"} />}>
+            <p className="card-note">这里展示定义自身的调度健康与下次到期；launchd 安装仍由明确的本地命令管理，不会在页面加载时改系统配置。</p>
+            <dl className="detail-list"><div><dt>LaunchAgent plist</dt><dd><Badge value={maintenance?.monitor_scheduler_plist_present ? "INSTALLED" : "MISSING"} /></dd></div><div><dt>launchd loaded</dt><dd><Badge value={maintenance?.monitor_scheduler_loaded === true ? "LOADED" : maintenance?.monitor_scheduler_loaded === false ? "NOT LOADED" : "UNKNOWN"} /></dd></div><div><dt>Last exit</dt><dd>{String(maintenance?.monitor_scheduler_last_exit_code ?? "—")}</dd></div></dl>
+            <div className="operations-detail-list">{monitorSchedules.length === 0 ? <span className="muted">没有 Active Monitor。</span> : monitorSchedules.map(({ monitor, item }) => <div key={String(monitor.monitor_id)}><div><strong>{String(monitor.name ?? "未命名 Monitor")}</strong><small className="mono">{String(monitor.primary_instrument_id ?? "portfolio")}</small></div><div><Badge value={String(item.schedule_health ?? "UNKNOWN")} /><small>下次 {formatDate(item.next_due_at)}</small></div></div>)}</div>
+            <code className="command-block">uv run trading-partner-monitor-scheduler status</code>
+            <code className="command-block">uv run trading-partner-monitor-scheduler install</code>
+          </Card>
+          <Card className="span-6" kicker="CONFIGURATION READINESS" title="组件可用性矩阵" action={<Badge value={String(health?.status ?? "UNKNOWN")} />}>
+            <p className="card-note">configuration 只表示配置就绪；只有标记为 live_probe 的检查才代表实际连通性。</p>
+            <div className="configuration-matrix">{healthComponents.map(([name, raw]) => { const component = raw as Dict; return <div key={name}><strong>{name.replaceAll("_", " ")}</strong><Badge value={String(component.state ?? "UNKNOWN")} /><span>{String(component.check_kind ?? "configuration")}</span><small>{String(component.detail ?? component.message ?? "—")}</small></div>; })}</div>
+          </Card>
+          <Card className="span-12" kicker="PROVIDER ROUTES · LAST 24H" title="路由与 admission 结果">
+            <div className="provider-route-table table-wrap"><table><thead><tr><th>Market / Category</th><th>最新时间</th><th>Selected</th><th>Calls</th><th>Fallback</th><th>Failures</th><th>最近错误</th></tr></thead><tbody>{providerRoutes.length === 0 ? <tr><td colSpan={7}>最近 24 小时没有持久化 Provider 路由回执。</td></tr> : providerRoutes.map((route) => <tr key={`${String(route.market)}-${String(route.category)}`}><td><strong>{String(route.market)}</strong><small>{String(route.category)}</small></td><td>{formatDate(route.latest_at)}</td><td>{String(route.latest_selected_vendor ?? "—")}</td><td>{String(route.execution_count ?? 0)}</td><td className={Number(route.fallback_count ?? 0) > 0 ? "text-amber" : ""}>{String(route.fallback_count ?? 0)}</td><td className={Number(route.failure_count ?? 0) > 0 ? "text-red" : ""}>{String(route.failure_count ?? 0)}</td><td className="mono">{String(route.latest_error_code ?? "—")}</td></tr>)}</tbody></table></div>
+            {quality?.provider_route_window_truncated === true && <p className="card-note text-amber">窗口已触及持久化读取上限；当前视图不是全部历史。</p>}
           </Card>
         </div>
       </DataBoundary>

@@ -20,7 +20,7 @@ Typical conversations:
 列出我的 Moomoo 半导体自选。
 把 NVDA 加到 MAG。
 从 Favorites 删除 FX.XAUUSD。
-刷新 CSV 自选，然后告诉我哪些标的已经有 Investment Case。
+刷新 CSV 自选，然后告诉我哪些标的已经有 Research Subject。
 ```
 
 Phase 2 does not run a hidden in-process alert daemon, backtest engine, or order
@@ -70,13 +70,13 @@ Watchlist Hub Store
 = durable database groups, memberships, lifecycle, sync state, mutation receipts
 
 Research WatchlistItem
-= thesis hint, triggers, status, expiry, and Investment Case association
+= thesis hint, triggers, status, expiry, and Research Subject association
 ```
 
 The existing Phase 1 `WatchlistItem` remains unchanged. It is research metadata,
 not an external membership row. An external add does not fabricate a thesis hint.
 An external remove never archives/deletes a Research WatchlistItem or Investment
-Case.
+Research Subject.
 
 ## 3. Source selection
 
@@ -283,7 +283,7 @@ request
 request(group or configured default)
 → optional target-group refresh
 → persist membership snapshot and inactive history
-→ attach matching Research WatchlistItem/Case references by normalized identity
+→ attach matching Research WatchlistItem/Research Subject references by normalized identity
 → ToolEnvelope
 ```
 
@@ -330,7 +330,7 @@ offset: >=0 = 0
 ```
 
 Returns memberships plus normalized instrument/research support and optional
-Research WatchlistItem/Case references.
+Research WatchlistItem/Research Subject references.
 
 ### `watchlist_manage` (`add`)
 
@@ -403,7 +403,7 @@ Phase 2 is complete only when all of the following are proven:
 - add/remove require an allowed confirmer and are idempotent;
 - upstream-success/local-failure produces a recoverable partial result;
 - unsupported Moomoo members remain visible without fake instruments;
-- external deletion cannot cascade into Research WatchlistItem or Investment Case;
+- external deletion cannot cascade into Research WatchlistItem or Research Subject;
 - `.env.example`, local `.env` safe defaults, README, AGENTS, skill, capability
   guide, roadmap, and docs index agree;
 - Ruff, mypy, focused tests, full pytest, Alembic heads, package build, and a fresh
@@ -434,7 +434,7 @@ Historical Watchlist Hub closeout evidence (before the three Phase 2B tools):
   durable `PARTIAL` mutation with `PERSISTENCE_ERROR`;
 - integration tests proved restart recovery, stable membership IDs, inactive
   history, research metadata linkage, and no deletion of the separate Research
-  WatchlistItem/Investment Case rows.
+  WatchlistItem/Research Subject rows.
 
 ## 13. Phase 2B — Portfolio Risk Engine v1
 
@@ -543,7 +543,7 @@ state is `QUIET`, `TRIGGERED`, or `NOT_EVALUATED`. A first trigger produces a
 `TRIGGERED` event; repeated unchanged triggers produce no event; a later quiet
 state produces `RECOVERED`. Missing or stale facts produce `NOT_EVALUATED`, never
 a quiet result. Events can be explicitly acknowledged or resolved, but neither
-action changes a Thesis, Investment Case, Risk Policy, position, or order.
+action changes a Thesis, Research Subject, Risk Policy, position, or order.
 
 Phase 3A continuous futures reuse the same US price-rule path. Futures quote and
 bars routing is asset-aware. Alpha Vantage is never sent a future. `GC=F`, `SI=F`,
@@ -625,10 +625,21 @@ that the value is an XAUUSD weekend-volatility proxy rather than spot/LBMA. It d
 not generate or upload an image and does not invoke an LLM.
 
 ```bash
-uv run trading-partner-monitor-notifications status
-uv run trading-partner-monitor-notifications test
-uv run trading-partner-monitor-notifications flush
+uv run trading-partner-notifications status
+uv run trading-partner-notifications test
+uv run trading-partner-notifications flush
+printf '%s' 'body' | uv run trading-partner-notifications enqueue \
+  --title 'Operational note' --idempotency-key note-1 \
+  --confirmed-by user --authorization-note 'Explicitly authorized notification'
 ```
+
+`trading-partner-monitor-notifications` remains a compatibility alias. The
+generic `enqueue` command is operational CLI only, not a public MCP tool. It
+reads UTF-8 plain text from stdin, requires explicit `user` or `external_agent`
+authorization, stores a bounded per-entry expiry, and never echoes the body or
+authorization note in JSON. Internal deterministic producers use the closed
+SYSTEM source; MANUAL remains explicitly authorized. Notifications do not
+create orders or otherwise change trading state.
 
 The hourly due dispatcher flushes pending notifications even when no Monitor is
 due. Market-cadence groups flush after evaluation. Delivery does not
@@ -660,8 +671,8 @@ Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
   operations and the current surface schema is `compact-v12`;
-- migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`, and
-  `0028_provider_route_history` pass
+- migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`,
+  `0028_provider_route_history`, and `0030_generic_notification_outbox` pass
   clean upgrade/downgrade/upgrade checks;
 - focused tests cover transition deduplication, immutable observations, whole-hour
   schedule validation, due/skip behavior, compact schema, and launchd arguments;

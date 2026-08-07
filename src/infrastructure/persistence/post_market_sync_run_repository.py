@@ -40,6 +40,15 @@ class SqlAlchemyPostMarketSyncRunRepository:
             )
             return None if row is None else self._domain(row)
 
+    def list_recent(self, limit: int) -> tuple[PostMarketSyncRun, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(PostMarketSyncRunRow)
+                .order_by(PostMarketSyncRunRow.market_session_date.desc())
+                .limit(limit)
+            )
+            return tuple(self._domain(row) for row in rows)
+
     def save(self, run: PostMarketSyncRun) -> PostMarketSyncRun:
         with Session(self._engine) as session, session.begin():
             row = session.scalar(

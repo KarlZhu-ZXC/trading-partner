@@ -10,9 +10,6 @@ from infrastructure.persistence.repositories.candidate_thesis_revision import (
     SqlAlchemyCandidateThesisRevisionRepository,
     register_candidate_payload_listeners,
 )
-from infrastructure.persistence.repositories.case_evidence_link import (
-    SqlAlchemyCaseEvidenceLinkRepository,
-)
 from infrastructure.persistence.repositories.decision_record import (
     SqlAlchemyDecisionRecordRepository,
 )
@@ -24,9 +21,6 @@ from infrastructure.persistence.repositories.evidence_assessment import (
 )
 from infrastructure.persistence.repositories.invalidation_condition import (
     SqlAlchemyInvalidationConditionRepository,
-)
-from infrastructure.persistence.repositories.investment_case import (
-    SqlAlchemyInvestmentCaseRepository,
 )
 from infrastructure.persistence.repositories.journal import (
     SqlAlchemyJournalRepository,
@@ -42,6 +36,12 @@ from infrastructure.persistence.repositories.research_report import (
 )
 from infrastructure.persistence.repositories.research_search_index import (
     SqlAlchemyResearchSearchIndex,
+)
+from infrastructure.persistence.repositories.research_subject import (
+    SqlAlchemyResearchSubjectRepository,
+)
+from infrastructure.persistence.repositories.subject_evidence_link import (
+    SqlAlchemySubjectEvidenceLinkRepository,
 )
 from infrastructure.persistence.repositories.thesis import SqlAlchemyThesisRepository
 from infrastructure.persistence.repositories.thesis_revision import (
@@ -67,12 +67,12 @@ register_candidate_payload_listeners()
 __all__ = [
     "SqlAlchemyAssumptionRepository",
     "SqlAlchemyCandidateThesisRevisionRepository",
-    "SqlAlchemyCaseEvidenceLinkRepository",
+    "SqlAlchemySubjectEvidenceLinkRepository",
     "SqlAlchemyDecisionRecordRepository",
     "SqlAlchemyEvidenceAssessmentRepository",
     "SqlAlchemyEvidenceRepository",
     "SqlAlchemyInvalidationConditionRepository",
-    "SqlAlchemyInvestmentCaseRepository",
+    "SqlAlchemyResearchSubjectRepository",
     "SqlAlchemyJournalRepository",
     "SqlAlchemyOpenQuestionRepository",
     "SqlAlchemyResearchEventRepository",

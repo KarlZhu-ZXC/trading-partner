@@ -23,7 +23,7 @@ def _to_domain(row: InvalidationConditionRow) -> InvalidationCondition:
     return InvalidationCondition(
         invalidation_id=row.invalidation_id,
         thesis_id=row.thesis_id,
-        case_id=row.case_id,
+        subject_id=row.subject_id,
         revision_no=row.revision_no,
         description=row.description,
         observable=row.observable,
@@ -43,7 +43,7 @@ def _to_row(invalidation: InvalidationCondition) -> InvalidationConditionRow:
     return InvalidationConditionRow(
         invalidation_id=invalidation.invalidation_id,
         thesis_id=invalidation.thesis_id,
-        case_id=invalidation.case_id,
+        subject_id=invalidation.subject_id,
         revision_no=invalidation.revision_no,
         description=invalidation.description,
         observable=invalidation.observable,
@@ -96,9 +96,7 @@ class SqlAlchemyInvalidationConditionRepository:
         triggered_reason: str | None,
         last_checked_at: datetime | None,
     ) -> None:
-        row = self._session.get(
-            InvalidationConditionRow, invalidation_id, with_for_update=True
-        )
+        row = self._session.get(InvalidationConditionRow, invalidation_id, with_for_update=True)
         if row is None:
             raise PersistenceError(
                 f"InvalidationCondition not found: {invalidation_id}",
@@ -115,7 +113,7 @@ class SqlAlchemyInvalidationConditionRepository:
         next_domain = InvalidationCondition(
             invalidation_id=current.invalidation_id,
             thesis_id=current.thesis_id,
-            case_id=current.case_id,
+            subject_id=current.subject_id,
             revision_no=current.revision_no,
             description=current.description,
             observable=current.observable,
@@ -134,9 +132,7 @@ class SqlAlchemyInvalidationConditionRepository:
         row.triggered_reason = next_domain.triggered_reason
         row.last_checked_at = dt_opt_to_db(next_domain.last_checked_at)
 
-    def list_armed(
-        self, thesis_id: str, revision_no: int
-    ) -> tuple[InvalidationCondition, ...]:
+    def list_armed(self, thesis_id: str, revision_no: int) -> tuple[InvalidationCondition, ...]:
         stmt = (
             select(InvalidationConditionRow)
             .where(InvalidationConditionRow.thesis_id == thesis_id)

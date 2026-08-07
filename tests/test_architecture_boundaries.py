@@ -587,7 +587,7 @@ def test_d8b_bootstrap_wires_router_fields() -> None:
 
 _C2A_BUSINESS_ROW_NAMES = (
     "ResearchEvidenceRow",
-    "CaseEvidenceLinkRow",
+    "SubjectEvidenceLinkRow",
     "EvidenceAssessmentRow",
     "ResearchReportRow",
     "ResearchEventRow",
@@ -637,7 +637,7 @@ def test_c3_uow_exposes_search_index_with_business_properties() -> None:
     concrete_text = concrete.read_text(encoding="utf-8")
     for name in (
         "evidence",
-        "case_evidence_links",
+        "subject_evidence_links",
         "evidence_assessments",
         "reports",
         "events",

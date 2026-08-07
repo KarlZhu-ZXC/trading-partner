@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from domain.common.enums import AppEnvironment, DataCategory, LogLevel
@@ -238,6 +238,7 @@ class AppSettings(BaseSettings):
     moomoo_host: str = "127.0.0.1"
     moomoo_port: int = Field(default=11111, ge=1, le=65535)
     moomoo_account_ids: str = ""
+    moomoo_account_base_currency: Literal["USD", "HKD", "CNH", "JPY", "SGD"] = "USD"
     manual_holdings_csv_path: Path | None = None
 
     # Phase 2 Watchlist Hub. Exactly one upstream is active at runtime.
@@ -247,15 +248,54 @@ class AppSettings(BaseSettings):
     post_market_sync_delay_minutes: int = Field(default=10, ge=0, le=120)
     post_market_sync_lock_path: Path = Path("data/locks/post_market_sync.lock")
 
-    # Deterministic Monitor event delivery. Telegram is an outbound notification
-    # adapter only; it never receives commands or mutates research/trading state.
-    monitor_notifications_enabled: bool = False
+    # Deterministic outbound delivery. Telegram never receives commands and
+    # cannot mutate research, portfolio, or trading state. Legacy Monitor-prefixed
+    # environment names remain accepted during the generic-Outbox migration.
+    notifications_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "notifications_enabled",
+            "NOTIFICATIONS_ENABLED",
+            "monitor_notifications_enabled",
+            "MONITOR_NOTIFICATIONS_ENABLED",
+        ),
+    )
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_message_thread_id: int | None = Field(default=None, ge=1)
-    monitor_notification_max_attempts: int = Field(default=5, ge=1, le=10)
-    monitor_notification_event_ttl_hours: int = Field(default=24, ge=1, le=168)
-    monitor_notification_batch_size: int = Field(default=20, ge=1, le=100)
+    notification_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices(
+            "notification_max_attempts",
+            "NOTIFICATION_MAX_ATTEMPTS",
+            "monitor_notification_max_attempts",
+            "MONITOR_NOTIFICATION_MAX_ATTEMPTS",
+        ),
+    )
+    notification_ttl_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        validation_alias=AliasChoices(
+            "notification_ttl_hours",
+            "NOTIFICATION_TTL_HOURS",
+            "monitor_notification_event_ttl_hours",
+            "MONITOR_NOTIFICATION_EVENT_TTL_HOURS",
+        ),
+    )
+    notification_batch_size: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "notification_batch_size",
+            "NOTIFICATION_BATCH_SIZE",
+            "monitor_notification_batch_size",
+            "MONITOR_NOTIFICATION_BATCH_SIZE",
+        ),
+    )
 
     # Schwab read-only accounts. schwab-py owns the rotating token file.
     schwab_client_id: str | None = None
@@ -491,12 +531,11 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_telegram_notification_configuration(self) -> Self:
-        if not self.monitor_notifications_enabled:
+        if not self.notifications_enabled:
             return self
         if self.telegram_bot_token is None or self.telegram_chat_id is None:
             raise ValueError(
-                "Telegram bot token and chat id are required when Monitor "
-                "notifications are enabled"
+                "Telegram bot token and chat id are required when notifications are enabled"
             )
         if re.fullmatch(r"-?[0-9]+|@[A-Za-z0-9_]{5,}", self.telegram_chat_id) is None:
             raise ValueError("telegram_chat_id must be a numeric id or @channel username")

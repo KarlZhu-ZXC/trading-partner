@@ -108,10 +108,12 @@ due-checked US post-market account plus Watchlist job. Explicit-cadence
 and A-share/US post-market Monitoring uses the unified `trading-partner-monitor-run
 due`; on macOS one token-free hourly launchd wake is managed by
 `trading-partner-monitor-scheduler`.
-Optional phone delivery uses a durable Telegram Outbox operated by
-`trading-partner-monitor-notifications`; it sends transition alerts plus one
-consolidated summary for every evaluated A-share/US post-market group and does not
-invoke Codex or an LLM.
+Optional phone delivery uses a durable generic Telegram Outbox operated by
+`trading-partner-notifications`; the Monitor command remains an alias. It sends
+transition alerts plus one consolidated summary for every evaluated A-share/US
+post-market group. Explicitly authorized stdin-backed MANUAL enqueue is
+operational-only, has no order effect, and does not invoke Codex or an LLM;
+internal deterministic producers use the closed SYSTEM source.
 The loopback-only, LLM-free operational frontend is started with
 `uv run trading-partner-console` plus `npm run dev` under `console/`.
 Database status, owner-only backup, and dry-run-by-default cache retention are

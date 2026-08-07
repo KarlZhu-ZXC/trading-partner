@@ -46,12 +46,17 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         trade_plan_version: int | None = None,
         compile_trade_plan_conditions: bool = False,
     ) -> dict[str, Any]:
-        """Create a monitor from explicit rules and/or one confirmed Trade Plan version."""
+        """Create a monitor from explicit rules and/or one confirmed Trade Plan version.
+
+        A bound Monitor may display a condition reference instrument that differs
+        from the Trade Plan execution instrument; evaluation still follows each
+        rule's own instrument identity.
+        """
         try:
             request = MonitorCreateInput.model_validate(
                 {
                     "name": name,
-                    "case_id": case_id,
+                    "subject_id": case_id,
                     "primary_instrument_id": primary_instrument_id,
                     "cadence": cadence,
                     "interval_minutes": interval_minutes,
@@ -146,14 +151,18 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         trade_plan_version: int | None = None,
         compile_trade_plan_conditions: bool = False,
     ) -> dict[str, Any]:
-        """Append a confirmed monitor version, including pause/archive changes."""
+        """Append a confirmed monitor version, including pause/archive changes.
+
+        The primary display instrument may be a bound condition's reference
+        instrument and need not equal the Trade Plan execution instrument.
+        """
         try:
             request = MonitorUpdateInput.model_validate(
                 {
                     "monitor_id": monitor_id,
                     "expected_version": expected_version,
                     "name": name,
-                    "case_id": case_id,
+                    "subject_id": case_id,
                     "primary_instrument_id": primary_instrument_id,
                     "cadence": cadence,
                     "interval_minutes": interval_minutes,

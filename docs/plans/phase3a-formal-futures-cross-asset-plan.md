@@ -54,7 +54,7 @@ CME 金属、DCE 生猪、OTC 贵金属和后续 LME 数据的跨资产事实层
 - “当前监控的是 `GC=F` 代理还是某一张 `GCZ26` 合约？发生换月了吗？”
 
 MCP 只返回结构化事实、可比性结论和风险披露。Codex 负责解释这些事实；MCP 不生成交易
-建议、不决定主力合约、不修改 Investment Case/Thesis，也不创建订单。
+建议、不决定主力合约、不修改研究档案/Thesis，也不创建订单。
 
 ## 3. 当前基础与问题
 
@@ -190,7 +190,7 @@ benchmark:OTC:LBMA_GOLD_PM       # 仅在取得许可后启用
 兼容规则：
 
 - 已存在的 `future:US:GC=F` 等 ID 永不静默重写；
-- 新建 Case/Monitor 可显式选择 proxy、ruled continuous 或 specific contract；
+- 新建研究档案/Monitor 可显式选择 proxy、ruled continuous 或 specific contract；
 - 旧 Monitor 继续跟踪原代理，除非用户明确迁移；
 - 同一 symbol 的 proxy 与正式合约必须能同时存在，不能按名称误合并。
 
@@ -467,7 +467,7 @@ continuous_contract_mappings
 
 - `Market`/`AssetType` 只 append，不改变既有 wire value；
 - 不批量重写 `future:US:*=F`；
-- 不自动迁移 Case、Thesis、Monitor 或 Journal 的 instrument；
+- 不自动迁移研究档案、Thesis、Monitor 或 Journal 的 instrument；
 - definition version append-only，Provider 修订可追踪；
 - 删除/到期合约只改变 lifecycle status，不删除历史身份；
 - Alembic upgrade 在现有真实 SQLite 副本和空库都通过。

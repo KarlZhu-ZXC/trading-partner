@@ -76,7 +76,7 @@ def _review() -> ChallengeReview:
     )
     return ChallengeReview(
         review_id=REVIEW_ID,
-        case_id="case_00000000-0000-7000-8000-000000000001",
+        subject_id="case_00000000-0000-7000-8000-000000000001",
         mode=ConfirmationMode.STRICT_REVIEW,
         trigger=ChallengeTrigger.CONFIDENCE_INCREASE,
         proposed_action="Raise confidence",
@@ -97,7 +97,7 @@ def test_persistent_review_requires_material_trigger_and_ten_questions() -> None
     with pytest.raises(DataContractError, match="material trigger"):
         ChallengeReview(
             review_id=review.review_id,
-            case_id=review.case_id,
+            subject_id=review.subject_id,
             mode=review.mode,
             trigger=ChallengeTrigger.DISCUSSION,
             proposed_action=review.proposed_action,
@@ -195,14 +195,14 @@ def test_service_bypasses_discussion_and_persists_material_review() -> None:
 
     normal = service.start(
         ChallengeReviewStartInput(
-            case_id="case_1",
+            subject_id="case_1",
             trigger=ChallengeTrigger.DISCUSSION,
             proposed_action="Explore the thesis",
         )
     )
     strict = service.start(
         ChallengeReviewStartInput(
-            case_id="case_1",
+            subject_id="case_1",
             trigger=ChallengeTrigger.CONFIDENCE_WITHOUT_EVIDENCE,
             proposed_action="Raise confidence",
             idempotency_key="challenge-start-1",
@@ -242,7 +242,7 @@ def test_service_replays_material_start_and_rejects_changed_payload() -> None:
         DefaultSecretRedactor(),
     )
     request = ChallengeReviewStartInput(
-        case_id="case_1",
+        subject_id="case_1",
         trigger=ChallengeTrigger.CONFIDENCE_INCREASE,
         proposed_action="Raise confidence",
         idempotency_key="challenge-start-replay",
@@ -365,7 +365,10 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
         },
     )
     assert started["request_id"] == "req_start"
+    start_request = container.services.challenge.start.call_args.args[0]
+    assert isinstance(start_request, ChallengeReviewStartInput)
+    assert start_request.subject_id == "case_1"
     assert isinstance(
-            container.services.challenge.resolve.call_args.args[0],
+        container.services.challenge.resolve.call_args.args[0],
         ChallengeReviewResolveInput,
     )

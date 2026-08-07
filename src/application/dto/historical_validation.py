@@ -21,14 +21,14 @@ class QuantConnectPrepareInput(_DTO):
     start_date: date
     end_date: date
     resolution: Literal["hour", "daily"] = "hour"
-    normalization_mode: Literal[
-        "raw", "split_adjusted", "adjusted", "total_return"
-    ] = "split_adjusted"
+    normalization_mode: Literal["raw", "split_adjusted", "adjusted", "total_return"] = (
+        "split_adjusted"
+    )
     initial_cash: Decimal = Field(default=Decimal("100000"), gt=0)
     benchmark: str = Field(default="SPY", min_length=1, max_length=32)
     parameters: dict[str, str] = Field(default_factory=dict)
     strategy_code: str = Field(min_length=1, max_length=131_072)
-    case_id: str | None = Field(default=None, min_length=1, max_length=128)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("idempotency_key")
     @classmethod

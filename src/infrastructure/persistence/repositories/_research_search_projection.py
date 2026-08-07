@@ -11,12 +11,12 @@ from datetime import datetime
 
 from domain.common.enums import ResearchSearchEntityType
 from domain.research.models import (
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    SubjectEvidenceLink,
 )
 from infrastructure.persistence.repositories._research_search_normalization import (
     normalize_fts_text,
@@ -26,8 +26,8 @@ _BODY_MAX_CHARS = 200_000
 
 
 @dataclass(frozen=True, slots=True)
-class CaseMembershipProjection:
-    case_id: str
+class SubjectMembershipProjection:
+    subject_id: str
     membership_visible_at: datetime
 
 
@@ -40,7 +40,7 @@ class SearchDocumentProjection:
     topic_tags_fts: str
     instrument_ids: tuple[str, ...]
     topic_tags: tuple[str, ...]
-    case_memberships: tuple[CaseMembershipProjection, ...]
+    case_memberships: tuple[SubjectMembershipProjection, ...]
     visible_at: datetime
     occurred_at: datetime | None
     supersedes_entity_id: str | None
@@ -93,15 +93,15 @@ def evidence_occurred_at(evidence: Evidence) -> datetime:
 def project_evidence(
     evidence: Evidence,
     *,
-    links: tuple[CaseEvidenceLink, ...],
+    links: tuple[SubjectEvidenceLink, ...],
 ) -> SearchDocumentProjection:
     tags = evidence.topic_tags
     memberships = tuple(
-        CaseMembershipProjection(
-            case_id=link.case_id,
+        SubjectMembershipProjection(
+            subject_id=link.subject_id,
             membership_visible_at=link.linked_at,
         )
-        for link in sorted(links, key=lambda item: (item.case_id, item.link_id))
+        for link in sorted(links, key=lambda item: (item.subject_id, item.link_id))
     )
     return SearchDocumentProjection(
         entity_type=ResearchSearchEntityType.EVIDENCE,
@@ -139,8 +139,8 @@ def project_report(
         instrument_ids=instruments,
         topic_tags=(),
         case_memberships=(
-            CaseMembershipProjection(
-                case_id=report.case_id,
+            SubjectMembershipProjection(
+                subject_id=report.subject_id,
                 membership_visible_at=report.created_at,
             ),
         ),
@@ -161,8 +161,8 @@ def project_event(event: ResearchEvent) -> SearchDocumentProjection:
         instrument_ids=event.instrument_ids,
         topic_tags=(),
         case_memberships=(
-            CaseMembershipProjection(
-                case_id=event.case_id,
+            SubjectMembershipProjection(
+                subject_id=event.subject_id,
                 membership_visible_at=event.recorded_at,
             ),
         ),
@@ -178,9 +178,7 @@ def project_decision(
     referenced_instrument_ids: tuple[str, ...],
 ) -> SearchDocumentProjection:
     primary = (
-        (decision.primary_instrument_id,)
-        if decision.primary_instrument_id is not None
-        else ()
+        (decision.primary_instrument_id,) if decision.primary_instrument_id is not None else ()
     )
     instruments = stable_instrument_union(primary, referenced_instrument_ids)
     return SearchDocumentProjection(
@@ -195,8 +193,8 @@ def project_decision(
         instrument_ids=instruments,
         topic_tags=(),
         case_memberships=(
-            CaseMembershipProjection(
-                case_id=decision.case_id,
+            SubjectMembershipProjection(
+                subject_id=decision.subject_id,
                 membership_visible_at=decision.recorded_at,
             ),
         ),
@@ -208,13 +206,13 @@ def project_decision(
 
 def project_journal(entry: JournalEntry) -> SearchDocumentProjection:
     tags = entry.topic_tags
-    memberships: tuple[CaseMembershipProjection, ...]
-    if entry.case_id is None:
+    memberships: tuple[SubjectMembershipProjection, ...]
+    if entry.subject_id is None:
         memberships = ()
     else:
         memberships = (
-            CaseMembershipProjection(
-                case_id=entry.case_id,
+            SubjectMembershipProjection(
+                subject_id=entry.subject_id,
                 membership_visible_at=entry.created_at,
             ),
         )

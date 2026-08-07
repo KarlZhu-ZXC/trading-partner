@@ -745,28 +745,28 @@ class WatchlistHubService:
                 items = uow.watchlist.list(market=market, limit=500)
                 for item in items:
                     key = (item.market, item.symbol)
-                    old_items, old_cases = research_links.get(key, ((), ()))
-                    new_case_ids = tuple(
-                        case_id
-                        for case_id in (item.case_id, item.promoted_to_case_id)
-                        if case_id is not None and case_id not in old_cases
+                    old_items, old_subjects = research_links.get(key, ((), ()))
+                    new_subject_ids = tuple(
+                        subject_id
+                        for subject_id in (item.subject_id, item.promoted_to_subject_id)
+                        if subject_id is not None and subject_id not in old_subjects
                     )
                     research_links[key] = (
                         old_items + (item.item_id,),
-                        old_cases + new_case_ids,
+                        old_subjects + new_subject_ids,
                     )
         result: list[WatchlistMembershipDTO] = []
         for membership in memberships:
             item_ids: tuple[str, ...] = ()
-            case_ids: tuple[str, ...] = ()
+            subject_ids: tuple[str, ...] = ()
             if membership.instrument_id is not None:
                 _, market, symbol = parse_instrument_id(membership.instrument_id)
-                item_ids, case_ids = research_links.get((market, symbol), ((), ()))
+                item_ids, subject_ids = research_links.get((market, symbol), ((), ()))
             result.append(
                 WatchlistMembershipDTO.from_domain(
                     membership,
                     research_watchlist_item_ids=item_ids,
-                    investment_case_ids=case_ids,
+                    research_subject_ids=subject_ids,
                 )
             )
         return tuple(result)

@@ -20,8 +20,8 @@ from application.services._research_memory_write_support import (
     require_aware_optional,
     schema_version,
     stable_dedupe_strs,
-    update_case_event_cache,
-    update_case_report_cache,
+    update_subject_event_cache,
+    update_subject_report_cache,
     validate_event_references,
     validate_event_related_entity,
     validate_report_references,
@@ -85,7 +85,7 @@ class ResearchArchiveService:
     def archive_report(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         report_type: ResearchReportType,
         title: str,
         summary: str,
@@ -101,11 +101,11 @@ class ResearchArchiveService:
     ) -> ToolEnvelope[ResearchReportDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            case_id_n = case_id.strip()
-            if not case_id_n:
+            subject_id_n = subject_id.strip()
+            if not subject_id_n:
                 raise InputValidationError(
-                    "case_id must be non-blank",
-                    details={"field": "case_id"},
+                    "subject_id must be non-blank",
+                    details={"field": "subject_id"},
                 )
             title_r = redact_required_text(title, self._redactor, field="title")
             summary_r = redact_required_text(summary, self._redactor, field="summary")
@@ -113,15 +113,9 @@ class ResearchArchiveService:
             content_r = redact_required_text(
                 content_markdown, self._redactor, field="content_markdown"
             )
-            created_by_r = redact_required_text(
-                created_by, self._redactor, field="created_by"
-            )
-            model_r = redact_optional_text(
-                model_name, self._redactor, field="model_name"
-            )
-            prompt_r = redact_optional_text(
-                prompt_version, self._redactor, field="prompt_version"
-            )
+            created_by_r = redact_required_text(created_by, self._redactor, field="created_by")
+            model_r = redact_optional_text(model_name, self._redactor, field="model_name")
+            prompt_r = redact_optional_text(prompt_version, self._redactor, field="prompt_version")
             if model_r is not None and not model_r.strip():
                 raise InputValidationError(
                     "model_name must be non-blank when provided",
@@ -135,14 +129,8 @@ class ResearchArchiveService:
             as_of_n = require_aware_datetime(as_of, field_name="as_of")
             evidence = stable_dedupe_strs(evidence_ids)
             revisions = stable_dedupe_strs(thesis_revision_ids)
-            supersedes = (
-                supersedes_report_id.strip()
-                if supersedes_report_id is not None
-                else None
-            )
-            run_id = (
-                research_run_id.strip() if research_run_id is not None else None
-            )
+            supersedes = supersedes_report_id.strip() if supersedes_report_id is not None else None
+            run_id = research_run_id.strip() if research_run_id is not None else None
             if run_id is not None and not run_id:
                 raise InputValidationError(
                     "research_run_id must be non-blank when provided",
@@ -150,7 +138,7 @@ class ResearchArchiveService:
                 )
 
             content_hash = compute_report_content_sha256(
-                case_id=case_id_n,
+                subject_id=subject_id_n,
                 report_type=report_type,
                 title=title_r,
                 summary=summary_r,
@@ -163,7 +151,7 @@ class ResearchArchiveService:
             with self._uow_factory() as uow:
                 existing = uow.reports.get_by_content_sha256(content_hash)
                 if existing is not None:
-                    # Immutable duplicate: no Case cache / Search rewrite.
+                    # Immutable duplicate: no Research Subject cache / Search rewrite.
                     return envelope_success(
                         request_id=request_id,
                         clock=self._clock,
@@ -175,7 +163,7 @@ class ResearchArchiveService:
                 created_at = self._clock.now()
                 validate_report_references(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     as_of=as_of_n,
                     created_at=created_at,
                     evidence_ids=evidence,
@@ -185,7 +173,7 @@ class ResearchArchiveService:
                 report_id = self._id_generator.new(EntityIdPrefix.REPORT)
                 report = ResearchReport(
                     report_id=report_id,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     report_type=report_type,
                     title=title_r,
                     summary=summary_r,
@@ -203,9 +191,9 @@ class ResearchArchiveService:
                     schema_version=schema_version(),
                 )
                 uow.reports.add(report)
-                update_case_report_cache(
+                update_subject_report_cache(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     report_id=report_id,
                     updated_at=created_at,
                 )
@@ -216,7 +204,7 @@ class ResearchArchiveService:
                         action="archive",
                         entity_type="report",
                         entity_id=report_id,
-                        case_id=case_id_n,
+                        subject_id=subject_id_n,
                         actor=created_by_r,
                         content_sha256=content_hash,
                         linked_entity_ids=evidence + revisions,
@@ -240,7 +228,7 @@ class ResearchArchiveService:
     def record_event(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         event_type: ResearchEventType,
         title: str,
         summary: str,
@@ -256,34 +244,24 @@ class ResearchArchiveService:
     ) -> ToolEnvelope[ResearchEventDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
-            case_id_n = case_id.strip()
-            if not case_id_n:
+            subject_id_n = subject_id.strip()
+            if not subject_id_n:
                 raise InputValidationError(
-                    "case_id must be non-blank",
-                    details={"field": "case_id"},
+                    "subject_id must be non-blank",
+                    details={"field": "subject_id"},
                 )
             # recorded_by is audit actor only — never stored on ResearchEvent.
-            actor = redact_required_text(
-                recorded_by, self._redactor, field="recorded_by"
-            )
+            actor = redact_required_text(recorded_by, self._redactor, field="recorded_by")
             title_r = redact_required_text(title, self._redactor, field="title")
             summary_r = redact_required_text(summary, self._redactor, field="summary")
-            source_name_r = redact_required_text(
-                source_name, self._redactor, field="source_name"
-            )
+            source_name_r = redact_required_text(source_name, self._redactor, field="source_name")
             occurred = require_aware_datetime(occurred_at, field_name="occurred_at")
             published = require_aware_optional(published_at, field="published_at")
             instruments = stable_dedupe_strs(instrument_ids)
             evidence = stable_dedupe_strs(evidence_ids)
             reports = stable_dedupe_strs(report_ids)
-            rel_type = (
-                related_entity_type.strip()
-                if related_entity_type is not None
-                else None
-            )
-            rel_id = (
-                related_entity_id.strip() if related_entity_id is not None else None
-            )
+            rel_type = related_entity_type.strip() if related_entity_type is not None else None
+            rel_id = related_entity_id.strip() if related_entity_id is not None else None
             if rel_type is not None and not rel_type:
                 raise InputValidationError(
                     "related_entity_type must be non-blank when provided",
@@ -299,14 +277,14 @@ class ResearchArchiveService:
                 recorded_at = self._clock.now()
                 validate_event_references(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     recorded_at=recorded_at,
                     evidence_ids=evidence,
                     report_ids=reports,
                 )
                 validate_event_related_entity(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     recorded_at=recorded_at,
                     related_entity_type=rel_type,
                     related_entity_id=rel_id,
@@ -314,7 +292,7 @@ class ResearchArchiveService:
                 event_id = self._id_generator.new(EntityIdPrefix.EVENT)
                 event = ResearchEvent(
                     event_id=event_id,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     event_type=event_type,
                     title=title_r,
                     summary=summary_r,
@@ -330,9 +308,9 @@ class ResearchArchiveService:
                     schema_version=schema_version(),
                 )
                 uow.events.add(event)
-                update_case_event_cache(
+                update_subject_event_cache(
                     uow,
-                    case_id=case_id_n,
+                    subject_id=subject_id_n,
                     event_id=event_id,
                     updated_at=recorded_at,
                 )
@@ -343,7 +321,7 @@ class ResearchArchiveService:
                         action="record",
                         entity_type="event",
                         entity_id=event_id,
-                        case_id=case_id_n,
+                        subject_id=subject_id_n,
                         actor=actor,
                         content_sha256=None,
                         linked_entity_ids=evidence + reports,

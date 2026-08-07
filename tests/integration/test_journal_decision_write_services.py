@@ -27,15 +27,15 @@ from domain.common.enums import (
     EvidenceOrigin,
     EvidenceQuality,
     EvidenceType,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     JournalEntryType,
     ReliabilityLevel,
     ResearchEventType,
     ResearchReportType,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
 )
 from domain.common.ids import EntityIdPrefix
-from domain.research.models import RESEARCH_SCHEMA_VERSION, InvestmentCase
+from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.persistence.orm import (
     DecisionRecordRow,
     JournalEntryRow,
@@ -107,12 +107,12 @@ def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
-    case = InvestmentCase(
-        case_id=ids.new(EntityIdPrefix.CASE),
-        case_type=InvestmentCaseType.COMPANY,
+    subject = ResearchSubject(
+        subject_id=ids.new(EntityIdPrefix.SUBJECT),
+        subject_type=ResearchSubjectType.COMPANY,
         title="Integration case",
         summary="C4b2 flow",
-        status=InvestmentCaseStatus.ACTIVE,
+        status=ResearchSubjectStatus.ACTIVE,
         primary_instrument_id=US,
         topic_tags=("integration",),
         created_at=clock.now(),
@@ -120,7 +120,7 @@ def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         created_by="user",
         archived_at=None,
         archived_reason=None,
-        linked_case_ids=(),
+        linked_subject_ids=(),
         evidence_ids=(),
         report_ids=(),
         event_ids=(),
@@ -128,14 +128,14 @@ def _seed_case(factory, ids, clock) -> str:  # type: ignore[no-untyped-def]
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
     with factory() as uow:
-        uow.cases.add(case)
+        uow.subjects.add(subject)
         uow.commit()
-    return case.case_id
+    return subject.subject_id
 
 
 def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-untyped-def]
     journal, decision, evidence, archive, factory, clock, ids, eng = harness
-    case_id = _seed_case(factory, ids, clock)
+    subject_id = _seed_case(factory, ids, clock)
 
     ev = evidence.record_evidence(
         evidence_type=EvidenceType.A_SHARE_ANNOUNCEMENT,
@@ -158,13 +158,13 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
         confidence=Decimal("0.8"),
         supersedes_evidence_id=None,
         recorded_by="provider:eastmoney",
-        case_ids=(case_id,),
+        subject_ids=(subject_id,),
         observed_at=EARLIER,
     )
     assert ev.ok and ev.data
 
     rep = archive.archive_report(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,
         title="报告",
         summary="总结",
@@ -181,7 +181,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     assert rep.ok and rep.data
 
     event = archive.record_event(
-        case_id=case_id,
+        subject_id=subject_id,
         event_type=ResearchEventType.COMPANY,
         title="事件",
         summary="发生",
@@ -198,7 +198,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     assert event.ok and event.data
 
     j_note = journal.append(
-        case_id=case_id,
+        subject_id=subject_id,
         entry_type=JournalEntryType.NOTE,
         title="研究备注 uniquejournalphrase",
         body_markdown="与证据相关 uniquejournalphrase",
@@ -215,7 +215,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     assert j_note.data.related_entity_type == "event"
 
     dec = decision.append(
-        case_id=case_id,
+        subject_id=subject_id,
         decision_type=DecisionType.HOLD,
         title="维持观察",
         rationale="证据与报告支持 HOLD 意图，不产生订单",
@@ -235,14 +235,14 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     assert dec.data.primary_instrument_id == A_SHARE
 
     with factory() as uow:
-        case = uow.cases.get(case_id)
-        assert dec.data.decision_id in case.decision_ids
-        assert case.updated_at == dec.data.recorded_at
+        subject = uow.subjects.get(subject_id)
+        assert dec.data.decision_id in subject.decision_ids
+        assert subject.updated_at == dec.data.recorded_at
 
     # Idempotent retries after clock advance
     clock.advance(100)
     j_dup = journal.append(
-        case_id=case_id,
+        subject_id=subject_id,
         entry_type=JournalEntryType.NOTE,
         title="研究备注 uniquejournalphrase",
         body_markdown="与证据相关 uniquejournalphrase",
@@ -262,7 +262,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     assert j_dup.data.created_at == j_note.data.created_at
 
     d_dup = decision.append(
-        case_id=case_id,
+        subject_id=subject_id,
         decision_type=DecisionType.HOLD,
         title="维持观察",
         rationale="证据与报告支持 HOLD 意图，不产生订单",
@@ -284,7 +284,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
     # Journal search via structured type filter + text
     page = journal.search(
         text="uniquejournalphrase",
-        case_id=case_id,
+        subject_id=subject_id,
         instrument_id=None,
         entry_types=(JournalEntryType.NOTE,),
         as_of=None,
@@ -313,7 +313,7 @@ def test_full_journal_decision_pipeline(harness) -> None:  # type: ignore[no-unt
 def test_global_journal_and_supersede_chain(harness) -> None:  # type: ignore[no-untyped-def]
     journal, _decision, _ev, _ar, factory, clock, ids, _eng = harness
     g1 = journal.append(
-        case_id=None,
+        subject_id=None,
         entry_type=JournalEntryType.REFLECTION,
         title="global one",
         body_markdown="global body one",
@@ -329,7 +329,7 @@ def test_global_journal_and_supersede_chain(harness) -> None:  # type: ignore[no
     assert g1.ok and g1.data
     clock.advance(5)
     g2 = journal.append(
-        case_id=None,
+        subject_id=None,
         entry_type=JournalEntryType.REFLECTION,
         title="global two",
         body_markdown="global body two",
@@ -347,7 +347,7 @@ def test_global_journal_and_supersede_chain(harness) -> None:  # type: ignore[no
 
     page = journal.search(
         text="global body",
-        case_id=None,
+        subject_id=None,
         instrument_id=None,
         entry_types=(JournalEntryType.REFLECTION,),
         as_of=None,

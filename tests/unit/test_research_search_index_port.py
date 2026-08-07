@@ -23,12 +23,12 @@ from domain.common.enums import (
 )
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    CaseEvidenceLink,
     DecisionRecord,
     Evidence,
     JournalEntry,
     ResearchEvent,
     ResearchReport,
+    SubjectEvidenceLink,
     compute_evidence_content_sha256,
     compute_report_content_sha256,
 )
@@ -151,9 +151,9 @@ def test_project_evidence_fields() -> None:
         recorded_by="provider:mock_a_share",
         schema_version=RESEARCH_SCHEMA_VERSION,
     )
-    link = CaseEvidenceLink(
+    link = SubjectEvidenceLink(
         link_id="rev_00000000-0000-7000-8000-000000000002",
-        case_id="case_00000000-0000-7000-8000-000000000003",
+        subject_id="case_00000000-0000-7000-8000-000000000003",
         evidence_id=evidence.evidence_id,
         linked_at=NOW,
         linked_by="user",
@@ -170,9 +170,9 @@ def test_project_evidence_fields() -> None:
 
 
 def test_project_report_uses_referenced_instruments_not_case_primary() -> None:
-    case_id = "case_00000000-0000-7000-8000-000000000010"
+    subject_id = "case_00000000-0000-7000-8000-000000000010"
     content_sha = compute_report_content_sha256(
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Review",
         summary="Summary",
@@ -183,7 +183,7 @@ def test_project_report_uses_referenced_instruments_not_case_primary() -> None:
     )
     report = ResearchReport(
         report_id="report_00000000-0000-7000-8000-000000000011",
-        case_id=case_id,
+        subject_id=subject_id,
         report_type=ResearchReportType.DEEP_DIVE,
         title="Review",
         summary="Summary",
@@ -210,7 +210,7 @@ def test_project_report_uses_referenced_instruments_not_case_primary() -> None:
 def test_project_event_summary_once() -> None:
     event = ResearchEvent(
         event_id="event_00000000-0000-7000-8000-000000000020",
-        case_id="case_00000000-0000-7000-8000-000000000021",
+        subject_id="case_00000000-0000-7000-8000-000000000021",
         event_type=ResearchEventType.COMPANY,
         title="Earnings",
         summary="Beat expectations",
@@ -233,7 +233,7 @@ def test_project_event_summary_once() -> None:
 def test_project_decision_union_primary_then_evidence_instruments() -> None:
     decision = DecisionRecord(
         decision_id="decision_00000000-0000-7000-8000-000000000030",
-        case_id="case_00000000-0000-7000-8000-000000000031",
+        subject_id="case_00000000-0000-7000-8000-000000000031",
         decision_type=DecisionType.WATCH,
         title="Watch NVDA",
         rationale="Need more data",
@@ -291,7 +291,7 @@ def test_decision_thesis_as_of_predicate_exactly_once_in_source() -> None:
 def test_project_journal_membership_only_when_case_present() -> None:
     with_case = JournalEntry(
         journal_id="journal_00000000-0000-7000-8000-000000000040",
-        case_id="case_00000000-0000-7000-8000-000000000041",
+        subject_id="case_00000000-0000-7000-8000-000000000041",
         entry_type=JournalEntryType.NOTE,
         title="Note",
         body_markdown="body text",
@@ -307,7 +307,7 @@ def test_project_journal_membership_only_when_case_present() -> None:
     )
     without = JournalEntry(
         journal_id="journal_00000000-0000-7000-8000-000000000042",
-        case_id=None,
+        subject_id=None,
         entry_type=JournalEntryType.NOTE,
         title="Free note",
         body_markdown="orphan",

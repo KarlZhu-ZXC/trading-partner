@@ -22,12 +22,12 @@ from application.dto.research_memory import (
 from domain.common.enums import EvidenceStance, ResearchSearchEntityType
 from domain.common.errors import ResearchMemoryNotFound, SearchBackendUnavailable
 from infrastructure.persistence.orm import (
-    CaseEvidenceLinkRow,
     DecisionRecordRow,
     JournalEntryRow,
     ResearchEventRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    SubjectEvidenceLinkRow,
 )
 from infrastructure.persistence.repositories._mapping import dt_to_db
 from infrastructure.persistence.repositories._research_search_normalization import (
@@ -44,9 +44,6 @@ from infrastructure.persistence.repositories._research_search_projection import 
     project_report,
     stable_instrument_union,
 )
-from infrastructure.persistence.repositories.case_evidence_link import (
-    _to_domain as link_to_domain,
-)
 from infrastructure.persistence.repositories.decision_record import (
     _to_domain as decision_to_domain,
 )
@@ -61,6 +58,9 @@ from infrastructure.persistence.repositories.research_event import (
 )
 from infrastructure.persistence.repositories.research_report import (
     _to_domain as report_to_domain,
+)
+from infrastructure.persistence.repositories.subject_evidence_link import (
+    _to_domain as link_to_domain,
 )
 
 _SNIPPET_MAX = 800
@@ -175,10 +175,7 @@ class SqlAlchemyResearchSearchIndex:
                 },
             )
         doc = self._session.execute(
-            text(
-                "SELECT rowid FROM research_search_documents "
-                "WHERE entity_id = :entity_id"
-            ),
+            text("SELECT rowid FROM research_search_documents WHERE entity_id = :entity_id"),
             {"entity_id": evidence_id},
         ).first()
         if doc is None:
@@ -191,10 +188,7 @@ class SqlAlchemyResearchSearchIndex:
             )
         rowid = int(doc[0])
         self._session.execute(
-            text(
-                "DELETE FROM research_search_document_cases "
-                "WHERE document_rowid = :rowid"
-            ),
+            text("DELETE FROM research_search_document_cases WHERE document_rowid = :rowid"),
             {"rowid": rowid},
         )
         for link in self._load_evidence_links(evidence_id):
@@ -202,11 +196,11 @@ class SqlAlchemyResearchSearchIndex:
                 text(
                     "INSERT INTO research_search_document_cases("
                     "document_rowid, case_id, membership_visible_at"
-                    ") VALUES (:rowid, :case_id, :membership_visible_at)"
+                    ") VALUES (:rowid, :subject_id, :membership_visible_at)"
                 ),
                 {
                     "rowid": rowid,
-                    "case_id": link.case_id,
+                    "subject_id": link.subject_id,
                     "membership_visible_at": dt_to_db(link.linked_at),
                 },
             )
@@ -215,10 +209,7 @@ class SqlAlchemyResearchSearchIndex:
     def search(self, query: ResearchSearchQuery) -> ResearchSearchPageDTO:
         effective_types = self._effective_entity_types(query)
         effective_wires = {_wire(item) for item in effective_types}
-        if (
-            query.evidence_types
-            and ResearchSearchEntityType.EVIDENCE.value not in effective_wires
-        ):
+        if query.evidence_types and ResearchSearchEntityType.EVIDENCE.value not in effective_wires:
             return ResearchSearchPageDTO(
                 items=(),
                 total=0,
@@ -265,10 +256,7 @@ class SqlAlchemyResearchSearchIndex:
                     "LIMIT :limit OFFSET :offset"
                 )
             else:
-                count_sql = (
-                    "SELECT COUNT(*) FROM research_search_documents d "
-                    f"WHERE {where_sql}"
-                )
+                count_sql = f"SELECT COUNT(*) FROM research_search_documents d WHERE {where_sql}"
                 select_sql = (
                     "SELECT d.entity_type, d.entity_id, d.visible_at, "
                     "d.occurred_at, NULL AS score "
@@ -334,9 +322,7 @@ class SqlAlchemyResearchSearchIndex:
         count = 0
         for entity_type, model, id_attr in _REBUILD_ORDER:
             id_column = getattr(model, id_attr)
-            entity_ids = self._session.scalars(
-                select(id_column).order_by(id_column.asc())
-            ).all()
+            entity_ids = self._session.scalars(select(id_column).order_by(id_column.asc())).all()
             for entity_id in entity_ids:
                 self.index(entity_type, str(entity_id))
                 count += 1
@@ -348,10 +334,7 @@ class SqlAlchemyResearchSearchIndex:
     def _fts_command(self, command: str) -> None:
         try:
             self._session.execute(
-                text(
-                    "INSERT INTO research_search_fts(research_search_fts) "
-                    "VALUES(:command)"
-                ),
+                text("INSERT INTO research_search_fts(research_search_fts) VALUES(:command)"),
                 {"command": command},
             )
         except Exception as exc:
@@ -377,9 +360,7 @@ class SqlAlchemyResearchSearchIndex:
                 return False
             raise
 
-    def _build_projection(
-        self, entity_type: str, entity_id: str
-    ) -> SearchDocumentProjection:
+    def _build_projection(self, entity_type: str, entity_id: str) -> SearchDocumentProjection:
         if entity_type == ResearchSearchEntityType.EVIDENCE.value:
             evidence_row = self._session.get(ResearchEvidenceRow, entity_id)
             if evidence_row is None:
@@ -388,9 +369,7 @@ class SqlAlchemyResearchSearchIndex:
                     details={"entity_type": entity_type, "entity_id": entity_id},
                 )
             evidence = evidence_to_domain(evidence_row)
-            return project_evidence(
-                evidence, links=self._load_evidence_links(entity_id)
-            )
+            return project_evidence(evidence, links=self._load_evidence_links(entity_id))
 
         if entity_type == ResearchSearchEntityType.REPORT.value:
             report_row = self._session.get(ResearchReportRow, entity_id)
@@ -402,9 +381,7 @@ class SqlAlchemyResearchSearchIndex:
             report = report_to_domain(report_row)
             return project_report(
                 report,
-                referenced_instrument_ids=self._instruments_for_evidence_ids(
-                    report.evidence_ids
-                ),
+                referenced_instrument_ids=self._instruments_for_evidence_ids(report.evidence_ids),
             )
 
         if entity_type == ResearchSearchEntityType.EVENT.value:
@@ -426,9 +403,7 @@ class SqlAlchemyResearchSearchIndex:
             decision = decision_to_domain(decision_row)
             return project_decision(
                 decision,
-                referenced_instrument_ids=self._instruments_for_evidence_ids(
-                    decision.evidence_ids
-                ),
+                referenced_instrument_ids=self._instruments_for_evidence_ids(decision.evidence_ids),
             )
 
         if entity_type == ResearchSearchEntityType.JOURNAL.value:
@@ -451,19 +426,12 @@ class SqlAlchemyResearchSearchIndex:
             entity_id=projection.entity_id,
         )
         existing = self._session.execute(
-            text(
-                "SELECT rowid FROM research_search_documents "
-                "WHERE entity_id = :entity_id"
-            ),
+            text("SELECT rowid FROM research_search_documents WHERE entity_id = :entity_id"),
             {"entity_id": projection.entity_id},
         ).first()
         ids_text = instrument_ids_text(projection.instrument_ids)
         visible_at = dt_to_db(projection.visible_at)
-        occurred_at = (
-            None
-            if projection.occurred_at is None
-            else dt_to_db(projection.occurred_at)
-        )
+        occurred_at = None if projection.occurred_at is None else dt_to_db(projection.occurred_at)
         payload = {
             "entity_type": projection.entity_type.value,
             "entity_id": projection.entity_id,
@@ -491,8 +459,7 @@ class SqlAlchemyResearchSearchIndex:
             rowid = int(
                 self._session.execute(
                     text(
-                        "SELECT rowid FROM research_search_documents "
-                        "WHERE entity_id = :entity_id"
+                        "SELECT rowid FROM research_search_documents WHERE entity_id = :entity_id"
                     ),
                     {"entity_id": projection.entity_id},
                 ).scalar_one()
@@ -521,14 +488,12 @@ class SqlAlchemyResearchSearchIndex:
                 text(
                     "INSERT INTO research_search_document_cases("
                     "document_rowid, case_id, membership_visible_at"
-                    ") VALUES (:rowid, :case_id, :membership_visible_at)"
+                    ") VALUES (:rowid, :subject_id, :membership_visible_at)"
                 ),
                 {
                     "rowid": rowid,
-                    "case_id": membership.case_id,
-                    "membership_visible_at": dt_to_db(
-                        membership.membership_visible_at
-                    ),
+                    "subject_id": membership.subject_id,
+                    "membership_visible_at": dt_to_db(membership.membership_visible_at),
                 },
             )
         for instrument_id in projection.instrument_ids:
@@ -553,30 +518,19 @@ class SqlAlchemyResearchSearchIndex:
 
     def _delete_mappings(self, rowid: int) -> None:
         self._session.execute(
-            text(
-                "DELETE FROM research_search_document_cases "
-                "WHERE document_rowid = :rowid"
-            ),
+            text("DELETE FROM research_search_document_cases WHERE document_rowid = :rowid"),
             {"rowid": rowid},
         )
         self._session.execute(
-            text(
-                "DELETE FROM research_search_document_instruments "
-                "WHERE document_rowid = :rowid"
-            ),
+            text("DELETE FROM research_search_document_instruments WHERE document_rowid = :rowid"),
             {"rowid": rowid},
         )
         self._session.execute(
-            text(
-                "DELETE FROM research_search_document_tags "
-                "WHERE document_rowid = :rowid"
-            ),
+            text("DELETE FROM research_search_document_tags WHERE document_rowid = :rowid"),
             {"rowid": rowid},
         )
 
-    def _mark_predecessor_superseded(
-        self, *, predecessor_id: str, successor_id: str
-    ) -> None:
+    def _mark_predecessor_superseded(self, *, predecessor_id: str, successor_id: str) -> None:
         self._session.execute(
             text(
                 "UPDATE research_search_documents "
@@ -586,9 +540,7 @@ class SqlAlchemyResearchSearchIndex:
             {"successor_id": successor_id, "predecessor_id": predecessor_id},
         )
 
-    def _lookup_successor_id(
-        self, *, entity_type: str, entity_id: str
-    ) -> str | None:
+    def _lookup_successor_id(self, *, entity_type: str, entity_id: str) -> str | None:
         lookup = _SUCCESSOR_LOOKUP.get(entity_type)
         if lookup is None:
             return None
@@ -607,18 +559,16 @@ class SqlAlchemyResearchSearchIndex:
 
     def _load_evidence_links(self, evidence_id: str) -> tuple[Any, ...]:
         rows = self._session.scalars(
-            select(CaseEvidenceLinkRow)
-            .where(CaseEvidenceLinkRow.evidence_id == evidence_id)
+            select(SubjectEvidenceLinkRow)
+            .where(SubjectEvidenceLinkRow.evidence_id == evidence_id)
             .order_by(
-                CaseEvidenceLinkRow.case_id.asc(),
-                CaseEvidenceLinkRow.link_id.asc(),
+                SubjectEvidenceLinkRow.subject_id.asc(),
+                SubjectEvidenceLinkRow.link_id.asc(),
             )
         ).all()
         return tuple(link_to_domain(row) for row in rows)
 
-    def _instruments_for_evidence_ids(
-        self, evidence_ids: tuple[str, ...]
-    ) -> tuple[str, ...]:
+    def _instruments_for_evidence_ids(self, evidence_ids: tuple[str, ...]) -> tuple[str, ...]:
         if not evidence_ids:
             return ()
         groups: list[tuple[str, ...]] = []
@@ -633,9 +583,7 @@ class SqlAlchemyResearchSearchIndex:
         self, query: ResearchSearchQuery
     ) -> tuple[ResearchSearchEntityType, ...]:
         if query.entity_types:
-            return tuple(
-                ResearchSearchEntityType(_wire(item)) for item in query.entity_types
-            )
+            return tuple(ResearchSearchEntityType(_wire(item)) for item in query.entity_types)
         if query.stances:
             return (ResearchSearchEntityType.EVIDENCE,)
         if query.journal_entry_types:
@@ -665,15 +613,15 @@ class SqlAlchemyResearchSearchIndex:
             clauses.append("research_search_fts MATCH :match_expr")
             params["match_expr"] = match_expr
 
-        if query.case_id is not None:
-            params["case_id"] = query.case_id
+        if query.subject_id is not None:
+            params["subject_id"] = query.subject_id
             if query.as_of is not None:
                 params["case_as_of"] = dt_to_db(query.as_of)
                 clauses.append(
                     "EXISTS ("
                     "SELECT 1 FROM research_search_document_cases c "
                     "WHERE c.document_rowid = d.rowid "
-                    "AND c.case_id = :case_id "
+                    "AND c.case_id = :subject_id "
                     "AND c.membership_visible_at <= :case_as_of"
                     ")"
                 )
@@ -682,7 +630,7 @@ class SqlAlchemyResearchSearchIndex:
                     "EXISTS ("
                     "SELECT 1 FROM research_search_document_cases c "
                     "WHERE c.document_rowid = d.rowid "
-                    "AND c.case_id = :case_id"
+                    "AND c.case_id = :subject_id"
                     ")"
                 )
 
@@ -801,8 +749,8 @@ class SqlAlchemyResearchSearchIndex:
             if query.thesis_id is not None:
                 stance_scope = " AND a.thesis_id = :thesis_id"
             else:
-                params["stance_case_id"] = query.case_id
-                stance_scope = " AND a.case_id = :stance_case_id"
+                params["stance_subject_id"] = query.subject_id
+                stance_scope = " AND a.case_id = :stance_subject_id"
             as_of_clause = " AND a.assessed_at <= :as_of" if query.as_of else ""
             clauses.append(
                 "EXISTS ("
@@ -824,42 +772,42 @@ class SqlAlchemyResearchSearchIndex:
         query: ResearchSearchQuery,
         params: dict[str, Any],
     ) -> str:
-        if query.case_id is not None:
+        if query.subject_id is not None:
             if query.as_of is not None:
                 params.setdefault("as_of", dt_to_db(query.as_of))
-                evidence_case_hide = (
+                evidence_subject_hide = (
                     "EXISTS ("
                     "SELECT 1 FROM research_evidence succ "
                     "JOIN case_evidence_links scl "
                     "ON scl.evidence_id = succ.evidence_id "
                     "WHERE succ.supersedes_evidence_id = d.entity_id "
-                    "AND scl.case_id = :case_id "
+                    "AND scl.case_id = :subject_id "
                     "AND scl.linked_at <= :as_of "
                     "AND succ.observed_at <= :as_of"
                     ")"
                 )
             else:
-                evidence_case_hide = (
+                evidence_subject_hide = (
                     "EXISTS ("
                     "SELECT 1 FROM research_evidence succ "
                     "JOIN case_evidence_links scl "
                     "ON scl.evidence_id = succ.evidence_id "
                     "WHERE succ.supersedes_evidence_id = d.entity_id "
-                    "AND scl.case_id = :case_id"
+                    "AND scl.case_id = :subject_id"
                     ")"
                 )
             if query.as_of is None:
                 return (
                     "("
                     "(d.entity_type = 'evidence' AND NOT "
-                    f"{evidence_case_hide}) OR "
+                    f"{evidence_subject_hide}) OR "
                     "(d.entity_type != 'evidence' AND d.superseded_by_id IS NULL)"
                     ")"
                 )
             return (
                 "("
                 "(d.entity_type = 'evidence' AND NOT "
-                f"{evidence_case_hide}) OR "
+                f"{evidence_subject_hide}) OR "
                 "(d.entity_type = 'report' AND NOT EXISTS ("
                 "SELECT 1 FROM research_reports succ "
                 "WHERE succ.supersedes_report_id = d.entity_id "
@@ -955,7 +903,7 @@ class SqlAlchemyResearchSearchIndex:
         return ResearchSearchHitDTO(
             entity_type=ResearchSearchEntityType.EVIDENCE,
             entity_id=evidence.evidence_id,
-            case_id=query.case_id,
+            subject_id=query.subject_id,
             title=evidence.title,
             snippet=_truncate_snippet(evidence.summary),
             visible_at=evidence.observed_at,
@@ -968,9 +916,7 @@ class SqlAlchemyResearchSearchIndex:
             source_name=evidence.source_name,
         )
 
-    def _hydrate_report(
-        self, entity_id: str, *, score: Decimal | None
-    ) -> ResearchSearchHitDTO:
+    def _hydrate_report(self, entity_id: str, *, score: Decimal | None) -> ResearchSearchHitDTO:
         row = self._session.get(ResearchReportRow, entity_id)
         if row is None:
             raise ResearchMemoryNotFound(
@@ -984,7 +930,7 @@ class SqlAlchemyResearchSearchIndex:
         return ResearchSearchHitDTO(
             entity_type=ResearchSearchEntityType.REPORT,
             entity_id=report.report_id,
-            case_id=report.case_id,
+            subject_id=report.subject_id,
             title=report.title,
             snippet=_truncate_snippet(report.summary),
             visible_at=report.created_at,
@@ -997,9 +943,7 @@ class SqlAlchemyResearchSearchIndex:
             source_name=None,
         )
 
-    def _hydrate_event(
-        self, entity_id: str, *, score: Decimal | None
-    ) -> ResearchSearchHitDTO:
+    def _hydrate_event(self, entity_id: str, *, score: Decimal | None) -> ResearchSearchHitDTO:
         row = self._session.get(ResearchEventRow, entity_id)
         if row is None:
             raise ResearchMemoryNotFound(
@@ -1013,7 +957,7 @@ class SqlAlchemyResearchSearchIndex:
         return ResearchSearchHitDTO(
             entity_type=ResearchSearchEntityType.EVENT,
             entity_id=event.event_id,
-            case_id=event.case_id,
+            subject_id=event.subject_id,
             title=event.title,
             snippet=_truncate_snippet(event.summary),
             visible_at=event.recorded_at,
@@ -1026,9 +970,7 @@ class SqlAlchemyResearchSearchIndex:
             source_name=event.source_name,
         )
 
-    def _hydrate_decision(
-        self, entity_id: str, *, score: Decimal | None
-    ) -> ResearchSearchHitDTO:
+    def _hydrate_decision(self, entity_id: str, *, score: Decimal | None) -> ResearchSearchHitDTO:
         row = self._session.get(DecisionRecordRow, entity_id)
         if row is None:
             raise ResearchMemoryNotFound(
@@ -1040,9 +982,7 @@ class SqlAlchemyResearchSearchIndex:
             )
         decision = decision_to_domain(row)
         primary = (
-            (decision.primary_instrument_id,)
-            if decision.primary_instrument_id is not None
-            else ()
+            (decision.primary_instrument_id,) if decision.primary_instrument_id is not None else ()
         )
         instruments = stable_instrument_union(
             primary,
@@ -1051,7 +991,7 @@ class SqlAlchemyResearchSearchIndex:
         return ResearchSearchHitDTO(
             entity_type=ResearchSearchEntityType.DECISION,
             entity_id=decision.decision_id,
-            case_id=decision.case_id,
+            subject_id=decision.subject_id,
             title=decision.title,
             snippet=_truncate_snippet(decision.rationale),
             visible_at=decision.recorded_at,
@@ -1064,9 +1004,7 @@ class SqlAlchemyResearchSearchIndex:
             source_name=None,
         )
 
-    def _hydrate_journal(
-        self, entity_id: str, *, score: Decimal | None
-    ) -> ResearchSearchHitDTO:
+    def _hydrate_journal(self, entity_id: str, *, score: Decimal | None) -> ResearchSearchHitDTO:
         row = self._session.get(JournalEntryRow, entity_id)
         if row is None:
             raise ResearchMemoryNotFound(
@@ -1080,7 +1018,7 @@ class SqlAlchemyResearchSearchIndex:
         return ResearchSearchHitDTO(
             entity_type=ResearchSearchEntityType.JOURNAL,
             entity_id=entry.journal_id,
-            case_id=entry.case_id,
+            subject_id=entry.subject_id,
             title=entry.title,
             snippet=_truncate_snippet(entry.body_markdown),
             visible_at=entry.created_at,
@@ -1111,9 +1049,9 @@ class SqlAlchemyResearchSearchIndex:
         if query.thesis_id is not None:
             sql += " AND thesis_id = :thesis_id"
             params["thesis_id"] = query.thesis_id
-        elif query.case_id is not None:
-            sql += " AND case_id = :case_id"
-            params["case_id"] = query.case_id
+        elif query.subject_id is not None:
+            sql += " AND case_id = :subject_id"
+            params["subject_id"] = query.subject_id
         stance_keys: list[str] = []
         for index, stance in enumerate(query.stances):
             key = f"ms_{index}"

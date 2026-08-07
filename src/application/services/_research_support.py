@@ -10,9 +10,9 @@ from application.dto.research import (
     AssumptionDTO,
     CandidateRevisionDTO,
     InvalidationConditionDTO,
-    InvestmentCaseDTO,
     OpenQuestionDTO,
     ResearchStateDTO,
+    ResearchSubjectDTO,
     ThesisDTO,
     ThesisRevisionDTO,
     WatchlistItemDTO,
@@ -175,13 +175,13 @@ def envelope_failure[T](
 
 def build_research_state(
     uow: ResearchUnitOfWork,
-    case_id: str,
+    subject_id: str,
     *,
     include_archived_theses: bool = False,
     include_watchlist: bool = True,
 ) -> ResearchStateDTO:
-    case = uow.cases.get(case_id)
-    theses = uow.theses.list_by_case(case_id)
+    subject = uow.subjects.get(subject_id)
+    theses = uow.theses.list_by_subject(subject_id)
     if not include_archived_theses:
         theses = tuple(t for t in theses if t.status != ThesisStatus.ARCHIVED)
 
@@ -198,25 +198,23 @@ def build_research_state(
             uow.invalidations.list_by_revision(thesis.thesis_id, thesis.current_revision_no)
         )
 
-    questions = uow.questions.list_by_case(case_id)
+    questions = uow.questions.list_by_subject(subject_id)
     watchlist = (
-        uow.watchlist.list(case_id=case_id, limit=500, offset=0) if include_watchlist else ()
+        uow.watchlist.list(subject_id=subject_id, limit=500, offset=0) if include_watchlist else ()
     )
     pending = uow.candidates.list(
-        case_id=case_id,
+        subject_id=subject_id,
         status=CandidateStatus.PROPOSED,
         limit=500,
         offset=0,
     )
-    current_plan = uow.trade_plans.get_current_by_case(case_id)
+    current_plan = uow.trade_plans.get_current_by_subject(subject_id)
     plan_versions = (
-        uow.trade_plans.list_versions(current_plan.plan_id)
-        if current_plan is not None
-        else ()
+        uow.trade_plans.list_versions(current_plan.plan_id) if current_plan is not None else ()
     )
 
     return ResearchStateDTO(
-        case=InvestmentCaseDTO.from_domain(case),
+        subject=ResearchSubjectDTO.from_domain(subject),
         theses=ThesisDTO.from_domain_list(theses),
         latest_revisions=ThesisRevisionDTO.from_domain_list(tuple(latest_revisions)),
         assumptions=AssumptionDTO.from_domain_list(tuple(assumptions)),
@@ -237,7 +235,7 @@ def propose_candidate(
     clock: Clock,
     id_generator: IdGenerator,
     kind: CandidateKind,
-    case_id: str | None,
+    subject_id: str | None,
     thesis_id: str | None,
     target_revision_no: int | None,
     payload_model: object,
@@ -289,7 +287,7 @@ def propose_candidate(
     now = clock.now()
     candidate = CandidateThesisRevision(
         candidate_id=id_generator.new(EntityIdPrefix.RUN),
-        case_id=case_id,
+        subject_id=subject_id,
         thesis_id=thesis_id,
         target_revision_no=target_revision_no,
         payload_json=payload_json,

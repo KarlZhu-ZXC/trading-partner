@@ -2,7 +2,7 @@
 
 Not part of the public service surface. Bootstrap must inject UoW / Clock /
 IdGenerator / SecretRedactor explicitly; this module holds pure normalization,
-idempotency payload hashes, related-entity registries, audit-summary, and Case
+idempotency payload hashes, related-entity registries, audit-summary, and Research Subject
 JSON cache helpers only.
 """
 
@@ -26,11 +26,12 @@ from domain.common.errors import (
 from domain.common.time import ensure_utc, require_aware_datetime
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
-    InvestmentCase,
+    ResearchSubject,
     canonicalize_research_json_object,
 )
 
 # Frozen Event related-entity wire types (Phase 1C C4a §8.2).
+# The historical ``case`` token denotes a Research Subject and remains wire ABI.
 # Type ``event`` is intentionally excluded for Event writes (no self-related).
 EVENT_RELATED_ENTITY_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -79,7 +80,7 @@ def stable_dedupe_strs(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def stable_dedupe_topic_tags(values: Sequence[str]) -> tuple[str, ...]:
-    """Strip blanks, lower-case, stable-dedupe preserving first-seen order."""
+    """Strip blanks, lower-subject, stable-dedupe preserving first-seen order."""
     seen: set[str] = set()
     out: list[str] = []
     for raw in values:
@@ -96,18 +97,14 @@ def stable_dedupe_topic_tags(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
-def prepare_topic_tags(
-    values: Sequence[str], redactor: SecretRedactor
-) -> tuple[str, ...]:
+def prepare_topic_tags(values: Sequence[str], redactor: SecretRedactor) -> tuple[str, ...]:
     """Lower/dedupe tags, redact each, then stable-dedupe again for sentinels."""
     base = stable_dedupe_topic_tags(values)
     redacted = tuple(redactor.redact_text(tag) for tag in base)
     return stable_dedupe_strs(redacted)
 
 
-def redact_optional_text(
-    value: str | None, redactor: SecretRedactor, *, field: str
-) -> str | None:
+def redact_optional_text(value: str | None, redactor: SecretRedactor, *, field: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
@@ -118,9 +115,7 @@ def redact_optional_text(
     return redactor.redact_text(value)
 
 
-def redact_required_text(
-    value: str, redactor: SecretRedactor, *, field: str
-) -> str:
+def redact_required_text(value: str, redactor: SecretRedactor, *, field: str) -> str:
     if not isinstance(value, str):
         raise InputValidationError(
             f"{field} must be a string",
@@ -135,9 +130,7 @@ def redact_required_text(
     return redactor.redact_text(text)
 
 
-def prepare_structured_data_json(
-    value: str | None, redactor: SecretRedactor
-) -> str | None:
+def prepare_structured_data_json(value: str | None, redactor: SecretRedactor) -> str | None:
     """Parse JSON object, deep-redact mapping, canonicalize for hash/storage."""
     if value is None:
         return None
@@ -181,9 +174,7 @@ def _netloc_without_userinfo(parsed: Any) -> str:
     return host_part
 
 
-def normalize_source_url(
-    value: str | None, redactor: SecretRedactor
-) -> str | None:
+def normalize_source_url(value: str | None, redactor: SecretRedactor) -> str | None:
     """Validate scheme/userinfo, drop fragment, redact secret query keys.
 
     Query pairs are redacted via the injected SecretRedactor (one-key mapping)
@@ -238,129 +229,115 @@ def normalize_source_url(
     query = urlencode(redacted_pairs, doseq=False, safe="*")
     netloc = _netloc_without_userinfo(parsed)
     # Fragment always dropped; params rarely used but preserved.
-    rebuilt = urlunparse(
-        (scheme, netloc, parsed.path, parsed.params, query, "")
-    )
+    rebuilt = urlunparse((scheme, netloc, parsed.path, parsed.params, query, ""))
     return rebuilt
 
 
-def require_aware_optional(
-    value: datetime | None, *, field: str
-) -> datetime | None:
+def require_aware_optional(value: datetime | None, *, field: str) -> datetime | None:
     if value is None:
         return None
     return require_aware_datetime(value, field_name=field)
 
 
-def append_unique_id(
-    existing: tuple[str, ...], new_id: str
-) -> tuple[str, ...]:
+def append_unique_id(existing: tuple[str, ...], new_id: str) -> tuple[str, ...]:
     if new_id in existing:
         return existing
     return existing + (new_id,)
 
 
-def _rebuild_case(
-    case: InvestmentCase,
+def _rebuild_subject(
+    subject: ResearchSubject,
     *,
     updated_at: datetime,
     evidence_ids: tuple[str, ...] | None = None,
     report_ids: tuple[str, ...] | None = None,
     event_ids: tuple[str, ...] | None = None,
     decision_ids: tuple[str, ...] | None = None,
-) -> InvestmentCase:
-    return InvestmentCase(
-        case_id=case.case_id,
-        case_type=case.case_type,
-        title=case.title,
-        summary=case.summary,
-        status=case.status,
-        primary_instrument_id=case.primary_instrument_id,
-        topic_tags=case.topic_tags,
-        created_at=case.created_at,
+) -> ResearchSubject:
+    return ResearchSubject(
+        subject_id=subject.subject_id,
+        subject_type=subject.subject_type,
+        title=subject.title,
+        summary=subject.summary,
+        status=subject.status,
+        primary_instrument_id=subject.primary_instrument_id,
+        topic_tags=subject.topic_tags,
+        created_at=subject.created_at,
         updated_at=updated_at,
-        created_by=case.created_by,
-        archived_at=case.archived_at,
-        archived_reason=case.archived_reason,
-        linked_case_ids=case.linked_case_ids,
-        evidence_ids=case.evidence_ids if evidence_ids is None else evidence_ids,
-        report_ids=case.report_ids if report_ids is None else report_ids,
-        event_ids=case.event_ids if event_ids is None else event_ids,
-        decision_ids=case.decision_ids if decision_ids is None else decision_ids,
-        schema_version=case.schema_version,
+        created_by=subject.created_by,
+        archived_at=subject.archived_at,
+        archived_reason=subject.archived_reason,
+        linked_subject_ids=subject.linked_subject_ids,
+        evidence_ids=subject.evidence_ids if evidence_ids is None else evidence_ids,
+        report_ids=subject.report_ids if report_ids is None else report_ids,
+        event_ids=subject.event_ids if event_ids is None else event_ids,
+        decision_ids=subject.decision_ids if decision_ids is None else decision_ids,
+        schema_version=subject.schema_version,
     )
 
 
-def update_case_evidence_cache(
+def update_subject_evidence_cache(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     evidence_id: str,
     updated_at: datetime,
 ) -> None:
-    """Append evidence_id to Case cache; always set updated_at to write time."""
+    """Append evidence_id to Research Subject cache; always set updated_at to write time."""
     require_aware_datetime(updated_at, field_name="updated_at")
-    case = uow.cases.get(case_id)
-    next_ids = append_unique_id(case.evidence_ids, evidence_id)
-    if next_ids == case.evidence_ids and case.updated_at == updated_at:
+    subject = uow.subjects.get(subject_id)
+    next_ids = append_unique_id(subject.evidence_ids, evidence_id)
+    if next_ids == subject.evidence_ids and subject.updated_at == updated_at:
         return
-    uow.cases.update(
-        _rebuild_case(case, updated_at=updated_at, evidence_ids=next_ids)
-    )
+    uow.subjects.update(_rebuild_subject(subject, updated_at=updated_at, evidence_ids=next_ids))
 
 
-def update_case_report_cache(
+def update_subject_report_cache(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     report_id: str,
     updated_at: datetime,
 ) -> None:
-    """Append report_id to Case cache; always set updated_at to write time."""
+    """Append report_id to Research Subject cache; always set updated_at to write time."""
     require_aware_datetime(updated_at, field_name="updated_at")
-    case = uow.cases.get(case_id)
-    next_ids = append_unique_id(case.report_ids, report_id)
-    if next_ids == case.report_ids and case.updated_at == updated_at:
+    subject = uow.subjects.get(subject_id)
+    next_ids = append_unique_id(subject.report_ids, report_id)
+    if next_ids == subject.report_ids and subject.updated_at == updated_at:
         return
-    uow.cases.update(
-        _rebuild_case(case, updated_at=updated_at, report_ids=next_ids)
-    )
+    uow.subjects.update(_rebuild_subject(subject, updated_at=updated_at, report_ids=next_ids))
 
 
-def update_case_event_cache(
+def update_subject_event_cache(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     event_id: str,
     updated_at: datetime,
 ) -> None:
-    """Append event_id to Case cache; always set updated_at to write time."""
+    """Append event_id to Research Subject cache; always set updated_at to write time."""
     require_aware_datetime(updated_at, field_name="updated_at")
-    case = uow.cases.get(case_id)
-    next_ids = append_unique_id(case.event_ids, event_id)
-    if next_ids == case.event_ids and case.updated_at == updated_at:
+    subject = uow.subjects.get(subject_id)
+    next_ids = append_unique_id(subject.event_ids, event_id)
+    if next_ids == subject.event_ids and subject.updated_at == updated_at:
         return
-    uow.cases.update(
-        _rebuild_case(case, updated_at=updated_at, event_ids=next_ids)
-    )
+    uow.subjects.update(_rebuild_subject(subject, updated_at=updated_at, event_ids=next_ids))
 
 
-def update_case_decision_cache(
+def update_subject_decision_cache(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     decision_id: str,
     updated_at: datetime,
 ) -> None:
-    """Append decision_id to Case cache; set updated_at to recorded_at."""
+    """Append decision_id to Research Subject cache; set updated_at to recorded_at."""
     require_aware_datetime(updated_at, field_name="updated_at")
-    case = uow.cases.get(case_id)
-    next_ids = append_unique_id(case.decision_ids, decision_id)
-    if next_ids == case.decision_ids and case.updated_at == updated_at:
+    subject = uow.subjects.get(subject_id)
+    next_ids = append_unique_id(subject.decision_ids, decision_id)
+    if next_ids == subject.decision_ids and subject.updated_at == updated_at:
         return
-    uow.cases.update(
-        _rebuild_case(case, updated_at=updated_at, decision_ids=next_ids)
-    )
+    uow.subjects.update(_rebuild_subject(subject, updated_at=updated_at, decision_ids=next_ids))
 
 
 def audit_summary(
@@ -368,7 +345,7 @@ def audit_summary(
     action: str,
     entity_type: str,
     entity_id: str,
-    case_id: str | None,
+    subject_id: str | None,
     actor: str,
     confirmed_by: str | None = None,
     content_sha256: str | None = None,
@@ -380,14 +357,12 @@ def audit_summary(
         "action": action,
         "entity_type": entity_type,
         "entity_id": entity_id,
-        "case_id": case_id,
+        "subject_id": subject_id,
         "actor": actor,
         "confirmed_by": confirmed_by,
         "idempotency_key": idempotency_key,
         "content_sha256": content_sha256,
-        "linked_entity_ids": (
-            list(linked_entity_ids) if linked_entity_ids is not None else []
-        ),
+        "linked_entity_ids": (list(linked_entity_ids) if linked_entity_ids is not None else []),
     }
 
 
@@ -414,7 +389,7 @@ def _canonical_payload_sha256(payload: dict[str, object]) -> str:
 
 def compute_journal_idempotency_payload_sha256(
     *,
-    case_id: str | None,
+    subject_id: str | None,
     entry_type: JournalEntryType,
     title: str,
     body_markdown: str,
@@ -436,7 +411,7 @@ def compute_journal_idempotency_payload_sha256(
     payload: dict[str, object] = {
         "authored_by": authored_by,
         "body_markdown": body_markdown,
-        "case_id": case_id,
+        "subject_id": subject_id,
         "confirmed_by": confirmed_by,
         "entry_type": entry_type.value,
         "instrument_ids": sorted(instrument_ids),
@@ -451,7 +426,7 @@ def compute_journal_idempotency_payload_sha256(
 
 def compute_decision_idempotency_payload_sha256(
     *,
-    case_id: str,
+    subject_id: str,
     decision_type: DecisionType,
     title: str,
     rationale: str,
@@ -479,7 +454,7 @@ def compute_decision_idempotency_payload_sha256(
     require_aware_datetime(decided_at, field_name="decided_at")
     # Domain tuples keep first-seen order; hash sorts set fields only (§8.6).
     payload: dict[str, object] = {
-        "case_id": case_id,
+        "subject_id": subject_id,
         "confirmation_mode": confirmation_mode.value,
         "decided_at": _datetime_to_utc_z(decided_at),
         "decided_by": decided_by,
@@ -499,17 +474,17 @@ def compute_decision_idempotency_payload_sha256(
 def validate_report_references(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     as_of: datetime,
     created_at: datetime,
     evidence_ids: tuple[str, ...],
     thesis_revision_ids: tuple[str, ...],
     supersedes_report_id: str | None,
 ) -> None:
-    """Application-level Case membership + historical visibility for Report."""
+    """Application-level Research Subject membership + historical visibility for Report."""
     require_aware_datetime(as_of, field_name="as_of")
     require_aware_datetime(created_at, field_name="created_at")
-    uow.cases.get(case_id)
+    uow.subjects.get(subject_id)
 
     for evidence_id in evidence_ids:
         evidence = uow.evidence.get(evidence_id)
@@ -519,39 +494,39 @@ def validate_report_references(
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        if not uow.case_evidence_links.exists(case_id, evidence_id):
+        if not uow.subject_evidence_links.exists(subject_id, evidence_id):
             raise InvalidResearchLink(
-                "evidence must be linked to the report case",
+                "evidence must be linked to the report subject",
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        link = uow.case_evidence_links.get(case_id, evidence_id)
+        link = uow.subject_evidence_links.get(subject_id, evidence_id)
         # Frozen rule: Link.linked_at <= report created_at (not as_of).
         if link.linked_at > created_at:
             raise HistoricalVisibilityViolation(
-                "report created_at must not precede case evidence link linked_at",
+                "report created_at must not precede subject evidence link linked_at",
                 details={
-                    "entity_type": "case_evidence_link",
+                    "entity_type": "subject_evidence_link",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
     for revision_id in thesis_revision_ids:
         revision = uow.revisions.get(revision_id)
-        if revision.case_id != case_id:
+        if revision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "thesis revision does not belong to the report case",
+                "thesis revision does not belong to the report subject",
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if revision.confirmed_at > as_of:
@@ -560,19 +535,19 @@ def validate_report_references(
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
     if supersedes_report_id is not None:
         old = uow.reports.get(supersedes_report_id)
-        if old.case_id != case_id:
+        if old.subject_id != subject_id:
             raise InvalidResearchLink(
-                "superseded report does not belong to the same case",
+                "superseded report does not belong to the same subject",
                 details={
                     "entity_type": "report",
                     "supersedes_report_id": supersedes_report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if old.created_at > created_at:
@@ -588,14 +563,14 @@ def validate_report_references(
 def validate_event_references(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     recorded_at: datetime,
     evidence_ids: tuple[str, ...],
     report_ids: tuple[str, ...],
 ) -> None:
-    """Reject cross-Case references and future leakage for Event writes."""
+    """Reject cross-Research Subject references and future leakage for Event writes."""
     require_aware_datetime(recorded_at, field_name="recorded_at")
-    uow.cases.get(case_id)
+    uow.subjects.get(subject_id)
 
     for evidence_id in evidence_ids:
         evidence = uow.evidence.get(evidence_id)
@@ -605,38 +580,38 @@ def validate_event_references(
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        if not uow.case_evidence_links.exists(case_id, evidence_id):
+        if not uow.subject_evidence_links.exists(subject_id, evidence_id):
             raise InvalidResearchLink(
-                "evidence must be linked to the event case",
+                "evidence must be linked to the event subject",
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        link = uow.case_evidence_links.get(case_id, evidence_id)
+        link = uow.subject_evidence_links.get(subject_id, evidence_id)
         if link.linked_at > recorded_at:
             raise HistoricalVisibilityViolation(
-                "event recorded_at must not precede case evidence link linked_at",
+                "event recorded_at must not precede subject evidence link linked_at",
                 details={
-                    "entity_type": "case_evidence_link",
+                    "entity_type": "subject_evidence_link",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
     for report_id in report_ids:
         report = uow.reports.get(report_id)
-        if report.case_id != case_id:
+        if report.subject_id != subject_id:
             raise InvalidResearchLink(
-                "report does not belong to the event case",
+                "report does not belong to the event subject",
                 details={
                     "entity_type": "report",
                     "report_id": report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if report.created_at > recorded_at:
@@ -645,7 +620,7 @@ def validate_event_references(
                 details={
                     "entity_type": "report",
                     "report_id": report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
@@ -653,7 +628,7 @@ def validate_event_references(
 def validate_event_related_entity(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     recorded_at: datetime,
     related_entity_type: str | None,
     related_entity_id: str | None,
@@ -704,27 +679,27 @@ def validate_event_related_entity(
         )
 
     if rel_type == "case":
-        if rel_id != case_id:
+        if rel_id != subject_id:
             raise InvalidResearchLink(
-                "related case must equal the event case",
+                "related subject must equal the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        uow.cases.get(rel_id)
+        uow.subjects.get(rel_id)
         return
 
     if rel_type == "thesis":
         thesis = uow.theses.get(rel_id)
-        if thesis.case_id != case_id:
+        if thesis.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related thesis does not belong to the event case",
+                "related thesis does not belong to the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if thesis.created_at > recorded_at:
@@ -733,20 +708,20 @@ def validate_event_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "thesis_revision":
         revision = uow.revisions.get(rel_id)
-        if revision.case_id != case_id:
+        if revision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related thesis revision does not belong to the event case",
+                "related thesis revision does not belong to the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if revision.confirmed_at > recorded_at:
@@ -755,7 +730,7 @@ def validate_event_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
@@ -768,39 +743,39 @@ def validate_event_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        if not uow.case_evidence_links.exists(case_id, rel_id):
+        if not uow.subject_evidence_links.exists(subject_id, rel_id):
             raise InvalidResearchLink(
-                "related evidence must be linked to the event case",
+                "related evidence must be linked to the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        link = uow.case_evidence_links.get(case_id, rel_id)
+        link = uow.subject_evidence_links.get(subject_id, rel_id)
         if link.linked_at > recorded_at:
             raise HistoricalVisibilityViolation(
                 "event recorded_at must not precede related evidence link linked_at",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "report":
         report = uow.reports.get(rel_id)
-        if report.case_id != case_id:
+        if report.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related report does not belong to the event case",
+                "related report does not belong to the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if report.created_at > recorded_at:
@@ -809,20 +784,20 @@ def validate_event_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "decision":
         decision = uow.decisions.get(rel_id)
-        if decision.case_id != case_id:
+        if decision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related decision does not belong to the event case",
+                "related decision does not belong to the event subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if decision.recorded_at > recorded_at:
@@ -831,29 +806,29 @@ def validate_event_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     # journal
     journal = uow.journal.get(rel_id)
-    if journal.case_id is None:
+    if journal.subject_id is None:
         raise InvalidResearchLink(
-            "global journal cannot be related to a case-scoped event",
+            "global journal cannot be related to a subject-scoped event",
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
-    if journal.case_id != case_id:
+    if journal.subject_id != subject_id:
         raise InvalidResearchLink(
-            "related journal does not belong to the event case",
+            "related journal does not belong to the event subject",
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
     if journal.created_at > recorded_at:
@@ -862,7 +837,7 @@ def validate_event_related_entity(
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
 
@@ -897,21 +872,19 @@ def _normalize_related_pair(
 def validate_journal_related_entity(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str | None,
+    subject_id: str | None,
     created_at: datetime,
     related_entity_type: str | None,
     related_entity_id: str | None,
 ) -> None:
     """Typed registry for Journal generic related pair (design §8.5).
 
-    Case-scoped Journal: related entity must share the case and be visible at
-    ``created_at``. Global Journal (``case_id is None``) may only relate to
-    another global Journal. Evidence also requires a visible Case link.
+    Research Subject-scoped Journal: related entity must share the subject and be visible at
+    ``created_at``. Global Journal (``subject_id is None``) may only relate to
+    another global Journal. Evidence also requires a visible Research Subject link.
     """
     require_aware_datetime(created_at, field_name="created_at")
-    rel_type, rel_id = _normalize_related_pair(
-        related_entity_type, related_entity_id
-    )
+    rel_type, rel_id = _normalize_related_pair(related_entity_type, related_entity_id)
     if rel_type is None or rel_id is None:
         return
 
@@ -926,24 +899,24 @@ def validate_journal_related_entity(
         )
 
     # Global journal: only other global journals are allowed.
-    if case_id is None:
+    if subject_id is None:
         if rel_type != "journal":
             raise InvalidResearchLink(
                 "global journal may only relate to a global journal",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": None,
+                    "subject_id": None,
                 },
             )
         journal = uow.journal.get(rel_id)
-        if journal.case_id is not None:
+        if journal.subject_id is not None:
             raise InvalidResearchLink(
                 "global journal may only relate to a global journal",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "related_case_id": journal.case_id,
+                    "related_subject_id": journal.subject_id,
                 },
             )
         if journal.created_at > created_at:
@@ -956,29 +929,29 @@ def validate_journal_related_entity(
             )
         return
 
-    # Case-scoped journal related registry.
+    # Research Subject-scoped journal related registry.
     if rel_type == "case":
-        if rel_id != case_id:
+        if rel_id != subject_id:
             raise InvalidResearchLink(
-                "related case must equal the journal case",
+                "related subject must equal the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        uow.cases.get(rel_id)
+        uow.subjects.get(rel_id)
         return
 
     if rel_type == "thesis":
         thesis = uow.theses.get(rel_id)
-        if thesis.case_id != case_id:
+        if thesis.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related thesis does not belong to the journal case",
+                "related thesis does not belong to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if thesis.created_at > created_at:
@@ -987,20 +960,20 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "thesis_revision":
         revision = uow.revisions.get(rel_id)
-        if revision.case_id != case_id:
+        if revision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related thesis revision does not belong to the journal case",
+                "related thesis revision does not belong to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if revision.confirmed_at > created_at:
@@ -1009,7 +982,7 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
@@ -1022,39 +995,39 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        if not uow.case_evidence_links.exists(case_id, rel_id):
+        if not uow.subject_evidence_links.exists(subject_id, rel_id):
             raise InvalidResearchLink(
-                "related evidence must be linked to the journal case",
+                "related evidence must be linked to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        link = uow.case_evidence_links.get(case_id, rel_id)
+        link = uow.subject_evidence_links.get(subject_id, rel_id)
         if link.linked_at > created_at:
             raise HistoricalVisibilityViolation(
                 "journal created_at must not precede related evidence link linked_at",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "report":
         report = uow.reports.get(rel_id)
-        if report.case_id != case_id:
+        if report.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related report does not belong to the journal case",
+                "related report does not belong to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if report.created_at > created_at:
@@ -1063,20 +1036,20 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "event":
         event = uow.events.get(rel_id)
-        if event.case_id != case_id:
+        if event.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related event does not belong to the journal case",
+                "related event does not belong to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if event.recorded_at > created_at:
@@ -1085,20 +1058,20 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     if rel_type == "decision":
         decision = uow.decisions.get(rel_id)
-        if decision.case_id != case_id:
+        if decision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "related decision does not belong to the journal case",
+                "related decision does not belong to the journal subject",
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if decision.recorded_at > created_at:
@@ -1107,29 +1080,29 @@ def validate_journal_related_entity(
                 details={
                     "related_entity_type": rel_type,
                     "related_entity_id": rel_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         return
 
     # journal
     journal = uow.journal.get(rel_id)
-    if journal.case_id is None:
+    if journal.subject_id is None:
         raise InvalidResearchLink(
-            "global journal cannot be related to a case-scoped journal",
+            "global journal cannot be related to a subject-scoped journal",
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
-    if journal.case_id != case_id:
+    if journal.subject_id != subject_id:
         raise InvalidResearchLink(
-            "related journal does not belong to the journal case",
+            "related journal does not belong to the journal subject",
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
     if journal.created_at > created_at:
@@ -1138,7 +1111,7 @@ def validate_journal_related_entity(
             details={
                 "related_entity_type": rel_type,
                 "related_entity_id": rel_id,
-                "case_id": case_id,
+                "subject_id": subject_id,
             },
         )
 
@@ -1146,23 +1119,23 @@ def validate_journal_related_entity(
 def validate_journal_supersedes(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str | None,
+    subject_id: str | None,
     created_at: datetime,
     supersedes_journal_id: str | None,
 ) -> None:
-    """Superseded journal must exist, share case (incl. both None), and be older."""
+    """Superseded journal must exist, share subject (incl. both None), and be older."""
     if supersedes_journal_id is None:
         return
     require_aware_datetime(created_at, field_name="created_at")
     old = uow.journal.get(supersedes_journal_id)
-    if old.case_id != case_id:
+    if old.subject_id != subject_id:
         raise InvalidResearchLink(
-            "superseded journal does not share the same case_id",
+            "superseded journal does not share the same subject_id",
             details={
                 "entity_type": "journal",
                 "supersedes_journal_id": supersedes_journal_id,
-                "case_id": case_id,
-                "old_case_id": old.case_id,
+                "subject_id": subject_id,
+                "old_subject_id": old.subject_id,
             },
         )
     if old.created_at > created_at:
@@ -1178,26 +1151,26 @@ def validate_journal_supersedes(
 def validate_decision_references(
     uow: ResearchUnitOfWork,
     *,
-    case_id: str,
+    subject_id: str,
     recorded_at: datetime,
     thesis_revision_ids: tuple[str, ...],
     evidence_ids: tuple[str, ...],
     report_ids: tuple[str, ...],
     supersedes_decision_id: str | None,
 ) -> None:
-    """Application-level Case membership + historical visibility for Decision."""
+    """Application-level Research Subject membership + historical visibility for Decision."""
     require_aware_datetime(recorded_at, field_name="recorded_at")
-    uow.cases.get(case_id)
+    uow.subjects.get(subject_id)
 
     for revision_id in thesis_revision_ids:
         revision = uow.revisions.get(revision_id)
-        if revision.case_id != case_id:
+        if revision.subject_id != subject_id:
             raise InvalidResearchLink(
-                "thesis revision does not belong to the decision case",
+                "thesis revision does not belong to the decision subject",
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if revision.confirmed_at > recorded_at:
@@ -1206,7 +1179,7 @@ def validate_decision_references(
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
@@ -1218,38 +1191,38 @@ def validate_decision_references(
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        if not uow.case_evidence_links.exists(case_id, evidence_id):
+        if not uow.subject_evidence_links.exists(subject_id, evidence_id):
             raise InvalidResearchLink(
-                "evidence must be linked to the decision case",
+                "evidence must be linked to the decision subject",
                 details={
                     "entity_type": "evidence",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
-        link = uow.case_evidence_links.get(case_id, evidence_id)
+        link = uow.subject_evidence_links.get(subject_id, evidence_id)
         if link.linked_at > recorded_at:
             raise HistoricalVisibilityViolation(
-                "decision recorded_at must not precede case evidence link linked_at",
+                "decision recorded_at must not precede subject evidence link linked_at",
                 details={
-                    "entity_type": "case_evidence_link",
+                    "entity_type": "subject_evidence_link",
                     "evidence_id": evidence_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
     for report_id in report_ids:
         report = uow.reports.get(report_id)
-        if report.case_id != case_id:
+        if report.subject_id != subject_id:
             raise InvalidResearchLink(
-                "report does not belong to the decision case",
+                "report does not belong to the decision subject",
                 details={
                     "entity_type": "report",
                     "report_id": report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if report.created_at > recorded_at:
@@ -1258,19 +1231,19 @@ def validate_decision_references(
                 details={
                     "entity_type": "report",
                     "report_id": report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
 
     if supersedes_decision_id is not None:
         old = uow.decisions.get(supersedes_decision_id)
-        if old.case_id != case_id:
+        if old.subject_id != subject_id:
             raise InvalidResearchLink(
-                "superseded decision does not belong to the same case",
+                "superseded decision does not belong to the same subject",
                 details={
                     "entity_type": "decision",
                     "supersedes_decision_id": supersedes_decision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if old.recorded_at > recorded_at:

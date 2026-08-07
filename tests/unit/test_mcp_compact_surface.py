@@ -91,6 +91,57 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compact_v15_keeps_legacy_case_transport_discoverable_and_callable() -> None:
+    container = _container()
+    legacy_case_id = "case_00000000-0000-7000-8000-000000000001"
+    container.services.research_subjects.get_subject.return_value = _Envelope(
+        {
+            "subject_id": legacy_case_id,
+            "subject_type": "company",
+            "linked_subject_ids": [],
+            "title": "Copper cycle",
+        }
+    )
+    registry = create_capability_registry(container)
+    tools = {tool.name: tool for tool in registry.list_tools()}
+
+    assert "Research Subjects (标的)" in tools["investment_case_read"].description
+    assert "Legacy transport" in tools["investment_case_manage"].description
+    manage_definitions = tools["investment_case_manage"].inputSchema["$defs"].values()
+    manage_properties = [definition.get("properties", {}) for definition in manage_definitions]
+    assert any("case_type" in properties for properties in manage_properties)
+    assert any("case_id" in properties for properties in manage_properties)
+    assert any("linked_case_ids" in properties for properties in manage_properties)
+    assert any("title" in properties for properties in manage_properties)
+    manage_validator = Draft202012Validator(tools["investment_case_manage"].inputSchema)
+    assert not list(
+        manage_validator.iter_errors(
+            {
+                "request": {
+                    "operation": "create",
+                    "case_type": "company",
+                    "title": "Copper cycle",
+                    "summary": "Long-horizon copper supply and demand",
+                    "confirmed_by": "user",
+                    "idempotency_key": "legacy-create-1",
+                }
+            }
+        )
+    )
+
+    result = await registry.invoke(
+        "investment_case_read",
+        {"request": {"operation": "query", "case_id": legacy_case_id}},
+    )
+
+    container.services.research_subjects.get_subject.assert_called_once_with(legacy_case_id)
+    assert result["data"]["case_id"] == legacy_case_id
+    assert result["data"]["case_type"] == "company"
+    assert result["data"]["linked_case_ids"] == []
+    assert "subject_id" not in result["data"]
+
+
+@pytest.mark.asyncio
 async def test_technical_tools_publish_canonical_interval_enums() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
 
@@ -263,7 +314,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v14",
+        "surface_schema_version": "compact-v15",
     }
 
 

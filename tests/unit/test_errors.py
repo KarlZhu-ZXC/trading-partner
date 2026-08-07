@@ -13,7 +13,6 @@ from domain.common.errors import (
     InputValidationError,
     InvalidationConditionNarrowingForbidden,
     InvalidInstrument,
-    InvestmentCaseNotFound,
     MigrationError,
     NoMarketData,
     OpenQuestionNotFound,
@@ -25,6 +24,7 @@ from domain.common.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    ResearchSubjectNotFound,
     StaleMarketData,
     StrictReviewRequired,
     ThesisNotFound,
@@ -36,7 +36,7 @@ from infrastructure.system.redactor import DefaultSecretRedactor
 
 
 def test_error_codes_and_retryable() -> None:
-    cases: list[tuple[type, str, bool]] = [
+    subjects: list[tuple[type, str, bool]] = [
         (ConfigurationError, "CONFIGURATION_ERROR", False),
         (ProviderNotConfigured, "PROVIDER_NOT_CONFIGURED", False),
         (ProviderAuthenticationError, "PROVIDER_AUTHENTICATION_ERROR", False),
@@ -51,7 +51,7 @@ def test_error_codes_and_retryable() -> None:
         (PartialDataError, "PARTIAL_DATA_ERROR", True),
         (PersistenceError, "PERSISTENCE_ERROR", True),
         (MigrationError, "MIGRATION_ERROR", False),
-        (InvestmentCaseNotFound, "INVESTMENT_CASE_NOT_FOUND", False),
+        (ResearchSubjectNotFound, "INVESTMENT_CASE_NOT_FOUND", False),
         (ThesisNotFound, "THESIS_NOT_FOUND", False),
         (ThesisRevisionNotFound, "THESIS_REVISION_NOT_FOUND", False),
         (WatchlistItemNotFound, "WATCHLIST_ITEM_NOT_FOUND", False),
@@ -69,7 +69,7 @@ def test_error_codes_and_retryable() -> None:
         (InputValidationError, "INPUT_VALIDATION_ERROR", False),
         (AppendOnlyViolation, "APPEND_ONLY_VIOLATION", False),
     ]
-    for cls, code, retryable in cases:
+    for cls, code, retryable in subjects:
         exc = cls("msg")
         assert exc.code == code
         assert exc.retryable is retryable

@@ -21,6 +21,6 @@ class DecisionRecordRepository(Protocol):
 
     def get_by_idempotency_key(self, idempotency_key: str) -> DecisionRecord | None: ...
 
-    def list_by_case(
-        self, case_id: str, *, as_of: datetime | None = None
+    def list_by_subject(
+        self, subject_id: str, *, as_of: datetime | None = None
     ) -> tuple[DecisionRecord, ...]: ...

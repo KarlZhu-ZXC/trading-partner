@@ -134,6 +134,11 @@ class PostMarketSyncService:
             error_codes=receipt.error_codes,
         )
 
+    def recent_runs(self, limit: int = 20) -> tuple[PostMarketSyncRun, ...]:
+        """Return bounded durable receipts without refreshing either upstream."""
+
+        return self._repository.list_recent(max(1, min(limit, 100)))
+
     async def catch_up_latest_due(self) -> PostMarketSyncResultDTO:
         now = self._clock.now()
         schwab_oauth = self._inspect_schwab_oauth(now)

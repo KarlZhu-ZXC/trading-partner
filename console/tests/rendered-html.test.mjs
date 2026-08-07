@@ -22,9 +22,11 @@ test("server-renders the local control room", async () => {
   assert.match(html, /投资研究控制台/);
   assert.match(html, /Loopback only/);
   assert.match(html, /data-theme="light"/);
-  assert.match(html, /界面主题/);
-  assert.match(html, /浅色/);
-  assert.match(html, /深色/);
+  assert.match(html, /Theme/);
+  assert.match(html, /Light/);
+  assert.match(html, /Dark/);
+  assert.match(html, /Overview/);
+  assert.match(html, /Capabilities/);
   assert.doesNotMatch(html, /Your site is taking shape|react-loading-skeleton/);
 });
 
@@ -42,7 +44,7 @@ test("renders all primary local-console routes", async () => {
   }
 });
 
-test("research console is a responsive Case/Thesis master-detail workspace", async () => {
+test("research console is a responsive Research Subject/Thesis master-detail workspace", async () => {
   const response = await render("/research");
   assert.equal(response.status, 200);
   const html = await response.text();
@@ -53,7 +55,12 @@ test("research console is a responsive Case/Thesis master-detail workspace", asy
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/research/);
   assert.match(source, /含 archived/);
-  assert.match(source, /Investment Case/);
+  assert.match(source, /RESEARCH SUBJECTS/);
+  assert.match(source, /研究档案/);
+  assert.match(source, /SubjectAggregate/);
+  assert.match(source, /SubjectDraft/);
+  assert.match(source, /SubjectEditor/);
+  assert.doesNotMatch(source, /CaseAggregate|CaseDraft|CaseEditor|ResearchCaseDetail/);
   assert.match(source, /latest_revisions/);
   assert.match(source, /局部读取失败/);
   assert.match(source, /investment_case_manage/);
@@ -62,9 +69,17 @@ test("research console is a responsive Case/Thesis master-detail workspace", asy
   assert.match(source, /research_judgment_propose/);
   assert.match(source, /research_judgment_confirm/);
   assert.match(source, /pending_candidates/);
+  assert.match(source, /subject-activate-propose/);
+  assert.match(source, /开始跟踪/);
+  assert.match(source, /thesisStatusExplicit/);
+  assert.match(source, /编辑 Thesis · 新建 Revision/);
+  assert.match(source, /decideCandidate\(item, "withdraw"\)/);
+  assert.match(source, /#subject-/);
+  assert.match(source, /legacySubjectId/);
+  assert.match(source, /\^#case-/);
   assert.match(source, /\/api\/monitors\?run_limit=1&event_limit=1/);
   assert.match(source, /master-detail/);
-  assert.doesNotMatch(source, /只读展示全部 Investment Case/);
+  assert.doesNotMatch(source, /只读展示全部研究档案/);
   assert.match(shellSource, /href: "\/research"/);
 });
 
@@ -74,6 +89,8 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   const editorSource = await readFile(new URL("../app/monitors/monitor-editor.tsx", import.meta.url), "utf8");
 
   assert.match(overviewSource, /href=\{`\/monitors#\$\{monitorAnchorId\(monitor\.monitor_id\)\}`\}/);
+  assert.match(overviewSource, /qualityIssueHref/);
+  assert.match(overviewSource, /\/research#subject-/);
   assert.match(monitorsSource, /id=\{monitorAnchorId\(monitor\.monitor_id\)\}/);
   assert.match(monitorsSource, /window\.scrollTo/);
   assert.doesNotMatch(monitorsSource, /scrollIntoView/);
@@ -89,9 +106,11 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   assert.match(monitorsSource, /按标的代码筛选 Monitor/);
   assert.match(monitorsSource, /monitor-list-panel/);
   assert.match(editorSource, /条件缺少具体释义/);
+  assert.match(editorSource, /initialMonitor\?\.subject_id/);
+  assert.match(editorSource, /case_id: subjectId\.trim\(\)/);
 });
 
-test("portfolio is a five-tab durable hub with explicit writes", async () => {
+test("portfolio is a four-tab durable hub with explicit account writes", async () => {
   const portfolioSource = await readFile(new URL("../app/portfolio/page.tsx", import.meta.url), "utf8");
 
   assert.match(portfolioSource, /\/api\/portfolio\?transaction_limit=500&coverage_limit=100/);
@@ -99,15 +118,14 @@ test("portfolio is a five-tab durable hub with explicit writes", async () => {
   assert.match(portfolioSource, /Activity/);
   assert.match(portfolioSource, /Performance/);
   assert.match(portfolioSource, /Risk/);
-  assert.match(portfolioSource, /Watchlist/);
   assert.match(portfolioSource, /external_state_sync/);
-  assert.match(portfolioSource, /watchlist_manage/);
+  assert.doesNotMatch(portfolioSource, /watchlist_manage/);
+  assert.doesNotMatch(portfolioSource, /同步 Watchlist/);
   assert.match(portfolioSource, /risk_policy_update/);
   assert.match(portfolioSource, /portfolio_risk_get/);
   assert.match(portfolioSource, /window\.location\.hash/);
   assert.match(portfolioSource, /SortableHeader/);
   assert.match(portfolioSource, /execution_effect/);
-  assert.match(portfolioSource, /investment_case_ids/);
   assert.match(portfolioSource, /resultEnvelope = envelope\(invocationResult\(response\)\)/);
   assert.doesNotMatch(portfolioSource, /\/api\/accounts/);
 });

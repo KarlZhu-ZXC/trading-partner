@@ -3,7 +3,7 @@
 All checks run inside the caller's Session before flush. Failures raise
 ``InvalidResearchLink`` (or ``DataContractError`` for local storage-shape
 rules). Repositories never recompute content hashes, never compare
-idempotency payloads, and never mutate Phase 1B Case JSON caches.
+idempotency payloads, and never mutate Phase 1B Research Subject JSON caches.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ from sqlalchemy.orm import Session
 from domain.common.errors import DataContractError, InvalidResearchLink
 from domain.common.time import require_aware_datetime
 from infrastructure.persistence.orm import (
-    CaseEvidenceLinkRow,
     InstrumentRow,
-    InvestmentCaseRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    ResearchSubjectRow,
+    SubjectEvidenceLinkRow,
     ThesisRevisionRow,
     ThesisRow,
 )
@@ -52,9 +52,8 @@ def require_idempotency_storage(
             "idempotency_key length must be <= 128",
             details={"field": "idempotency_key", "length": len(idempotency_key)},
         )
-    if (
-        not isinstance(idempotency_payload_sha256, str)
-        or not _SHA256_HEX_RE.fullmatch(idempotency_payload_sha256)
+    if not isinstance(idempotency_payload_sha256, str) or not _SHA256_HEX_RE.fullmatch(
+        idempotency_payload_sha256
     ):
         raise DataContractError(
             "idempotency_payload_sha256 must be a 64-character lowercase hex digest",
@@ -62,17 +61,15 @@ def require_idempotency_storage(
         )
 
 
-def require_case_exists(session: Session, case_id: str) -> None:
-    if session.get(InvestmentCaseRow, case_id) is None:
+def require_subject_exists(session: Session, subject_id: str) -> None:
+    if session.get(ResearchSubjectRow, subject_id) is None:
         raise InvalidResearchLink(
-            "referenced investment case does not exist",
-            details={"entity_type": "case", "case_id": case_id},
+            "referenced research subject does not exist",
+            details={"entity_type": "subject", "subject_id": subject_id},
         )
 
 
-def require_instruments_exist(
-    session: Session, instrument_ids: tuple[str, ...]
-) -> None:
+def require_instruments_exist(session: Session, instrument_ids: tuple[str, ...]) -> None:
     for instrument_id in instrument_ids:
         if session.get(InstrumentRow, instrument_id) is None:
             raise InvalidResearchLink(
@@ -117,34 +114,32 @@ def require_evidence_supersedes(
         )
 
 
-def case_evidence_link_exists(
-    session: Session, *, case_id: str, evidence_id: str
-) -> bool:
+def subject_evidence_link_exists(session: Session, *, subject_id: str, evidence_id: str) -> bool:
     stmt = (
-        select(CaseEvidenceLinkRow.link_id)
+        select(SubjectEvidenceLinkRow.link_id)
         .where(
-            CaseEvidenceLinkRow.case_id == case_id,
-            CaseEvidenceLinkRow.evidence_id == evidence_id,
+            SubjectEvidenceLinkRow.subject_id == subject_id,
+            SubjectEvidenceLinkRow.evidence_id == evidence_id,
         )
         .limit(1)
     )
     return session.scalars(stmt).first() is not None
 
 
-def require_case_evidence_link(
-    session: Session, *, case_id: str, evidence_id: str
-) -> CaseEvidenceLinkRow:
-    stmt = select(CaseEvidenceLinkRow).where(
-        CaseEvidenceLinkRow.case_id == case_id,
-        CaseEvidenceLinkRow.evidence_id == evidence_id,
+def require_subject_evidence_link(
+    session: Session, *, subject_id: str, evidence_id: str
+) -> SubjectEvidenceLinkRow:
+    stmt = select(SubjectEvidenceLinkRow).where(
+        SubjectEvidenceLinkRow.subject_id == subject_id,
+        SubjectEvidenceLinkRow.evidence_id == evidence_id,
     )
     row = session.scalars(stmt).first()
     if row is None:
         raise InvalidResearchLink(
-            "case evidence link does not exist",
+            "subject evidence link does not exist",
             details={
-                "entity_type": "case_evidence_link",
-                "case_id": case_id,
+                "entity_type": "subject_evidence_link",
+                "subject_id": subject_id,
                 "evidence_id": evidence_id,
             },
         )
@@ -154,12 +149,12 @@ def require_case_evidence_link(
 def require_evidence_ids_linked_and_visible(
     session: Session,
     *,
-    case_id: str,
+    subject_id: str,
     evidence_ids: tuple[str, ...],
     observed_at_not_after: datetime,
     linked_at_not_after: datetime,
 ) -> None:
-    """Evidence must exist, be case-linked, and pass hindsight time bounds.
+    """Evidence must exist, be subject-linked, and pass hindsight time bounds.
 
     Event/Decision pass the record visible time for both bounds. Report is
     stricter: Evidence.observed_at <= report.as_of and Link.linked_at <=
@@ -176,25 +171,25 @@ def require_evidence_ids_linked_and_visible(
                 "evidence observed_at is not yet visible at record time",
                 details={
                     "entity_type": "evidence",
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                     "evidence_id": evidence_id,
                 },
             )
         stmt = (
-            select(CaseEvidenceLinkRow.link_id)
+            select(SubjectEvidenceLinkRow.link_id)
             .where(
-                CaseEvidenceLinkRow.case_id == case_id,
-                CaseEvidenceLinkRow.evidence_id == evidence_id,
-                CaseEvidenceLinkRow.linked_at <= linked_text,
+                SubjectEvidenceLinkRow.subject_id == subject_id,
+                SubjectEvidenceLinkRow.evidence_id == evidence_id,
+                SubjectEvidenceLinkRow.linked_at <= linked_text,
             )
             .limit(1)
         )
         if session.scalars(stmt).first() is None:
             raise InvalidResearchLink(
-                "evidence must be linked to case and visible at record time",
+                "evidence must be linked to the research subject and visible at record time",
                 details={
                     "entity_type": "evidence",
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                     "evidence_id": evidence_id,
                 },
             )
@@ -203,7 +198,7 @@ def require_evidence_ids_linked_and_visible(
 def require_thesis_optional(
     session: Session,
     *,
-    case_id: str,
+    subject_id: str,
     thesis_id: str | None,
     thesis_revision_id: str | None,
     assessed_at: datetime,
@@ -217,13 +212,13 @@ def require_thesis_optional(
                 "referenced thesis does not exist",
                 details={"entity_type": "thesis", "thesis_id": thesis_id},
             )
-        if thesis.case_id != case_id:
+        if thesis.subject_id != subject_id:
             raise InvalidResearchLink(
-                "thesis does not belong to the same case",
+                "thesis does not belong to the same research subject",
                 details={
                     "entity_type": "thesis",
                     "thesis_id": thesis_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
     if thesis_revision_id is not None:
@@ -236,13 +231,13 @@ def require_thesis_optional(
                     "thesis_revision_id": thesis_revision_id,
                 },
             )
-        if rev.case_id != case_id:
+        if rev.subject_id != subject_id:
             raise InvalidResearchLink(
-                "thesis revision does not belong to the same case",
+                "thesis revision does not belong to the same research subject",
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": thesis_revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if thesis_id is not None and rev.thesis_id != thesis_id:
@@ -267,11 +262,11 @@ def require_thesis_optional(
 def require_thesis_revision_ids_visible(
     session: Session,
     *,
-    case_id: str,
+    subject_id: str,
     thesis_revision_ids: tuple[str, ...],
     visible_at: datetime,
 ) -> None:
-    """Revisions must exist, same case, and confirmed_at <= visible_at."""
+    """Revisions must exist, same subject, and confirmed_at <= visible_at."""
     require_aware_datetime(visible_at, field_name="visible_at")
     visible_text = dt_to_db(visible_at)
     for revision_id in thesis_revision_ids:
@@ -284,13 +279,13 @@ def require_thesis_revision_ids_visible(
                     "thesis_revision_id": revision_id,
                 },
             )
-        if rev.case_id != case_id:
+        if rev.subject_id != subject_id:
             raise InvalidResearchLink(
-                "thesis revision does not belong to the same case",
+                "thesis revision does not belong to the same research subject",
                 details={
                     "entity_type": "thesis_revision",
                     "thesis_revision_id": revision_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if rev.confirmed_at > visible_text:
@@ -306,11 +301,11 @@ def require_thesis_revision_ids_visible(
 def require_report_ids_visible(
     session: Session,
     *,
-    case_id: str,
+    subject_id: str,
     report_ids: tuple[str, ...],
     visible_at: datetime,
 ) -> None:
-    """Reports must exist, same case, and created_at <= visible_at."""
+    """Reports must exist, same subject, and created_at <= visible_at."""
     require_aware_datetime(visible_at, field_name="visible_at")
     visible_text = dt_to_db(visible_at)
     for report_id in report_ids:
@@ -320,13 +315,13 @@ def require_report_ids_visible(
                 "referenced report does not exist",
                 details={"entity_type": "report", "report_id": report_id},
             )
-        if report.case_id != case_id:
+        if report.subject_id != subject_id:
             raise InvalidResearchLink(
-                "report does not belong to the same case",
+                "report does not belong to the same research subject",
                 details={
                     "entity_type": "report",
                     "report_id": report_id,
-                    "case_id": case_id,
+                    "subject_id": subject_id,
                 },
             )
         if report.created_at > visible_text:
@@ -336,17 +331,17 @@ def require_report_ids_visible(
             )
 
 
-def require_same_case_supersedes(
+def require_same_subject_supersedes(
     *,
-    new_case_id: str | None,
-    old_case_id: str | None,
+    new_subject_id: str | None,
+    old_subject_id: str | None,
     entity_type: str,
     supersedes_id: str,
 ) -> None:
-    """Journal allows both sides None; otherwise case_ids must be equal."""
-    if new_case_id != old_case_id:
+    """Journal allows both sides None; otherwise subject_ids must be equal."""
+    if new_subject_id != old_subject_id:
         raise InvalidResearchLink(
-            "supersedes target must belong to the same case",
+            "supersedes target must belong to the same research subject",
             details={
                 "entity_type": entity_type,
                 "supersedes_id": supersedes_id,

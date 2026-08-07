@@ -33,7 +33,7 @@ class _WorkflowInput(_DTO):
 
 
 class _CaseWorkflowInput(_WorkflowInput):
-    case_id: str | None = Field(default=None, min_length=1, max_length=128)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
     instrument_id: str | None = None
     as_of: datetime | None = None
     lookback_days: int = Field(default=365, ge=30, le=1_825)
@@ -52,40 +52,40 @@ class _CaseWorkflowInput(_WorkflowInput):
 
     @model_validator(mode="after")
     def one_selector(self) -> Self:
-        if (self.case_id is None) == (self.instrument_id is None):
-            raise ValueError("exactly one of case_id or instrument_id is required")
+        if (self.subject_id is None) == (self.instrument_id is None):
+            raise ValueError("exactly one of subject_id or instrument_id is required")
         return self
 
 
 class ResearchRunDeepDiveInput(_CaseWorkflowInput):
-    # A deep dive creates/reuses a Draft Case by default so the research has a
+    # A deep dive creates/reuses a Draft Research Subject by default so the research has a
     # durable home. This does not activate tracking or confirm a Thesis.
-    create_case: bool = True
-    case_title: str | None = Field(default=None, min_length=1, max_length=200)
-    case_summary: str | None = Field(default=None, min_length=1, max_length=4_000)
-    case_topic_tags: tuple[str, ...] = ()
-    case_creation_confirmed_by: Literal["user", "external_agent"] | None = None
-    case_creation_idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    create_subject: bool = True
+    subject_title: str | None = Field(default=None, min_length=1, max_length=200)
+    subject_summary: str | None = Field(default=None, min_length=1, max_length=4_000)
+    subject_topic_tags: tuple[str, ...] = ()
+    subject_creation_confirmed_by: Literal["user", "external_agent"] | None = None
+    subject_creation_idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
     industry_cycle: Literal["hog"] | None = None
     industry_cycle_lookback_months: int = Field(default=120, ge=3, le=240)
     company_operating_lookback_months: int = Field(default=36, ge=3, le=120)
     company_operating_document_limit: int = Field(default=20, ge=1, le=30)
 
-    @field_validator("case_topic_tags")
+    @field_validator("subject_topic_tags")
     @classmethod
-    def unique_case_topic_tags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def unique_subject_topic_tags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         normalized = tuple(tag.strip().lower() for tag in value if tag.strip())
         if len(set(normalized)) != len(normalized):
-            raise ValueError("case_topic_tags must not contain duplicates")
+            raise ValueError("subject_topic_tags must not contain duplicates")
         return normalized
 
     @model_validator(mode="after")
-    def explicit_case_creation_confirmation(self) -> Self:
-        has_confirmer = self.case_creation_confirmed_by is not None
-        has_key = self.case_creation_idempotency_key is not None
+    def explicit_subject_creation_confirmation(self) -> Self:
+        has_confirmer = self.subject_creation_confirmed_by is not None
+        has_key = self.subject_creation_idempotency_key is not None
         if has_confirmer != has_key:
             raise ValueError(
-                "case_creation_confirmed_by and case_creation_idempotency_key "
+                "subject_creation_confirmed_by and subject_creation_idempotency_key "
                 "must be provided together"
             )
         return self
@@ -166,7 +166,7 @@ class WorkflowSynthesisContractDTO(_DTO):
 class WorkflowRunDTO(_DTO):
     run_id: str
     workflow_type: WorkflowType
-    case_id: str | None
+    subject_id: str | None
     instrument_id: str | None
     requested_as_of: datetime
     started_at: datetime
@@ -194,7 +194,7 @@ class WorkflowRunDTO(_DTO):
         return cls(
             run_id=run.run_id,
             workflow_type=run.workflow_type,
-            case_id=run.case_id,
+            subject_id=run.subject_id,
             instrument_id=run.instrument_id,
             requested_as_of=run.requested_as_of,
             started_at=run.started_at,

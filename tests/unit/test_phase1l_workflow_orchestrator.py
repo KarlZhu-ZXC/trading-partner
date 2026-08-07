@@ -37,21 +37,21 @@ from infrastructure.system.redactor import DefaultSecretRedactor
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 
 
-class _CaseData(BaseModel):
-    case_id: str
+class _SubjectData(BaseModel):
+    subject_id: str
     primary_instrument_id: str
 
 
 class _ContextData(BaseModel):
-    case: _CaseData
+    subject: _SubjectData
 
 
 class _ReportData(BaseModel):
     report_id: str
 
 
-class _CaseListData(BaseModel):
-    items: tuple[_CaseData, ...] = ()
+class _SubjectListData(BaseModel):
+    items: tuple[_SubjectData, ...] = ()
     total: int = 0
 
 
@@ -161,7 +161,7 @@ def _orchestrator(
 ) -> tuple[ResearchWorkflowOrchestrator, SimpleNamespace]:
     dependencies = SimpleNamespace(
         repository=_Repository(),
-        cases=MagicMock(),
+        subjects=MagicMock(),
         context=MagicMock(),
         archive=MagicMock(),
         a_share=MagicMock(),
@@ -180,7 +180,9 @@ def _orchestrator(
         fetched_at=NOW,
         freshness=Freshness.FRESH,
         sources=(),
-        data=_ContextData(case=_CaseData(case_id="case_1", primary_instrument_id=instrument_id)),
+        data=_ContextData(
+            subject=_SubjectData(subject_id="case_1", primary_instrument_id=instrument_id)
+        ),
     )
     dependencies.archive.archive_report.return_value = ToolEnvelope.success(
         request_id="req_report",
@@ -191,14 +193,14 @@ def _orchestrator(
         sources=(),
         data=_ReportData(report_id="report_1"),
     )
-    dependencies.cases.list_cases.return_value = ToolEnvelope.success(
+    dependencies.subjects.list_subjects.return_value = ToolEnvelope.success(
         request_id="req_cases",
         market=None,
         as_of=NOW,
         fetched_at=NOW,
         freshness=Freshness.FRESH,
         sources=(),
-        data=_CaseListData(),
+        data=_SubjectListData(),
     )
     for target, methods in (
         (
@@ -247,7 +249,7 @@ def _orchestrator(
     )
     service = ResearchWorkflowOrchestrator(
         dependencies.repository,
-        dependencies.cases,
+        dependencies.subjects,
         dependencies.context,
         dependencies.archive,
         dependencies.a_share,
@@ -294,14 +296,14 @@ async def test_peer_comparison_is_one_replay_safe_workflow_step() -> None:
             WorkflowType.DEEP_DIVE,
             "equity:US:NVDA",
             "run_deep_dive",
-            ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW),
+            ResearchRunDeepDiveInput(idempotency_key="workflow-1", subject_id="case_1", as_of=NOW),
         ),
         (
             WorkflowType.CATALYST_REVIEW,
             "equity:A_SHARE:600519.SH",
             "run_catalyst_review",
             ResearchRunCatalystReviewInput(
-                idempotency_key="workflow-1", case_id="case_1", as_of=NOW
+                idempotency_key="workflow-1", subject_id="case_1", as_of=NOW
             ),
         ),
         (
@@ -403,13 +405,13 @@ async def test_deep_dive_can_run_ad_hoc_when_instrument_has_no_case() -> None:
             idempotency_key="workflow-1",
             instrument_id="equity:US:NVDA",
             as_of=NOW,
-            create_case=False,
+            create_subject=False,
         )
     )
 
     assert result.ok is True and result.data is not None
     assert result.data.status is WorkflowRunStatus.SUCCEEDED
-    assert result.data.case_id is None
+    assert result.data.subject_id is None
     assert result.data.instrument_id == "equity:US:NVDA"
     assert result.data.report_id is None
     assert "No instrument research file context; research ran in ad-hoc mode" in (
@@ -429,7 +431,7 @@ async def test_us_etf_deep_dive_uses_asset_aware_recipe_without_company_facts() 
             idempotency_key="workflow-etf-1",
             instrument_id="etf:US:UGL",
             as_of=NOW,
-            create_case=False,
+            create_subject=False,
         )
     )
 
@@ -449,17 +451,19 @@ async def test_us_etf_deep_dive_uses_asset_aware_recipe_without_company_facts() 
 
 
 @pytest.mark.asyncio
-async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() -> None:
+async def test_deep_dive_creates_draft_subject_by_default_then_runs_subject_bound() -> None:
     service, dependencies = _orchestrator()
-    created_case = _CaseData(case_id="case_created", primary_instrument_id="equity:US:NVDA")
-    dependencies.cases.create_case.return_value = ToolEnvelope.success(
-        request_id="req_create_case",
+    created_subject = _SubjectData(
+        subject_id="case_created", primary_instrument_id="equity:US:NVDA"
+    )
+    dependencies.subjects.create_subject.return_value = ToolEnvelope.success(
+        request_id="req_create_subject",
         market=None,
         as_of=NOW,
         fetched_at=NOW,
         freshness=Freshness.FRESH,
         sources=(),
-        data=created_case,
+        data=created_subject,
     )
     dependencies.context.build.return_value = ToolEnvelope.success(
         request_id="req_context",
@@ -468,7 +472,7 @@ async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() ->
         fetched_at=NOW,
         freshness=Freshness.FRESH,
         sources=(),
-        data=_ContextData(case=created_case),
+        data=_ContextData(subject=created_subject),
     )
 
     result = await service.run_deep_dive(
@@ -476,20 +480,20 @@ async def test_deep_dive_creates_draft_case_by_default_then_runs_case_bound() ->
             idempotency_key="workflow-1",
             instrument_id="equity:US:NVDA",
             as_of=NOW,
-            case_title="NVDA 深度研究",
-            case_creation_confirmed_by="user",
-            case_creation_idempotency_key="deep-dive-nvda-case",
+            subject_title="NVDA 深度研究",
+            subject_creation_confirmed_by="user",
+            subject_creation_idempotency_key="deep-dive-nvda-case",
         )
     )
 
     assert result.ok is True and result.data is not None
-    assert result.data.case_id == "case_created"
+    assert result.data.subject_id == "case_created"
     assert result.data.missing_capabilities == ()
-    dependencies.cases.create_case.assert_called_once()
+    dependencies.subjects.create_subject.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_deep_dive_never_infers_user_confirmation_for_case_creation() -> None:
+async def test_deep_dive_never_infers_user_confirmation_for_subject_creation() -> None:
     service, dependencies = _orchestrator()
 
     result = await service.run_deep_dive(
@@ -502,7 +506,7 @@ async def test_deep_dive_never_infers_user_confirmation_for_case_creation() -> N
 
     assert result.ok is False
     assert result.errors[0].code == "INPUT_VALIDATION_ERROR"
-    dependencies.cases.create_case.assert_not_called()
+    dependencies.subjects.create_subject.assert_not_called()
 
 
 def test_deep_dive_case_confirmation_fields_are_atomic() -> None:
@@ -510,7 +514,7 @@ def test_deep_dive_case_confirmation_fields_are_atomic() -> None:
         ResearchRunDeepDiveInput(
             idempotency_key="workflow-1",
             instrument_id="equity:US:NVDA",
-            case_creation_confirmed_by="user",
+            subject_creation_confirmed_by="user",
         )
 
 
@@ -532,7 +536,8 @@ async def test_workflow_receipts_only_name_public_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_portfolio_derived_fact_uses_provider_industry_case_theme_and_price_history() -> None:
+async def test_portfolio_derived_fact_uses_provider_industry_subject_theme_and_price_history(
+) -> None:
     position = AccountPosition(
         instrument_id="equity:US:NVDA",
         side=AccountPositionSide.LONG,
@@ -571,7 +576,7 @@ async def test_portfolio_derived_fact_uses_provider_industry_case_theme_and_pric
     context = MagicMock()
     context.build.return_value = SimpleNamespace(
         ok=True,
-        data=SimpleNamespace(case=SimpleNamespace(topic_tags=("AI",))),
+        data=SimpleNamespace(subject=SimpleNamespace(topic_tags=("AI",))),
     )
     bars = tuple(
         SimpleNamespace(timestamp=NOW + timedelta(days=index), close=Decimal(100 + index))
@@ -653,13 +658,13 @@ async def test_portfolio_derived_fact_does_not_send_etf_to_equity_fundamentals()
         ("etf:A_SHARE:510300.SH", (CapitalMetricType.DAILY_FLOW,)),
     ),
 )
-async def test_a_share_case_capital_metrics_follow_asset_type(
+async def test_a_share_subject_capital_metrics_follow_asset_type(
     instrument_id: str, expected_metrics: tuple[CapitalMetricType, ...]
 ) -> None:
     service, dependencies = _orchestrator(instrument_id)
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", subject_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True and result.data is not None
@@ -674,7 +679,7 @@ async def test_a_share_equity_deep_dive_includes_structured_financial_statements
     service, dependencies = _orchestrator("equity:A_SHARE:600519.SH")
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", subject_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True and result.data is not None
@@ -693,7 +698,7 @@ async def test_a_share_deep_dive_explicit_hog_cycle_adds_company_and_cycle_facts
     result = await service.run_deep_dive(
         ResearchRunDeepDiveInput(
             idempotency_key="workflow-1",
-            case_id="case_1",
+            subject_id="case_1",
             as_of=NOW,
             industry_cycle="hog",
             industry_cycle_lookback_months=180,
@@ -721,7 +726,7 @@ async def test_a_share_deep_dive_does_not_infer_hog_cycle_from_instrument() -> N
     service, dependencies = _orchestrator("equity:A_SHARE:002714.SZ")
 
     result = await service.run_deep_dive(
-        ResearchRunDeepDiveInput(idempotency_key="workflow-1", case_id="case_1", as_of=NOW)
+        ResearchRunDeepDiveInput(idempotency_key="workflow-1", subject_id="case_1", as_of=NOW)
     )
 
     assert result.ok is True

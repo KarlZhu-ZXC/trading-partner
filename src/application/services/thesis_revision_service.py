@@ -5,10 +5,10 @@ from __future__ import annotations
 from application.dto.research import (
     AssumptionCandidatePayload,
     CandidateRevisionDTO,
-    CaseUpdateCandidatePayload,
     ConfirmedStateUpdateDTO,
     InvalidationCandidatePayload,
     OpenQuestionCandidatePayload,
+    SubjectUpdateCandidatePayload,
     ThesisHistoryDTO,
     ThesisRevisionCandidatePayload,
     TradePlanCandidatePayload,
@@ -33,6 +33,13 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from application.services.research_state_invariants import (
+    ensure_active_trade_plan_dependencies,
+    ensure_subject_can_host_live_thesis,
+    ensure_subject_can_leave_tracking,
+    ensure_thesis_status_transition,
+)
+from application.services.subject_metadata_policy import validate_subject_metadata
 from domain.common.actor import ActorContext
 from domain.common.enums import (
     AssumptionStatus,
@@ -41,7 +48,7 @@ from domain.common.enums import (
     ConfirmationMode,
     InvalidationSeverity,
     InvalidationStatus,
-    InvestmentCaseStatus,
+    ResearchSubjectStatus,
     ThesisRole,
     ThesisStatus,
     WatchlistItemStatus,
@@ -59,8 +66,8 @@ from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
     Assumption,
     InvalidationCondition,
-    InvestmentCase,
     OpenQuestion,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
     WatchlistItem,
@@ -93,7 +100,7 @@ class ThesisRevisionService:
     def propose_revision(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         thesis_id: str | None,
         payload: ThesisRevisionCandidatePayload,
         confirmation_mode: ConfirmationMode = ConfirmationMode.STRICT_REVIEW,
@@ -106,20 +113,20 @@ class ThesisRevisionService:
             if payload.kind != "thesis_revision":
                 raise InputValidationError("payload.kind must be thesis_revision")
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 if thesis_id is not None:
                     thesis = uow.theses.get(thesis_id)
-                    if thesis.case_id != case_id:
+                    if thesis.subject_id != subject_id:
                         raise InputValidationError(
-                            "thesis_id does not belong to case_id",
-                            details={"thesis_id": thesis_id, "case_id": case_id},
+                            "thesis_id does not belong to subject_id",
+                            details={"thesis_id": thesis_id, "subject_id": subject_id},
                         )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.THESIS_REVISION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=thesis_id,
                     target_revision_no=payload.replaces_revision_no,
                     payload_model=payload,
@@ -134,7 +141,7 @@ class ThesisRevisionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": candidate.kind.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "proposed_by": proposed_by,
                         },
                         request_id=request_id,
@@ -158,7 +165,7 @@ class ThesisRevisionService:
     def propose_assumption(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         thesis_id: str,
         revision_no: int,
         payload: AssumptionCandidatePayload,
@@ -180,16 +187,16 @@ class ThesisRevisionService:
                     falsifiability=payload.falsifiability,
                 )
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 thesis = uow.theses.get(thesis_id)
-                if thesis.case_id != case_id:
-                    raise InputValidationError("thesis_id does not belong to case_id")
+                if thesis.subject_id != subject_id:
+                    raise InputValidationError("thesis_id does not belong to subject_id")
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.ASSUMPTION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=thesis_id,
                     target_revision_no=revision_no,
                     payload_model=body,
@@ -204,7 +211,7 @@ class ThesisRevisionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": candidate.kind.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                         },
                         request_id=request_id,
                     )
@@ -227,7 +234,7 @@ class ThesisRevisionService:
     def propose_invalidation(
         self,
         *,
-        case_id: str,
+        subject_id: str,
         thesis_id: str,
         revision_no: int,
         payload: InvalidationCandidatePayload,
@@ -260,20 +267,17 @@ class ThesisRevisionService:
                     # narrowing/relaxation path is allowed only under STRICT_REVIEW
                     pass
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
+                uow.subjects.get(subject_id)
                 thesis = uow.theses.get(thesis_id)
-                if thesis.case_id != case_id:
-                    raise InputValidationError("thesis_id does not belong to case_id")
+                if thesis.subject_id != subject_id:
+                    raise InputValidationError("thesis_id does not belong to subject_id")
                 if body.relaxes_invalidation_id is not None:
                     existing = uow.invalidations.get(body.relaxes_invalidation_id)
                     is_hard_to_soft = (
                         existing.severity == InvalidationSeverity.HARD
                         and body.severity == InvalidationSeverity.SOFT
                     )
-                    if (
-                        is_hard_to_soft
-                        and confirmation_mode != ConfirmationMode.STRICT_REVIEW
-                    ):
+                    if is_hard_to_soft and confirmation_mode != ConfirmationMode.STRICT_REVIEW:
                         raise InvalidationConditionNarrowingForbidden(
                             "HARD→SOFT relaxation requires STRICT_REVIEW candidate",
                             details={
@@ -285,7 +289,7 @@ class ThesisRevisionService:
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=CandidateKind.INVALIDATION_CONDITION,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=thesis_id,
                     target_revision_no=revision_no,
                     payload_model=body,
@@ -300,7 +304,7 @@ class ThesisRevisionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": candidate.kind.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                         },
                         request_id=request_id,
                     )
@@ -323,7 +327,7 @@ class ThesisRevisionService:
     def propose_state_update(
         self,
         *,
-        case_id: str | None,
+        subject_id: str | None,
         thesis_id: str | None = None,
         payload: (
             ThesisRevisionCandidatePayload
@@ -331,7 +335,7 @@ class ThesisRevisionService:
             | InvalidationCandidatePayload
             | OpenQuestionCandidatePayload
             | WatchlistCandidatePayload
-            | CaseUpdateCandidatePayload
+            | SubjectUpdateCandidatePayload
             | TradePlanCandidatePayload
         ),
         confirmation_mode: ConfirmationMode = ConfirmationMode.STRICT_REVIEW,
@@ -343,25 +347,34 @@ class ThesisRevisionService:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
             kind = kind_from_payload(payload)
-            if kind == CandidateKind.CASE_STATUS_CHANGE:
-                assert isinstance(payload, CaseUpdateCandidatePayload)
+            if kind == CandidateKind.SUBJECT_STATUS_CHANGE:
+                assert isinstance(payload, SubjectUpdateCandidatePayload)
                 if payload.action == "create":
                     raise InputValidationError(
-                        "case create must use investment_case_create, not research_state_update"
+                        "subject create must use research_subject_create, not research_state_update"
                     )
                 if (
                     payload.action == "archive"
                     and confirmation_mode != ConfirmationMode.STRICT_REVIEW
                 ):
                     raise StrictReviewRequired(
-                        "case archive candidate requires STRICT_REVIEW",
+                        "subject archive candidate requires STRICT_REVIEW",
                     )
-            if kind != CandidateKind.WATCHLIST_ITEM and case_id is None:
-                raise InputValidationError("case_id is required for non-watchlist candidates")
+            if kind != CandidateKind.WATCHLIST_ITEM and subject_id is None:
+                raise InputValidationError("subject_id is required for non-watchlist candidates")
 
             with self._uow_factory() as uow:
-                if case_id is not None:
-                    uow.cases.get(case_id)
+                subject = uow.subjects.get(subject_id) if subject_id is not None else None
+                if (
+                    isinstance(payload, SubjectUpdateCandidatePayload)
+                    and payload.action == "update"
+                ):
+                    if subject is None:
+                        raise InputValidationError("subject update candidate requires subject_id")
+                    validate_subject_metadata(
+                        title=payload.title if payload.title is not None else subject.title,
+                        summary=payload.summary if payload.summary is not None else subject.summary,
+                    )
                 target_revision_no: int | None = None
                 resolved_thesis = thesis_id
                 if isinstance(payload, AssumptionCandidatePayload):
@@ -380,26 +393,26 @@ class ThesisRevisionService:
                 elif isinstance(payload, ThesisRevisionCandidatePayload):
                     target_revision_no = payload.replaces_revision_no
                 elif isinstance(payload, TradePlanCandidatePayload):
-                    if case_id is None:
-                        raise InputValidationError("trade_plan candidate requires case_id")
+                    if subject_id is None:
+                        raise InputValidationError("trade_plan candidate requires subject_id")
                     thesis = uow.theses.get(payload.thesis_id)
-                    if thesis.case_id != case_id:
+                    if thesis.subject_id != subject_id:
                         raise InputValidationError(
-                            "Trade Plan thesis_id does not belong to case_id"
+                            "Trade Plan thesis_id does not belong to subject_id"
                         )
-                    case = uow.cases.get(case_id)
+                    subject = uow.subjects.get(subject_id)
                     if (
-                        case.primary_instrument_id is not None
-                        and case.primary_instrument_id != payload.instrument_id
+                        subject.primary_instrument_id is not None
+                        and subject.primary_instrument_id != payload.instrument_id
                     ):
                         raise InputValidationError(
-                            "Trade Plan instrument must match the Case primary Instrument"
+                            "Trade Plan instrument must match the Subject primary Instrument"
                         )
-                    current = uow.trade_plans.get_current_by_case(case_id)
+                    current = uow.trade_plans.get_current_by_subject(subject_id)
                     if payload.plan_id is None:
                         if current is not None:
                             raise InputValidationError(
-                                "Case already has a Trade Plan; append a version instead"
+                                "Subject already has a Trade Plan; append a version instead"
                             )
                     elif (
                         current is None
@@ -417,7 +430,7 @@ class ThesisRevisionService:
                     clock=self._clock,
                     id_generator=self._id_generator,
                     kind=kind,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     thesis_id=resolved_thesis,
                     target_revision_no=target_revision_no,
                     payload_model=payload,
@@ -433,7 +446,7 @@ class ThesisRevisionService:
                         {
                             "candidate_id": candidate.candidate_id,
                             "kind": candidate.kind.value,
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "proposed_by": proposed_by,
                         },
                         request_id=request_id,
@@ -528,8 +541,8 @@ class ThesisRevisionService:
                 )
 
                 research_state = None
-                if candidate.case_id is not None:
-                    research_state = build_research_state(uow, candidate.case_id)
+                if candidate.subject_id is not None:
+                    research_state = build_research_state(uow, candidate.subject_id)
 
                 uow.commit()
                 data = ConfirmedStateUpdateDTO(
@@ -784,9 +797,7 @@ class ThesisRevisionService:
             )
         if kind is CandidateKind.ASSUMPTION:
             assert isinstance(payload, AssumptionCandidatePayload)
-            return self._apply_assumption(
-                uow, candidate, payload, reviewed_by=reviewed_by, now=now
-            )
+            return self._apply_assumption(uow, candidate, payload, reviewed_by=reviewed_by, now=now)
         if kind is CandidateKind.INVALIDATION_CONDITION:
             assert isinstance(payload, InvalidationCandidatePayload)
             return self._apply_invalidation(
@@ -800,14 +811,12 @@ class ThesisRevisionService:
         if kind is CandidateKind.WATCHLIST_ITEM:
             assert isinstance(payload, WatchlistCandidatePayload)
             return self._apply_watchlist(uow, candidate, payload, now=now)
-        if kind is CandidateKind.CASE_STATUS_CHANGE:
-            assert isinstance(payload, CaseUpdateCandidatePayload)
-            return self._apply_case_update(uow, candidate, payload, now=now)
+        if kind is CandidateKind.SUBJECT_STATUS_CHANGE:
+            assert isinstance(payload, SubjectUpdateCandidatePayload)
+            return self._apply_subject_update(uow, candidate, payload, now=now)
         if kind is CandidateKind.TRADE_PLAN:
             assert isinstance(payload, TradePlanCandidatePayload)
-            return self._apply_trade_plan(
-                uow, candidate, payload, reviewed_by=reviewed_by, now=now
-            )
+            return self._apply_trade_plan(uow, candidate, payload, reviewed_by=reviewed_by, now=now)
         raise DataContractError(f"unsupported candidate kind: {kind}")
 
     def _apply_trade_plan(
@@ -825,36 +834,34 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("trade_plan candidate requires case_id")
-        case = uow.cases.get(case_id)
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("trade_plan candidate requires subject_id")
+        subject = uow.subjects.get(subject_id)
         thesis = uow.theses.get(payload.thesis_id)
-        if thesis.case_id != case_id:
-            raise DataContractError("Trade Plan thesis does not belong to Case")
+        if thesis.subject_id != subject_id:
+            raise DataContractError("Trade Plan thesis does not belong to Subject")
         status = TradePlanStatus(payload.status)
-        if status is TradePlanStatus.ACTIVE and thesis.status in {
-            ThesisStatus.INVALIDATED,
-            ThesisStatus.ARCHIVED,
-        }:
-            raise DataContractError(
-                "ACTIVE Trade Plan cannot reference an invalidated or archived Thesis"
-            )
+        ensure_active_trade_plan_dependencies(
+            subject,
+            thesis,
+            attempted_child_status=status,
+        )
         if (
-            case.primary_instrument_id is not None
-            and case.primary_instrument_id != payload.instrument_id
+            subject.primary_instrument_id is not None
+            and subject.primary_instrument_id != payload.instrument_id
         ):
-            raise DataContractError("Trade Plan instrument cannot diverge from Case")
+            raise DataContractError("Trade Plan instrument cannot diverge from Subject")
 
-        current = uow.trade_plans.get_current_by_case(case_id)
+        current = uow.trade_plans.get_current_by_subject(subject_id)
         if payload.plan_id is None:
             if current is not None:
-                raise DataContractError("Case already has a Trade Plan")
+                raise DataContractError("Subject already has a Trade Plan")
             plan_id = self._id_generator.new(EntityIdPrefix.TRADE_PLAN)
             version = 1
         else:
             if current is None or current.plan_id != payload.plan_id:
-                raise DataContractError("Trade Plan identity is not current for Case")
+                raise DataContractError("Trade Plan identity is not current for Subject")
             if payload.expected_version != current.version:
                 from domain.common.errors import TradePlanVersionConflict
 
@@ -874,9 +881,7 @@ class ThesisRevisionService:
                 severity=item.severity,
                 fact_type=(TradePlanFactType(item.fact_type) if item.fact_type else None),
                 metric_key=item.metric_key,
-                comparator=(
-                    TradePlanComparator(item.comparator) if item.comparator else None
-                ),
+                comparator=(TradePlanComparator(item.comparator) if item.comparator else None),
                 threshold=item.threshold,
                 unit=item.unit,
                 instrument_id=item.instrument_id,
@@ -888,7 +893,7 @@ class ThesisRevisionService:
         plan = TradePlan(
             plan_id=plan_id,
             version=version,
-            case_id=case_id,
+            subject_id=subject_id,
             thesis_id=payload.thesis_id,
             instrument_id=payload.instrument_id,
             status=status,
@@ -908,35 +913,35 @@ class ThesisRevisionService:
             idempotency_key=candidate.idempotency_key,
         )
         uow.trade_plans.append(plan)
-        self._touch_case(uow, case_id, now)
+        self._touch_subject(uow, subject_id, now)
         return "trade_plan", plan.plan_id
 
-    def _touch_case(self, uow: ResearchUnitOfWork, case_id: str, now: object) -> None:
+    def _touch_subject(self, uow: ResearchUnitOfWork, subject_id: str, now: object) -> None:
         from datetime import datetime
 
         assert isinstance(now, datetime)
-        case = uow.cases.get(case_id)
-        updated = InvestmentCase(
-            case_id=case.case_id,
-            case_type=case.case_type,
-            title=case.title,
-            summary=case.summary,
-            status=case.status,
-            primary_instrument_id=case.primary_instrument_id,
-            topic_tags=case.topic_tags,
-            created_at=case.created_at,
+        subject = uow.subjects.get(subject_id)
+        updated = ResearchSubject(
+            subject_id=subject.subject_id,
+            subject_type=subject.subject_type,
+            title=subject.title,
+            summary=subject.summary,
+            status=subject.status,
+            primary_instrument_id=subject.primary_instrument_id,
+            topic_tags=subject.topic_tags,
+            created_at=subject.created_at,
             updated_at=now,
-            created_by=case.created_by,
-            archived_at=case.archived_at,
-            archived_reason=case.archived_reason,
-            linked_case_ids=case.linked_case_ids,
-            evidence_ids=case.evidence_ids,
-            report_ids=case.report_ids,
-            event_ids=case.event_ids,
-            decision_ids=case.decision_ids,
-            schema_version=case.schema_version,
+            created_by=subject.created_by,
+            archived_at=subject.archived_at,
+            archived_reason=subject.archived_reason,
+            linked_subject_ids=subject.linked_subject_ids,
+            evidence_ids=subject.evidence_ids,
+            report_ids=subject.report_ids,
+            event_ids=subject.event_ids,
+            decision_ids=subject.decision_ids,
+            schema_version=subject.schema_version,
         )
-        uow.cases.update(updated)
+        uow.subjects.update(updated)
 
     def _apply_thesis_revision(
         self,
@@ -953,9 +958,11 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("thesis_revision candidate requires case_id")
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("thesis_revision candidate requires subject_id")
+
+        subject = uow.subjects.get(subject_id)
 
         role = (
             ThesisRole(payload.thesis_role)
@@ -969,14 +976,25 @@ class ThesisRevisionService:
         )
 
         if candidate.thesis_id is None:
+            if thesis_status in {ThesisStatus.INVALIDATED, ThesisStatus.ARCHIVED}:
+                raise InputValidationError(
+                    "new Thesis must start as DRAFT or a live status",
+                    details={
+                        "attempted_child_status": thesis_status.value,
+                    },
+                )
+            ensure_subject_can_host_live_thesis(
+                subject,
+                attempted_child_status=thesis_status,
+            )
             # New thesis: revision_no = 1
             if role == ThesisRole.PRIMARY and thesis_status == ThesisStatus.ACTIVE:
-                existing_primaries = uow.cases.list_active_primary_thesis_ids(case_id)
+                existing_primaries = uow.subjects.list_active_primary_thesis_ids(subject_id)
                 if existing_primaries:
                     raise DataContractError(
-                        "active primary thesis already exists for case",
+                        "active primary thesis already exists for subject",
                         details={
-                            "case_id": case_id,
+                            "subject_id": subject_id,
                             "existing": list(existing_primaries),
                         },
                     )
@@ -986,7 +1004,7 @@ class ThesisRevisionService:
             supersedes = None
             thesis = Thesis(
                 thesis_id=thesis_id,
-                case_id=case_id,
+                subject_id=subject_id,
                 title=payload.title,
                 role=role,
                 status=thesis_status,
@@ -1002,6 +1020,38 @@ class ThesisRevisionService:
         else:
             thesis_id = candidate.thesis_id
             thesis = uow.theses.get(thesis_id)
+            if thesis.subject_id != subject_id:
+                raise DataContractError(
+                    "Thesis does not belong to candidate Subject",
+                    details={
+                        "thesis_id": thesis.thesis_id,
+                        "subject_id": subject_id,
+                        "thesis_subject_id": thesis.subject_id,
+                    },
+                )
+            thesis_status = (
+                ThesisStatus(payload.thesis_status)
+                if payload.thesis_status is not None
+                else thesis.status
+            )
+            if (
+                thesis_status is not thesis.status
+                and candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW
+            ):
+                raise StrictReviewRequired(
+                    "changing Thesis status requires STRICT_REVIEW",
+                    details={
+                        "thesis_id": thesis.thesis_id,
+                        "from": thesis.status.value,
+                        "to": thesis_status.value,
+                    },
+                )
+            ensure_thesis_status_transition(
+                uow,
+                subject,
+                thesis,
+                attempted_child_status=thesis_status,
+            )
             revision_no = uow.revisions.next_revision_no(thesis_id)
             supersedes = thesis.current_revision_no
             revision_id = self._id_generator.new(EntityIdPrefix.REV)
@@ -1011,7 +1061,7 @@ class ThesisRevisionService:
         revision = ThesisRevision(
             revision_id=revision_id,
             thesis_id=thesis_id,
-            case_id=case_id,
+            subject_id=subject_id,
             revision_no=revision_no,
             supersedes_revision_no=supersedes,
             statement=payload.statement,
@@ -1035,13 +1085,19 @@ class ThesisRevisionService:
                 new_revision_no=revision_no,
                 new_latest_revision_id=revision_id,
             )
+            if thesis_status is not thesis.status:
+                uow.theses.update_status(
+                    thesis_id,
+                    new_status=thesis_status,
+                    archived_at=(now if thesis_status is ThesisStatus.ARCHIVED else None),
+                )
 
         for ap in payload.assumptions:
             uow.assumptions.add(
                 Assumption(
                     assumption_id=self._id_generator.new(EntityIdPrefix.REV),
                     thesis_id=thesis_id,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     revision_no=revision_no,
                     statement=ap.statement,
                     basis=ap.basis,
@@ -1066,7 +1122,7 @@ class ThesisRevisionService:
                 InvalidationCondition(
                     invalidation_id=self._id_generator.new(EntityIdPrefix.REV),
                     thesis_id=thesis_id,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     revision_no=revision_no,
                     description=inv.description,
                     observable=inv.observable,
@@ -1082,7 +1138,7 @@ class ThesisRevisionService:
                 )
             )
 
-        self._touch_case(uow, case_id, now)
+        self._touch_subject(uow, subject_id, now)
         return "thesis_revision", revision_id
 
     def _apply_assumption(
@@ -1100,15 +1156,15 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("assumption candidate requires case_id")
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("assumption candidate requires subject_id")
         assumption_id = self._id_generator.new(EntityIdPrefix.REV)
         uow.assumptions.add(
             Assumption(
                 assumption_id=assumption_id,
                 thesis_id=payload.thesis_id,
-                case_id=case_id,
+                subject_id=subject_id,
                 revision_no=payload.revision_no,
                 statement=payload.statement,
                 basis=payload.basis,
@@ -1122,7 +1178,7 @@ class ThesisRevisionService:
                 retired_reason=None,
             )
         )
-        self._touch_case(uow, case_id, now)
+        self._touch_subject(uow, subject_id, now)
         return "assumption", assumption_id
 
     def _apply_invalidation(
@@ -1140,9 +1196,9 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("invalidation candidate requires case_id")
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("invalidation candidate requires subject_id")
         severity = InvalidationSeverity(payload.severity)
         # New HARD must be ARMED (INV-9)
         status = InvalidationStatus.ARMED
@@ -1170,7 +1226,7 @@ class ThesisRevisionService:
             InvalidationCondition(
                 invalidation_id=inv_id,
                 thesis_id=payload.thesis_id,
-                case_id=case_id,
+                subject_id=subject_id,
                 revision_no=payload.revision_no,
                 description=payload.description,
                 observable=payload.observable,
@@ -1185,7 +1241,7 @@ class ThesisRevisionService:
                 confirmed_by=reviewed_by,
             )
         )
-        self._touch_case(uow, case_id, now)
+        self._touch_subject(uow, subject_id, now)
         return "invalidation_condition", inv_id
 
     def _apply_open_question(
@@ -1204,16 +1260,16 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("open_question candidate requires case_id")
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("open_question candidate requires subject_id")
 
         if payload.action == "create":
             qid = self._id_generator.new(EntityIdPrefix.REV)
             uow.questions.add(
                 OpenQuestion(
                     question_id=qid,
-                    case_id=case_id,
+                    subject_id=subject_id,
                     text=payload.text or "",
                     status=OpenQuestionStatus.OPEN,
                     asked_at=now,
@@ -1223,7 +1279,7 @@ class ThesisRevisionService:
                     proposed_by=candidate.proposed_by,
                 )
             )
-            self._touch_case(uow, case_id, now)
+            self._touch_subject(uow, subject_id, now)
             return "open_question", qid
         if payload.action == "answer":
             assert payload.question_id is not None
@@ -1233,12 +1289,12 @@ class ThesisRevisionService:
                 answered_at=now,
                 answer_summary=payload.answer_summary,
             )
-            self._touch_case(uow, case_id, now)
+            self._touch_subject(uow, subject_id, now)
             return "open_question", payload.question_id
         if payload.action == "mark_stale":
             assert payload.question_id is not None
             uow.questions.mark_stale(payload.question_id)
-            self._touch_case(uow, case_id, now)
+            self._touch_subject(uow, subject_id, now)
             return "open_question", payload.question_id
         if payload.action == "close":
             assert payload.question_id is not None
@@ -1247,7 +1303,7 @@ class ThesisRevisionService:
                 payload.question_id,
                 closed_reason=payload.closed_reason,
             )
-            self._touch_case(uow, case_id, now)
+            self._touch_subject(uow, subject_id, now)
             return "open_question", payload.question_id
         raise DataContractError(f"unknown open_question action: {payload.action}")
 
@@ -1279,12 +1335,14 @@ class ThesisRevisionService:
                 display_name=(payload.display_name or "").strip(),
                 thesis_hint=(payload.thesis_hint or "").strip(),
                 triggers=payload.triggers,
-                case_id=payload.case_id if payload.case_id is not None else candidate.case_id,
+                subject_id=payload.subject_id
+                if payload.subject_id is not None
+                else candidate.subject_id,
                 status=WatchlistItemStatus.WATCHING,
                 created_at=now,
                 updated_at=now,
                 expires_at=payload.expires_at,
-                promoted_to_case_id=None,
+                promoted_to_subject_id=None,
                 triggered_at=None,
                 triggered_reason=None,
             )
@@ -1300,16 +1358,16 @@ class ThesisRevisionService:
             new_status=new_status,
             triggered_at=triggered_at,
             triggered_reason=payload.triggered_reason,
-            promoted_to_case_id=payload.promoted_to_case_id,
+            promoted_to_subject_id=payload.promoted_to_subject_id,
             expires_at=payload.expires_at,
         )
         return "watchlist_item", payload.item_id
 
-    def _apply_case_update(
+    def _apply_subject_update(
         self,
         uow: ResearchUnitOfWork,
         candidate: object,
-        payload: CaseUpdateCandidatePayload,
+        payload: SubjectUpdateCandidatePayload,
         *,
         now: object,
     ) -> tuple[str, str | None]:
@@ -1319,90 +1377,105 @@ class ThesisRevisionService:
 
         assert isinstance(candidate, CandidateThesisRevision)
         assert isinstance(now, datetime)
-        case_id = candidate.case_id
-        if case_id is None:
-            raise DataContractError("case_status_change candidate requires case_id")
-        case = uow.cases.get(case_id)
+        subject_id = candidate.subject_id
+        if subject_id is None:
+            raise DataContractError("subject_status_change candidate requires subject_id")
+        subject = uow.subjects.get(subject_id)
 
         if payload.action == "create":
-            # create is handled by InvestmentCaseService; confirm path is a no-op guard
+            # create is handled by ResearchSubjectService; confirm path is a no-op guard
             raise DataContractError(
-                "case create candidates are confirmed at creation time, not via confirm_candidate"
+                "subject create candidates are confirmed at creation time, "
+                "not via confirm_candidate"
             )
         if payload.action == "archive":
             if candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW:
                 raise StrictReviewRequired("archive requires STRICT_REVIEW")
+            ensure_subject_can_leave_tracking(
+                uow,
+                subject,
+                attempted_subject_status=ResearchSubjectStatus.ARCHIVED,
+            )
             reason = payload.archived_reason or "archived"
-            archived = InvestmentCase(
-                case_id=case.case_id,
-                case_type=case.case_type,
-                title=case.title,
-                summary=case.summary,
-                status=InvestmentCaseStatus.ARCHIVED,
-                primary_instrument_id=case.primary_instrument_id,
-                topic_tags=case.topic_tags,
-                created_at=case.created_at,
+            archived = ResearchSubject(
+                subject_id=subject.subject_id,
+                subject_type=subject.subject_type,
+                title=subject.title,
+                summary=subject.summary,
+                status=ResearchSubjectStatus.ARCHIVED,
+                primary_instrument_id=subject.primary_instrument_id,
+                topic_tags=subject.topic_tags,
+                created_at=subject.created_at,
                 updated_at=now,
-                created_by=case.created_by,
+                created_by=subject.created_by,
                 archived_at=now,
                 archived_reason=reason,
-                linked_case_ids=case.linked_case_ids,
-                evidence_ids=case.evidence_ids,
-                report_ids=case.report_ids,
-                event_ids=case.event_ids,
-                decision_ids=case.decision_ids,
-                schema_version=case.schema_version,
+                linked_subject_ids=subject.linked_subject_ids,
+                evidence_ids=subject.evidence_ids,
+                report_ids=subject.report_ids,
+                event_ids=subject.event_ids,
+                decision_ids=subject.decision_ids,
+                schema_version=subject.schema_version,
             )
-            uow.cases.update(archived)
-            return "investment_case", case_id
+            uow.subjects.update(archived)
+            return "research_subject", subject_id
 
         # update
+        if payload.subject_type is not None or payload.primary_instrument_id is not None:
+            raise InputValidationError(
+                "Subject type and primary instrument are immutable after creation",
+            )
         new_status = (
-            InvestmentCaseStatus(payload.new_status)
+            ResearchSubjectStatus(payload.new_status)
             if payload.new_status is not None
-            else case.status
+            else subject.status
+        )
+        metadata = validate_subject_metadata(
+            title=payload.title if payload.title is not None else subject.title,
+            summary=payload.summary if payload.summary is not None else subject.summary,
+        )
+        ensure_subject_can_leave_tracking(
+            uow,
+            subject,
+            attempted_subject_status=new_status,
         )
         if (
-            case.status == InvestmentCaseStatus.ACTIVE
-            and new_status != InvestmentCaseStatus.ACTIVE
+            subject.status == ResearchSubjectStatus.ACTIVE
+            and new_status != ResearchSubjectStatus.ACTIVE
             and candidate.confirmation_mode != ConfirmationMode.STRICT_REVIEW
         ):
             raise StrictReviewRequired(
-                "leaving ACTIVE case status requires STRICT_REVIEW",
-                details={"from": case.status.value, "to": new_status.value},
+                "leaving ACTIVE subject status requires STRICT_REVIEW",
+                details={"from": subject.status.value, "to": new_status.value},
             )
-        is_archived = new_status == InvestmentCaseStatus.ARCHIVED
-        updated = InvestmentCase(
-            case_id=case.case_id,
-            case_type=case.case_type,
-            title=payload.title if payload.title is not None else case.title,
-            summary=payload.summary if payload.summary is not None else case.summary,
+        is_archived = new_status == ResearchSubjectStatus.ARCHIVED
+        updated = ResearchSubject(
+            subject_id=subject.subject_id,
+            subject_type=subject.subject_type,
+            title=metadata.title,
+            summary=metadata.summary,
             status=new_status,
-            primary_instrument_id=(
-                payload.primary_instrument_id
-                if payload.primary_instrument_id is not None
-                else case.primary_instrument_id
-            ),
-            topic_tags=payload.topic_tags if payload.topic_tags is not None else case.topic_tags,
-            created_at=case.created_at,
+            primary_instrument_id=subject.primary_instrument_id,
+            topic_tags=payload.topic_tags if payload.topic_tags is not None else subject.topic_tags,
+            created_at=subject.created_at,
             updated_at=now,
-            created_by=case.created_by,
+            created_by=subject.created_by,
             archived_at=now if is_archived else None,
             archived_reason=(
-                (payload.archived_reason or case.archived_reason or "archived")
+                (payload.archived_reason or subject.archived_reason or "archived")
                 if is_archived
                 else None
             ),
-            linked_case_ids=(
-                payload.linked_case_ids
-                if payload.linked_case_ids is not None
-                else case.linked_case_ids
+            linked_subject_ids=(
+                payload.linked_subject_ids
+                if payload.linked_subject_ids is not None
+                else subject.linked_subject_ids
             ),
-            evidence_ids=case.evidence_ids,
-            report_ids=case.report_ids,
-            event_ids=case.event_ids,
-            decision_ids=case.decision_ids,
-            schema_version=case.schema_version,
+            evidence_ids=subject.evidence_ids,
+            report_ids=subject.report_ids,
+            event_ids=subject.event_ids,
+            decision_ids=subject.decision_ids,
+            schema_version=subject.schema_version,
         )
-        uow.cases.update(updated)
-        return "investment_case", case_id
+        uow.subjects.update(updated)
+        return "research_subject", subject_id

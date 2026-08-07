@@ -20,6 +20,25 @@ from interfaces.mcp.tools.compact import (
 )
 
 
+def test_console_bff_canonicalizes_legacy_subject_transport_fields() -> None:
+    assert console_api._canonical_subject_transport(
+        {
+            "data": {
+                "case_id": "case_001",
+                "case_type": "company",
+                "linked_case_ids": ["case_002"],
+            }
+        }
+    ) == {
+        "data": {
+            "subject_id": "case_001",
+            "subject_type": "company",
+            "linked_subject_ids": ["case_002"],
+        }
+    }
+
+
+
 class _Container:
     async def aclose(self) -> None:
         return None
@@ -321,15 +340,8 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
         "coverage",
         "risk_policy",
         "risk_check",
-        "watchlist",
     }
-    assert payload["watchlist"]["groups"]["data"]["source"] == "MOOMOO"
-    assert payload["watchlist"]["items"]["data"]["group_name"] == "All"
-    assert [
-        (tool, request)
-        for tool, request in calls
-        if tool != "watchlist_get"
-    ] == [
+    assert calls == [
         ("account_get", {"operation": "positions"}),
         ("account_get", {"operation": "transactions", "limit": 17}),
         ("portfolio_analyze", {"operation": "exposure"}),
@@ -337,15 +349,12 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
         ("portfolio_risk_get", {"operation": "policy"}),
         ("portfolio_risk_get", {"operation": "check"}),
     ]
-    assert calls[-2:] == [
-        ("watchlist_get", {"operation": "groups"}),
-        ("watchlist_get", {"operation": "items", "limit": 500, "group_name": "All"}),
-    ]
+    assert all(tool != "watchlist_get" for tool, _request in calls)
     assert all(tool != "external_state_sync" for tool, _request in calls)
 
 
 @pytest.mark.asyncio
-async def test_research_console_pages_all_cases_and_keeps_partial_state_failure(
+async def test_research_console_pages_all_subjects_and_keeps_partial_state_failure(
     monkeypatch: Any,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -405,11 +414,12 @@ async def test_research_console_pages_all_cases_and_keeps_partial_state_failure(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["case_list"]["page_size"] == 200
-    assert payload["case_list"]["total"] == 201
-    assert len(payload["cases"]) == 201
-    assert payload["cases"][0]["state"]["errors"][0]["code"] == "CASE_STATE_FAILED"
-    assert payload["cases"][-1]["state"]["ok"] is True
+    assert payload["subject_list"]["page_size"] == 200
+    assert payload["subject_list"]["total"] == 201
+    assert len(payload["subjects"]) == 201
+    assert payload["subjects"][0]["subject"]["subject_id"] == "case_001"
+    assert payload["subjects"][0]["state"]["errors"][0]["code"] == "CASE_STATE_FAILED"
+    assert payload["subjects"][-1]["state"]["ok"] is True
 
     list_calls = [arguments for name, arguments in calls if name == "investment_case_read"]
     assert [call["request"] for call in list_calls] == [

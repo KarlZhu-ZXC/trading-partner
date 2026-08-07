@@ -11,8 +11,7 @@ from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
-from application.ports.monitor_notification_sender import MonitorNotificationSender
-from application.ports.monitor_repository import MonitorRepository
+from application.ports.notification_sender import NotificationSender
 from application.ports.operational_maintenance import OperationalMaintenancePort
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
@@ -46,16 +45,15 @@ from application.services.historical_validation_service import HistoricalValidat
 from application.services.instrument_access_service import InstrumentAccessService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
-from application.services.investment_case_service import InvestmentCaseService
 from application.services.journal_service import JournalService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_fact_resolver import MonitorFactResolver
-from application.services.monitor_notification_service import MonitorNotificationService
 from application.services.monitor_schedule_service import MonitorScheduleService
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
+from application.services.notification_service import NotificationService
 from application.services.peer_comparison_service import PeerComparisonService
 from application.services.performance_reconciliation_service import (
     PerformanceReconciliationService,
@@ -75,6 +73,7 @@ from application.services.research_report_search_service import (
 )
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
+from application.services.research_subject_service import ResearchSubjectService
 from application.services.research_timeline_service import ResearchTimelineService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
 from application.services.risk_engine_service import RiskEngineService
@@ -174,9 +173,7 @@ from infrastructure.providers.instrument_directory import (
     TencentInstrumentDirectoryAdapter,
     YahooInstrumentDirectoryAdapter,
 )
-from infrastructure.providers.notifications.telegram import (
-    TelegramMonitorNotificationAdapter,
-)
+from infrastructure.providers.notifications.telegram import TelegramNotificationAdapter
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
 from infrastructure.providers.us.context_codecs import (
@@ -217,17 +214,19 @@ class ProviderBundle:
 
 @dataclass(frozen=True, slots=True)
 class OperationalServices:
-    """CLI-only application entry points that are intentionally not MCP tools."""
-
     industry_metrics: IndustryMetricRepository
     futures_contracts: FuturesContractService
     monitor_evaluation: MonitorEvaluationService
-    monitor_notifications: MonitorNotificationService
+    notifications: NotificationService
     monitor_dispatch: MonitorDispatchService
     post_market_sync: PostMarketSyncService
     maintenance: OperationalMaintenancePort
     performance_reconciliation: PerformanceReconciliationService
     schwab_oauth: SchwabOAuthFlowManager | None
+    @property
+    def monitor_notifications(self) -> NotificationService:
+        """Compatibility accessor for the former Monitor-only name."""
+        return self.notifications
 
 
 @dataclass(slots=True)
@@ -265,19 +264,19 @@ def build_application(
     clock: Clock = overrides.clock or SystemClock()
     id_generator: IdGenerator = Uuid7IdGenerator()
     secret_redactor: SecretRedactor = DefaultSecretRedactor()
-    owned_monitor_notification_sender: MonitorNotificationSender | None = None
-    monitor_notification_sender = overrides.monitor_notification_sender
-    if monitor_notification_sender is None and settings.monitor_notifications_enabled:
+    owned_notification_sender: NotificationSender | None = None
+    notification_sender = overrides.notification_sender or overrides.monitor_notification_sender
+    if notification_sender is None and settings.notifications_enabled:
         assert settings.telegram_bot_token is not None
         assert settings.telegram_chat_id is not None
-        owned_monitor_notification_sender = TelegramMonitorNotificationAdapter(
+        owned_notification_sender = TelegramNotificationAdapter(
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             message_thread_id=settings.telegram_message_thread_id,
             timeout_seconds=settings.provider_timeout_default_seconds,
             proxy_url=settings.provider_proxy_url,
         )
-        monitor_notification_sender = owned_monitor_notification_sender
+        notification_sender = owned_notification_sender
     persistence = build_persistence_infrastructure(
         settings,
         clock=clock,
@@ -360,7 +359,7 @@ def build_application(
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
         return SqlAlchemyInstrumentUnitOfWork(engine, clock)
 
-    investment_case_service = InvestmentCaseService(
+    research_subject_service = ResearchSubjectService(
         research_unit_of_work_factory,
         clock,
         id_generator,
@@ -756,10 +755,11 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    monitor_repository: MonitorRepository = SqlAlchemyMonitorRepository(engine)
+    monitor_repository = SqlAlchemyMonitorRepository(engine)
     data_quality_service = DataQualityService(
         account_snapshot_repository, account_transaction_repository, monitor_repository,
         provider_infrastructure.route_history_store,
+        research_unit_of_work_factory,
         clock, id_generator, secret_redactor,
     )
     us_market_calendar = XnysMarketSessionCalendar()
@@ -795,22 +795,22 @@ def build_application(
         id_generator,
         monitor_fact_resolver,
     )
-    monitor_notification_service = MonitorNotificationService(
+    notification_service = NotificationService(
         monitor_repository,
-        monitor_notification_sender,
+        notification_sender,
         clock,
-        enabled=settings.monitor_notifications_enabled,
+        enabled=settings.notifications_enabled,
         configured=(
             settings.telegram_bot_token is not None and settings.telegram_chat_id is not None
         ),
-        max_attempts=settings.monitor_notification_max_attempts,
-        event_ttl_hours=settings.monitor_notification_event_ttl_hours,
-        batch_size=settings.monitor_notification_batch_size,
+        max_attempts=settings.notification_max_attempts,
+        ttl_hours=settings.notification_ttl_hours,
+        batch_size=settings.notification_batch_size,
     )
     monitor_dispatch_service = MonitorDispatchService(
         monitor_repository,
         monitor_evaluation_service,
-        monitor_notification_service,
+        notification_service,
         monitor_schedule_service,
         clock,
     )
@@ -902,7 +902,7 @@ def build_application(
     )
     research_workflow_orchestrator = ResearchWorkflowOrchestrator(
         workflow_run_repository,
-        investment_case_service,
+        research_subject_service,
         research_context_builder,
         research_archive_service,
         a_share_tool_coordinator,
@@ -931,13 +931,13 @@ def build_application(
             post_market_sync_lock=post_market_sync_lock,
             a_share_transport=provider_infrastructure.owned_a_share_transport,
             cross_asset_transport=provider_infrastructure.owned_cross_asset_transport,
-            monitor_notification_sender=owned_monitor_notification_sender,
+            notification_sender=owned_notification_sender,
         ),
         providers=ProviderBundle(router=provider_router, registry=vendor_registry),
         services=ApplicationServices(
             health=health_service,
             data_quality=data_quality_service,
-            investment_cases=investment_case_service,
+            research_subjects=research_subject_service,
             thesis_revisions=thesis_revision_service,
             research_state=research_state_query_service,
             research_archive=research_archive_service,
@@ -966,7 +966,7 @@ def build_application(
             industry_metrics=industry_metric_repository,
             futures_contracts=futures_contract_service,
             monitor_evaluation=monitor_evaluation_service,
-            monitor_notifications=monitor_notification_service,
+            notifications=notification_service,
             monitor_dispatch=monitor_dispatch_service,
             post_market_sync=post_market_sync_service,
             maintenance=maintenance_service,

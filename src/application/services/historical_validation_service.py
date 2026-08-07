@@ -260,7 +260,7 @@ class HistoricalValidationService:
                 "strategy": {
                     "name": request.strategy_name,
                     "hypothesis": request.hypothesis,
-                    "case_id": request.case_id,
+                    "subject_id": request.subject_id,
                     "code_sha256": code_sha256,
                     "parameters": request.parameters,
                 },

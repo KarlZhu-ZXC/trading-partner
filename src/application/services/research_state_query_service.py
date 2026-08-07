@@ -31,7 +31,7 @@ class ResearchStateQueryService:
 
     def get_state(
         self,
-        case_id: str,
+        subject_id: str,
         *,
         include_archived_theses: bool = False,
         include_watchlist: bool = True,
@@ -41,7 +41,7 @@ class ResearchStateQueryService:
             with self._uow_factory() as uow:
                 data = build_research_state(
                     uow,
-                    case_id,
+                    subject_id,
                     include_archived_theses=include_archived_theses,
                     include_watchlist=include_watchlist,
                 )
@@ -58,12 +58,12 @@ class ResearchStateQueryService:
                 exc=exc,
             )
 
-    def list_open_questions(self, case_id: str) -> ToolEnvelope[OpenQuestionListDTO]:
+    def list_open_questions(self, subject_id: str) -> ToolEnvelope[OpenQuestionListDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
             with self._uow_factory() as uow:
-                uow.cases.get(case_id)
-                items = uow.questions.list_by_case(case_id)
+                uow.subjects.get(subject_id)
+                items = uow.questions.list_by_subject(subject_id)
                 data = OpenQuestionListDTO(items=OpenQuestionDTO.from_domain_list(items))
                 return envelope_success(
                     request_id=request_id,

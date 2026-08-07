@@ -1,4 +1,4 @@
-"""Read-only quality ledger over durable account and Monitor facts."""
+"""Read-only quality ledger over durable account, research, Monitor, and route facts."""
 
 from __future__ import annotations
 
@@ -22,6 +22,12 @@ from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
 from application.ports.provider_route_history_store import ProviderRouteHistoryStore
 from application.ports.secret_redactor import SecretRedactor
+from application.services._research_support import UowFactory
+from application.services.research_state_invariants import (
+    LIVE_THESIS_STATUSES,
+    LIVE_TRADE_PLAN_STATUSES,
+    TRACKING_SUBJECT_STATUSES,
+)
 from domain.common.enums import DataCategory, Freshness, HealthState, Market, VendorId
 from domain.common.ids import EntityIdPrefix
 from domain.monitoring.enums import (
@@ -32,6 +38,7 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import MonitorDefinition
 from domain.portfolio.enums import AccountActivityCoverageStatus
 from domain.portfolio.models import AccountActivityCoverageReceipt, AccountSnapshot
+from domain.trade_plan.enums import TradePlanStatus
 
 
 class DataQualityService:
@@ -50,6 +57,7 @@ class DataQualityService:
         account_transactions: AccountTransactionRepository,
         monitors: MonitorRepository,
         provider_routes: ProviderRouteHistoryStore,
+        research_uow_factory: UowFactory,
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
@@ -58,6 +66,7 @@ class DataQualityService:
         self._account_transactions = account_transactions
         self._monitors = monitors
         self._provider_routes = provider_routes
+        self._research_uow_factory = research_uow_factory
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
@@ -101,12 +110,16 @@ class DataQualityService:
             repository_errors = True
             issues.append(self._persistence_issue("provider_routes", exc, now))
 
+        try:
+            self._append_research_state_issues(issues, now)
+        except Exception as exc:  # noqa: BLE001 — health view must not raise or leak
+            repository_errors = True
+            issues.append(self._persistence_issue("research_state", exc, now))
+
         account_items = tuple(
             self._account_quality(snapshot, now, issues) for snapshot in snapshots
         )
-        latest_coverage: dict[
-            tuple[VendorId, str], AccountActivityCoverageReceipt
-        ] = {}
+        latest_coverage: dict[tuple[VendorId, str], AccountActivityCoverageReceipt] = {}
         for receipt in coverage_receipts:
             key = (receipt.provider, receipt.account_ref)
             current = latest_coverage.get(key)
@@ -132,9 +145,7 @@ class DataQualityService:
         monitor_items = tuple(
             self._monitor_quality(monitor, now, issues) for monitor in monitor_definitions
         )
-        route_items = self._provider_route_quality(
-            route_receipts, route_window_start, issues
-        )
+        route_items = self._provider_route_quality(route_receipts, route_window_start, issues)
         route_window_truncated = len(route_receipts) == self._ROUTE_LIMIT
         limitations = list(self._BASE_LIMITATIONS)
         if not self._provider_routes.is_durable:
@@ -182,6 +193,82 @@ class DataQualityService:
             warnings=warnings,
         )
 
+    def _append_research_state_issues(
+        self,
+        issues: list[DataQualityIssueDTO],
+        observed_at: datetime,
+    ) -> None:
+        """Report persisted parent/child lifecycle conflicts without mutating them."""
+        page_size = 200
+        offset = 0
+        with self._research_uow_factory() as uow:
+            while True:
+                subjects = uow.subjects.list(
+                    include_archived=True,
+                    limit=page_size,
+                    offset=offset,
+                )
+                for subject in subjects:
+                    theses = uow.theses.list_by_subject(subject.subject_id)
+                    plan = uow.trade_plans.get_current_by_subject(subject.subject_id)
+                    live_theses = tuple(
+                        thesis for thesis in theses if thesis.status in LIVE_THESIS_STATUSES
+                    )
+                    if subject.status not in TRACKING_SUBJECT_STATUSES:
+                        if live_theses:
+                            issues.append(
+                                DataQualityIssueDTO(
+                                    code="RESEARCH_CASE_WITH_LIVE_THESIS",
+                                    severity=HealthState.DEGRADED,
+                                    scope="research_state",
+                                    subject_ref=subject.subject_id,
+                                    observed_at=observed_at,
+                                    detail=(
+                                        "A non-tracking Research Subject contains a live Thesis; "
+                                        "activate the Research Subject through explicit "
+                                        "confirmation or "
+                                        "retire the Thesis."
+                                    ),
+                                )
+                            )
+                        if plan is not None and plan.status in LIVE_TRADE_PLAN_STATUSES:
+                            issues.append(
+                                DataQualityIssueDTO(
+                                    code="RESEARCH_CASE_WITH_LIVE_TRADE_PLAN",
+                                    severity=HealthState.DEGRADED,
+                                    scope="research_state",
+                                    subject_ref=subject.subject_id,
+                                    observed_at=observed_at,
+                                    detail=(
+                                        "A non-tracking Research Subject contains an ACTIVE "
+                                        "or PAUSED "
+                                        "Trade Plan."
+                                    ),
+                                )
+                            )
+                    if (
+                        plan is not None
+                        and plan.status is TradePlanStatus.ACTIVE
+                        and not any(
+                            thesis.thesis_id == plan.thesis_id
+                            and thesis.status in LIVE_THESIS_STATUSES
+                            for thesis in theses
+                        )
+                    ):
+                        issues.append(
+                            DataQualityIssueDTO(
+                                code="ACTIVE_TRADE_PLAN_WITHOUT_LIVE_THESIS",
+                                severity=HealthState.DEGRADED,
+                                scope="research_state",
+                                subject_ref=subject.subject_id,
+                                observed_at=observed_at,
+                                detail="An ACTIVE Trade Plan does not reference a live Thesis.",
+                            )
+                        )
+                if len(subjects) < page_size:
+                    break
+                offset += page_size
+
     @staticmethod
     def _provider_route_quality(
         receipts: tuple[ProviderRouteReceipt, ...],
@@ -199,9 +286,7 @@ class DataQualityService:
             latest = items[0]
             failures = sum(not item.ok for item in items)
             fallbacks = sum(item.used_fallback for item in items)
-            warning_codes = tuple(
-                sorted({code for item in items for code in item.warning_codes})
-            )
+            warning_codes = tuple(sorted({code for item in items for code in item.warning_codes}))
             subject = f"{market.value}:{category.value}"
             if failures:
                 issues.append(
@@ -364,20 +449,14 @@ class DataQualityService:
             run_lookup_failed = True
             run = None
         all_observations = (
-            tuple(
-                item
-                for item in run.observations
-                if item.monitor_id == monitor.monitor_id
-            )
+            tuple(item for item in run.observations if item.monitor_id == monitor.monitor_id)
             if run is not None
             else ()
         )
         observations = tuple(
             item for item in all_observations if item.monitor_version == monitor.version
         )
-        evaluated_versions = tuple(
-            sorted({item.monitor_version for item in all_observations})
-        )
+        evaluated_versions = tuple(sorted({item.monitor_version for item in all_observations}))
         latest_evaluated_version = evaluated_versions[-1] if evaluated_versions else None
         not_evaluated = sum(
             item.state is MonitorRuleStateValue.NOT_EVALUATED for item in observations
@@ -458,8 +537,7 @@ class DataQualityService:
                         subject_ref=monitor.monitor_id,
                         observed_at=run.completed_at,
                         detail=(
-                            "The latest run does not contain a complete immutable "
-                            "observation set."
+                            "The latest run does not contain a complete immutable observation set."
                         ),
                     )
                 )

@@ -14,11 +14,11 @@ from domain.common.enums import (
     ConfirmationMode,
     InvalidationSeverity,
     InvalidationStatus,
-    InvestmentCaseStatus,
-    InvestmentCaseType,
     InvestmentRating,
     Market,
     OpenQuestionStatus,
+    ResearchSubjectStatus,
+    ResearchSubjectType,
     ThesisRole,
     ThesisStatus,
     WatchlistItemStatus,
@@ -31,8 +31,8 @@ from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
     InvalidationCondition,
-    InvestmentCase,
     OpenQuestion,
+    ResearchSubject,
     Thesis,
     ThesisRevision,
     WatchlistItem,
@@ -42,13 +42,13 @@ NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 LATER = NOW + timedelta(hours=1)
 
 
-def _case(**overrides: object) -> InvestmentCase:
+def _case(**overrides: object) -> ResearchSubject:
     base: dict[str, object] = {
-        "case_id": "case_00000000-0000-7000-8000-000000000001",
-        "case_type": InvestmentCaseType.COMPANY,
+        "subject_id": "case_00000000-0000-7000-8000-000000000001",
+        "subject_type": ResearchSubjectType.COMPANY,
         "title": "NVDA long",
         "summary": "Structural GPU demand",
-        "status": InvestmentCaseStatus.DRAFT,
+        "status": ResearchSubjectStatus.DRAFT,
         "primary_instrument_id": "equity:US:NVDA",
         "topic_tags": ("ai", "semiconductors"),
         "created_at": NOW,
@@ -56,7 +56,7 @@ def _case(**overrides: object) -> InvestmentCase:
         "created_by": "user",
         "archived_at": None,
         "archived_reason": None,
-        "linked_case_ids": (),
+        "linked_subject_ids": (),
         "evidence_ids": (),
         "report_ids": (),
         "event_ids": (),
@@ -64,13 +64,13 @@ def _case(**overrides: object) -> InvestmentCase:
         "schema_version": RESEARCH_SCHEMA_VERSION,
     }
     base.update(overrides)
-    return InvestmentCase(**base)  # type: ignore[arg-type]
+    return ResearchSubject(**base)  # type: ignore[arg-type]
 
 
 def _thesis(**overrides: object) -> Thesis:
     base: dict[str, object] = {
         "thesis_id": "thesis_00000000-0000-7000-8000-000000000001",
-        "case_id": "case_00000000-0000-7000-8000-000000000001",
+        "subject_id": "case_00000000-0000-7000-8000-000000000001",
         "title": "Primary demand",
         "role": ThesisRole.PRIMARY,
         "status": ThesisStatus.ACTIVE,
@@ -90,7 +90,7 @@ def _revision(**overrides: object) -> ThesisRevision:
     base: dict[str, object] = {
         "revision_id": "rev_00000000-0000-7000-8000-000000000001",
         "thesis_id": "thesis_00000000-0000-7000-8000-000000000001",
-        "case_id": "case_00000000-0000-7000-8000-000000000001",
+        "subject_id": "case_00000000-0000-7000-8000-000000000001",
         "revision_no": 1,
         "supersedes_revision_no": None,
         "statement": "GPU demand remains structural",
@@ -114,7 +114,7 @@ def _revision(**overrides: object) -> ThesisRevision:
 def _candidate(**overrides: object) -> CandidateThesisRevision:
     base: dict[str, object] = {
         "candidate_id": "run_00000000-0000-7000-8000-000000000001",
-        "case_id": "case_00000000-0000-7000-8000-000000000001",
+        "subject_id": "case_00000000-0000-7000-8000-000000000001",
         "thesis_id": None,
         "target_revision_no": None,
         "payload_json": '{"kind":"thesis_revision"}',
@@ -137,7 +137,7 @@ def _candidate(**overrides: object) -> CandidateThesisRevision:
 
 def test_frozen_research_registry_keeps_original_twelve_names() -> None:
     assert len(FROZEN_RESEARCH_MODEL_NAMES) == 12
-    assert FROZEN_RESEARCH_MODEL_NAMES[0] == "InvestmentCase"
+    assert FROZEN_RESEARCH_MODEL_NAMES[0] == "ResearchSubject"
     assert "Evidence" in FROZEN_RESEARCH_MODEL_NAMES
     assert "WatchlistItem" in FROZEN_RESEARCH_MODEL_NAMES
     assert FROZEN_PHASE1B_SUPPORTING_MODEL_NAMES == (
@@ -147,12 +147,12 @@ def test_frozen_research_registry_keeps_original_twelve_names() -> None:
 
 
 def test_investment_case_archived_fields_sync() -> None:
-    with pytest.raises(DataContractError, match="ARCHIVED case requires"):
-        _case(status=InvestmentCaseStatus.ARCHIVED)
+    with pytest.raises(DataContractError, match="ARCHIVED research subject requires"):
+        _case(status=ResearchSubjectStatus.ARCHIVED)
     with pytest.raises(DataContractError, match="non-ARCHIVED"):
         _case(archived_at=NOW, archived_reason="done")
     archived = _case(
-        status=InvestmentCaseStatus.ARCHIVED,
+        status=ResearchSubjectStatus.ARCHIVED,
         archived_at=LATER,
         archived_reason="no longer tracked",
         updated_at=LATER,
@@ -200,7 +200,7 @@ def test_hard_invalidation_allows_triggered_recovery() -> None:
     recovered = InvalidationCondition(
         invalidation_id="rev_00000000-0000-7000-8000-000000000099",
         thesis_id="thesis_00000000-0000-7000-8000-000000000001",
-        case_id="case_00000000-0000-7000-8000-000000000001",
+        subject_id="case_00000000-0000-7000-8000-000000000001",
         revision_no=1,
         description="Gross margin collapse",
         observable="GM < 50%",
@@ -220,7 +220,7 @@ def test_hard_invalidation_allows_triggered_recovery() -> None:
     rearmed = InvalidationCondition(
         invalidation_id="rev_00000000-0000-7000-8000-000000000098",
         thesis_id="thesis_00000000-0000-7000-8000-000000000001",
-        case_id="case_00000000-0000-7000-8000-000000000001",
+        subject_id="case_00000000-0000-7000-8000-000000000001",
         revision_no=1,
         description="Gross margin collapse",
         observable="GM < 50%",
@@ -242,7 +242,7 @@ def test_triggered_invalidation_requires_fields() -> None:
         InvalidationCondition(
             invalidation_id="rev_00000000-0000-7000-8000-000000000097",
             thesis_id="thesis_00000000-0000-7000-8000-000000000001",
-            case_id="case_00000000-0000-7000-8000-000000000001",
+            subject_id="case_00000000-0000-7000-8000-000000000001",
             revision_no=1,
             description="x",
             observable="y",
@@ -263,7 +263,7 @@ def test_non_triggered_invalidation_rejects_residual_fields() -> None:
         InvalidationCondition(
             invalidation_id="rev_00000000-0000-7000-8000-000000000096",
             thesis_id="thesis_00000000-0000-7000-8000-000000000001",
-            case_id="case_00000000-0000-7000-8000-000000000001",
+            subject_id="case_00000000-0000-7000-8000-000000000001",
             revision_no=1,
             description="x",
             observable="y",
@@ -284,7 +284,7 @@ def test_assumption_retired_fields() -> None:
         Assumption(
             assumption_id="rev_a",
             thesis_id="thesis_t",
-            case_id="case_c",
+            subject_id="case_c",
             revision_no=1,
             statement="s",
             basis="b",
@@ -303,7 +303,7 @@ def test_open_question_status_fields() -> None:
     with pytest.raises(DataContractError, match="ANSWERED requires"):
         OpenQuestion(
             question_id="rev_q",
-            case_id="case_c",
+            subject_id="case_c",
             text="Why?",
             status=OpenQuestionStatus.ANSWERED,
             asked_at=NOW,
@@ -315,7 +315,7 @@ def test_open_question_status_fields() -> None:
     with pytest.raises(DataContractError, match="CLOSED_WITHOUT_ANSWER"):
         OpenQuestion(
             question_id="rev_q",
-            case_id="case_c",
+            subject_id="case_c",
             text="Why?",
             status=OpenQuestionStatus.CLOSED_WITHOUT_ANSWER,
             asked_at=NOW,
@@ -327,7 +327,7 @@ def test_open_question_status_fields() -> None:
     with pytest.raises(DataContractError, match="non-ANSWERED"):
         OpenQuestion(
             question_id="rev_q",
-            case_id="case_c",
+            subject_id="case_c",
             text="Why?",
             status=OpenQuestionStatus.OPEN,
             asked_at=NOW,
@@ -339,7 +339,7 @@ def test_open_question_status_fields() -> None:
     with pytest.raises(DataContractError, match="non-CLOSED_WITHOUT_ANSWER"):
         OpenQuestion(
             question_id="rev_q",
-            case_id="case_c",
+            subject_id="case_c",
             text="Why?",
             status=OpenQuestionStatus.STALE,
             asked_at=NOW,
@@ -351,7 +351,7 @@ def test_open_question_status_fields() -> None:
 
 
 def test_watchlist_status_fields() -> None:
-    with pytest.raises(DataContractError, match="PROMOTED_TO_CASE"):
+    with pytest.raises(DataContractError, match="PROMOTED_TO_SUBJECT"):
         WatchlistItem(
             item_id="snapshot_1",
             market=Market.US,
@@ -359,16 +359,16 @@ def test_watchlist_status_fields() -> None:
             display_name="NVIDIA",
             thesis_hint="watch earnings",
             triggers=("eps miss",),
-            case_id=None,
-            status=WatchlistItemStatus.PROMOTED_TO_CASE,
+            subject_id=None,
+            status=WatchlistItemStatus.PROMOTED_TO_SUBJECT,
             created_at=NOW,
             updated_at=NOW,
             expires_at=None,
-            promoted_to_case_id=None,
+            promoted_to_subject_id=None,
             triggered_at=None,
             triggered_reason=None,
         )
-    with pytest.raises(DataContractError, match="non-PROMOTED_TO_CASE"):
+    with pytest.raises(DataContractError, match="non-PROMOTED_TO_SUBJECT"):
         WatchlistItem(
             item_id="snapshot_1",
             market=Market.US,
@@ -376,12 +376,12 @@ def test_watchlist_status_fields() -> None:
             display_name="NVIDIA",
             thesis_hint="watch earnings",
             triggers=("eps miss",),
-            case_id=None,
+            subject_id=None,
             status=WatchlistItemStatus.WATCHING,
             created_at=NOW,
             updated_at=NOW,
             expires_at=None,
-            promoted_to_case_id="case_x",
+            promoted_to_subject_id="case_x",
             triggered_at=None,
             triggered_reason=None,
         )
@@ -393,12 +393,12 @@ def test_watchlist_status_fields() -> None:
             display_name="NVIDIA",
             thesis_hint="watch earnings",
             triggers=("eps miss",),
-            case_id=None,
+            subject_id=None,
             status=WatchlistItemStatus.WATCHING,
             created_at=NOW,
             updated_at=NOW,
             expires_at=None,
-            promoted_to_case_id=None,
+            promoted_to_subject_id=None,
             triggered_at=LATER,
             triggered_reason="leftover",
         )
@@ -449,14 +449,14 @@ def test_candidate_status_field_sync() -> None:
 
 
 def test_candidate_case_scope() -> None:
-    with pytest.raises(DataContractError, match="case_id is required"):
-        _candidate(case_id=None, kind=CandidateKind.THESIS_REVISION)
+    with pytest.raises(DataContractError, match="subject_id is required"):
+        _candidate(subject_id=None, kind=CandidateKind.THESIS_REVISION)
     watch = _candidate(
-        case_id=None,
+        subject_id=None,
         kind=CandidateKind.WATCHLIST_ITEM,
         payload_json='{"kind":"watchlist_item"}',
     )
-    assert watch.case_id is None
+    assert watch.subject_id is None
 
 
 def test_candidate_thesis_scope_for_assumption() -> None:

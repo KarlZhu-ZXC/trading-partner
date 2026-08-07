@@ -13,7 +13,9 @@ from domain.common.enums import (
     DataCriticality,
     HealthState,
     Market,
+    ResearchSubjectStatus,
     SourceRole,
+    ThesisStatus,
     VendorId,
 )
 from domain.monitoring.enums import (
@@ -22,6 +24,7 @@ from domain.monitoring.enums import (
     MonitorRunStatus,
     MonitorStatus,
 )
+from domain.trade_plan.enums import TradePlanStatus
 from infrastructure.system.redactor import DefaultSecretRedactor
 
 
@@ -68,14 +71,53 @@ class _Routes:
         return self.values
 
 
+class _ResearchCases:
+    def __init__(self, values=()) -> None:
+        self.values = values
+
+    def list(self, *, include_archived, limit, offset):
+        assert include_archived is True
+        return self.values[offset : offset + limit]
+
+
+class _ResearchTheses:
+    def __init__(self, values=None) -> None:
+        self.values = values or {}
+
+    def list_by_subject(self, subject_id):
+        return self.values.get(subject_id, ())
+
+
+class _ResearchPlans:
+    def __init__(self, values=None) -> None:
+        self.values = values or {}
+
+    def get_current_by_subject(self, subject_id):
+        return self.values.get(subject_id)
+
+
+class _ResearchUow:
+    def __init__(self, subjects=(), theses=None, plans=None) -> None:
+        self.subjects = _ResearchCases(subjects)
+        self.theses = _ResearchTheses(theses)
+        self.trade_plans = _ResearchPlans(plans)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
 def _service(
-    snapshots=(), activity=(), monitors=(), runs=None, routes=()
+    snapshots=(), activity=(), monitors=(), runs=None, routes=(), research_uow=None
 ) -> DataQualityService:
     return DataQualityService(
         _Snapshots(snapshots),
         _Activity(activity),
         _Monitors(monitors, runs),
         _Routes(routes),
+        lambda: research_uow or _ResearchUow(),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),
@@ -171,6 +213,33 @@ def test_account_and_monitor_gaps_are_machine_readable() -> None:
     assert envelope.data.account_snapshots[0].valuation_coverage_ratio == 0
 
 
+def test_non_tracking_case_with_live_judgment_is_reported() -> None:
+    subject = SimpleNamespace(
+        subject_id="case_00000000-0000-7000-8000-000000000001",
+        status=ResearchSubjectStatus.DRAFT,
+    )
+    thesis = SimpleNamespace(
+        thesis_id="thesis_00000000-0000-7000-8000-000000000001",
+        status=ThesisStatus.ACTIVE,
+    )
+    plan = SimpleNamespace(
+        thesis_id=thesis.thesis_id,
+        status=TradePlanStatus.ACTIVE,
+    )
+    uow = _ResearchUow(
+        subjects=(subject,),
+        theses={subject.subject_id: (thesis,)},
+        plans={subject.subject_id: plan},
+    )
+
+    envelope = _service(research_uow=uow).check()
+
+    assert envelope.data is not None
+    codes = {item.code for item in envelope.data.issues}
+    assert "RESEARCH_CASE_WITH_LIVE_THESIS" in codes
+    assert "RESEARCH_CASE_WITH_LIVE_TRADE_PLAN" in codes
+
+
 def test_old_definition_run_does_not_cover_the_current_monitor_version() -> None:
     now = FixedClock().now()
     monitor = SimpleNamespace(
@@ -222,6 +291,7 @@ def test_repository_failure_is_redacted_and_does_not_probe_upstream() -> None:
         _Activity(),
         _Monitors(),
         _Routes(),
+        lambda: _ResearchUow(),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),
@@ -260,6 +330,7 @@ def test_monitor_run_read_failure_is_not_mislabeled_as_never_evaluated() -> None
         _Activity(),
         _BrokenMonitorRuns((monitor,)),
         _Routes(),
+        lambda: _ResearchUow(),
         FixedClock(),
         SequentialIdGenerator(),
         DefaultSecretRedactor(),

@@ -50,31 +50,31 @@ Trading Partner 不是行情终端、券商前端或通用个人财务软件。�
 
 1. **A1–A3 真实绩效与贡献**：完成券商报表签收，再实现 TWR/Modified Dietz、标的/账户/
    研究主题贡献和可解释残差。这是所有“判断是否有效”功能的事实底座。
-2. **Catalyst Agenda C0–C3**：统一持仓、Watchlist、Case 的财报、公告和宏观事项，保留日期
+2. **Catalyst Agenda C0–C3**：统一持仓、Watchlist、研究档案的财报、公告和宏观事项，保留日期
    certainty、source coverage 与显式刷新，不把已发生 Event 冒充未来事项。
 3. **Thesis-impact packet**：当 filing、财报、经营指标或新闻发生变化时，确定性返回它可能
-   对应的 Case、假设、失效条件和待复核问题；由 Codex 判断意义并提出候选修订。
+   对应的研究档案、假设、失效条件和待复核问题；由 Codex 判断意义并提出候选修订。
 4. **Monitor 通知策略**：在现有 transition event、market-close heartbeat 和 Telegram 上增加
    severity 门槛、quiet hours、digest/即时模式与订阅范围；所有规则仍归一个 Dashboard 管理。
 
 ### P1：提高研究质量和日常效率
 
 1. **研究 Inbox / 待处理队列**：将新 filing、公告、Transcript、用户上传材料和重大新闻先
-   进入可追溯队列，支持关联 Case、标记已读、延后或归档，避免直接污染 Thesis。
+   进入可追溯队列，支持关联研究档案、标记已读、延后或归档，避免直接污染 Thesis。
 2. **管理层讲话与 Transcript facts**：先接免费、许可清晰的 SEC/公司 IR 材料；只抽取带
    来源片段、说话人和时间的事实，跨期措辞变化由确定性 diff 呈现。
 3. **版本化估值与情景假设**：保存收入、利润率、倍数、折现率和情景，不自动生成目标价；
    当前事实变化时展示模型敏感性及过期输入。
 4. **研究前数据 preflight**：一次显示某标的可用 Provider、覆盖期、延迟、关键缺口和预计
    请求成本，减少 Deep Dive 跑到一半才发现数据不可用。
-5. **可移植研究包**：按 Case 导出不含 secret/账户标识的 Markdown/JSON bundle，便于备份、
+5. **可移植研究包**：按研究档案导出不含 secret/账户标识的 Markdown/JSON bundle，便于备份、
    分享或交给其他 MCP Host；导入必须保留来源和冲突提示。
 
 ### P2：在核心稳定后再做
 
 1. **候选发现与 Screener bridge**：接收用户或外部筛选器给出的候选集，做同口径初筛和
    research queue；不在本地维护全市场数据库，也不让 LLM 自主选股。
-2. **更多免费市场覆盖**：只有当新市场能填补真实 Case/组合缺口且有清晰 identity、时区、
+2. **更多免费市场覆盖**：只有当新市场能填补真实研究档案/组合缺口且有清晰 identity、时区、
    freshness 和 license 时才接入。
 3. **多渠道通知与摘要**：Email/Telegram 等共享同一 durable Outbox 和订阅策略，不让每个
    channel 产生另一套业务逻辑。

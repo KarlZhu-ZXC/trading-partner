@@ -74,10 +74,11 @@ class PortfolioSnapshotRow(Base):
     warning_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class CasePositionLinkRow(Base):
+class SubjectPositionLinkRow(Base):
     __tablename__ = "case_position_links"
 
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         primary_key=True,
@@ -157,7 +158,8 @@ class TradePlanIdentityRow(Base):
     __table_args__ = (UniqueConstraint("case_id", name="uq_trade_plan_identities_case_id"),)
 
     plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    case_id: Mapped[str] = mapped_column(
+    subject_id: Mapped[str] = mapped_column(
+        "case_id",
         Text,
         ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
         nullable=False,

@@ -7,7 +7,7 @@ description: Use Trading Partner MCP for investment research facts, health check
 
 ## When to use
 
-- User asks about portfolio research, Investment Cases, market facts, or judgment continuity.
+- User asks about portfolio research, Research Subjects, market facts, or judgment continuity.
 - You need **verified** market or system facts from tools rather than model memory.
 - You need to search historical evidence, reports, events, decisions, or journals.
 - You need to check whether the Trading Partner backend is healthy.
@@ -42,12 +42,17 @@ actually rate-limited a request. Do not describe the first two as an upstream 42
 
 ### Research file / investment judgment (Phase 1B)
 
-Use the user-facing terms **research file** for `InvestmentCase` and **current
-investment judgment** for `Thesis`. In company/catalyst flows, an Instrument is the
-objective identity and the Case is its durable research file. Theme, macro, and
-portfolio-concern Cases may omit a primary Instrument. A Thesis is one falsifiable
-judgment inside a file. Do not imply that creating a Draft Case confirms a Thesis
-or starts long-term tracking.
+Use **Research Subject** in English and 标的、研究标的 or 研究档案 in Chinese,
+depending on whether the context emphasizes the research object or its durable file.
+`InvestmentCase`, `investment_case_*`, `case_id`, `case_type`, `linked_case_ids`,
+and the opaque `case_` prefix are compatibility-boundary names only; do not present
+them as the product concept. Equity means an actual stock Instrument only.
+
+In company/catalyst flows, an Instrument is the objective identity and the Research
+Subject is its durable research file. Theme, macro, and portfolio-concern Research
+Subjects may omit a primary Instrument. A Thesis is one falsifiable judgment inside
+a file. Do not imply that creating a draft Research Subject confirms a Thesis or
+starts long-term tracking.
 
 - `investment_case_read`: `query` or bounded durable `context`
 - `investment_case_manage`: confirmed/idempotent `create`, metadata `update`, or `archive`
@@ -65,6 +70,31 @@ Ask one concise clarification only when the target or action is genuinely ambigu
 This authority does not extend to orders, fills, position mutation, or other
 out-of-scope execution.
 
+A Research Subject names a durable **research object or research question**.
+Its title identifies that object/question and its summary defines stable research
+scope. Never copy an entry, add/trim, take-profit, stop-loss, sizing, or position
+plan into Research Subject metadata; put the current investment judgment in the Thesis and
+conditional execution intent in the Trade Plan. A Research Subject's type and primary
+Instrument are immutable after creation. Use `DRAFT`, `ACTIVE`, and `ARCHIVED` for
+new Research Subject lifecycle decisions; legacy `STRENGTHENED`, `WEAKENED`, and `INVALIDATED`
+Research Subject values remain readable, but conviction semantics belong to the Thesis.
+
+A Draft/non-tracking Research Subject can hold research artifacts and proposed candidates, but
+cannot receive an ACTIVE/STRENGTHENED/WEAKENED Thesis or ACTIVE Trade Plan. Activate
+the Research Subject through its own explicitly confirmed status candidate first. An ACTIVE
+Trade Plan additionally requires a live Thesis. A tracking Research Subject cannot leave
+tracking while a live Thesis or ACTIVE/PAUSED Trade Plan remains. Preserve typed
+`RESEARCH_STATE_CONFLICT`; never hide it through implicit activation or cascade.
+Existing Thesis revisions preserve status unless `thesis_status` is explicit, and
+an actual status transition requires strict review. Close state inside-out: archive
+the ACTIVE/PAUSED Trade Plan, retire the live Thesis, then archive the Research Subject.
+Child research references must stay inside their owner scope: an Assumption or
+Invalidation must name a Thesis/revision in the same Research Subject, and an Open Question or
+Watchlist transition must target the candidate's own durable object. Never reuse a
+foreign child ID merely because it exists. Before retiring a Research Subject or bound Trade
+Plan, inspect its Monitor definitions and explicitly update their lifecycle; do not
+assume an automatic cascade.
+
 ### Instrument resolve (Phase 1D)
 
 - `instrument_resolve` — local-first instrument registry lookup. On a local miss,
@@ -78,7 +108,7 @@ out-of-scope execution.
 
 | Tool | Purpose |
 |---|---|
-| `research_memory_get` | `search`, immutable `report`, or unified case `timeline` |
+| `research_memory_get` | `search`, immutable `report`, or unified Research Subject `timeline` |
 | `research_memory_append` | Confirmed/idempotent `journal` or research/position `decision` intent; never orders/fills |
 
 **Do not call** (not registered): `evidence_create`, `evidence_update`,
@@ -130,6 +160,10 @@ session close. The adapter never maps Yahoo `chartPreviousClose` or
 `regularMarketPreviousClose` directly to this field; when a temporarily null daily
 close is recovered from timestamped `regularMarketPrice`, preserve
 `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`.
+If current pre-market has no same-day minute observation, a prior-day post-market
+value may remain the latest known price only with `INTRADAY_QUOTE_UNAVAILABLE`.
+Its session and `previous_close` stay anchored to that observation day, so the
+baseline must not slip back by an extra trading session.
 Moomoo Hot List is an attention ranking, not Bullish/Bearish sentiment. Preserve
 its trade/search/news heat basis and the `MOOMOO_OPEND_VERSION_UNSUPPORTED`
 warning when the local OpenD predates 10.9.
@@ -152,6 +186,9 @@ Formal contracts use `future:CME:*` and `future:DCE:LH*`. CME public facts are
 reference/delayed and Yahoo active-contract bars have no SLA. DCE is official EOD
 only. `commodity_spot:OTC:XAUUSD` and `XAGUSD` are Dukascopy broker/SWFX observations,
 not LBMA benchmarks; `cfd:OTC:COPPER_CMD_USD` is a rolling CFD, not copper spot.
+OTC quote DTOs expose `display_price` with its exact `price_basis`. Dukascopy
+bid/ask observations normally use the midpoint; `last` remains null because a
+broker quote midpoint must not be relabelled as a traded price.
 `cfd:OTC:LIGHT_CMD_USD` maps to Dukascopy `LIGHT.CMD-USD`; `USOIL` is only a
 lookup alias. It is an OTC rolling light-oil CFD, not WTI spot, NYMEX `CL`, a
 specific futures contract, or a continuous futures series.
@@ -270,7 +307,7 @@ after a failure or callback timeout.
 
 ### Durable context restore (Phase 1J)
 
-- `investment_case_read(request={"operation":"context", ...})` selects one Case by
+- `investment_case_read(request={"operation":"context", ...})` selects one Research Subject by
   `case_id` or an unambiguous primary
   `instrument_id`, then returns current research state, contrary-first evidence,
   compact history, latest durable positions, missing facts, and budget metadata.
@@ -309,7 +346,7 @@ reconciliation, fee, corporate-action, and valuation warning.
 |---|---|
 | `research_workflow_run` | Run one closed research workflow or prepare/import a manual QuantConnect Free historical-validation artifact |
 
-Compact `deep_dive` cannot create a Case and compact `portfolio_review` cannot
+Compact `deep_dive` cannot create a Research Subject and compact `portfolio_review` cannot
 refresh brokers. Use `investment_case_manage(request={"operation":"create",...})`
 or `external_state_sync(request={"operation":"accounts"})` first when the user explicitly asks
 for those separate effects.
@@ -338,10 +375,10 @@ peers. Preserve period, currency, source, missing-cell, and comparability labels
 Never invent a rank, score, target price, FX conversion, or Thesis update from the
 fact package.
 
-A Deep Dive Draft Case is a durable instrument research file, not an active tracking
+A draft Research Subject created by Deep Dive is a durable instrument research file, not an active tracking
 decision and not a confirmed investment judgment. Catalyst Review does not
-auto-create a Case; pass the Deep Dive `case_id` to continue the same judgment
-history. When multiple open Cases match one instrument, require an explicit
+auto-create a Research Subject; pass the Deep Dive `case_id` to continue the same judgment
+history. When multiple open Research Subjects match one instrument, require an explicit
 `case_id` instead of guessing.
 US equity workflows include company fundamentals/statements/events. US ETF workflows
 instead use composite market/technical facts, exact-symbol ETF news, ETF sentiment,
@@ -362,7 +399,7 @@ refresh and returns its sync receipt; it is not a paged single-group read.
 
 Moomoo and Manual CSV are alternatives, not merged or reconciled sources. External
 removal keeps inactive membership history and never deletes a research
-`WatchlistItem` or Investment Case. Manual CSV supports KR identities; Moomoo
+`WatchlistItem` or Research Subject. Manual CSV supports KR identities; Moomoo
 Watchlist mutation does not. Unsupported Moomoo codes remain visible with
 `research_supported=false`; never fabricate an A-share/US/KR instrument for them.
 
@@ -403,6 +440,14 @@ but must relay an explicit current-chat user decision using `reviewed_by="user"`
 plan and versions.
 A Trade Plan is a research control document, not an order; every response has
 `execution_effect=false`.
+The Trade Plan top-level `instrument_id` is the execution/position instrument used
+by sizing and portfolio-risk calculations. Each `MONITORABLE` condition has its own
+fact `instrument_id`, which may intentionally differ—for example, a UCO plan may
+observe `cfd:OTC:LIGHT_CMD_USD` (USOIL alias). A bound Monitor may use that condition
+instrument as its primary display/observation identity. Never use the reference
+instrument's price, currency, multiplier, or return as if it were the execution
+instrument, and never claim one-to-one tracking between a leveraged ETF and its
+underlying/reference market.
 
 | Tool | Purpose |
 |---|---|
@@ -477,10 +522,16 @@ an LLM. Do not place unescaped monitor text into `parse_mode=HTML`.
 Multiple transitions for one Monitor in one run are batched into one message while
 their durable events remain separate. Prior/current price changes use a signed
 absolute delta and a percentage rounded half-up to exactly two decimal places. Use
-`uv run trading-partner-monitor-notifications status`,
-`test`, or `flush` for operations. Never request or echo the Bot Token in chat;
-the user must place it in the project `.env`. Delivery does not acknowledge or
-resolve a source event/run and has no execution effect.
+`uv run trading-partner-notifications status`, `test`, or `flush` for
+operations; `trading-partner-monitor-notifications` remains an alias. The
+operational-only `enqueue` command reads a UTF-8 plain-text body from stdin and
+requires `--title`, `--idempotency-key`, `--confirmed-by user|external_agent`,
+and a bounded `--authorization-note`. MANUAL enqueue is explicitly authorized
+and has no order effect; closed-source `SYSTEM` entries are reserved for
+internal deterministic producers;
+its JSON receipt never echoes body or authorization note. Never request or echo
+the Bot Token in chat; the user must place it in the project `.env`. Delivery
+does not acknowledge or resolve a source event/run and has no execution effect.
 
 ### Technical Engine v2 (Phase 2D)
 

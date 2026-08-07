@@ -27,7 +27,6 @@ from domain.common.values import parse_instrument_id
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventType,
-    MonitorNotificationChannel,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -36,12 +35,13 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
-    MonitorNotificationMessage,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
     MonitorRunObservation,
 )
+from domain.notifications.enums import NotificationChannel, NotificationSourceType
+from domain.notifications.models import NotificationMessage
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 
@@ -122,7 +122,7 @@ class MonitorEvaluationService:
         generic_cache: dict[tuple[object, ...], _Fact] = {}
         states: list[MonitorRuleState] = []
         events: list[MonitorEvent] = []
-        notifications: list[MonitorNotificationMessage] = []
+        notifications: list[NotificationMessage] = []
         observations: list[MonitorRunObservation] = []
         warnings = list(selection_warnings)
         errors: list[str] = []
@@ -598,7 +598,7 @@ def _notification_messages(
     previous_states: dict[str, MonitorRuleState],
     data_sources: tuple[str, ...],
     id_generator: IdGenerator,
-) -> tuple[MonitorNotificationMessage, ...]:
+) -> tuple[NotificationMessage, ...]:
     event_types = {event.event_type for event in events}
     emoji = (
         "🚨"
@@ -649,8 +649,7 @@ def _notification_messages(
         lines.append(f"数据提示：{', '.join(remaining_warning_codes)}")
     if "IG_WEEKEND_GOLD_CFD_FALLBACK" in warning_codes:
         lines.append(
-            "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；"
-            "不是现货黄金或 LBMA 基准价。"
+            "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；不是现货黄金或 LBMA 基准价。"
         )
     if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
@@ -658,11 +657,11 @@ def _notification_messages(
     title = _notification_title(emoji, context.symbol, event_label)
     body = "\n".join(lines)
     return tuple(
-        MonitorNotificationMessage(
+        NotificationMessage(
             notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
-            source_event_id=event.event_id,
-            source_run_id=None,
-            channel=MonitorNotificationChannel.TELEGRAM,
+            source_type=NotificationSourceType.MONITOR_EVENT,
+            source_id=event.event_id,
+            channel=NotificationChannel.TELEGRAM,
             title=title,
             body=body,
             created_at=event.created_at,
@@ -833,9 +832,7 @@ def _notification_price_context(
         )
     symbol = instrument_id.rsplit(":", 1)[-1] if instrument_id else monitor.name
     candidates = tuple(
-        item
-        for item in observations
-        if is_price_rule(item) and item.instrument_id == instrument_id
+        item for item in observations if is_price_rule(item) and item.instrument_id == instrument_id
     )
     current = next((item for item in candidates if item.observed_value is not None), None)
     previous: MonitorRuleState | None = None
@@ -882,9 +879,7 @@ def _notification_price_context(
             symbol=symbol,
             price=str(previous.observed_value),
             price_time=(
-                previous.fact_as_of.isoformat()
-                if previous.fact_as_of is not None
-                else "不可用"
+                previous.fact_as_of.isoformat() if previous.fact_as_of is not None else "不可用"
             ),
             current_available=False,
             previous_price=previous.observed_value,
@@ -911,7 +906,7 @@ def _post_market_summary_message(
     events: tuple[MonitorEvent, ...] = (),
     previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] | None = None,
     monitor_sources_by_monitor: dict[str, tuple[str, ...]] | None = None,
-) -> MonitorNotificationMessage:
+) -> NotificationMessage:
     if run.cadence is MonitorCadence.A_SHARE_POST_MARKET:
         market_label = "A股"
     elif run.cadence is MonitorCadence.US_POST_MARKET:
@@ -955,18 +950,12 @@ def _post_market_summary_message(
                 *(
                     (
                         "数据来源："
-                        + ", ".join(
-                            (monitor_sources_by_monitor or {}).get(monitor.monitor_id, ())
-                        ),
+                        + ", ".join((monitor_sources_by_monitor or {}).get(monitor.monitor_id, ())),
                     )
                     if (monitor_sources_by_monitor or {}).get(monitor.monitor_id)
                     else ()
                 ),
-                *(
-                    ("CHANGES",)
-                    if monitor_events
-                    else ()
-                ),
+                *(("CHANGES",) if monitor_events else ()),
                 *(
                     tuple(
                         _format_notification_change(
@@ -990,9 +979,7 @@ def _post_market_summary_message(
         if context.instrument_id is not None and context.instrument_id.startswith("future:"):
             lines.append("期货价格并非现货；连续合约存在换月风险。")
     all_not_evaluated = tuple(
-        item
-        for item in run.observations
-        if item.state is MonitorRuleStateValue.NOT_EVALUATED
+        item for item in run.observations if item.state is MonitorRuleStateValue.NOT_EVALUATED
     )
     causes = tuple(
         dict.fromkeys(
@@ -1028,11 +1015,11 @@ def _post_market_summary_message(
         lines.append(f"数据提示：{', '.join(warning_codes)}")
     if error_codes:
         lines.append(f"运行错误：{', '.join(error_codes)}")
-    return MonitorNotificationMessage(
+    return NotificationMessage(
         notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
-        source_event_id=None,
-        source_run_id=run.run_id,
-        channel=MonitorNotificationChannel.TELEGRAM,
+        source_type=NotificationSourceType.MONITOR_RUN,
+        source_id=run.run_id,
+        channel=NotificationChannel.TELEGRAM,
         title=(f"📊 {market_label}盘后 Monitor · {len(monitors)} 标的 · {run.events_created} 变化"),
         body="\n".join(lines),
         created_at=run.completed_at,

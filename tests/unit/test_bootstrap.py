@@ -145,7 +145,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert isinstance(container.providers.registry, VendorRegistry)
         assert container.providers.router is not None
         assert container.services.health is not None
-        assert container.services.investment_cases is not None
+        assert container.services.research_subjects is not None
         assert container.services.thesis_revisions is not None
         assert container.services.research_state is not None
         assert container.services.instruments is not None
