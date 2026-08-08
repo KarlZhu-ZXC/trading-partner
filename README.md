@@ -1,6 +1,6 @@
 # Trading Partner
 
-**A local-first investment judgment companion for A-shares, US and Korean markets, and selected cross-asset facts.**
+**The local-first memory and monitoring layer for serious investment conversations.**
 
 [![CI](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml/badge.svg)](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml)
 [![Release](https://img.shields.io/github/v/release/KarlZhu-ZXC/trading-partner)](https://github.com/KarlZhu-ZXC/trading-partner/releases)
@@ -12,19 +12,62 @@
   <img src="docs/assets/readme/hero.png" alt="Trading Partner is a local-first investment judgment companion for A-shares, US and Korean markets" width="100%" />
 </p>
 
-Trading Partner is a durable research and portfolio context service exposed through
-the [Model Context Protocol](https://modelcontextprotocol.io/). Connect it to Codex
-or another MCP host and the conversation can retrieve your positions, Watchlist,
-past research, research files (instrument-centered Research Subjects by default), investment-judgment
-revisions (Thesis revisions), challenge reviews, monitoring
-events, and current market facts without rebuilding context from scratch.
+Most AI investment chats can summarize today's market. They do not remember why you
+bought, what would invalidate the idea, how the plan changed, or whether new evidence
+contradicts last month's judgment.
 
-The MCP supplies structured facts and durable state. Your AI host remains responsible
-for interpretation, debate, and the final answer.
+Trading Partner gives Codex and other
+[Model Context Protocol](https://modelcontextprotocol.io/) hosts that missing layer:
+durable research memory, read-only portfolio context, provider-backed facts, and
+transition-aware monitoring—without giving the model permission to trade.
+
+> **Ask:** “Review my gold position. What changed since the original thesis, and
+> what evidence would make the current plan invalid?”
+>
+> **Trading Partner restores:** the confirmed position, Research Subject, competing
+> Theses, Trade Plan, latest market facts, Monitor observations, provenance, and data
+> quality warnings. The AI host interprets and challenges them in the conversation.
+
+<p align="center">
+  <a href="#product-tour"><strong>See the product flow</strong></a>
+  ·
+  <a href="#quick-start"><strong>Quick start</strong></a>
+  ·
+  <a href="docs/guide/mcp-capability-boundary.md"><strong>Capability boundary</strong></a>
+</p>
+
+<p align="center">
+  <sub>If this is the investment workflow you want AI hosts to support, a ⭐ helps more people find the project.</sub>
+</p>
+
+<a id="product-tour"></a>
+## <img src="docs/assets/readme/sections/why.svg" alt="" width="24" /> 60-second product tour
+
+```text
+You ask in Codex
+    ↓
+Trading Partner restores your portfolio, Watchlist, research history, and active plan
+    ↓
+Provider-backed facts arrive with source, timestamp, freshness, and typed warnings
+    ↓
+Codex compares the new evidence with PRIMARY, SUB, COMPETITOR, and BEAR Theses
+    ↓
+Deterministic or composite Monitors persist every observation and notify only on change
+    ↓
+You explicitly confirm any durable judgment or plan revision; no order is ever placed
+```
+
+| Built for | What it changes |
+|---|---|
+| Long-horizon research | One durable file keeps the question, evidence, Thesis history, decisions, and open questions together. |
+| Portfolio-aware conversations | The host can use persisted positions, transactions, Watchlists, performance, and risk without silently refreshing a broker. |
+| Judgment monitoring | Price, technical, relative-strength, fundamental, macro, sentiment, and portfolio-risk conditions can be evaluated on a schedule. |
+| Trustworthy answers | Facts retain provenance, observation time, freshness, fallback basis, and typed failures instead of hiding uncertainty. |
 
 The durable research object is called a **Research Subject**（研究标的/研究档案）.
-Legacy `InvestmentCase`, `investment_case_*`, `case_id`, and opaque `case_…` names
-remain only at compatibility boundaries; Equity refers only to actual stocks.
+It may represent a company, ETF, theme, macro question, catalyst, or portfolio concern;
+it is not limited to an equity. The legacy `investment_case_*`, `case_id`, and opaque
+`case_…` names remain only at compatibility boundaries.
 
 ## <img src="docs/assets/readme/sections/why.svg" alt="" width="24" /> Why Trading Partner?
 
@@ -37,7 +80,25 @@ market.
 Every precise result carries provenance such as source, observation time, freshness,
 basis, and typed warnings. Missing or stale data is disclosed instead of fabricated.
 
-## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> What it can do
+## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Core capabilities
+
+- **Research memory:** Research Subjects, multiple Thesis threads, journals,
+  decisions, evidence, Challenge Reviews, and versioned Trade Plans.
+- **Portfolio context:** Schwab, Moomoo OpenD, or strict CSV holdings; durable
+  transactions, Watchlists, performance attribution, exposure, and Risk Engine v2.
+- **Market facts:** A-share, US, Korea Exchange, macro, company filings, sentiment,
+  selected futures, and explicitly labelled OTC/cross-asset references.
+- **Monitoring:** deterministic facts plus optional bounded composite judgment,
+  immutable run diagnostics, and transition-aware Telegram delivery.
+- **Technical analysis:** shared daily/weekly indicators, market structure,
+  support/resistance, candlestick patterns, and auditable charts.
+- **Safe workflows:** deep dives, catalyst and market reviews, peer comparisons, and
+  a manual QuantConnect Free code/result bridge—with no order surface.
+
+<details>
+<summary><strong>Expand the complete implemented capability list</strong></summary>
+
+<br />
 
 - Maintain a durable research file for an instrument or higher-level topic, including
   its current investment judgments, revision history, journals, decisions, and
@@ -96,6 +157,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   invoke the configured server-side LLM only when that Monitor has an enabled
   composite judgment policy.
 
+</details>
+
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
 Trading Partner is a research service, not a broker or autonomous trading agent.
@@ -107,6 +170,7 @@ Technical outputs are derived facts—not forecasts, strategies, or trade signal
 Ordinary portfolio questions read durable snapshots; broker refreshes happen only
 when explicitly requested.
 
+<a id="quick-start"></a>
 ## <img src="docs/assets/readme/sections/quickstart.svg" alt="" width="24" /> Quick start
 
 Requirements:
@@ -425,6 +489,7 @@ per-minute quota.
 - [Documentation index](docs/README.md)
 - [Known operational issues](docs/operations/known-issues.md)
 - [Product roadmap](docs/roadmap/global-roadmap-cn-us.md)
+- [Contributing guide](.github/CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
 ## <img src="docs/assets/readme/sections/development.svg" alt="" width="24" /> Development
@@ -444,6 +509,11 @@ Upstream projects under `references/` are design references only and are not run
 dependencies. See each `UPSTREAM.md` for its pinned revision and attribution.
 
 ## <img src="docs/assets/readme/sections/support.svg" alt="" width="24" /> Support
+
+Questions, bug reports, Provider proposals, and focused contributions are welcome
+through [GitHub Issues](https://github.com/KarlZhu-ZXC/trading-partner/issues).
+Please read the [contributing guide](.github/CONTRIBUTING.md) and keep credentials
+and personal financial data out of public reports.
 
 If Trading Partner is useful to you, consider
 [buying me a coffee through PayPal](https://paypal.me/xczhu).

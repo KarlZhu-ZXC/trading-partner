@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a focused product or workflow improvement
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What investment-research or operating problem is currently difficult?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Desired conversation or workflow
+      description: Show the user request, expected MCP/Console behavior, and durable state changes.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Research Subject, Thesis, or Trade Plan
+        - Market or company facts
+        - Accounts, Watchlist, portfolio, or risk
+        - Monitoring or notifications
+        - MCP host integration
+        - Local Console
+        - Contributor experience
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Safety and data boundary
+      description: Note Provider, provenance, privacy, execution, or compatibility considerations.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This request does not require Trading Partner to place or modify live orders.
+          required: true

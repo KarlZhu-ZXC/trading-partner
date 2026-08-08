@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security or privacy report
+    url: https://github.com/KarlZhu-ZXC/trading-partner/security/policy
+    about: Report credentials, personal financial data exposure, and vulnerabilities privately.
+  - name: Capability and trust boundary
+    url: https://github.com/KarlZhu-ZXC/trading-partner/blob/main/docs/guide/mcp-capability-boundary.md
+    about: Check the implemented boundary before proposing a feature.
