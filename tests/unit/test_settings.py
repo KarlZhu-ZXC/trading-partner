@@ -529,12 +529,15 @@ def test_load_explicit_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         ),
         encoding="utf-8",
     )
-    # Clear ambient env that might override
+    # An explicit runtime file is authoritative over ambient host variables.
     for key in list(__import__("os").environ):
         if key in __import__("conftest").APP_SETTINGS_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_NAME", "ambient-must-not-win")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'ambient.sqlite'}")
     settings = AppSettings.load(env_file=env_path)
     assert settings.app_name == "from-file"
+    assert settings.database_url == f"sqlite:///{db}"
     assert settings.provider_timeout_seconds == 9.0
 
 
