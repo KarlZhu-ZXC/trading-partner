@@ -33,7 +33,7 @@ export function useApi<T>(route: string): ApiResult<T> {
       })
       .catch((cause: unknown) => {
         if (cause instanceof DOMException && cause.name === "AbortError") return;
-        setError(cause instanceof Error ? cause.message : "无法连接本地 API");
+        setError(cause instanceof Error ? cause.message : "Unable to connect to the local API");
       })
       .finally(() => setLoading(false));
     return () => controller.abort();

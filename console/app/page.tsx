@@ -67,15 +67,15 @@ export default function OverviewPage() {
   });
 
   return (
-    <ConsoleShell active="overview" eyebrow="System overview" title="投资研究控制台">
+    <ConsoleShell active="overview" eyebrow="System overview" title="Investment Research Console">
       <DataBoundary loading={result.loading} error={result.error}>
         <div className="summary-strip">
           <div>
-            <span>系统</span>
+            <span>System</span>
             <strong>{String(health?.status ?? "—")}</strong>
           </div>
           <div>
-            <span>公开能力</span>
+            <span>Public Tools</span>
             <strong>{String(result.data?.capability_count ?? 0)}</strong>
           </div>
           <div>
@@ -83,18 +83,18 @@ export default function OverviewPage() {
             <strong>{activeMonitorItems.length}</strong>
           </div>
           <div>
-            <span>触发规则</span>
+            <span>Triggered Rules</span>
             <strong className={triggered ? "text-amber" : ""}>{triggered}</strong>
           </div>
           <RefreshButton onClick={result.refresh} loading={result.loading} />
         </div>
 
         <div className="dashboard-grid">
-          <Card className="span-12" kicker="ATTENTION QUEUE" title="需要处理" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
-            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>当前无需人工操作</strong><small>运行限制与自动重试状态会单独列在下方，不计入 Attention。</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          <Card className="span-12" kicker="ATTENTION QUEUE" title="Needs Attention" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
+            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No manual action required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">
-                <div className="quality-section-heading"><span>等待下次评估</span><small>不是当前数据源状态</small></div>
+                <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the current source status</small></div>
                 <div className="attention-queue">{notices.automaticItems.slice(0, 6).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>
               </div>
             ) : null}
@@ -102,25 +102,25 @@ export default function OverviewPage() {
           <Card
             className="span-12"
             kicker="DATA QUALITY"
-            title="数据质量中心"
+            title="Data Quality Center"
             action={<Badge value={String(quality?.status ?? "UNKNOWN")} />}
           >
             <div className="quality-center-grid">
               <div className="metric-pairs quality-metrics">
-                <div><span>账户快照</span><strong>{qualityAccounts.length}</strong><small>持久化最新版本</small></div>
-                <div><span>活动覆盖回执</span><strong>{qualityActivity.length}</strong><small>每账户最新回执</small></div>
-                <div><span>Active Monitor</span><strong>{qualityMonitors.length}</strong><small>只读最近运行</small></div>
-                <div><span>Monitor 盲区</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>未运行 / 未评估 / 不完整</small></div>
-                <div><span>24h Provider fallback</span><strong className={recentFallbacks ? "text-amber" : ""}>{recentFallbacks}</strong><small>{qualityRoutes.length} 个 market/category</small></div>
-                <div><span>24h Provider 失败</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>安全路由回执</small></div>
+                <div><span>Account Snapshots</span><strong>{qualityAccounts.length}</strong><small>Latest durable versions</small></div>
+                <div><span>Activity Coverage</span><strong>{qualityActivity.length}</strong><small>Latest receipt per account</small></div>
+                <div><span>Active Monitors</span><strong>{qualityMonitors.length}</strong><small>Latest runs, read only</small></div>
+                <div><span>Monitor Blind Spots</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>Not run / unevaluated / incomplete</small></div>
+                <div><span>24h Provider Fallbacks</span><strong className={recentFallbacks ? "text-amber" : ""}>{recentFallbacks}</strong><small>{qualityRoutes.length} market/category pairs</small></div>
+                <div><span>24h Provider Failures</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>Secret-safe route receipts</small></div>
               </div>
               <div className="quality-issues">
                 <div className="quality-section-heading">
-                  <span>当前缺口</span>
-                  <small>{notices.qualityItems.length} 组 · 不触发上游请求</small>
+                  <span>Current Gaps</span>
+                  <small>{notices.qualityItems.length} groups · no upstream requests</small>
                 </div>
                 {notices.qualityItems.length === 0 ? (
-                  <Empty>持久化证据未发现质量缺口。</Empty>
+                  <Empty>No quality gaps found in durable evidence.</Empty>
                 ) : (
                   <div className="quality-issue-list">
                     {notices.qualityItems.slice(0, 6).map((item) => (
@@ -134,7 +134,7 @@ export default function OverviewPage() {
                       </article>
                       </Link>
                     ))}
-                    {notices.qualityItems.length > 6 ? <small>另有 {notices.qualityItems.length - 6} 组，可通过 system_health 读取完整机器视图。</small> : null}
+                    {notices.qualityItems.length > 6 ? <small>{notices.qualityItems.length - 6} more groups are available in the full system_health machine view.</small> : null}
                   </div>
                 )}
               </div>
@@ -144,11 +144,11 @@ export default function OverviewPage() {
           <Card
             className="span-8"
             kicker="MONITOR PULSE"
-            title="当前监控态势"
-            action={<Link className="text-link" href="/monitors">查看全部 →</Link>}
+            title="Current Monitor Posture"
+            action={<Link className="text-link" href="/monitors">View all →</Link>}
           >
             {activeMonitorItems.length === 0 ? (
-              <Empty>尚无 Monitor 定义。</Empty>
+              <Empty>No Monitor definitions yet.</Empty>
             ) : (
               <div className="monitor-overview-list">
                 {activeMonitorItems.slice(0, 4).map((item) => {
@@ -163,11 +163,11 @@ export default function OverviewPage() {
                           className="monitor-title-link"
                           href={`/monitors#${monitorAnchorId(monitor.monitor_id)}`}
                         >
-                          {String(monitor.name ?? "未命名 Monitor")}
+                          {String(monitor.name ?? "Untitled Monitor")}
                         </Link>
-                        <span>创建 {formatDate(item.monitor_created_at ?? monitor.created_at)} · {String(monitor.cadence ?? "—")} · v{String(monitor.version ?? "—")}</span>
+                        <span>Created {formatDate(item.monitor_created_at ?? monitor.created_at)} · {String(monitor.cadence ?? "—")} · v{String(monitor.version ?? "—")}</span>
                       </div>
-                      <div className="state-dots" aria-label="规则状态">
+                      <div className="state-dots" aria-label="Rule states">
                         {states.slice(0, 10).map((state) => (
                           <i
                             className={`state-dot ${String(state.state ?? "").toLowerCase()}`}
@@ -187,24 +187,24 @@ export default function OverviewPage() {
             )}
           </Card>
 
-          <Card className="span-4" kicker="AUTOMATION" title="收盘后运行">
+          <Card className="span-4" kicker="AUTOMATION" title="Post-Market Run">
             <div className="status-hero">
               <Badge value={String(sync?.health ?? "UNKNOWN")} />
-              <strong>{String(sync?.run_status ?? "无回执")}</strong>
-              <span>最近会话 {String(sync?.receipt_session_date ?? "—")}</span>
+              <strong>{String(sync?.run_status ?? "No receipt")}</strong>
+              <span>Latest session {String(sync?.receipt_session_date ?? "—")}</span>
             </div>
             <dl className="detail-list">
-              <div><dt>账户同步</dt><dd>{String(sync?.portfolio_status ?? "—")}</dd></div>
-              <div><dt>自选同步</dt><dd>{String(sync?.watchlist_status ?? "—")}</dd></div>
+              <div><dt>Account Sync</dt><dd>{String(sync?.portfolio_status ?? "—")}</dd></div>
+              <div><dt>Watchlist Sync</dt><dd>{String(sync?.watchlist_status ?? "—")}</dd></div>
               <div><dt>OAuth</dt><dd><Badge value={String((sync?.schwab_oauth as Dict | undefined)?.state ?? "—")} /></dd></div>
             </dl>
           </Card>
 
-          <Card className="span-7" kicker="RECENT RUNS" title="最近 Monitor Run">
-            {runs.length === 0 ? <Empty>尚无运行记录。</Empty> : (
+          <Card className="span-7" kicker="RECENT RUNS" title="Recent Monitor Runs">
+            {runs.length === 0 ? <Empty>No run history yet.</Empty> : (
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>标的 / Monitor</th><th>完成时间</th><th>Cadence</th><th>规则</th><th>事件</th><th>状态</th></tr></thead>
+                  <thead><tr><th>Target / Monitor</th><th>Completed</th><th>Cadence</th><th>Rules</th><th>Events</th><th>Status</th></tr></thead>
                   <tbody>
                     {runs.slice(0, 8).map((run) => {
                       const identity = monitorRunPresentation(run, monitorItems);
@@ -225,12 +225,12 @@ export default function OverviewPage() {
             )}
           </Card>
 
-          <Card className="span-5" kicker="OPERATIONS" title="本地运行面">
+          <Card className="span-5" kicker="OPERATIONS" title="Local Runtime">
             <div className="metric-pairs">
-              <div><span>数据库</span><strong>{formatBytes(maintenance?.database_bytes)}</strong><small>{String(maintenance?.database_filename ?? "—")}</small></div>
-              <div><span>备份</span><strong>{String(maintenance?.backup_files ?? 0)}</strong><small>最近 {formatDate(maintenance?.latest_backup_at)}</small></div>
-              <div><span>通知待发</span><strong>{String(notifications?.pending ?? 0)}</strong><small>{String(notifications?.provider ?? "未配置")}</small></div>
-              <div><span>缓存已过期</span><strong>{String(maintenance?.provider_cache_expired ?? 0)}</strong><small>显式命令清理</small></div>
+              <div><span>Database</span><strong>{formatBytes(maintenance?.database_bytes)}</strong><small>{String(maintenance?.database_filename ?? "—")}</small></div>
+              <div><span>Backups</span><strong>{String(maintenance?.backup_files ?? 0)}</strong><small>Latest {formatDate(maintenance?.latest_backup_at)}</small></div>
+              <div><span>Notifications Pending</span><strong>{String(notifications?.pending ?? 0)}</strong><small>{String(notifications?.provider ?? "Not configured")}</small></div>
+              <div><span>Expired Cache</span><strong>{String(maintenance?.provider_cache_expired ?? 0)}</strong><small>Removed only by explicit command</small></div>
             </div>
           </Card>
         </div>

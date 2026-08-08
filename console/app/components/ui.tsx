@@ -54,7 +54,7 @@ export function RefreshButton({
 }) {
   return (
     <button className="refresh-button" onClick={onClick} disabled={loading} type="button">
-      {loading ? "读取中" : "刷新"}
+      {loading ? "Loading" : "Refresh"}
     </button>
   );
 }
@@ -63,7 +63,7 @@ export function ActionButton({
   children,
   onClick,
   busy = false,
-  busyLabel = "执行中…",
+  busyLabel = "Working…",
   tone = "default",
 }: {
   children: ReactNode;
@@ -104,12 +104,12 @@ export function DataBoundary({
   error: string | null;
   children: ReactNode;
 }) {
-  if (loading) return <div className="state-panel">正在读取本地事实…</div>;
+  if (loading) return <div className="state-panel">Loading local facts…</div>;
   if (error)
     return (
       <div className="state-panel error-state">
-        <strong>本地 API 未连接</strong>
-        <span>请先运行 uv run trading-partner-console（{error}）</span>
+        <strong>Local API disconnected</strong>
+        <span>Run uv run trading-partner-console first ({error})</span>
       </div>
     );
   return <>{children}</>;

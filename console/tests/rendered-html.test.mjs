@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { after, before } from "node:test";
 import test from "node:test";
@@ -69,7 +69,8 @@ test("server-renders the local control room", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /Trading Partner/);
-  assert.match(html, /投资研究控制台/);
+  assert.match(html, /Investment Research Console/);
+  assert.match(html, /<html data-theme="light" lang="en"/);
   assert.match(html, /Loopback only/);
   assert.match(html, /data-theme="light"/);
   assert.match(html, /Theme/);
@@ -99,11 +100,11 @@ test("places Research before Monitors in primary navigation", async () => {
 
 test("renders all primary local-console routes", async () => {
   for (const [route, heading] of [
-    ["/monitors", "Monitor 运行与事件"],
-    ["/research", "Research 工作区"],
-    ["/capabilities", "全部 MCP 能力"],
+    ["/monitors", "Monitor Runs &amp; Events"],
+    ["/research", "Research workspace"],
+    ["/capabilities", "MCP Capabilities"],
     ["/portfolio", "Portfolio"],
-    ["/operations", "操作中心"],
+    ["/operations", "Operations Center"],
   ]) {
     const response = await render(route);
     assert.equal(response.status, 200);
@@ -115,24 +116,24 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   const response = await render("/research");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Research 工作区/);
+  assert.match(html, /Research workspace/);
   assert.match(html, /Research/);
 
   const source = await readFile(new URL("../app/research/page.tsx", import.meta.url), "utf8");
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/research/);
-  assert.match(source, /含 archived/);
+  assert.match(source, /including archived/i);
   assert.match(source, /const SUBJECT_STATUSES = \["draft", "active", "archived"\]/);
   assert.match(source, /const \[status, setStatus\] = useState\("ACTIVE"\)/);
   assert.match(source, /const THESIS_STATUSES = \["draft", "active", "strengthened", "weakened", "invalidated", "archived"\]/);
   assert.match(source, /RESEARCH SUBJECTS/);
-  assert.match(source, /研究档案/);
+  assert.match(source, /Research Subject/);
   assert.match(source, /SubjectAggregate/);
   assert.match(source, /SubjectDraft/);
   assert.match(source, /SubjectEditor/);
   assert.doesNotMatch(source, /CaseAggregate|CaseDraft|CaseEditor|ResearchCaseDetail/);
   assert.match(source, /latest_revisions/);
-  assert.match(source, /局部读取失败/);
+  assert.match(source, /Partial read failed/);
   assert.match(source, /investment_case_manage/);
   assert.match(source, /operation: "update"/);
   assert.match(source, /operation: "archive"/);
@@ -146,10 +147,10 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(source, /"selected"/);
   assert.match(source, /"rejected"/);
   assert.match(source, /subject-activate-propose/);
-  assert.match(source, /开始跟踪/);
+  assert.match(source, /Start tracking/);
   assert.match(source, /thesisStatusExplicit/);
-  assert.match(source, /编辑 Thesis · 新建 Revision/);
-  assert.match(source, /父 PRIMARY Thesis/);
+  assert.match(source, /Edit Thesis · New Revision/);
+  assert.match(source, /Parent PRIMARY Thesis/);
   assert.match(source, /Rival Theses/);
   assert.match(source, /ThesisRelationshipList/);
   assert.match(source, /parent_thesis_id/);
@@ -160,7 +161,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(source, /\^#case-/);
   assert.match(source, /\/api\/monitors\?run_limit=1&event_limit=1/);
   assert.match(source, /master-detail/);
-  assert.doesNotMatch(source, /只读展示全部研究档案/);
+  assert.doesNotMatch(source, /Read-only display of all Research Subjects/);
   assert.match(shellSource, /href: "\/research"/);
 });
 
@@ -172,36 +173,36 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
 
   assert.match(overviewSource, /href=\{`\/monitors#\$\{monitorAnchorId\(monitor\.monitor_id\)\}`\}/);
   assert.match(overviewSource, /buildConsoleNotices/);
-  assert.match(overviewSource, /等待下次评估/);
-  assert.match(overviewSource, /当前无需人工操作/);
+  assert.match(overviewSource, /Waiting for Next Evaluation/);
+  assert.match(overviewSource, /No manual action required/);
   assert.match(attentionSource, /\/research#subject-/);
   assert.match(attentionSource, /OIL_WEEKEND_REFERENCE_UNAVAILABLE/);
-  assert.match(attentionSource, /不代表当前仍无数据/);
-  assert.match(attentionSource, /目标 Monitor 已停止或归档/);
+  assert.match(attentionSource, /does not mean data is currently unavailable/);
+  assert.match(attentionSource, /target Monitor is paused or archived/i);
   assert.match(overviewSource, /runs\.slice\(0, 8\)/);
   assert.match(monitorsSource, /id=\{monitorAnchorId\(monitor\.monitor_id\)\}/);
   assert.match(monitorsSource, /window\.scrollTo/);
   assert.doesNotMatch(monitorsSource, /scrollIntoView/);
   assert.match(monitorsSource, /monitor_created_at/);
   assert.match(monitorsSource, /monitor_updated_at/);
-  assert.match(monitorsSource, /最近编辑/);
+  assert.match(monitorsSource, /Last Edited/);
   assert.match(monitorsSource, /rule\.description/);
   assert.match(monitorsSource, /monitorPriceObservation/);
   assert.match(monitorsSource, /monitor-price-observation/);
-  assert.match(monitorsSource, /最近运行价格/);
+  assert.match(monitorsSource, /Latest Price/);
   assert.match(monitorsSource, /showIndividualObservation/);
   assert.match(monitorsSource, /monitorMatchesInstrument/);
-  assert.match(monitorsSource, /按标的代码筛选 Monitor/);
-  assert.match(monitorsSource, /按 Monitor 状态筛选/);
-  assert.match(monitorsSource, /恢复并激活/);
+  assert.match(monitorsSource, /Filter Monitors by target symbol/);
+  assert.match(monitorsSource, /Filter by Monitor status/);
+  assert.match(monitorsSource, /Restore & Activate/);
   assert.match(monitorsSource, /changeMonitorStatus/);
   assert.match(monitorsSource, /statusFilter === "ALL"/);
   assert.match(monitorsSource, /MONITOR_STATUSES\)\[number\]>\("ACTIVE"\)/);
-  assert.match(monitorsSource, /归档中…/);
+  assert.match(monitorsSource, /Archiving…/);
   assert.match(monitorsSource, /monitor-list-panel/);
-  assert.match(monitorsSource, /联网搜索来源/);
+  assert.match(monitorsSource, /Web Search Sources/);
   assert.match(monitorsSource, /web_source_urls/);
-  assert.match(editorSource, /条件缺少具体释义/);
+  assert.match(editorSource, /missing a human-readable meaning/);
   assert.match(editorSource, /initialMonitor\?\.subject_id/);
   assert.match(editorSource, /case_id: subjectId\.trim\(\)/);
 });
@@ -216,7 +217,7 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /Risk/);
   assert.match(portfolioSource, /external_state_sync/);
   assert.doesNotMatch(portfolioSource, /watchlist_manage/);
-  assert.doesNotMatch(portfolioSource, /同步 Watchlist/);
+  assert.doesNotMatch(portfolioSource, /Sync Watchlist/);
   assert.match(portfolioSource, /risk_policy_update/);
   assert.match(portfolioSource, /portfolio_risk_get/);
   assert.match(portfolioSource, /window\.location\.hash/);
@@ -232,6 +233,15 @@ test("operations provides a guarded foreground Schwab OAuth flow", async () => {
   assert.match(operationsSource, /\/api\/schwab\/oauth/);
   assert.match(operationsSource, /schwab_oauth_renew/);
   assert.match(operationsSource, /schwab_oauth_renew_confirmed/);
-  assert.match(operationsSource, /等待授权回调/);
-  assert.match(operationsSource, /请只操作这次新打开的标签页/);
+  assert.match(operationsSource, /waiting for the Schwab callback/i);
+  assert.match(operationsSource, /Use only the newly opened tab/);
+});
+
+test("keeps the default console UI copy English-only", async () => {
+  const appRoot = new URL("../app/", import.meta.url);
+  const files = await readdir(appRoot, { recursive: true });
+  for (const file of files.filter((name) => /\.(?:ts|tsx)$/.test(name))) {
+    const source = await readFile(new URL(file, appRoot), "utf8");
+    assert.doesNotMatch(source, /\p{Script=Han}/u, `${file} contains Chinese default UI copy`);
+  }
 });
