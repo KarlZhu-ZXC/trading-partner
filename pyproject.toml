@@ -48,6 +48,7 @@ all = [
 
 [project.scripts]
 trading-partner-mcp = "interfaces.mcp.server:main"
+trading-partner-init = "interfaces.cli.initialize:main"
 trading-partner-watchlist-sync = "interfaces.cli.watchlist_sync:main"
 trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
 trading-partner-schwab-auth = "interfaces.cli.schwab_oauth:main"
@@ -89,6 +90,7 @@ sources = ["src"]
 "config/a_share_trading_calendar.v1.json" = "infrastructure/config/a_share_trading_calendar.v1.json"
 "config/moomoo_security_corrections.yaml" = "infrastructure/config/moomoo_security_corrections.yaml"
 "config/cninfo_org_map.v1.json" = "infrastructure/config/cninfo_org_map.v1.json"
+"migrations" = "trading_partner_migrations"
 
 [dependency-groups]
 dev = [

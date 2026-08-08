@@ -21,9 +21,15 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    settings = AppSettings.load()
-    ensure_sqlite_parent_dir(settings.database_url)
-    return settings.database_url
+    explicit_url = config.attributes.get("database_url")
+    if explicit_url is not None:
+        if not isinstance(explicit_url, str) or not explicit_url.strip():
+            raise ValueError("Alembic database_url attribute must be a nonblank string")
+        database_url = explicit_url.strip()
+    else:
+        database_url = AppSettings.load().database_url
+    ensure_sqlite_parent_dir(database_url)
+    return database_url
 
 
 def run_migrations_offline() -> None:

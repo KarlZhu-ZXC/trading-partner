@@ -175,52 +175,42 @@ when explicitly requested.
 
 Requirements:
 
-- Python 3.13
 - [uv](https://docs.astral.sh/uv/)
-- Node.js 22.13 or newer when running the optional local Console
+
+Install the core MCP from the versioned project tag, then initialize its private
+per-user runtime:
+
+```bash
+uv tool install --python 3.13 \
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.5.1"
+trading-partner-init
+```
+
+`trading-partner-init` creates an owner-only `runtime.env`, initializes or upgrades
+the SQLite database idempotently, and prints the absolute MCP command and arguments.
+It requires no API key or broker login. Add optional Provider credentials only to
+that generated file.
+
+Copy the printed command and `--env-file` argument into your MCP host. Tested Claude
+Desktop, Cursor, and generic stdio recipes are in the
+[MCP host setup guide](docs/guide/mcp-host-setup.md); a concise
+[中文快速开始](docs/guide/quickstart-zh.md) is also available.
+
+For a source checkout or optional Console development, use the contributor path:
 
 ```bash
 git clone https://github.com/KarlZhu-ZXC/trading-partner.git
 cd trading-partner
-
 uv sync
 cp .env.example .env
 uv run alembic upgrade head
-```
-
-`uv sync` installs the complete development environment in a source checkout. For a
-minimal production installation, install the core package and select only the
-capabilities you use: `accounts-moomoo`, `accounts-schwab`, `chart`, or `company-pdf`.
-`trading-partner[all]` installs every optional runtime integration.
-
-Edit `.env` only for the providers and account sources you want to use. Safe defaults
-work without broker credentials; unavailable optional providers return explicit
-degradation metadata.
-
-Start the local stdio MCP server:
-
-```bash
 uv run trading-partner-mcp
 ```
 
-The repository includes a Codex project configuration in `.codex/config.toml`. For a
-generic stdio MCP host, use the equivalent configuration:
-
-```json
-{
-  "mcpServers": {
-    "trading-partner": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/trading-partner",
-        "run",
-        "trading-partner-mcp"
-      ]
-    }
-  }
-}
-```
+The source checkout installs the complete development environment. Optional runtime
+extras remain scoped to `accounts-moomoo`, `accounts-schwab`, `chart`, `company-pdf`,
+and `console`; `trading-partner[all]` installs all of them. Node.js 22.13 or newer is
+required only for the optional Console frontend.
 
 After connecting, call `system_health` first. Then verify the specific market and
 account providers you intend to use; a healthy MCP process does not imply that every
@@ -484,6 +474,8 @@ per-minute quota.
 ## <img src="docs/assets/readme/sections/documentation.svg" alt="" width="24" /> Documentation
 
 - [MCP capability and trust boundary](docs/guide/mcp-capability-boundary.md)
+- [MCP host setup: Claude Desktop, Cursor, and generic stdio](docs/guide/mcp-host-setup.md)
+- [中文快速开始](docs/guide/quickstart-zh.md)
 - [Local Console and maintenance](docs/operations/local-console-and-maintenance.md)
 - [QuantConnect Free manual validation](docs/guide/quantconnect-free-bridge.md)
 - [Documentation index](docs/README.md)
