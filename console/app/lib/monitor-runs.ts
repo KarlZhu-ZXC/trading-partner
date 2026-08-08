@@ -77,12 +77,12 @@ export function monitorRunTargets(run: Dict, dashboardItems: Dict[]): MonitorRun
 
   return [...targetsById.values()].map((target) => {
     const current = currentById.get(target.monitorId);
-    const currentVersion = numberValue(current?.version);
-    const versionMatches = target.version === null || target.version === currentVersion;
     return {
       ...target,
       instrumentId: target.instrumentId ?? stringValue(current?.primary_instrument_id),
-      monitorName: versionMatches ? stringValue(current?.name) : null,
+      // Historical runs may target an older immutable version, but the current
+      // definition still supplies a much more useful identity than an opaque ID.
+      monitorName: stringValue(current?.name),
     };
   });
 }

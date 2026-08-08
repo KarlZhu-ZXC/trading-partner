@@ -38,6 +38,7 @@ class RuntimeResources:
     a_share_transport: HttpTransport | None = None
     cross_asset_transport: HttpTransport | None = None
     notification_sender: NotificationSender | None = None
+    monitor_judgment_provider: object | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     @property
@@ -55,6 +56,7 @@ class RuntimeResources:
                 self.a_share_transport,
                 self.cross_asset_transport,
                 self.notification_sender,
+                self.monitor_judgment_provider,
             ):
                 if transport is None or id(transport) in closed:
                     continue

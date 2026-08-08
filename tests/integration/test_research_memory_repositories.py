@@ -269,12 +269,13 @@ def _make_thesis(
     subject_id: str,
     revision_id: str,
     created_at: datetime = NOW,
+    role: ThesisRole = ThesisRole.PRIMARY,
 ) -> Thesis:
     return Thesis(
         thesis_id=ids.new(EntityIdPrefix.THESIS),
         subject_id=subject_id,
         title="Primary",
-        role=ThesisRole.PRIMARY,
+        role=role,
         status=ThesisStatus.ACTIVE,
         current_revision_no=1,
         latest_revision_id=revision_id,
@@ -630,7 +631,10 @@ def test_memory_round_trips_and_timeline_ordering(uow_factory) -> None:  # type:
 
         rev_id = uow_factory.ids.new(EntityIdPrefix.REV)
         thesis = _make_thesis(
-            ids=uow_factory.ids, subject_id=subject.subject_id, revision_id=rev_id
+            ids=uow_factory.ids,
+            subject_id=subject.subject_id,
+            revision_id=rev_id,
+            role=ThesisRole.COMPETITOR,
         )
         revision = _make_revision(
             uow_factory.ids,

@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-07
+> Updated: 2026-08-09
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -15,9 +15,8 @@ already corrupt.
 |---|---|---|---|
 | `AUTH-001` | deferred | Confirmation identity | Local stdio confirmation fields are caller assertions. Authenticated principal binding must be supplied by a future authenticated MCP host/transport. |
 | `RESEARCH-STATE-002` | open / P0 | Candidate scope | Generic Assumption, Invalidation, and Open Question candidate paths verify that referenced IDs exist but do not consistently prove that they belong to the candidate's Research Subject, Thesis, and revision at both proposal and confirmation. Relaxed Invalidation targets need the same owner check. |
-| `RESEARCH-STATE-003` | open / P1 | Research graph | Parent/rival Thesis IDs and `linked_case_ids` need uniform existence, same-scope/self-link, and confirmation-time validation. JSON-held references do not receive relational-FK protection. |
+| `RESEARCH-STATE-003` | open / P1 | Research graph | `linked_case_ids` (canonical application field: `linked_subject_ids`) still need uniform existence, self-link, and confirmation-time validation. Parent/rival Thesis ownership is already enforced at proposal and confirmation. JSON-held Subject links do not receive relational-FK protection. |
 | `RESEARCH-STATE-004` | open / P1 | Monitor lifecycle | A Monitor can be created against a non-tracking Research Subject, and a bound Monitor is not automatically reconciled when its Research Subject or Trade Plan retires. The intended fix is an explicit lifecycle guard, not a hidden cascade. |
-| `RESEARCH-MODEL-001` | compatibility debt | Research Subject status | Research Subject still exposes legacy `STRENGTHENED`, `WEAKENED`, and `INVALIDATED` values that duplicate Thesis conviction semantics. New writes should use DRAFT/ACTIVE/ARCHIVED until a migration can retain historical readability while narrowing the public enum. |
 
 `ActorContext` already distinguishes `CALLER_ASSERTED` from `AUTHENTICATED` and
 rejects trusted-principal/`confirmed_by` mismatches. The local stdio server cannot
@@ -44,7 +43,10 @@ These are deliberate product boundaries, not open defects:
   deferred for at least two months; A-share monitoring remains fact-only and does
   not imply an A-share broker snapshot.
 - Local stdio MCP exposes no authenticated user identity, order write, fill,
-  execution, runtime LLM, or automated backtest runner.
+  execution, or automated backtest runner. Runtime LLM use is limited to a Monitor
+  whose composite judgment policy is explicitly enabled; it receives deterministic
+  features, has no mutation/order port, and is skipped when the qualitative feature
+  signature has not changed.
 
 ## Resolved index
 
@@ -65,7 +67,8 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Watchlist reads/sync | Omitted Moomoo scope selects durable `All`; public sync refreshes every group and membership; pagination is explicit |
 | Monitor read scope | Monitor-filtered runs contain only that Monitor's observations; Dashboard uses compact run summaries |
 | ETF research | US ETF workflow uses ETF quote/technical/news/sentiment/macro facts without equity-only company calls |
-| OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD intervals skip known closures; optional IG Weekend Gold browser fallback is current-only, XAUUSD-only, and explicitly CFD/not-spot |
+| OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD/light-oil intervals skip known closures; weekend XAUUSD uses Binance PAXG/USDC, light oil uses Hyperliquid XYZ CL/USDC, and optional IG Weekend Gold is a final gold fallback; all are current-only labelled proxies |
+| Weekend Provider diagnosis | Retryable weekend-reference calls use three bounded attempts; failed proxy/primary hops are persisted as secret-safe structured diagnostics and rendered in the Console Run drill-down |
 | Margin-account risk checks | A negative cash balance is retained as a signed cash ratio and evaluated as a policy breach instead of failing the complete risk result with `DATA_CONTRACT_ERROR` |
 | Yahoo extended-hours quotes | A recovered pre/post-market last price clears unsupported regular-session range/volume fields and emits `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE` |
 | Technical interval input | MCP schemas advertise `1d`/`1w`; common daily/weekly aliases normalize at the DTO boundary instead of failing conversational calls |

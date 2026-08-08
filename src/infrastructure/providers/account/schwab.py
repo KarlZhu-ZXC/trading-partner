@@ -34,6 +34,7 @@ from domain.common.errors import (
     ProviderNotConfigured,
     ProviderRateLimitError,
     ProviderUnavailableError,
+    TradingPartnerError,
 )
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
@@ -180,8 +181,7 @@ def _instrument_id(instrument: Mapping[str, object]) -> str | None:
     if symbol is None:
         return None
     if asset_type in {"EQUITY", "ETF"} or (
-        asset_type == "COLLECTIVE_INVESTMENT"
-        and instrument_type == "EXCHANGE_TRADED_FUND"
+        asset_type == "COLLECTIVE_INVESTMENT" and instrument_type == "EXCHANGE_TRADED_FUND"
     ):
         kind = (
             AssetType.ETF
@@ -246,7 +246,16 @@ class SchwabAccountAdapter:
     ) -> ProviderSuccess[tuple[AccountSnapshot, ...]]:
         require_aware_datetime(as_of, field_name="as_of")
         self._require_configured()
-        return await asyncio.to_thread(self._read_snapshots)
+        try:
+            return await asyncio.to_thread(self._read_snapshots)
+        except TradingPartnerError:
+            raise
+        except Exception:
+            raise ProviderUnavailableError(
+                "Schwab account snapshot read failed",
+                details={"vendor": VendorId.SCHWAB.value, "operation": "account_snapshot"},
+                code="SCHWAB_ACCOUNT_SNAPSHOT_UNAVAILABLE",
+            ) from None
 
     async def get_account_transactions(
         self,
@@ -372,8 +381,7 @@ class SchwabAccountAdapter:
         row: Mapping[str, object], instrument_id: str, quantity: Decimal, short: bool
     ) -> AccountPosition:
         average = _decimal(
-            row.get("averageShortPrice" if short else "averageLongPrice")
-            or row.get("averagePrice")
+            row.get("averageShortPrice" if short else "averageLongPrice") or row.get("averagePrice")
         )
         market_value = _decimal(row.get("marketValue"))
         if short and market_value is not None and market_value > 0:
@@ -465,9 +473,10 @@ class SchwabAccountAdapter:
                             values.append(normalized)
                         else:
                             warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
-                    if len(values) == transaction_value_count and _decimal(
-                        transaction.get("netAmount")
-                    ) is not None:
+                    if (
+                        len(values) == transaction_value_count
+                        and _decimal(transaction.get("netAmount")) is not None
+                    ):
                         synthetic_cash_item: Mapping[str, object] = {
                             "amount": transaction.get("netAmount"),
                             "instrument": {
@@ -495,6 +504,9 @@ class SchwabAccountAdapter:
                 - {
                     "SCHWAB_TRANSACTION_WINDOW_DEFAULTED",
                     "SCHWAB_TRANSACTION_WINDOW_PAGED",
+                    # This is an explainable normalization detail, not a
+                    # missing activity category or truncated coverage.
+                    "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN",
                 }
             )
         )
@@ -610,11 +622,7 @@ class SchwabAccountAdapter:
         occurred_at: datetime,
     ) -> tuple[AccountTransaction | None, bool]:
         raw_id_value = transaction.get("activityId")
-        raw_id = (
-            str(raw_id_value)
-            if isinstance(raw_id_value, int)
-            else _text(raw_id_value)
-        )
+        raw_id = str(raw_id_value) if isinstance(raw_id_value, int) else _text(raw_id_value)
         if raw_id is None:
             raise DataContractError("Schwab transaction id is missing")
         raw_kind = (_text(transaction.get("type")) or "").upper()
@@ -644,11 +652,7 @@ class SchwabAccountAdapter:
                 # Transaction history can omit instruction while keeping the
                 # transferred security quantity signed. Positive moves the
                 # security into the account; negative moves it out.
-                side = (
-                    AccountTransactionSide.BUY
-                    if amount > 0
-                    else AccountTransactionSide.SELL
-                )
+                side = AccountTransactionSide.BUY if amount > 0 else AccountTransactionSide.SELL
                 side_inferred = True
             else:
                 return None, False
@@ -673,9 +677,7 @@ class SchwabAccountAdapter:
         elif raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
             kind, side = AccountTransactionKind.CORPORATE_ACTION, None
             side_inferred = False
-        elif "FEE" in raw_kind or "FEE" in (
-            _text(transaction.get("description")) or ""
-        ).upper():
+        elif "FEE" in raw_kind or "FEE" in (_text(transaction.get("description")) or "").upper():
             kind, side = AccountTransactionKind.FEE, None
             side_inferred = False
         else:

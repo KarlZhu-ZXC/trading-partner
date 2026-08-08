@@ -1,9 +1,9 @@
-# Phase 3C-0 — QuantConnect Free manual bridge
+# QuantConnect Free manual validation guide
 
 > Status: implemented as the complete current Phase 3C scope. It prepares and
 > imports validation artifacts; it does not run a local engine or call the paid
-> QuantConnect API. One user-operated prepare -> web backtest -> import smoke
-> remains before operational closeout.
+> QuantConnect API. The prepare → web backtest → import path has been exercised
+> with user-exported results; each new strategy still requires the same manual run.
 
 ## Product decision
 

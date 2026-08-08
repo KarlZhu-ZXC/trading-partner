@@ -141,6 +141,34 @@ def test_legacy_monitor_notification_setting_names_remain_readable() -> None:
     assert settings.notification_batch_size == 9
 
 
+def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
+    defaults = _base_settings()
+    assert defaults.llm_provider == "bailian"
+    assert defaults.bailian_model == "qwen3.8-max"
+    assert defaults.llm_reasoning_effort == "max"
+    assert defaults.bailian_web_search_enabled is True
+    assert defaults.llm_output_language == "zh-CN"
+    assert defaults.deepseek_model == "deepseek-v4-flash"
+
+    with pytest.raises(ValidationError, match="BAILIAN_API_KEY"):
+        _base_settings(monitor_judgment_enabled=True)
+    enabled = _base_settings(
+        monitor_judgment_enabled=True,
+        bailian_api_key="test-bailian-secret",
+    )
+    assert enabled.bailian_base_url.startswith("https://token-plan.")
+
+    with pytest.raises(ValidationError, match="DEEPSEEK_API_KEY"):
+        _base_settings(monitor_judgment_enabled=True, llm_provider="deepseek")
+    deepseek = _base_settings(
+        monitor_judgment_enabled=True,
+        llm_provider="deepseek",
+        deepseek_api_key="test-deepseek-secret",
+    )
+    assert deepseek.deepseek_base_url == "https://api.deepseek.com"
+    assert deepseek.deepseek_model == "deepseek-v4-flash"
+
+
 def test_env_example_contains_required_keys() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / ".env.example").read_text(encoding="utf-8")
@@ -177,6 +205,15 @@ def test_env_example_contains_required_keys() -> None:
         "NOTIFICATION_MAX_ATTEMPTS=5",
         "NOTIFICATION_TTL_HOURS=24",
         "NOTIFICATION_BATCH_SIZE=20",
+        "LLM_PROVIDER=bailian",
+        "BAILIAN_API_KEY=",
+        "BAILIAN_MODEL=qwen3.8-max",
+        "BAILIAN_WEB_SEARCH_ENABLED=true",
+        "DEEPSEEK_API_KEY=",
+        "DEEPSEEK_BASE_URL=https://api.deepseek.com",
+        "DEEPSEEK_MODEL=deepseek-v4-flash",
+        "LLM_REASONING_EFFORT=max",
+        "LLM_OUTPUT_LANGUAGE=zh-CN",
     ):
         assert line in text, f"missing .env.example key line: {line}"
 
@@ -211,6 +248,8 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
         provider_proxy_url="http://general-user:general-secret@127.0.0.1:7891",
         telegram_bot_token="REAL_TELEGRAM_TOKEN",
         telegram_chat_id="123456789",
+        bailian_api_key="REAL_BAILIAN_SECRET",
+        deepseek_api_key="REAL_DEEPSEEK_SECRET",
     )
     redacted = settings.redacted_dict()
     assert redacted["alpha_vantage_api_keys"] == "***REDACTED***"
@@ -222,8 +261,12 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert redacted["provider_proxy_url"] == "***REDACTED***"
     assert redacted["telegram_bot_token"] == "***REDACTED***"
     assert redacted["telegram_chat_id"] == "***REDACTED***"
+    assert redacted["bailian_api_key"] == "***REDACTED***"
+    assert redacted["deepseek_api_key"] == "***REDACTED***"
     assert "general-secret" not in repr(settings)
     assert "REAL_TELEGRAM_TOKEN" not in repr(settings)
+    assert "REAL_BAILIAN_SECRET" not in repr(settings)
+    assert "REAL_DEEPSEEK_SECRET" not in repr(settings)
     assert redacted["provider_timeout_default_seconds"] == 30.0
     assert redacted["provider_timeout_market_seconds"] == 15.0
     assert redacted["provider_retry_max_attempts"] == 2
@@ -549,6 +592,9 @@ def test_d5b_resilience_defaults() -> None:
     }
     assert s.reddit_apify_max_charge_usd == Decimal("0.20")
     assert s.apify_api_token is None
+    assert s.weekend_rwa_proxy_enabled is True
+    assert s.weekend_rwa_proxy_cache_ttl_seconds == 60
+    assert s.weekend_rwa_proxy_timeout_seconds == 10.0
     assert s.ig_weekend_gold_enabled is False
     assert s.ig_weekend_gold_actor_id == "apify/web-scraper"
     assert s.ig_weekend_gold_cache_ttl_seconds == 600

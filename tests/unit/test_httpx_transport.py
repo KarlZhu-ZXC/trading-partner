@@ -218,6 +218,36 @@ async def test_us_market_provider_endpoints_are_allowlisted(url: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_weekend_reference_endpoints_are_exactly_allowlisted() -> None:
+    transport = _transport(_FixedHandler())
+
+    binance = await transport.send(
+        _req(
+            "https://api.binance.com/api/v3/ticker/bookTicker",
+            params={"symbol": "PAXGUSDC"},
+        )
+    )
+    hyperliquid = await transport.send(
+        _req(
+            "https://api.hyperliquid.xyz/info",
+            method="POST",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            body=b'{"type":"allMids","dex":"xyz"}',
+        )
+    )
+
+    assert binance.status_code == 200
+    assert hyperliquid.status_code == 200
+    for url in (
+        "https://api.binance.com/api/v3/ticker/bookTicker/extra",
+        "https://api.hyperliquid.xyz/info/extra",
+    ):
+        with pytest.raises(DataContractError):
+            await transport.send(_req(url))
+    await transport.aclose()
+
+
+@pytest.mark.asyncio
 async def test_query_not_part_of_path_matching() -> None:
     transport = _transport(_FixedHandler(body=b"ok"))
     # Structured params must not affect allowlist; path remains exact /q

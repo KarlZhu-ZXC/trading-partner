@@ -53,7 +53,11 @@ from infrastructure.providers.cross_asset.dce_official_client import DceOfficial
 from infrastructure.providers.cross_asset.dukascopy_client import DukascopySpotAdapter
 from infrastructure.providers.cross_asset.ig_weekend_gold import (
     IGWeekendGoldApifyAdapter,
-    WeekendGoldFallbackSpotAdapter,
+)
+from infrastructure.providers.cross_asset.weekend_reference import (
+    BinancePaxgUsdcWeekendAdapter,
+    HyperliquidClUsdcWeekendAdapter,
+    WeekendReferenceFallbackSpotAdapter,
 )
 from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDRateLimiter
 from infrastructure.providers.registry import VendorRegistry
@@ -332,15 +336,33 @@ def build_provider_infrastructure(
         max_charge_usd=settings.ig_weekend_gold_max_charge_usd,
         timeout_seconds=settings.ig_weekend_gold_timeout_seconds,
     )
-    commodity_spot = WeekendGoldFallbackSpotAdapter(
+    paxg_weekend = BinancePaxgUsdcWeekendAdapter(
+        cross_asset_transport,
+        clock=clock,
+        enabled=settings.weekend_rwa_proxy_enabled,
+        cache_ttl_seconds=settings.weekend_rwa_proxy_cache_ttl_seconds,
+        timeout_seconds=settings.weekend_rwa_proxy_timeout_seconds,
+    )
+    oil_weekend = HyperliquidClUsdcWeekendAdapter(
+        cross_asset_transport,
+        clock=clock,
+        enabled=settings.weekend_rwa_proxy_enabled,
+        cache_ttl_seconds=settings.weekend_rwa_proxy_cache_ttl_seconds,
+        timeout_seconds=settings.weekend_rwa_proxy_timeout_seconds,
+    )
+    commodity_spot = WeekendReferenceFallbackSpotAdapter(
         dukascopy,
-        ig_weekend_gold,
+        gold_proxy=paxg_weekend,
+        oil_proxy=oil_weekend,
+        legacy_gold_fallback=ig_weekend_gold,
         clock=clock,
     )
     registry.register(VendorId.CME_PUBLIC, cme_public)
     registry.register(VendorId.DCE_OFFICIAL, dce_official)
     registry.register(VendorId.DUKASCOPY, dukascopy)
     registry.register(VendorId.IG_WEEKEND_GOLD, ig_weekend_gold)
+    registry.register(VendorId.BINANCE, paxg_weekend)
+    registry.register(VendorId.HYPERLIQUID, oil_weekend)
     registry.register(
         VendorId.ALPHA_VANTAGE,
         AlphaVantageResearchAdapter(

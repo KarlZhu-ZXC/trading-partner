@@ -5,17 +5,20 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.errors import PersistenceError
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
+    MonitorJudgmentConclusion,
     MonitorNotificationChannel,
     MonitorNotificationStatus,
     MonitorRuleStateValue,
@@ -28,6 +31,8 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
+    MonitorJudgment,
+    MonitorJudgmentPolicy,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
@@ -45,6 +50,7 @@ from infrastructure.persistence.orm import (
     MonitorEventResolutionRow,
     MonitorEventRow,
     MonitorIdentityRow,
+    MonitorJudgmentRow,
     MonitorRuleStateRow,
     MonitorRunObservationRow,
     MonitorRunRow,
@@ -59,6 +65,38 @@ def _dt(value: str | None) -> datetime | None:
 
 def _dec(value: str | None) -> Decimal | None:
     return Decimal(value) if value is not None else None
+
+
+def _diagnostics_to_json(values: tuple[ProviderFailureDiagnostic, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "provider": item.provider,
+                "stage": item.stage,
+                "error_code": item.error_code,
+                "retryable": item.retryable,
+                "attempt_count": item.attempt_count,
+                "error_type": item.error_type,
+                "status_class": item.status_class,
+                "status_code": item.status_code,
+            }
+            for item in values
+        ],
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _diagnostics_from_json(payload: str) -> tuple[ProviderFailureDiagnostic, ...]:
+    try:
+        raw = json.loads(payload)
+        if not isinstance(raw, list):
+            raise ValueError("diagnostics must be list")
+        return tuple(ProviderFailureDiagnostic(**item) for item in raw if isinstance(item, dict))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PersistenceError(
+            "Stored Monitor Provider diagnostics are invalid", retryable=False
+        ) from exc
 
 
 def _rules_to_json(rules: tuple[MonitorRule, ...]) -> str:
@@ -85,6 +123,10 @@ def _rules_to_json(rules: tuple[MonitorRule, ...]) -> str:
                 "numeric_threshold": (
                     str(item.numeric_threshold) if item.numeric_threshold is not None else None
                 ),
+                "recovery_threshold": (
+                    str(item.recovery_threshold) if item.recovery_threshold is not None else None
+                ),
+                "technical_interval": item.technical_interval,
                 "event_after": (
                     item.event_after.isoformat() if item.event_after is not None else None
                 ),
@@ -135,6 +177,12 @@ def _rules_from_json(payload: str) -> tuple[MonitorRule, ...]:
                     if item.get("numeric_threshold") is not None
                     else None
                 ),
+                recovery_threshold=(
+                    Decimal(item["recovery_threshold"])
+                    if item.get("recovery_threshold") is not None
+                    else None
+                ),
+                technical_interval=item.get("technical_interval"),
                 event_after=_dt(item.get("event_after")),
             )
             for item in raw
@@ -143,6 +191,42 @@ def _rules_from_json(payload: str) -> tuple[MonitorRule, ...]:
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise PersistenceError(
             "Stored monitor rules are invalid", retryable=False, details={}
+        ) from exc
+
+
+def _judgment_policy_to_json(value: MonitorJudgmentPolicy | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        {
+            "playbook": value.playbook,
+            "reference_instrument_ids": value.reference_instrument_ids,
+            "relative_strength_pairs": value.relative_strength_pairs,
+            "confirmed_state_json": value.confirmed_state_json,
+            "prompt_version": value.prompt_version,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _judgment_policy_from_json(payload: str | None) -> MonitorJudgmentPolicy | None:
+    if payload is None:
+        return None
+    try:
+        raw = json.loads(payload)
+        return MonitorJudgmentPolicy(
+            playbook=raw["playbook"],
+            reference_instrument_ids=tuple(raw["reference_instrument_ids"]),
+            relative_strength_pairs=tuple(
+                tuple(item) for item in raw.get("relative_strength_pairs", ())
+            ),
+            confirmed_state_json=raw.get("confirmed_state_json", "{}"),
+            prompt_version=raw.get("prompt_version", "monitor-judgment-v1"),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PersistenceError(
+            "Stored Monitor judgment policy is invalid", retryable=False
         ) from exc
 
 
@@ -158,12 +242,45 @@ def _definition(row: MonitorVersionRow) -> MonitorDefinition:
         cadence=MonitorCadence(row.cadence),
         status=MonitorStatus(row.status),
         rules=_rules_from_json(row.rules_json),
+        judgment_policy=_judgment_policy_from_json(row.judgment_policy_json),
         valid_until=_dt(row.valid_until),
         interval_minutes=row.interval_minutes,
         confirmed_by=row.confirmed_by,
         idempotency_key=row.idempotency_key,
         created_at=datetime.fromisoformat(row.created_at),
         schema_version=row.schema_version,
+    )
+
+
+def _judgment(row: MonitorJudgmentRow) -> MonitorJudgment:
+    return MonitorJudgment(
+        judgment_id=row.judgment_id,
+        run_id=row.run_id,
+        monitor_id=row.monitor_id,
+        monitor_version=row.monitor_version,
+        status=cast(Literal["SUCCEEDED", "SKIPPED", "FAILED"], row.status),
+        urgency=cast(Literal["WATCH", "ACTION", "URGENT"] | None, row.urgency),
+        phase=row.phase,
+        market_state=row.market_state,
+        divergence=cast(Literal["BULLISH", "BEARISH", "NONE"] | None, row.divergence),
+        conclusion=(MonitorJudgmentConclusion(row.conclusion) if row.conclusion else None),
+        quantity_min=row.quantity_min,
+        quantity_max=row.quantity_max,
+        summary=row.summary,
+        evidence_feature_ids=row.evidence_feature_ids,
+        next_trigger=row.next_trigger,
+        invalidation=row.invalidation,
+        feature_signature=row.feature_signature,
+        result_fingerprint=row.result_fingerprint,
+        provider=row.provider,
+        model=row.model,
+        reasoning_effort=row.reasoning_effort,
+        prompt_version=row.prompt_version,
+        warning_codes=row.warning_codes,
+        error_codes=row.error_codes,
+        created_at=datetime.fromisoformat(row.created_at),
+        web_search_used=row.web_search_used,
+        web_source_urls=row.web_source_urls,
     )
 
 
@@ -180,6 +297,7 @@ def _version_row(value: MonitorDefinition) -> MonitorVersionRow:
         interval_minutes=value.interval_minutes,
         status=value.status.value,
         rules_json=_rules_to_json(value.rules),
+        judgment_policy_json=_judgment_policy_to_json(value.judgment_policy),
         valid_until=(value.valid_until.isoformat() if value.valid_until is not None else None),
         confirmed_by=value.confirmed_by,
         idempotency_key=value.idempotency_key,
@@ -235,6 +353,7 @@ def _observation(row: MonitorRunObservationRow) -> MonitorRunObservation:
         warning_codes=row.warning_codes,
         error_codes=row.error_codes,
         message=row.message,
+        diagnostics=_diagnostics_from_json(row.diagnostics_json),
     )
 
 
@@ -291,6 +410,7 @@ def _run(
             if not observations
             else MonitorRunStatus.PARTIAL
             if error_codes
+            or any(item.state is MonitorRuleStateValue.NOT_EVALUATED for item in observations)
             else MonitorRunStatus.SUCCEEDED
         )
     return MonitorRun(
@@ -420,6 +540,7 @@ class SqlAlchemyMonitorRepository:
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
         notifications: tuple[NotificationMessage, ...],
+        judgments: tuple[MonitorJudgment, ...] = (),
     ) -> MonitorRun:
         with Session(self._engine) as session, session.begin():
             session.add(
@@ -502,6 +623,7 @@ class SqlAlchemyMonitorRepository:
                         warning_codes=value.warning_codes,
                         error_codes=value.error_codes,
                         message=value.message,
+                        diagnostics_json=_diagnostics_to_json(value.diagnostics),
                     )
                     for value in run.observations
                 ]
@@ -534,6 +656,40 @@ class SqlAlchemyMonitorRepository:
             )
             session.add_all(
                 [
+                    MonitorJudgmentRow(
+                        judgment_id=value.judgment_id,
+                        run_id=value.run_id,
+                        monitor_id=value.monitor_id,
+                        monitor_version=value.monitor_version,
+                        status=value.status,
+                        urgency=value.urgency,
+                        phase=value.phase,
+                        market_state=value.market_state,
+                        divergence=value.divergence,
+                        conclusion=(value.conclusion.value if value.conclusion else None),
+                        quantity_min=value.quantity_min,
+                        quantity_max=value.quantity_max,
+                        summary=value.summary,
+                        evidence_feature_ids=value.evidence_feature_ids,
+                        next_trigger=value.next_trigger,
+                        invalidation=value.invalidation,
+                        feature_signature=value.feature_signature,
+                        result_fingerprint=value.result_fingerprint,
+                        provider=value.provider,
+                        model=value.model,
+                        reasoning_effort=value.reasoning_effort,
+                        prompt_version=value.prompt_version,
+                        warning_codes=value.warning_codes,
+                        error_codes=value.error_codes,
+                        created_at=value.created_at.isoformat(),
+                        web_search_used=value.web_search_used,
+                        web_source_urls=value.web_source_urls,
+                    )
+                    for value in judgments
+                ]
+            )
+            session.add_all(
+                [
                     NotificationOutboxRow(
                         notification_id=value.notification_id,
                         source_type=value.source_type.value,
@@ -556,6 +712,26 @@ class SqlAlchemyMonitorRepository:
                 ]
             )
         return run
+
+    def latest_judgment(self, monitor_id: str) -> MonitorJudgment | None:
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(MonitorJudgmentRow)
+                .where(MonitorJudgmentRow.monitor_id == monitor_id)
+                .order_by(MonitorJudgmentRow.created_at.desc())
+                .limit(1)
+            )
+            return _judgment(row) if row is not None else None
+
+    def list_judgments(self, monitor_id: str, limit: int) -> tuple[MonitorJudgment, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(MonitorJudgmentRow)
+                .where(MonitorJudgmentRow.monitor_id == monitor_id)
+                .order_by(MonitorJudgmentRow.created_at.desc())
+                .limit(limit)
+            )
+            return tuple(_judgment(row) for row in rows)
 
     def list_due_notifications(
         self,

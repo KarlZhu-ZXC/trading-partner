@@ -14,29 +14,23 @@ import {
   shortId,
 } from "./components/ui";
 import { envelopeData, listOf, useApi } from "./lib/api";
+import { buildConsoleNotices } from "./lib/attention";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
-
-function qualityIssueHref(issue: Dict): string {
-  const scope = String(issue.scope ?? "");
-  const subject = String(issue.subject_ref ?? "");
-  if (scope === "monitor" && subject) return `/monitors#${monitorAnchorId(subject)}`;
-  if (scope === "research_state" && subject) return `/research#subject-${subject}`;
-  if (scope === "account_snapshot") return "/portfolio#holdings";
-  if (scope === "account_activity") return "/portfolio#activity";
-  if (scope === "provider_route" || scope === "persistence") return "/operations";
-  return "/capabilities";
-}
 
 export default function OverviewPage() {
   const result = useApi<Dict>("/api/overview");
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
   const monitorItems = listOf<Dict>(monitorData, "items");
+  const activeMonitorItems = monitorItems.filter((item) => {
+    const monitor = (item.monitor ?? {}) as Dict;
+    return String(monitor.status ?? "").toUpperCase() === "ACTIVE";
+  });
   const runsData = envelopeData<Dict>(result.data?.recent_runs);
   const runs = listOf<Dict>(runsData, "runs");
-  const triggered = monitorItems.flatMap((item) => listOf<Dict>(item, "rule_states"))
+  const triggered = activeMonitorItems.flatMap((item) => listOf<Dict>(item, "rule_states"))
     .filter((rule) => rule.state === "TRIGGERED").length;
   const maintenance = result.data?.maintenance as Dict | undefined;
   const notifications = result.data?.notifications as Dict | undefined;
@@ -61,13 +55,16 @@ export default function OverviewPage() {
       .map((item) => String(item.subject_ref)),
   ).size;
   const researchAttention = listOf<Dict>(result.data, "research_attention");
-  const failedRuns = runs.filter((run) => !["SUCCEEDED", "SKIPPED"].includes(String(run.status ?? "").toUpperCase()));
-  const attentionItems = [
-    ...researchAttention.map((item) => ({ key: `research-${String(item.subject_id)}`, severity: "ATTENTION", title: `${String(item.pending_count)} 个待审候选`, detail: String(item.title ?? item.subject_id), href: `/research#subject-${String(item.subject_id)}` })),
-    ...failedRuns.map((run) => ({ key: `run-${String(run.run_id)}`, severity: "DEGRADED", title: `Monitor Run ${String(run.status)}`, detail: String(run.run_id), href: "/monitors" })),
-    ...(Number(notifications?.dead_letter ?? 0) > 0 ? [{ key: "outbox-dead", severity: "ERROR", title: `${String(notifications?.dead_letter)} 条通知 dead-letter`, detail: "检查通知配置与投递回执", href: "/operations" }] : []),
-    ...qualityIssues.map((issue, index) => ({ key: `quality-${String(issue.code)}-${index}`, severity: String(issue.severity ?? "DEGRADED"), title: String(issue.code), detail: `${String(issue.subject_ref ?? issue.scope)} · ${String(issue.detail ?? "")}`, href: qualityIssueHref(issue) })),
-  ];
+  const notices = buildConsoleNotices({
+    monitorItems,
+    runs,
+    researchAttention,
+    notifications,
+    qualityIssues,
+    qualityAccounts,
+    qualityActivity,
+    qualityRoutes,
+  });
 
   return (
     <ConsoleShell active="overview" eyebrow="System overview" title="投资研究控制台">
@@ -83,7 +80,7 @@ export default function OverviewPage() {
           </div>
           <div>
             <span>Active Monitor</span>
-            <strong>{monitorItems.length}</strong>
+            <strong>{activeMonitorItems.length}</strong>
           </div>
           <div>
             <span>触发规则</span>
@@ -93,8 +90,14 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card className="span-12" kicker="ATTENTION QUEUE" title="需要处理" action={<Badge value={`${attentionItems.length} ITEMS`} />}>
-            {attentionItems.length === 0 ? <Empty>没有需要人工处理的持久化状态。</Empty> : <div className="attention-queue">{attentionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          <Card className="span-12" kicker="ATTENTION QUEUE" title="需要处理" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
+            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>当前无需人工操作</strong><small>运行限制与自动重试状态会单独列在下方，不计入 Attention。</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+            {notices.automaticItems.length > 0 ? (
+              <div className="automatic-recovery">
+                <div className="quality-section-heading"><span>等待下次评估</span><small>不是当前数据源状态</small></div>
+                <div className="attention-queue">{notices.automaticItems.slice(0, 6).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>
+              </div>
+            ) : null}
           </Card>
           <Card
             className="span-12"
@@ -114,24 +117,24 @@ export default function OverviewPage() {
               <div className="quality-issues">
                 <div className="quality-section-heading">
                   <span>当前缺口</span>
-                  <small>{qualityIssues.length} 项 · 不触发上游请求</small>
+                  <small>{notices.qualityItems.length} 组 · 不触发上游请求</small>
                 </div>
-                {qualityIssues.length === 0 ? (
+                {notices.qualityItems.length === 0 ? (
                   <Empty>持久化证据未发现质量缺口。</Empty>
                 ) : (
                   <div className="quality-issue-list">
-                    {qualityIssues.slice(0, 6).map((issue, index) => (
-                      <Link className="quality-issue-link" href={qualityIssueHref(issue)} key={`${String(issue.code)}-${String(issue.subject_ref)}-${index}`}>
+                    {notices.qualityItems.slice(0, 6).map((item) => (
+                      <Link className="quality-issue-link" href={item.href} key={item.key}>
                       <article>
-                        <Badge value={String(issue.severity ?? "DEGRADED")} />
+                        <Badge value={item.severity} />
                         <div>
-                          <strong>{String(issue.code)}</strong>
-                          <span>{String(issue.subject_ref ?? issue.scope ?? "system")} · {String(issue.detail ?? "—")}</span>
+                          <strong>{item.title}</strong>
+                          <span>{item.detail}</span>
                         </div>
                       </article>
                       </Link>
                     ))}
-                    {qualityIssues.length > 6 ? <small>另有 {qualityIssues.length - 6} 项，可通过 system_health 读取完整机器视图。</small> : null}
+                    {notices.qualityItems.length > 6 ? <small>另有 {notices.qualityItems.length - 6} 组，可通过 system_health 读取完整机器视图。</small> : null}
                   </div>
                 )}
               </div>
@@ -144,11 +147,11 @@ export default function OverviewPage() {
             title="当前监控态势"
             action={<Link className="text-link" href="/monitors">查看全部 →</Link>}
           >
-            {monitorItems.length === 0 ? (
+            {activeMonitorItems.length === 0 ? (
               <Empty>尚无 Monitor 定义。</Empty>
             ) : (
               <div className="monitor-overview-list">
-                {monitorItems.slice(0, 4).map((item) => {
+                {activeMonitorItems.slice(0, 4).map((item) => {
                   const monitor = (item.monitor ?? {}) as Dict;
                   const states = listOf<Dict>(item, "rule_states");
                   const run = (item.latest_run ?? {}) as Dict;
@@ -203,7 +206,7 @@ export default function OverviewPage() {
                 <table>
                   <thead><tr><th>标的 / Monitor</th><th>完成时间</th><th>Cadence</th><th>规则</th><th>事件</th><th>状态</th></tr></thead>
                   <tbody>
-                    {runs.map((run) => {
+                    {runs.slice(0, 8).map((run) => {
                       const identity = monitorRunPresentation(run, monitorItems);
                       return (
                         <tr key={String(run.run_id)}>

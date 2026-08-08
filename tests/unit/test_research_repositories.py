@@ -734,7 +734,7 @@ def test_candidate_list_tie_break_proposed_at_desc_candidate_id_asc(
     assert not {c.candidate_id for c in page1} & {c.candidate_id for c in page2}
 
 
-def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no-untyped-def]
+def test_list_live_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no-untyped-def]
     clock = uow_factory.clock
     ids = uow_factory.ids
     subject = _make_case(ids, clock)
@@ -749,7 +749,7 @@ def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no
                 subject_id=subject.subject_id,
                 title="P1",
                 role=ThesisRole.PRIMARY,
-                status=ThesisStatus.ACTIVE,
+                status=ThesisStatus.STRENGTHENED,
                 current_revision_no=1,
                 latest_revision_id=rev,
                 parent_thesis_id=None,
@@ -778,8 +778,8 @@ def test_list_active_primary_thesis_ids(uow_factory) -> None:  # type: ignore[no
         uow.commit()
 
     with uow_factory() as uow:
-        active_primary = uow.subjects.list_active_primary_thesis_ids(subject.subject_id)
-        assert active_primary == (t1,)
+        live_primary = uow.subjects.list_live_primary_thesis_ids(subject.subject_id)
+        assert live_primary == (t1,)
 
 
 def test_orm_models_registered() -> None:

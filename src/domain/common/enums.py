@@ -100,9 +100,6 @@ class ResearchSubjectType(StrEnum):
 class ResearchSubjectStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"
-    STRENGTHENED = "strengthened"
-    WEAKENED = "weakened"
-    INVALIDATED = "invalidated"
     ARCHIVED = "archived"
 
 
@@ -153,6 +150,9 @@ class OpenQuestionStatus(StrEnum):
 class WatchlistItemStatus(StrEnum):
     WATCHING = "watching"
     TRIGGERED = "triggered"
+    SHORTLISTED = "shortlisted"
+    SELECTED = "selected"
+    REJECTED = "rejected"
     # Persisted wire token retained for storage and historical payload compatibility.
     PROMOTED_TO_SUBJECT = "promoted_to_case"
     EXPIRED = "expired"
@@ -290,6 +290,10 @@ class VendorId(StrEnum):
     DUKASCOPY = "dukascopy"
     # IG Weekend Gold browser observation obtained through a bounded Apify Actor.
     IG_WEEKEND_GOLD = "ig_weekend_gold"
+    # Keyless public weekend reference feeds. These remain explicitly separate
+    # from XAUUSD spot and Dukascopy's rolling light-oil CFD identity.
+    BINANCE = "binance"
+    HYPERLIQUID = "hyperliquid"
     ALPHA_VANTAGE = "alpha_vantage"
     SEC_EDGAR = "sec_edgar"
     FRED = "fred"

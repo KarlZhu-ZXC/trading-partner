@@ -115,6 +115,33 @@ def test_phase1b_upgrade_from_phase1a_only(
     engine.dispose()
 
 
+def test_head_restricts_research_subject_to_lifecycle_statuses(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "subject_lifecycle.db"
+    database_url = f"sqlite:///{db_path}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(database_url)
+    with engine.connect() as conn:
+        ddl = conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='investment_cases'"
+            )
+        ).scalar_one()
+
+    assert "status IN ('draft','active','archived')" in ddl
+    assert "strengthened" not in ddl
+    assert "weakened" not in ddl
+    assert "invalidated" not in ddl
+    engine.dispose()
+
+
 def test_candidate_sql_checks_reject_illegal_rows(
     tmp_path: Path,
     project_root: Path,

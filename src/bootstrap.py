@@ -11,6 +11,7 @@ from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
+from application.ports.monitor_judgment_provider import MonitorJudgmentProvider
 from application.ports.notification_sender import NotificationSender
 from application.ports.operational_maintenance import OperationalMaintenancePort
 from application.ports.research_unit_of_work import ResearchUnitOfWork
@@ -50,6 +51,7 @@ from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_fact_resolver import MonitorFactResolver
+from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.monitor_schedule_service import MonitorScheduleService
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
@@ -173,6 +175,10 @@ from infrastructure.providers.instrument_directory import (
     TencentInstrumentDirectoryAdapter,
     YahooInstrumentDirectoryAdapter,
 )
+from infrastructure.providers.llm import (
+    BailianMonitorJudgmentProvider,
+    DeepSeekMonitorJudgmentProvider,
+)
 from infrastructure.providers.notifications.telegram import TelegramNotificationAdapter
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
@@ -223,6 +229,7 @@ class OperationalServices:
     maintenance: OperationalMaintenancePort
     performance_reconciliation: PerformanceReconciliationService
     schwab_oauth: SchwabOAuthFlowManager | None
+
     @property
     def monitor_notifications(self) -> NotificationService:
         """Compatibility accessor for the former Monitor-only name."""
@@ -317,12 +324,10 @@ def build_application(
             "cross_asset.dce_eod": lambda: True,
             "cross_asset.dukascopy_spot": lambda: settings.dukascopy_enabled,
             "cross_asset.ig_weekend_gold": lambda: (
-                not settings.ig_weekend_gold_enabled
-                or settings.apify_api_token is not None
+                not settings.ig_weekend_gold_enabled or settings.apify_api_token is not None
             ),
         },
     )
-
     provider_infrastructure = build_provider_infrastructure(
         settings,
         engine=engine,
@@ -413,7 +418,8 @@ def build_application(
         clock=clock,
     )
     yahoo_instrument_directory = YahooInstrumentDirectoryAdapter(
-        a_share_transport, clock=clock,
+        a_share_transport,
+        clock=clock,
         enabled=settings.yfinance_enabled,
         timeout_seconds=market_timeout,
     )
@@ -757,10 +763,14 @@ def build_application(
     )
     monitor_repository = SqlAlchemyMonitorRepository(engine)
     data_quality_service = DataQualityService(
-        account_snapshot_repository, account_transaction_repository, monitor_repository,
+        account_snapshot_repository,
+        account_transaction_repository,
+        monitor_repository,
         provider_infrastructure.route_history_store,
         research_unit_of_work_factory,
-        clock, id_generator, secret_redactor,
+        clock,
+        id_generator,
+        secret_redactor,
     )
     us_market_calendar = XnysMarketSessionCalendar()
     monitor_schedule_service = MonitorScheduleService(
@@ -768,6 +778,7 @@ def build_application(
         a_share_calendar=AShareMarketSessionCalendarAdapter(a_share_calendar),
         kr_calendar=XkrxMarketSessionCalendar(),
         post_market_delay_minutes=settings.post_market_sync_delay_minutes,
+        weekend_rwa_proxy_enabled=settings.weekend_rwa_proxy_enabled,
         ig_weekend_gold_enabled=(
             settings.ig_weekend_gold_enabled and settings.apify_api_token is not None
         ),
@@ -786,6 +797,40 @@ def build_application(
         us_context=us_context_tool_coordinator,
         research_uow_factory=research_unit_of_work_factory,
     )
+    monitor_judgment_provider: MonitorJudgmentProvider | None = None
+    monitor_judgment_service = None
+    if settings.monitor_judgment_enabled:
+        if settings.llm_provider == "bailian":
+            assert settings.bailian_api_key is not None
+            monitor_judgment_provider = BailianMonitorJudgmentProvider(
+                api_key=settings.bailian_api_key,
+                base_url=settings.bailian_base_url,
+                model=settings.bailian_model,
+                reasoning_effort=settings.llm_reasoning_effort,
+                web_search_enabled=settings.bailian_web_search_enabled,
+                output_language=settings.llm_output_language,
+                timeout_seconds=settings.monitor_judgment_timeout_seconds,
+                max_output_tokens=settings.monitor_judgment_max_output_tokens,
+                proxy_url=settings.provider_proxy_url,
+            )
+        else:
+            assert settings.deepseek_api_key is not None
+            monitor_judgment_provider = DeepSeekMonitorJudgmentProvider(
+                api_key=settings.deepseek_api_key,
+                base_url=settings.deepseek_base_url,
+                model=settings.deepseek_model,
+                reasoning_effort=settings.llm_reasoning_effort,
+                timeout_seconds=settings.monitor_judgment_timeout_seconds,
+                max_output_tokens=settings.monitor_judgment_max_output_tokens,
+                proxy_url=settings.provider_proxy_url,
+            )
+        monitor_judgment_service = MonitorJudgmentService(
+            monitor_repository,
+            market_tool_coordinator,
+            monitor_judgment_provider,
+            clock,
+            id_generator,
+        )
     monitor_evaluation_service = MonitorEvaluationService(
         monitor_repository,
         a_share_tool_coordinator,
@@ -794,6 +839,7 @@ def build_application(
         clock,
         id_generator,
         monitor_fact_resolver,
+        monitor_judgment_service,
     )
     notification_service = NotificationService(
         monitor_repository,
@@ -868,7 +914,9 @@ def build_application(
             VendorId.SCHWAB: schwab_account_provider,
             VendorId.MOOMOO: moomoo_account_provider,
         },
-        account_transaction_repository, account_snapshot_repository, clock,
+        account_transaction_repository,
+        account_snapshot_repository,
+        clock,
         id_generator,
         secret_redactor,
     )
@@ -932,6 +980,7 @@ def build_application(
             a_share_transport=provider_infrastructure.owned_a_share_transport,
             cross_asset_transport=provider_infrastructure.owned_cross_asset_transport,
             notification_sender=owned_notification_sender,
+            monitor_judgment_provider=monitor_judgment_provider,
         ),
         providers=ProviderBundle(router=provider_router, registry=vendor_registry),
         services=ApplicationServices(

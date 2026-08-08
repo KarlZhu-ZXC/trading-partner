@@ -48,7 +48,7 @@ class MonitorVersionRow(Base):
             "confirmed_by IN ('user','external_agent')",
             name="ck_monitor_versions_confirmed_by",
         ),
-        CheckConstraint("schema_version IN (1,2)", name="ck_monitor_versions_schema"),
+        CheckConstraint("schema_version IN (1,2,3)", name="ck_monitor_versions_schema"),
         CheckConstraint(
             "(cadence = 'INTERVAL' AND interval_minutes >= 60 "
             "AND interval_minutes % 60 = 0) OR "
@@ -75,6 +75,7 @@ class MonitorVersionRow(Base):
     interval_minutes: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     rules_json: Mapped[str] = mapped_column(Text, nullable=False)
+    judgment_policy_json: Mapped[str | None] = mapped_column(Text)
     valid_until: Mapped[str | None] = mapped_column(Text)
     confirmed_by: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -241,6 +242,52 @@ class MonitorRunObservationRow(Base):
     warning_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     error_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    diagnostics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+
+class MonitorJudgmentRow(Base):
+    __tablename__ = "monitor_judgments"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('SUCCEEDED','SKIPPED','FAILED')",
+            name="ck_monitor_judgments_status",
+        ),
+        Index("ix_monitor_judgments_monitor_created", "monitor_id", "created_at"),
+    )
+
+    judgment_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("monitor_runs.run_id", ondelete="CASCADE"), nullable=False
+    )
+    monitor_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("monitor_identities.monitor_id", ondelete="RESTRICT"), nullable=False
+    )
+    monitor_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    urgency: Mapped[str | None] = mapped_column(Text)
+    phase: Mapped[str | None] = mapped_column(Text)
+    market_state: Mapped[str | None] = mapped_column(Text)
+    divergence: Mapped[str | None] = mapped_column(Text)
+    conclusion: Mapped[str | None] = mapped_column(Text)
+    quantity_min: Mapped[int | None] = mapped_column(Integer)
+    quantity_max: Mapped[int | None] = mapped_column(Integer)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_feature_ids: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
+    next_trigger: Mapped[str | None] = mapped_column(Text)
+    invalidation: Mapped[str | None] = mapped_column(Text)
+    feature_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    result_fingerprint: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    warning_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
+    error_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    web_search_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    web_source_urls: Mapped[tuple[str, ...]] = mapped_column(
+        JsonStringTuple(), nullable=False, default=tuple
+    )
 
 
 class NotificationOutboxRow(Base):

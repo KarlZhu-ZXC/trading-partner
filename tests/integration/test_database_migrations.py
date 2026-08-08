@@ -86,6 +86,7 @@ _PHASE2_TABLES = {
     "monitor_runs",
     "monitor_run_observations",
     "notification_outbox",
+    "monitor_judgments",
 }
 
 _HARDENING_TABLES = {
@@ -110,7 +111,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0030_generic_notification_outbox"})
+_HEAD_REVISIONS = frozenset({"0036_monitor_provider_diagnostics"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -172,6 +173,17 @@ def test_migration_round_trip(
     assert _PHASE2_TABLES.issubset(tables_after_first)
     assert _PHASE3_TABLES.issubset(tables_after_first)
     assert _HARDENING_TABLES.issubset(tables_after_first)
+    judgment_columns = {item["name"] for item in insp.get_columns("monitor_judgments")}
+    assert {"web_search_used", "web_source_urls"}.issubset(judgment_columns)
+    selection_columns = {item["name"] for item in insp.get_columns("watchlist_items")}
+    assert {"instrument_id", "selection_reason"}.issubset(selection_columns)
+    observation_columns = {
+        item["name"] for item in insp.get_columns("monitor_run_observations")
+    }
+    assert "diagnostics_json" in observation_columns
+    assert "uq_watchlist_selected_per_case" in {
+        item["name"] for item in insp.get_indexes("watchlist_items")
+    }
 
     with engine.connect() as conn:
         versions = {

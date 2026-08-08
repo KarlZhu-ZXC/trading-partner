@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from domain.common.enums import ThesisStatus
+from domain.common.enums import ThesisRole, ThesisStatus
 from domain.research.models import Thesis
 
 
@@ -22,6 +22,16 @@ class ThesisRepository(Protocol):
         *,
         new_status: ThesisStatus,
         archived_at: datetime | None,
+    ) -> None: ...
+
+    def update_metadata(
+        self,
+        thesis_id: str,
+        *,
+        title: str,
+        role: ThesisRole,
+        parent_thesis_id: str | None,
+        rival_thesis_ids: tuple[str, ...],
     ) -> None: ...
 
     def advance_current_revision(

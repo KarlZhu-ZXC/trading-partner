@@ -254,6 +254,19 @@ _ALLOWLIST: Final[tuple[_AllowEntry, ...]] = (
         _MatchMode.PREFIX,
         frozenset({"GET"}),
     ),
+    # Keyless public weekend reference feeds. Exact endpoints only.
+    _AllowEntry(
+        "api.binance.com",
+        "/api/v3/ticker/bookTicker",
+        _MatchMode.EXACT,
+        frozenset({"GET"}),
+    ),
+    _AllowEntry(
+        "api.hyperliquid.xyz",
+        "/info",
+        _MatchMode.EXACT,
+        frozenset({"POST"}),
+    ),
     _AllowEntry(
         "gamma-api.polymarket.com",
         "/public-search",

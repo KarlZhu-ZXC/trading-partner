@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,7 +24,7 @@ from domain.monitoring.enums import (
     MonitorSeverity,
     MonitorStatus,
 )
-from domain.monitoring.models import MonitorDefinition, MonitorRule
+from domain.monitoring.models import MonitorDefinition, MonitorRule, MonitorRuleState
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
 from infrastructure.persistence.metadata import Base
@@ -39,6 +40,9 @@ def _rule(
     *,
     instrument_id: str | None = None,
     comparator: TradePlanComparator = TradePlanComparator.GTE,
+    threshold: Decimal = Decimal("1"),
+    recovery_threshold: Decimal | None = None,
+    technical_interval: Literal["1d", "1w"] | None = None,
 ) -> MonitorRule:
     return MonitorRule(
         rule_code=code,
@@ -52,8 +56,10 @@ def _rule(
         metric_key=metric,
         comparator=comparator,
         numeric_threshold=(
-            None if comparator is TradePlanComparator.OCCURRED else Decimal("1")
+            None if comparator is TradePlanComparator.OCCURRED else threshold
         ),
+        recovery_threshold=recovery_threshold,
+        technical_interval=technical_interval,
     )
 
 
@@ -245,3 +251,140 @@ async def test_a_share_fundamental_without_publication_time_is_not_evaluated() -
     assert fact.value is None
     assert fact.as_of is None
     assert fact.error_codes == ("MONITOR_PUBLICATION_TIME_UNAVAILABLE",)
+
+
+@pytest.mark.asyncio
+async def test_technical_fact_uses_requested_weekly_interval() -> None:
+    technical = MagicMock()
+    technical.get_snapshot = AsyncMock(
+        return_value=SimpleNamespace(
+            ok=True,
+            data=SimpleNamespace(
+                timeframes=(
+                    SimpleNamespace(
+                        interval="1w",
+                        bar_as_of=NOW,
+                        metrics=(SimpleNamespace(name="rsi_14", value=Decimal("28.5")),),
+                    ),
+                )
+            ),
+            warnings=(),
+            errors=(),
+        )
+    )
+    resolver = MonitorFactResolver(
+        technical=technical,
+        a_share=MagicMock(),
+        us_research=MagicMock(),
+        us_context=MagicMock(),
+        research_uow_factory=MagicMock(),
+    )
+    rule = _rule(
+        "WEEKLY_RSI",
+        TradePlanFactType.TECHNICAL,
+        "rsi_14",
+        instrument_id="equity:US:NVDA",
+        comparator=TradePlanComparator.LT,
+        threshold=Decimal("30"),
+        recovery_threshold=Decimal("35"),
+        technical_interval="1w",
+    )
+
+    fact = await resolver.resolve(rule, NOW)
+
+    request = technical.get_snapshot.await_args.args[0]
+    assert request.intervals == ("1w",)
+    assert fact.value == Decimal("28.5")
+    assert fact.as_of == NOW
+
+
+def test_fact_rule_hysteresis_waits_for_recovery_threshold() -> None:
+    rule = _rule(
+        "RSI_OVERSOLD",
+        TradePlanFactType.TECHNICAL,
+        "rsi_14",
+        instrument_id="equity:US:NVDA",
+        comparator=TradePlanComparator.LT,
+        threshold=Decimal("30"),
+        recovery_threshold=Decimal("35"),
+        technical_interval="1d",
+    )
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000099",
+        version=1,
+        name="RSI hysteresis",
+        subject_id=None,
+        primary_instrument_id="equity:US:NVDA",
+        cadence=MonitorCadence.US_POST_MARKET,
+        status=MonitorStatus.ACTIVE,
+        rules=(rule,),
+        confirmed_by="user",
+        idempotency_key="rsi-hysteresis",
+        created_at=NOW,
+    )
+    previous = MonitorRuleState(
+        monitor_id=monitor.monitor_id,
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        state=MonitorRuleStateValue.TRIGGERED,
+        observed_value=Decimal("29"),
+        fact_as_of=NOW,
+        message="Rule condition triggered.",
+        updated_at=NOW,
+    )
+
+    still_triggered = MonitorEvaluationService._evaluate_rule(
+        monitor,
+        rule,
+        SimpleNamespace(value=Decimal("32"), as_of=NOW, closed_session_last_known=False),
+        NOW,
+        previous,
+    )
+    recovered = MonitorEvaluationService._evaluate_rule(
+        monitor,
+        rule,
+        SimpleNamespace(value=Decimal("35"), as_of=NOW, closed_session_last_known=False),
+        NOW,
+        previous,
+    )
+
+    assert still_triggered.state is MonitorRuleStateValue.TRIGGERED
+    assert recovered.state is MonitorRuleStateValue.QUIET
+
+
+def test_monitor_repository_round_trips_technical_interval_and_hysteresis(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-technical-rule.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    rule = _rule(
+        "RSI_OVERSOLD",
+        TradePlanFactType.TECHNICAL,
+        "rsi_14",
+        instrument_id="equity:US:NVDA",
+        comparator=TradePlanComparator.LT,
+        threshold=Decimal("30"),
+        recovery_threshold=Decimal("35"),
+        technical_interval="1w",
+    )
+    repository.create(
+        MonitorDefinition(
+            monitor_id="monitor_00000000-0000-7000-8000-000000000098",
+            version=1,
+            name="Weekly RSI",
+            subject_id=None,
+            primary_instrument_id="equity:US:NVDA",
+            cadence=MonitorCadence.US_POST_MARKET,
+            status=MonitorStatus.ACTIVE,
+            rules=(rule,),
+            confirmed_by="user",
+            idempotency_key="weekly-rsi-roundtrip",
+            created_at=NOW,
+        )
+    )
+
+    restored = repository.get_current("monitor_00000000-0000-7000-8000-000000000098")
+
+    assert restored is not None
+    assert restored.rules[0].technical_interval == "1w"
+    assert restored.rules[0].recovery_threshold == Decimal("35")
+    engine.dispose()

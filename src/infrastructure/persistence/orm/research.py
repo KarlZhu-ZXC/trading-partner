@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,7 +22,7 @@ class ResearchSubjectRow(Base):
     __tablename__ = "investment_cases"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft','active','strengthened','weakened','invalidated','archived')",
+            "status IN ('draft','active','archived')",
             name="ck_investment_cases_status",
         ),
         CheckConstraint(
@@ -95,6 +96,14 @@ class ThesisRow(Base):
         Index("ix_theses_case_id", "case_id"),
         Index("ix_theses_status", "status"),
         Index("ix_theses_parent", "parent_thesis_id"),
+        Index(
+            "uq_theses_live_primary_per_subject",
+            "case_id",
+            unique=True,
+            sqlite_where=text(
+                "role = 'primary' AND status IN ('active','strengthened','weakened')"
+            ),
+        ),
     )
 
     thesis_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -335,60 +344,6 @@ class OpenQuestionRow(Base):
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     closed_without_answer_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     proposed_by: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-class WatchlistItemRow(Base):
-    __tablename__ = "watchlist_items"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('watching','triggered','promoted_to_case','expired','archived')",
-            name="ck_watchlist_status",
-        ),
-        CheckConstraint(
-            "(status = 'promoted_to_case') = (promoted_to_case_id IS NOT NULL)",
-            name="ck_watchlist_promoted",
-        ),
-        CheckConstraint(
-            "(status = 'triggered') = (triggered_at IS NOT NULL)",
-            name="ck_watchlist_triggered",
-        ),
-        CheckConstraint(
-            "(status = 'triggered') = (triggered_reason IS NOT NULL)",
-            name="ck_watchlist_triggered_reason",
-        ),
-        CheckConstraint("updated_at >= created_at", name="ck_watchlist_updated_at"),
-        CheckConstraint("market IN ('A_SHARE','US')", name="ck_watchlist_market"),
-        Index("ix_watchlist_status", "status"),
-        Index("ix_watchlist_case_id", "case_id"),
-        Index("ix_watchlist_market_symbol", "market", "symbol"),
-    )
-
-    item_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    market: Mapped[str] = mapped_column(Text, nullable=False)
-    symbol: Mapped[str] = mapped_column(Text, nullable=False)
-    display_name: Mapped[str] = mapped_column(Text, nullable=False)
-    thesis_hint: Mapped[str] = mapped_column(Text, nullable=False)
-    triggers_json: Mapped[tuple[str, ...]] = mapped_column(
-        JsonStringTuple(), nullable=False, default=()
-    )
-    subject_id: Mapped[str | None] = mapped_column(
-        "case_id",
-        Text,
-        ForeignKey("investment_cases.case_id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    status: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
-    expires_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    promoted_to_subject_id: Mapped[str | None] = mapped_column(
-        "promoted_to_case_id",
-        Text,
-        ForeignKey("investment_cases.case_id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    triggered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    triggered_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class WatchlistGroupRow(Base):

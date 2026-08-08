@@ -43,6 +43,8 @@ _SECRET_FIELD_NAMES = frozenset(
         "dukascopy_api_key",
         "telegram_bot_token",
         "telegram_chat_id",
+        "bailian_api_key",
+        "deepseek_api_key",
     }
 )
 
@@ -218,6 +220,11 @@ class AppSettings(BaseSettings):
     )
     reddit_apify_max_charge_usd: Decimal = Field(default=Decimal("0.20"), gt=0)
     apify_api_token: str | None = None
+    # Keyless weekend references: Binance PAXG/USDC for XAUUSD and
+    # Hyperliquid XYZ CL/USDC for the Dukascopy light-oil CFD.
+    weekend_rwa_proxy_enabled: bool = True
+    weekend_rwa_proxy_cache_ttl_seconds: int = Field(default=60, ge=10, le=3600)
+    weekend_rwa_proxy_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     ig_weekend_gold_enabled: bool = False
     ig_weekend_gold_actor_id: str = Field(default="apify/web-scraper", min_length=1)
     ig_weekend_gold_cache_ttl_seconds: int = Field(default=600, ge=60, le=3600)
@@ -229,7 +236,8 @@ class AppSettings(BaseSettings):
     reddit_cache_ttl_seconds: int = Field(default=3600, gt=0)
     reddit_cooldown_default_seconds: int = Field(default=900, gt=0)
     reddit_cooldown_max_seconds: int = Field(default=3600, gt=0)
-    # General outbound proxy for CME/DCE/Dukascopy, Polymarket, and Telegram.
+    # General outbound proxy for CME/DCE/Dukascopy, weekend references,
+    # Polymarket, and Telegram.
     provider_proxy_url: str | None = None
 
     # Phase 1I read-only account providers. Sources are additive; no unlock/order
@@ -285,6 +293,55 @@ class AppSettings(BaseSettings):
             "MONITOR_NOTIFICATION_EVENT_TTL_HOURS",
         ),
     )
+    # Optional server-side structured judgment for composite Monitors. These are
+    # shared LLM defaults; the Monitor is currently the only runtime consumer.
+    monitor_judgment_enabled: bool = False
+    llm_provider: Literal["bailian", "deepseek"] = "bailian"
+    bailian_api_key: str | None = None
+    bailian_base_url: str = Field(
+        default="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices(
+            "bailian_base_url", "BAILIAN_BASE_URL", "llm_base_url", "LLM_BASE_URL"
+        ),
+    )
+    bailian_model: str = Field(
+        default="qwen3.8-max",
+        validation_alias=AliasChoices(
+            "bailian_model", "BAILIAN_MODEL", "llm_model", "LLM_MODEL"
+        ),
+    )
+    bailian_web_search_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "bailian_web_search_enabled",
+            "BAILIAN_WEB_SEARCH_ENABLED",
+            "llm_web_search_enabled",
+            "LLM_WEB_SEARCH_ENABLED",
+        ),
+    )
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com",
+        validation_alias=AliasChoices(
+            "deepseek_base_url",
+            "DEEPSEEK_BASE_URL",
+            "monitor_judgment_base_url",
+            "MONITOR_JUDGMENT_BASE_URL",
+        ),
+    )
+    deepseek_model: str = Field(
+        default="deepseek-v4-flash",
+        validation_alias=AliasChoices(
+            "deepseek_model",
+            "DEEPSEEK_MODEL",
+            "monitor_judgment_model",
+            "MONITOR_JUDGMENT_MODEL",
+        ),
+    )
+    llm_reasoning_effort: Literal["high", "xhigh", "max"] = "max"
+    llm_output_language: Literal["zh-CN"] = "zh-CN"
+    monitor_judgment_timeout_seconds: float = Field(default=120.0, gt=0, le=300)
+    monitor_judgment_max_output_tokens: int = Field(default=8000, ge=512, le=8000)
     notification_batch_size: int = Field(
         default=20,
         ge=1,
@@ -347,6 +404,8 @@ class AppSettings(BaseSettings):
         "telegram_bot_token",
         "telegram_chat_id",
         "telegram_message_thread_id",
+        "bailian_api_key",
+        "deepseek_api_key",
         mode="before",
     )
     @classmethod
@@ -539,6 +598,28 @@ class AppSettings(BaseSettings):
             )
         if re.fullmatch(r"-?[0-9]+|@[A-Za-z0-9_]{5,}", self.telegram_chat_id) is None:
             raise ValueError("telegram_chat_id must be a numeric id or @channel username")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_monitor_judgment_configuration(self) -> Self:
+        if self.monitor_judgment_enabled:
+            if self.llm_provider == "bailian" and self.bailian_api_key is None:
+                raise ValueError(
+                    "BAILIAN_API_KEY is required when Bailian Monitor judgment is enabled"
+                )
+            if self.llm_provider == "deepseek" and self.deepseek_api_key is None:
+                raise ValueError(
+                    "DEEPSEEK_API_KEY is required when DeepSeek Monitor judgment is enabled"
+                )
+            if (
+                self.llm_provider == "deepseek"
+                and self.llm_reasoning_effort == "xhigh"
+            ):
+                raise ValueError("DeepSeek Monitor judgment supports high or max effort")
+        if not self.bailian_base_url.startswith("https://"):
+            raise ValueError("Bailian base URL must use https")
+        if not self.deepseek_base_url.startswith("https://"):
+            raise ValueError("DeepSeek base URL must use https")
         return self
 
     @field_validator("iwencai_base_url", mode="before")

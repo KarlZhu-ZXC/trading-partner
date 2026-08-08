@@ -1,122 +1,66 @@
-# Trading Partner — Documentation Index
+# Trading Partner documentation
 
-Root-level markdown is limited to `README.md` (product overview) and `AGENTS.md`
-(agent operating rules). Current phase specifications are consolidated. The
-`plans/` area holds bounded design and acceptance records; current behavior is
-always folded back into the phase specifications and capability guide.
+This directory contains only current product documentation, active future plans,
+and release history. Completed implementation plans are folded into the phase
+specifications and capability guide instead of being kept as parallel sources of
+truth.
 
-## Layout
+## Start here
 
-```text
-docs/
-├── README.md                 # this index
-├── examples/
-│   ├── manual-holdings.v1.csv
-│   ├── manual-watchlist.v1.csv
-│   └── quantconnect-free-hourly-template.py
-├── guide/
-│   └── mcp-capability-boundary.md
-├── phases/
-│   ├── phase1.md
-│   ├── phase2.md
-│   └── phase3.md
-├── plans/
-│   ├── phase3a-formal-futures-cross-asset-plan.md
-│   ├── phase3c-quantconnect-free-bridge.md
-│   ├── catalyst-agenda-and-scorecard-plan.md
-│   ├── local-console-product-closure-plan.md
-│   ├── product-capability-and-market-gap-review.md
-│   └── performance-attribution-and-console-plan.md
-├── operations/
-│   ├── known-issues.md
-│   ├── local-console-and-maintenance.md
-│   └── phase3a-live-smoke.md
-├── releases/
-│   ├── unreleased.md
-│   ├── v0.4.0.md
-│   └── v0.2.0.md
-├── roadmap/
-│   └── global-roadmap-cn-us.md
-```
-
-## Roadmap
-
-| Document | Purpose |
+| Document | Use it for |
 |---|---|
-| [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Global product principles and phase sequencing (A-share + US core, KR/cross-asset extensions) |
+| [../README.md](../README.md) | Product overview, installation, architecture, and common commands |
+| [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Complete public MCP contract, trust model, provider boundaries, and host usage |
+| [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Local Console, backup, maintenance, scheduler, and operational controls |
+| [operations/known-issues.md](operations/known-issues.md) | Active defects, accepted constraints, and resolved issue index |
+| [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Current product direction and future sequencing |
 
-## User guide
+## Current specifications
 
-| Document | Purpose |
+| Document | Scope |
 |---|---|
-| [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Complete Phase 1 MCP setup, capability, trust, write, provider, and out-of-scope boundaries |
+| [phases/phase1.md](phases/phase1.md) | Research memory, market/company facts, accounts, workflows, and the compact MCP foundation |
+| [phases/phase2.md](phases/phase2.md) | Watchlist Hub, Risk Engine, Monitoring Hub, notifications, and Technical Engine |
+| [phases/phase3.md](phases/phase3.md) | Cross-asset facts, company operating data, QuantConnect bridge, and judgment-to-plan controls |
 
-## Current phase specifications
+## User and operator guides
 
-| Document | Purpose |
+| Document | Scope |
 |---|---|
-| [phases/phase1.md](phases/phase1.md) | Consolidated Phase 1 product, architecture, capability, acceptance, and operational boundary |
-| [phases/phase2.md](phases/phase2.md) | Phase 2 Watchlist Hub, Risk, Monitoring, and cross-market Technical Engine v2 |
-| [phases/phase3.md](phases/phase3.md) | Phase 3 cross-asset facts, QuantConnect Free manual validation bridge, and judgment-to-plan controls |
+| [guide/quantconnect-free-bridge.md](guide/quantconnect-free-bridge.md) | Prepare LEAN code, run it manually in QuantConnect Free, and import the result JSON |
+| [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Command-line OpenD lifecycle on macOS |
+| [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Cross-asset free-provider smoke checks and expected typed degradation |
 
-## Implementation plans and acceptance records
+## Active plans
 
-| Document | Purpose |
+Only unimplemented or partially implemented work belongs in `plans/`.
+
+| Document | Status |
 |---|---|
-| [plans/phase3a-formal-futures-cross-asset-plan.md](plans/phase3a-formal-futures-cross-asset-plan.md) | Approved free-provider design and Phase 3A implementation/acceptance record |
-| [plans/phase3c-quantconnect-free-bridge.md](plans/phase3c-quantconnect-free-bridge.md) | Implemented zero-cost LEAN package/result-import bridge for user-operated QuantConnect Free backtests |
-| [plans/performance-attribution-and-console-plan.md](plans/performance-attribution-and-console-plan.md) | Staged real-performance attribution plan, QMT/FX deferral, and implemented local-console boundary |
-| [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Frozen durable Catalyst Agenda contract, free-source sequence, lean TDD, and Judgment Scorecard prerequisites |
-| [plans/local-console-product-closure-plan.md](plans/local-console-product-closure-plan.md) | Complete Local Console information architecture, editing semantics, gap inventory, and staged closure plan |
-| [plans/product-capability-and-market-gap-review.md](plans/product-capability-and-market-gap-review.md) | Current user-facing capability inventory, comparable-product research, and bounded product-gap priorities |
-| [plans/mcp-surface-reduction-plan.md](plans/mcp-surface-reduction-plan.md) | Implemented compact v2 reduction from 52 legacy tools to the sole 28-tool runtime surface, with discriminated schemas and permission separation; the compatibility profile was removed |
+| [plans/performance-attribution-and-console-plan.md](plans/performance-attribution-and-console-plan.md) | A0/A1 implemented; broker-statement sign-off and A2–A4 remain |
+| [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Approved future design; runtime implementation has not started |
 
-## Operations
+## Release history
 
-| Document | Purpose |
+| Document | Scope |
 |---|---|
-| [operations/known-issues.md](operations/known-issues.md) | Active verified defects, deferred external boundaries, and accepted operational constraints |
-| [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Loopback-only console, SQLite backup, cache retention, and maintenance commands |
-| [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Secure macOS command-line OpenD layout, launchd lifecycle, readiness, and upgrade procedure |
-| [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Free CME/DCE/Dukascopy live-smoke and typed-degradation runbook |
+| [releases/unreleased.md](releases/unreleased.md) | Current unreleased changes |
+| [releases/v0.5.0.md](releases/v0.5.0.md) | v0.5.0 release record |
+| [releases/v0.4.0.md](releases/v0.4.0.md) | v0.4.0 release record |
+| [releases/v0.2.0.md](releases/v0.2.0.md) | v0.2.0 release record |
 
-## Release notes
+Historical release notes intentionally retain the terminology and public schema
+versions that were true when those releases shipped. They are not current usage
+instructions.
 
-| Document | Purpose |
-|---|---|
-| [releases/unreleased.md](releases/unreleased.md) | Changes queued for the next release |
-| [releases/v0.4.0.md](releases/v0.4.0.md) | Portfolio attribution, data quality, Monitor reliability, Console closure, and cross-asset additions |
-| [releases/v0.2.0.md](releases/v0.2.0.md) | Phase 3 facts, compact 28, and judgment controls |
+## Examples and upstream references
 
-## Source layout
+- `examples/manual-holdings.v1.csv` and `examples/manual-watchlist.v1.csv` are
+  strict manual-source templates.
+- `examples/quantconnect-free-hourly-template.py` is the starter LEAN strategy.
+- `references/` records pinned upstream projects used as design references only;
+  they are not runtime dependencies.
 
-```text
-src/
-├── bootstrap.py          # composition root only
-├── application/          # ports, DTOs, services
-├── domain/               # pure domain
-├── infrastructure/       # composition, config, persistence/orm, providers, system
-└── interfaces/           # MCP adapters
-```
-
-Python imports are top-level (`application.*`, `domain.*`, `infrastructure.*`,
-`interfaces.*`, `bootstrap`). Console entries are `uv run trading-partner-mcp`
-for the MCP server, `uv run trading-partner-watchlist-sync` for an explicit
-Watchlist-only refresh, and `uv run trading-partner-post-market-sync` for the
-due-checked US post-market account plus Watchlist job. Explicit-cadence
-`trading-partner-monitor-run` remains available for diagnostics. Normal INTERVAL
-and A-share/US post-market Monitoring uses the unified `trading-partner-monitor-run
-due`; on macOS one token-free hourly launchd wake is managed by
-`trading-partner-monitor-scheduler`.
-Optional phone delivery uses a durable generic Telegram Outbox operated by
-`trading-partner-notifications`; the Monitor command remains an alias. It sends
-transition alerts plus one consolidated summary for every evaluated A-share/US
-post-market group. Explicitly authorized stdin-backed MANUAL enqueue is
-operational-only, has no order effect, and does not invoke Codex or an LLM;
-internal deterministic producers use the closed SYSTEM source.
-The loopback-only, LLM-free operational frontend is started with
-`uv run trading-partner-console` plus `npm run dev` under `console/`.
-Database status, owner-only backup, and dry-run-by-default cache retention are
-managed by `uv run trading-partner-maintenance`.
-Formal futures definitions and EOD statistics are explicitly synchronized through
-`uv run trading-partner-futures-sync`; it is read-only with respect to broker state.
+Runtime research data, broker exports, generated validation artifacts, audit
+captures, and private reports live under gitignored `data/` or `artifacts/`. They
+are not product documentation and must not be committed.

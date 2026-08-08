@@ -85,6 +85,55 @@ _IG_WEEKEND_WARNINGS = (
         message="IG forms weekend prices separately from its weekday gold market.",
     ),
 )
+_PAXG_WEEKEND_WARNINGS = (
+    WarningInfo(
+        code="PAXG_USDC_WEEKEND_PROXY",
+        message="Current weekend quote uses Binance PAXG/USDC spot as a reference.",
+    ),
+    WarningInfo(
+        code="WEEKEND_PROXY_NOT_XAUUSD_SPOT",
+        message="PAXG/USDC is tokenized gold quoted in USDC, not XAUUSD spot or LBMA gold.",
+    ),
+    WarningInfo(
+        code="TOKENIZED_GOLD_BASIS_RISK",
+        message=(
+            "PAXG may diverge from weekday OTC gold because of token, venue, and liquidity basis."
+        ),
+    ),
+    WarningInfo(
+        code="USDC_PEG_RISK",
+        message="The proxy is USDC-denominated; USDC/USD parity is not assumed to be exact.",
+    ),
+    WarningInfo(
+        code="PRICE_TIME_IS_FETCH_TIME",
+        message="The REST book ticker has no quote timestamp; quote_at is fetch time.",
+    ),
+)
+_CL_USDC_WEEKEND_WARNINGS = (
+    WarningInfo(
+        code="CL_USDC_WEEKEND_PROXY",
+        message="Current weekend quote uses Hyperliquid XYZ CL/USDC as a reference.",
+    ),
+    WarningInfo(
+        code="WEEKEND_PROXY_NOT_WTI_SPOT",
+        message=(
+            "XYZ CL/USDC is a builder-deployed perpetual proxy, not WTI spot, "
+            "NYMEX CL, or Dukascopy LIGHT.CMD-USD."
+        ),
+    ),
+    WarningInfo(
+        code="HIP3_PERPETUAL_BASIS_RISK",
+        message="The HIP-3 perpetual may diverge from exchange futures and OTC oil prices.",
+    ),
+    WarningInfo(
+        code="USDC_PEG_RISK",
+        message="The proxy is USDC-denominated; USDC/USD parity is not assumed to be exact.",
+    ),
+    WarningInfo(
+        code="PRICE_TIME_IS_FETCH_TIME",
+        message="The allMids response has no quote timestamp; quote_at is fetch time.",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +177,10 @@ def _quote_warnings(
 ) -> tuple[WarningInfo, ...]:
     if observation.venue_basis.value == "ig_weekend_cfd":
         return _IG_WEEKEND_WARNINGS
+    if observation.venue_basis.value == "paxg_usdc_spot_proxy":
+        return _PAXG_WEEKEND_WARNINGS
+    if observation.venue_basis.value == "cl_usdc_perpetual_proxy":
+        return _CL_USDC_WEEKEND_WARNINGS
     return _warnings_for(instrument)
 
 
@@ -144,12 +197,29 @@ def _provider_extra_warnings(
         "XAUUSD",
         "XAGUSD",
     }
-    return tuple(
+    code_warnings = tuple(
         WarningInfo(code=code, message=code.replace("_", " ").lower())
         for code in meta.warnings
-        if code not in known_codes
-        and (code != "DUKASCOPY_SWFX_NOT_LBMA" or lbma_allowed)
+        if code not in known_codes and (code != "DUKASCOPY_SWFX_NOT_LBMA" or lbma_allowed)
     )
+    diagnostic_warnings = tuple(
+        WarningInfo(
+            code="PROVIDER_ATTEMPT_DIAGNOSTIC",
+            message="A labelled fallback Provider attempt failed before another source returned.",
+            details={
+                "provider": item.provider,
+                "stage": item.stage,
+                "error_code": item.error_code,
+                "retryable": item.retryable,
+                "attempt_count": item.attempt_count,
+                "error_type": item.error_type,
+                "status_class": item.status_class,
+                "status_code": item.status_code,
+            },
+        )
+        for item in meta.diagnostics
+    )
+    return (*code_warnings, *diagnostic_warnings)
 
 
 def _require_otc_instrument(instrument: Instrument) -> None:
@@ -231,9 +301,7 @@ class CommoditySpotService:
             return CommoditySpotQuoteResult(
                 ok=False,
                 data=None,
-                warnings=_warnings_for(instrument)
-                if isinstance(instrument, Instrument)
-                else (),
+                warnings=_warnings_for(instrument) if isinstance(instrument, Instrument) else (),
                 error=exc,
             )
 
@@ -283,9 +351,7 @@ class CommoditySpotService:
             return CommoditySpotBarsResult(
                 ok=False,
                 data=None,
-                warnings=_warnings_for(instrument)
-                if isinstance(instrument, Instrument)
-                else (),
+                warnings=_warnings_for(instrument) if isinstance(instrument, Instrument) else (),
                 error=exc,
             )
 

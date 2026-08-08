@@ -82,13 +82,19 @@ The Research Subject title must identify the durable research object or research
 the summary must define stable research scope. Entry/add/trim, take-profit,
 stop-loss, sizing, and position plans belong to the Thesis or Trade Plan, never the
 Research Subject title/summary. Research Subject type and primary Instrument are immutable after creation.
-For new lifecycle decisions use `DRAFT`, `ACTIVE`, and `ARCHIVED`; legacy Research Subject
-`STRENGTHENED`, `WEAKENED`, and `INVALIDATED` values remain readable only for
-compatibility because conviction state belongs to the Thesis.
+Research Subject lifecycle is exactly `DRAFT`, `ACTIVE`, and `ARCHIVED`;
+conviction state belongs to the Thesis.
+Theme, macro, and portfolio-concern Research Subjects may intentionally have no
+primary Instrument. Their confirmed Research WatchlistItems form an Instrument
+Selection candidate pool with `WATCHING`, `SHORTLISTED`, `SELECTED`, and `REJECTED`
+states. Every selected/rejected transition requires a bounded rationale and exactly
+one candidate may be `SELECTED` per Research Subject. Selection never mutates the
+Research Subject identity, creates a position, or executes an order. A selected
+candidate may seed the execution `instrument_id` of a later Trade Plan.
 
 A Draft/non-tracking Research Subject may contain research artifacts and proposed candidates,
 but it cannot receive an ACTIVE/STRENGTHENED/WEAKENED Thesis or an ACTIVE Trade
-Plan. A live Thesis requires an ACTIVE/STRENGTHENED/WEAKENED Research Subject; an ACTIVE Trade
+Plan. A live Thesis requires an ACTIVE Research Subject; an ACTIVE Trade
 Plan additionally requires a live Thesis. A tracking Research Subject cannot leave tracking
 while a live Thesis or ACTIVE/PAUSED Trade Plan remains. Violations return the
 non-retryable `RESEARCH_STATE_CONFLICT`. Never auto-activate or cascade another
@@ -98,6 +104,14 @@ An existing Thesis revision preserves status unless `thesis_status` is explicitl
 provided; a real status transition requires `STRICT_REVIEW`. To archive a tracked
 Research Subject, explicitly archive its ACTIVE/PAUSED Trade Plan first, retire the live Thesis,
 then archive the Research Subject.
+Each Research Subject may hold several Thesis threads but at most one live PRIMARY
+across ACTIVE/STRENGTHENED/WEAKENED. Multiple SUB Theses may share that PRIMARY;
+COMPETITOR and BEAR represent alternatives and contrary judgments. SUB parent and
+rival references must belong to the same Research Subject and are validated during
+both proposal and confirmation. Confirmed revisions may update Thesis title, role,
+parent, and rival metadata while preserving append-only candidate/revision history.
+A live SUB requires a live PRIMARY parent. Retire live SUB children before retiring
+their PRIMARY, and detach every SUB before changing that PRIMARY to another role.
 Assumption, Invalidation, Open Question, Watchlist, parent/rival Thesis, and linked
 Research Subject references must be validated against their owning Research Subject/Thesis before proposal
 and again before confirmation. Existence alone is insufficient. Retiring a Research Subject or
@@ -144,6 +158,11 @@ and transition Monitor definitions explicitly.
 - Dukascopy OTC quote DTOs expose `display_price` plus `price_basis`; bid/ask
   observations normally use their midpoint while `last` stays null. Never
   relabel a quote midpoint as a traded price.
+- During the Dukascopy weekend closure, current XAUUSD price rules may use
+  Binance PAXG/USDC spot and current LIGHT.CMD-USD/USOIL rules may use
+  Hyperliquid XYZ CL/USDC. The former is tokenized gold; the latter is a HIP-3
+  perpetual. Both retain USDC, venue/liquidity, and basis-risk warnings and must
+  never be relabelled as the requested OTC identity, WTI spot, or NYMEX CL.
 - `uv run trading-partner-futures-sync` explicitly refreshes contract definitions
   and persists EOD statistics vintages. It is idempotent and has no order effect.
 
@@ -254,6 +273,10 @@ Every explicitly supplied Monitor rule requires a bounded human-readable
 direction, threshold, severity, and meaning are separate persisted fields. Legacy
 versions without a description remain readable but must be completed before an edit
 can create a new version.
+`TECHNICAL` fact rules support explicit daily/weekly (`1d`/`1w`) metrics from the
+shared Technical Engine. Ordered numeric rules may carry a separate recovery
+threshold for deterministic hysteresis. Legacy rules without a technical interval
+remain daily. Hourly/4-hour indicators and compound Boolean rules are not supported.
 
 Monitoring also supports `monitor_read` operations `dashboard` and `runs` without
 adding public tools. Dashboard embeds a compact per-Monitor latest-run summary;
@@ -269,14 +292,21 @@ market-review Automations must not duplicate Monitor evaluation or alerts.
 Successful whole-hour INTERVAL schedules are anchored to the run-start hour so
 Provider latency cannot turn a two-hour definition into a three-hour effective
 cycle. Due dispatch uses live evaluation time, not a pre-fetch historical cutoff.
-Dukascopy XAUUSD/XAGUSD INTERVAL schedules are venue-aware: the dispatcher skips
+Dukascopy XAUUSD/XAGUSD/light-oil INTERVAL schedules are venue-aware: the dispatcher skips
 the published Friday-to-Sunday closure and daily maintenance break before Provider
-access, reports `MARKET_CLOSED`, and resumes at the next observation window. When
-explicitly enabled, current XAUUSD price rules may use a bounded Apify browser
-fallback during the published IG Weekend Gold window. The observation keeps the
-requested Monitor identity but must disclose `ig_weekend_cfd`, scrape time, and
-proxy/not-spot warnings; it never supplies bars, technicals, XAGUSD, or historical
-`as_of` facts and must never be presented as XAUUSD spot or LBMA gold.
+access, reports `MARKET_CLOSED`, and resumes at the next observation window unless
+an enabled keyless weekend proxy supports that exact rule set. PAXG/USDC is the
+first XAUUSD weekend reference and XYZ CL/USDC is the light-oil reference. Optional
+IG Weekend Gold is the final XAUUSD fallback. These observations keep the requested
+Monitor identity but disclose their exact source and proxy basis; they never supply
+bars, technicals, XAGUSD, or historical `as_of` facts.
+Retryable weekend-reference calls use at most three bounded attempts. Failed
+primary/fallback hops are persisted on the immutable observation as structured,
+secret-safe diagnostics containing Provider, stage, typed error code, optional HTTP
+status, attempt, and retryability. Console Run details may render those fields but
+must never persist or display request URLs, proxy values, headers, response bodies,
+or exception text. Runs created before migration `0036` remain readable with an
+empty diagnostic list; never infer a missing historical cause.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
 market-close run. INTERVAL alerts remain transition-only. A-share/US/KR post-market
 groups persist their ordinary transition events but enqueue no separate event-linked
@@ -311,9 +341,9 @@ multi-transition headline stays a compact count and details each change below.
 Prominent red/green Unicode alert bands distinguish a newly triggered or recovered
 level because Telegram HTML cannot set text background colors. Common provenance
 warnings are condensed to a human-readable basis line without hiding typed errors.
-IG Weekend Gold cards
-explicitly describe the value as an XAUUSD weekend-volatility proxy rather than
-spot/LBMA. It does not generate or upload an image.
+Weekend cards explicitly describe PAXG/USDC as tokenized-gold proxy, XYZ CL/USDC
+as a HIP-3 perpetual proxy, or IG Weekend Gold as a separate CFD proxy. They do
+not generate or upload an image.
 
 **Phase 3D judgment-to-plan controls**
 
@@ -447,6 +477,19 @@ lifetime; expired Monitors are skipped before provider access, state mutation, o
 event creation and report `MONITOR_EXPIRED`. It is separate from rule fact age.
 Event acknowledgement/resolution never mutates a Thesis,
 position, Risk Policy, or order, and every run carries `execution_effect=false`.
+Optional composite judgment policies may add a bounded Playbook, 1–12 reference
+Instruments, relative-strength pairs, and user-confirmed execution state. The
+runtime computes 1h/4h/1d/3d returns, rule state, provenance, and session alignment
+before a server-side LLM call. Alibaba Cloud Model Studio `qwen3.8-max` is the
+default; the retained DeepSeek Provider can be selected through `LLM_PROVIDER`.
+Only the Bailian adapter may use bounded web search for current macro-event context; search usage and
+up to ten source URLs are persisted, while prices, positions, levels, returns, and
+quantity facts remain deterministic-only. Explanations are validated as Chinese.
+The LLM has no mutation/order port;
+evidence IDs and quantity ranges are validated, session-misaligned divergence
+actions are downgraded to WAIT, unchanged qualitative signatures skip calls, and
+only material judgment changes create events/notifications. Never infer a fill or
+mutate confirmed state from an LLM result.
 
 Phase 2D derives standard indicators through the open-source TA-Lib backend and
 project-owned structure analysis over provider-backed adjusted daily bars. Phase 3A
@@ -548,7 +591,8 @@ user guides, and historical archives.
 
 ```text
 local/automated backtest engines, execution, orders, fills
-automated evidence ingestion, runtime LLM synthesis
+automated evidence ingestion, general-purpose/autonomous runtime LLM synthesis
+outside the explicitly enabled composite Monitor judgment boundary
 order writes
 ```
 

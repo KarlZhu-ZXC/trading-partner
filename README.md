@@ -59,12 +59,19 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   and explicit `INCOMPLETE` status when history or valuation evidence is insufficient.
 - Propose and explicitly confirm versioned Trade Plans, calculate non-executing A-share/US
   position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
+- Open a theme Research Subject before an execution product is known, maintain a
+  confirmed Instrument Selection pool (`WATCHING` / `SHORTLISTED` / `SELECTED` /
+  `REJECTED`), record selection rationale, and carry the single selected ETF or
+  other Instrument into a later Trade Plan without rewriting the research scope.
 - Create durable price, volume, technical, fundamental, company-event, macro, sentiment,
   Thesis-state, and portfolio-risk monitors with transition-only events.
-- Run venue-aware XAUUSD/XAGUSD interval monitoring that sleeps through known
-  Dukascopy closures. An optional Apify browser fallback may evaluate current
-  XAUUSD rules during the published IG Weekend Gold window, always labelled as
-  a separately formed weekend CFD proxy rather than spot or LBMA gold.
+- Run venue-aware XAUUSD/XAGUSD/light-oil interval monitoring that sleeps through
+  known Dukascopy closures. During the weekend, current XAUUSD rules use Binance
+  PAXG/USDC and current `USOIL`/light-oil rules use Hyperliquid XYZ CL/USDC as
+  explicitly labelled proxies. Optional IG Weekend Gold remains a last-resort
+  XAUUSD fallback; none of these references is relabelled as spot or a benchmark.
+  Retryable weekend-reference failures receive three bounded attempts, and each
+  failed route stage is retained as a secret-safe diagnostic in the Monitor Run.
 - Produce shared A-share/US/KR daily and weekly technical analysis, including indicators,
   market structure, support/resistance, candlestick patterns, and PNG charts.
 - Retrieve free COMEX/NYMEX continuous metal-futures facts with Yahoo primary,
@@ -83,9 +90,11 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   backtests and import downloaded result JSON with explicit reproducibility gaps.
 - Browse system health, a durable-only Data Quality Center, every Research Subject
   and Thesis, all 28 MCP capabilities, Monitor runs/events, accounts, and
-  operational state in an LLM-free local web console. Its Attention Queue links
+  operational state in a local web console with no embedded chat model. Its Attention Queue links
   pending research candidates, failed Monitor runs, data-quality gaps, and
-  notification failures to the relevant workspace.
+  notification failures to the relevant workspace. An explicit Monitor run may
+  invoke the configured server-side LLM only when that Monitor has an enabled
+  composite judgment policy.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -161,7 +170,8 @@ The local Console renders both on its overview page.
 
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Local Console
 
-The optional Console is a loopback-only, LLM-free control room over the same
+The optional Console is a loopback-only control room with no embedded chat model,
+running over the same
 application services and compact-28 capability registry used by MCP. Start the API
 and frontend in separate terminals:
 
@@ -181,12 +191,23 @@ Open `http://localhost:3000`. The Console provides:
 - an Attention Queue for pending candidates, failed Monitor runs, data-quality
   gaps, and notification dead letters;
 - Research Subject lifecycle controls, Thesis revisions, versioned Trade Plans,
-  unified Timeline, confirmed Journal/Decision append, Challenge Review, and
-  research workflows;
+  PRIMARY/SUB/COMPETITOR/BEAR Thesis relationships, unified Timeline, confirmed
+  Journal/Decision append, Challenge Review, and research workflows;
 - durable Holdings, Activity, Performance, and Risk views without an implicit
   broker refresh;
-- Monitor definition editing plus per-Monitor Run, event, warning, error, and
-  rule-observation drill-down;
+- Monitor definition editing with price, daily/weekly technical-indicator and other
+  deterministic fact rules, optional trigger/recovery hysteresis, plus per-Monitor
+  Run, event, warning, error, rule-observation, and structured Provider-diagnostic
+  drill-down. Diagnostics identify the Provider, route stage, error code, HTTP
+  status, attempt, and retryability without exposing URLs, proxies, headers,
+  response bodies, or exception text. An optional composite
+  judgment policy can compare up to 12 instruments, relative-strength pairs, and
+  confirmed user state through a selectable server-side LLM Provider. Alibaba Cloud
+  Model Studio `qwen3.8-max` is the default; the existing DeepSeek Provider remains
+  available through configuration. Chinese explanations are required, and Bailian's
+  optional macro-context web search is bounded and auditable;
+  unchanged qualitative feature states skip the LLM call, and the result cannot
+  mutate state or orders;
 - operational receipts for post-market sync, notification delivery, Provider
   routing/admission, scheduler installation/load/last-exit state, and next-due
   Monitor timing; and
@@ -267,7 +288,11 @@ bot one message, then set `NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`, and
 `TELEGRAM_CHAT_ID` in the gitignored `.env`. The durable generic Outbox carries
 Monitor alerts plus explicitly authorized manual text; repeat Monitor observations
 remain in run history without notifying again. The hourly local dispatcher retries
-pending messages without opening a Codex task or consuming LLM tokens.
+pending messages without opening a Codex task or consuming Codex tokens. Only a
+Monitor with an explicitly enabled composite judgment policy may call the configured
+server-side LLM, and unchanged qualitative feature states skip that call. Search
+usage and bounded source URLs are persisted, while price/account facts remain owned
+by deterministic Providers.
 The unified dispatcher also owns A-share, US, and KR post-market Monitor execution;
 Codex market-review Automations must not duplicate Monitor evaluation or alerts.
 
@@ -337,10 +362,12 @@ flowchart TB
         CME[CME public reference<br/>contracts · settlement · curve]
         DCE[DCE public EOD<br/>live-hog contracts · settlement]
         Jetta[Dukascopy Jetta keyless<br/>XAUUSD · XAGUSD · rolling copper/light-oil CFDs]
-        IGWeekend[IG Weekend Gold via Apify browser<br/>current XAUUSD fallback · CFD proxy label]
+        WeekendRWA[Binance PAXG/USDC · Hyperliquid XYZ CL/USDC<br/>current weekend proxies · explicit basis risk]
+        IGWeekend[IG Weekend Gold via Apify browser<br/>last-resort XAUUSD weekend fallback]
         Legacy[optional legacy Dukascopy key API]
         Jetta -. failure with configured key .-> Legacy
-        Jetta -. published weekend window .-> IGWeekend
+        Jetta -. weekend closure .-> WeekendRWA
+        WeekendRWA -. gold proxy unavailable .-> IGWeekend
     end
 
     subgraph Personal[Personal read-only context]
@@ -365,12 +392,13 @@ flowchart TB
     Router --> CME
     Router --> DCE
     Router --> Jetta
+    Router --> WeekendRWA
     Router --> IGWeekend
     App --> Accounts
     App --> Watchlists
     Router --> Hot
 
-    Proxy[optional PROVIDER_PROXY_URL<br/>CME · DCE · Dukascopy · Polymarket] -. network route .-> Router
+    Proxy[optional PROVIDER_PROXY_URL<br/>CME · DCE · Dukascopy · weekend references · Polymarket] -. network route .-> Router
 ```
 
 Dukascopy follows the current `dukascopy-node` Jetta strategy: 1-minute data is
@@ -393,6 +421,7 @@ per-minute quota.
 
 - [MCP capability and trust boundary](docs/guide/mcp-capability-boundary.md)
 - [Local Console and maintenance](docs/operations/local-console-and-maintenance.md)
+- [QuantConnect Free manual validation](docs/guide/quantconnect-free-bridge.md)
 - [Documentation index](docs/README.md)
 - [Known operational issues](docs/operations/known-issues.md)
 - [Product roadmap](docs/roadmap/global-roadmap-cn-us.md)

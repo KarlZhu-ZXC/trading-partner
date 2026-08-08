@@ -38,12 +38,14 @@ class MonitorScheduleService:
         a_share_calendar: MarketSessionCalendar | None = None,
         kr_calendar: MarketSessionCalendar | None = None,
         post_market_delay_minutes: int = 10,
+        weekend_rwa_proxy_enabled: bool = False,
         ig_weekend_gold_enabled: bool = False,
     ) -> None:
         self._us_calendar = us_calendar
         self._a_share_calendar = a_share_calendar
         self._kr_calendar = kr_calendar
         self._post_market_delay = timedelta(minutes=post_market_delay_minutes)
+        self._weekend_rwa_proxy_enabled = bool(weekend_rwa_proxy_enabled)
         self._ig_weekend_gold_enabled = bool(ig_weekend_gold_enabled)
 
     def status(
@@ -75,6 +77,7 @@ class MonitorScheduleService:
         reopens_at = _interval_market_reopens_at(
             monitor,
             now,
+            weekend_rwa_proxy_enabled=self._weekend_rwa_proxy_enabled,
             ig_weekend_gold_enabled=self._ig_weekend_gold_enabled,
         )
         if reopens_at is not None:
@@ -136,11 +139,15 @@ class MonitorScheduleService:
 
 
 _NEW_YORK = ZoneInfo("America/New_York")
-_DUKASCOPY_PRECIOUS_METALS = frozenset(
+_DUKASCOPY_WEEKEND_INSTRUMENTS = frozenset(
     {
         "commodity_spot:OTC:XAUUSD",
         "commodity_spot:OTC:XAGUSD",
+        "cfd:OTC:LIGHT_CMD_USD",
     }
+)
+_WEEKEND_RWA_PROXY_INSTRUMENTS = frozenset(
+    {"commodity_spot:OTC:XAUUSD", "cfd:OTC:LIGHT_CMD_USD"}
 )
 
 
@@ -148,14 +155,15 @@ def _interval_market_reopens_at(
     monitor: MonitorDefinition,
     now: datetime,
     *,
+    weekend_rwa_proxy_enabled: bool = False,
     ig_weekend_gold_enabled: bool = False,
 ) -> datetime | None:
     """Return the next known observation window for venue-scoped intervals.
 
-    Dukascopy publishes XAU/USD and XAG/USD on a New-York-aligned 24/5
-    schedule with a daily 17:00-18:00 ET break.  A closed venue is a scheduling
-    fact, not a failed market-data observation, so the dispatcher waits for the
-    next window instead of manufacturing recurring NOT_EVALUATED runs.
+    The supported Dukascopy OTC instruments use a New-York-aligned 24/5 schedule
+    with a daily 17:00-18:00 ET break. A closed venue is a scheduling fact, not a
+    failed observation, so the dispatcher waits instead of manufacturing recurring
+    NOT_EVALUATED runs unless a labelled current weekend proxy is enabled.
     """
     if any(
         rule.rule_type
@@ -172,7 +180,7 @@ def _interval_market_reopens_at(
         )
         if item is not None
     }
-    if not instrument_ids or not instrument_ids.issubset(_DUKASCOPY_PRECIOUS_METALS):
+    if not instrument_ids or not instrument_ids.issubset(_DUKASCOPY_WEEKEND_INSTRUMENTS):
         return None
 
     local = now.astimezone(_NEW_YORK)
@@ -181,14 +189,18 @@ def _interval_market_reopens_at(
     close = time(17)
     reopen = time(18)
 
+    weekend_closure = False
     if weekday == 4 and local_time >= close:  # Friday close through Sunday reopen.
         reopen_date = local.date() + timedelta(days=2)
+        weekend_closure = True
     elif weekday == 5:
         reopen_date = local.date() + timedelta(days=1)
+        weekend_closure = True
     elif (weekday == 6 and local_time < reopen) or (
         weekday in {0, 1, 2, 3} and close <= local_time < reopen
     ):
         reopen_date = local.date()
+        weekend_closure = weekday == 6
     else:
         return None
     dukascopy_reopens_at = datetime.combine(
@@ -196,6 +208,12 @@ def _interval_market_reopens_at(
     ).astimezone(
         now.tzinfo
     )
+    if (
+        weekend_closure
+        and weekend_rwa_proxy_enabled
+        and instrument_ids.issubset(_WEEKEND_RWA_PROXY_INSTRUMENTS)
+    ):
+        return None
     if (
         ig_weekend_gold_enabled
         and instrument_ids == {"commodity_spot:OTC:XAUUSD"}

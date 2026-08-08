@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
+from urllib.parse import urlsplit
 
+from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import Market
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
@@ -14,6 +18,7 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
+    MonitorJudgmentConclusion,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -33,7 +38,7 @@ from domain.trade_plan.enums import (
 MonitorNotificationMessage = NotificationMessage
 MonitorNotificationOutboxEntry = NotificationOutboxEntry
 
-MONITORING_SCHEMA_VERSION = 2
+MONITORING_SCHEMA_VERSION = 3
 
 # Price rules may target A-share equities, US exchange instruments, CME/DCE
 # futures identities, and OTC spot/CFD seeds. Evaluation remains asset-aware:
@@ -70,6 +75,54 @@ def _codes(values: tuple[str, ...], field: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class MonitorJudgmentPolicy:
+    """Versioned LLM judgment policy; confirmed execution state stays immutable."""
+
+    playbook: str
+    reference_instrument_ids: tuple[str, ...]
+    relative_strength_pairs: tuple[tuple[str, str, str], ...] = ()
+    confirmed_state_json: str = "{}"
+    prompt_version: str = "monitor-judgment-v1"
+
+    def __post_init__(self) -> None:
+        _text(self.playbook, "judgment playbook", 16000)
+        if not 1 <= len(self.reference_instrument_ids) <= 12:
+            raise DataContractError("judgment policy requires 1..12 reference instruments")
+        _codes(self.reference_instrument_ids, "reference_instrument_ids")
+        for instrument_id in self.reference_instrument_ids:
+            parse_instrument_id(instrument_id)
+        if len(self.relative_strength_pairs) > 12:
+            raise DataContractError("judgment policy supports at most 12 relative-strength pairs")
+        pair_names: list[str] = []
+        for name, numerator, denominator in self.relative_strength_pairs:
+            pair_names.append(_text(name, "relative strength pair name", 64))
+            if numerator not in self.reference_instrument_ids:
+                raise DataContractError("relative-strength numerator is not a reference instrument")
+            if denominator not in self.reference_instrument_ids:
+                raise DataContractError(
+                    "relative-strength denominator is not a reference instrument"
+                )
+        if len(pair_names) != len(set(pair_names)):
+            raise DataContractError("relative-strength pair names must be unique")
+        try:
+            state = json.loads(self.confirmed_state_json)
+        except json.JSONDecodeError as exc:
+            raise DataContractError("confirmed_state_json must be valid JSON") from exc
+        if not isinstance(state, dict) or len(state) > 50:
+            raise DataContractError("confirmed state must be a bounded object")
+        if any(not isinstance(key, str) or not key.strip() for key in state):
+            raise DataContractError("confirmed state keys must be non-blank strings")
+        if any(
+            not isinstance(value, (str, int, float, bool)) and value is not None
+            for value in state.values()
+        ):
+            raise DataContractError("confirmed state values must be JSON scalars")
+        if len(self.confirmed_state_json) > 8000:
+            raise DataContractError("confirmed state is too large")
+        _text(self.prompt_version, "prompt_version", 64)
+
+
+@dataclass(frozen=True, slots=True)
 class MonitorRule:
     rule_code: str
     rule_type: MonitorRuleType
@@ -83,6 +136,8 @@ class MonitorRule:
     metric_key: str | None = None
     comparator: TradePlanComparator | None = None
     numeric_threshold: Decimal | None = None
+    recovery_threshold: Decimal | None = None
+    technical_interval: Literal["1d", "1w"] | None = None
     event_after: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -118,6 +173,8 @@ class MonitorRule:
                     self.metric_key,
                     self.comparator,
                     self.numeric_threshold,
+                    self.recovery_threshold,
+                    self.technical_interval,
                     self.event_after,
                 )
             ):
@@ -137,6 +194,8 @@ class MonitorRule:
                     self.metric_key,
                     self.comparator,
                     self.numeric_threshold,
+                    self.recovery_threshold,
+                    self.technical_interval,
                     self.event_after,
                 )
             ):
@@ -150,12 +209,45 @@ class MonitorRule:
             if not isinstance(self.comparator, TradePlanComparator):
                 raise DataContractError("fact rule requires comparator")
             if self.comparator is TradePlanComparator.OCCURRED:
-                if self.numeric_threshold is not None:
-                    raise DataContractError("OCCURRED rule cannot set numeric_threshold")
+                if self.numeric_threshold is not None or self.recovery_threshold is not None:
+                    raise DataContractError(
+                        "OCCURRED rule cannot set numeric or recovery threshold"
+                    )
             else:
                 if self.numeric_threshold is None:
                     raise DataContractError("numeric fact rule requires numeric_threshold")
                 _decimal(self.numeric_threshold, "numeric_threshold")
+                if self.recovery_threshold is not None:
+                    _decimal(self.recovery_threshold, "recovery_threshold")
+                    if self.comparator is TradePlanComparator.EQ:
+                        raise DataContractError("EQ rule cannot set recovery_threshold")
+                    if (
+                        self.comparator
+                        in {
+                            TradePlanComparator.GT,
+                            TradePlanComparator.GTE,
+                        }
+                        and self.recovery_threshold >= self.numeric_threshold
+                    ):
+                        raise DataContractError(
+                            "upper trigger recovery_threshold must be below numeric_threshold"
+                        )
+                    if (
+                        self.comparator
+                        in {
+                            TradePlanComparator.LT,
+                            TradePlanComparator.LTE,
+                        }
+                        and self.recovery_threshold <= self.numeric_threshold
+                    ):
+                        raise DataContractError(
+                            "lower trigger recovery_threshold must be above numeric_threshold"
+                        )
+            if self.technical_interval is not None:
+                if self.fact_type is not TradePlanFactType.TECHNICAL:
+                    raise DataContractError("technical_interval is only valid for TECHNICAL rules")
+                if self.technical_interval not in {"1d", "1w"}:
+                    raise DataContractError("technical_interval must be 1d or 1w")
             if self.event_after is not None:
                 _aware(self.event_after, "event_after")
             requires_instrument = self.fact_type in {
@@ -201,6 +293,7 @@ class MonitorDefinition:
     trade_plan_version: int | None = None
     valid_until: datetime | None = None
     interval_minutes: int | None = None
+    judgment_policy: MonitorJudgmentPolicy | None = None
     schema_version: int = MONITORING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -262,10 +355,93 @@ class MonitorDefinition:
             _aware(self.valid_until, "valid_until")
             if self.valid_until <= self.created_at:
                 raise DataContractError("monitor valid_until must follow created_at")
-        if self.schema_version not in {1, MONITORING_SCHEMA_VERSION}:
-            raise DataContractError("monitoring schema_version must be 1 or 2")
+        if self.schema_version not in {1, 2, MONITORING_SCHEMA_VERSION}:
+            raise DataContractError("monitoring schema_version must be 1, 2, or 3")
         if self.cadence is MonitorCadence.INTERVAL and self.schema_version < 2:
             raise DataContractError("INTERVAL monitor requires monitoring schema_version 2")
+        if self.judgment_policy is not None and self.schema_version < 3:
+            raise DataContractError("judgment policy requires monitoring schema_version 3")
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorJudgment:
+    judgment_id: str
+    run_id: str
+    monitor_id: str
+    monitor_version: int
+    status: Literal["SUCCEEDED", "SKIPPED", "FAILED"]
+    urgency: Literal["WATCH", "ACTION", "URGENT"] | None
+    phase: str | None
+    market_state: str | None
+    divergence: Literal["BULLISH", "BEARISH", "NONE"] | None
+    conclusion: MonitorJudgmentConclusion | None
+    quantity_min: int | None
+    quantity_max: int | None
+    summary: str
+    evidence_feature_ids: tuple[str, ...]
+    next_trigger: str | None
+    invalidation: str | None
+    feature_signature: str
+    result_fingerprint: str | None
+    provider: str
+    model: str
+    reasoning_effort: str
+    prompt_version: str
+    warning_codes: tuple[str, ...]
+    error_codes: tuple[str, ...]
+    created_at: datetime
+    web_search_used: bool = False
+    web_source_urls: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _text(self.judgment_id, "judgment_id", 128)
+        _text(self.run_id, "run_id", 128)
+        _text(self.monitor_id, "monitor_id", 128)
+        if self.monitor_version <= 0:
+            raise DataContractError("monitor_version must be positive")
+        if self.status not in {"SUCCEEDED", "SKIPPED", "FAILED"}:
+            raise DataContractError("judgment status is invalid")
+        if self.conclusion is not None and not isinstance(
+            self.conclusion, MonitorJudgmentConclusion
+        ):
+            raise DataContractError("judgment conclusion is invalid")
+        if (self.quantity_min is None) != (self.quantity_max is None):
+            raise DataContractError("judgment quantity bounds must be provided together")
+        if self.quantity_min is not None:
+            assert self.quantity_max is not None
+            if self.quantity_min < 0 or self.quantity_max < self.quantity_min:
+                raise DataContractError("judgment quantity bounds are invalid")
+        _text(self.summary, "judgment summary", 1000)
+        if len(self.evidence_feature_ids) > 3:
+            raise DataContractError("judgment supports at most three evidence features")
+        _codes(self.evidence_feature_ids, "evidence_feature_ids")
+        for field, value, limit in (
+            ("phase", self.phase, 100),
+            ("market_state", self.market_state, 500),
+            ("next_trigger", self.next_trigger, 500),
+            ("invalidation", self.invalidation, 500),
+        ):
+            if value is not None:
+                _text(value, field, limit)
+        _text(self.feature_signature, "feature_signature", 128)
+        if self.result_fingerprint is not None:
+            _text(self.result_fingerprint, "result_fingerprint", 128)
+        for field, value in (
+            ("provider", self.provider),
+            ("model", self.model),
+            ("reasoning_effort", self.reasoning_effort),
+            ("prompt_version", self.prompt_version),
+        ):
+            _text(value, field, 128)
+        _codes(self.warning_codes, "warning_codes")
+        _codes(self.error_codes, "error_codes")
+        if len(self.web_source_urls) > 10:
+            raise DataContractError("judgment supports at most ten web sources")
+        for url in self.web_source_urls:
+            _text(url, "web_source_url", 2000)
+            if urlsplit(url).scheme not in {"http", "https"}:
+                raise DataContractError("judgment web source URL is invalid")
+        _aware(self.created_at, "created_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +541,7 @@ class MonitorRunObservation:
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
     message: str
+    diagnostics: tuple[ProviderFailureDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         _text(self.run_id, "run_id", 128)
@@ -394,6 +571,12 @@ class MonitorRunObservation:
         _codes(self.warning_codes, "warning_codes")
         _codes(self.error_codes, "error_codes")
         _text(self.message, "message", 1000)
+        if not isinstance(self.diagnostics, tuple) or any(
+            not isinstance(item, ProviderFailureDiagnostic) for item in self.diagnostics
+        ):
+            raise DataContractError(
+                "monitor observation diagnostics must contain ProviderFailureDiagnostic values"
+            )
 
 
 @dataclass(frozen=True, slots=True)

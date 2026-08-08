@@ -24,6 +24,7 @@ from infrastructure.persistence.orm.monitoring import (
     MonitorEventResolutionRow,
     MonitorEventRow,
     MonitorIdentityRow,
+    MonitorJudgmentRow,
     MonitorRuleStateRow,
     MonitorRunObservationRow,
     MonitorRunRow,
@@ -63,7 +64,6 @@ from infrastructure.persistence.orm.research import (
     ThesisRevisionRow,
     ThesisRow,
     WatchlistGroupRow,
-    WatchlistItemRow,
     WatchlistMembershipRow,
     WatchlistMutationRow,
 )
@@ -76,6 +76,7 @@ from infrastructure.persistence.orm.research_memory import (
     ResearchReportRow,
     SubjectEvidenceLinkRow,
 )
+from infrastructure.persistence.orm.research_selection import WatchlistItemRow
 from infrastructure.persistence.orm.system import (
     SchemaVersionRow,
     SystemAuditLogRow,
@@ -125,6 +126,7 @@ __all__ = [
     "TradePlanVersionRow",
     "TradePlanConditionRow",
     "MonitorIdentityRow",
+    "MonitorJudgmentRow",
     "MonitorVersionRow",
     "MonitorRuleStateRow",
     "MonitorEventRow",
