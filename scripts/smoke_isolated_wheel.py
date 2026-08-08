@@ -12,8 +12,10 @@ startup path uses ``AppSettings.load()`` under an installed layout.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -146,6 +148,43 @@ def main() -> int:
         _run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
         _run([str(python), "-m", "pip", "install", str(wheel)])
 
+        if sys.platform == "win32":
+            init_command = venv_dir / "Scripts" / "trading-partner-init.exe"
+        else:
+            init_command = venv_dir / "bin" / "trading-partner-init"
+        runtime_home = work / "runtime"
+        init_result = subprocess.run(
+            [
+                str(init_command),
+                "--runtime-home",
+                str(runtime_home),
+                "--json",
+            ],
+            cwd=work,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sys.stdout.write(init_result.stdout)
+        sys.stderr.write(init_result.stderr)
+        if init_result.returncode != 0:
+            return init_result.returncode
+        init_receipt = json.loads(init_result.stdout)
+        if Path(init_receipt["mcp_command"]).resolve().parent != init_command.resolve().parent:
+            print(
+                f"init returned a non-isolated MCP command: {init_receipt['mcp_command']}",
+                file=sys.stderr,
+            )
+            return 1
+        runtime_db = runtime_home / "trading_partner.db"
+        with sqlite3.connect(runtime_db) as connection:
+            revision = connection.execute(
+                "SELECT version_num FROM alembic_version"
+            ).fetchone()
+        if revision != ("0036_monitor_provider_diagnostics",):
+            print(f"unexpected packaged migration head: {revision}", file=sys.stderr)
+            return 1
+
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         # Clear every project key documented by .env.example so ambient shell
         # configuration cannot steer the isolated probe now that keys are unprefixed.
@@ -158,7 +197,7 @@ def main() -> int:
             env.pop(key, None)
 
         # Required process env for installed AppSettings.load() (console/MCP path).
-        db_path = work / "smoke.db"
+        db_path = runtime_db
         env.update(
             {
                 "APP_NAME": "trading-partner-wheel-smoke",

@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Coroutine
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -124,6 +125,16 @@ def test_main_invokes_asyncio_run_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(server_module.asyncio, "run", fake_asyncio_run)
 
-    server_module.main()
+    server_module.main([])
 
     assert len(received) == 1
+
+
+def test_parser_accepts_explicit_env_file(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "runtime.env"
+
+    args = server_module._parser().parse_args(["--env-file", str(env_file)])
+
+    assert args.env_file == env_file

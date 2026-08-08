@@ -10,6 +10,8 @@ truth.
 | Document | Use it for |
 |---|---|
 | [../README.md](../README.md) | Product overview, installation, architecture, and common commands |
+| [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文安装、MCP 接入、首次验证与安全边界 |
+| [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Claude Desktop, Cursor, generic stdio, upgrade, and uninstall recipes |
 | [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Complete public MCP contract, trust model, provider boundaries, and host usage |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Local Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects, accepted constraints, and resolved issue index |
@@ -28,6 +30,8 @@ truth.
 | Document | Scope |
 |---|---|
 | [guide/quantconnect-free-bridge.md](guide/quantconnect-free-bridge.md) | Prepare LEAN code, run it manually in QuantConnect Free, and import the result JSON |
+| [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Connect the installed core runtime to Claude Desktop, Cursor, or a generic stdio host |
+| [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文快速开始与第一个安全研究问题 |
 | [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Command-line OpenD lifecycle on macOS |
 | [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Cross-asset free-provider smoke checks and expected typed degradation |
 
@@ -45,6 +49,7 @@ Only unimplemented or partially implemented work belongs in `plans/`.
 | Document | Scope |
 |---|---|
 | [releases/unreleased.md](releases/unreleased.md) | Current unreleased changes |
+| [releases/v0.5.1.md](releases/v0.5.1.md) | v0.5.1 portable MCP onboarding release |
 | [releases/v0.5.0.md](releases/v0.5.0.md) | v0.5.0 release record |
 | [releases/v0.4.0.md](releases/v0.4.0.md) | v0.4.0 release record |
 | [releases/v0.2.0.md](releases/v0.2.0.md) | v0.2.0 release record |

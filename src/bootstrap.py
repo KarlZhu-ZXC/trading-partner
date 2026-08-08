@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
@@ -1025,9 +1026,9 @@ def build_application(
     )
 
 
-def load_settings() -> AppSettings:
-    """Load settings from the project-root ``.env`` (I/O — call from main only)."""
-    return AppSettings.load()
+def load_settings(env_file: Path | None = None) -> AppSettings:
+    """Load default or explicitly located settings at the composition root."""
+    return AppSettings.load(env_file=env_file)
 
 
 def build_default_application() -> ApplicationContainer:
