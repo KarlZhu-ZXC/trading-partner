@@ -69,7 +69,7 @@ export function ConsoleShell({
     <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-header">
-          <Link className="brand" href="/" aria-label="Trading Partner 控制台首页">
+          <Link className="brand" href="/" aria-label="Trading Partner console home">
             <img
               alt=""
               className="brand-logo"
@@ -92,7 +92,7 @@ export function ConsoleShell({
             {collapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
           </button>
         </div>
-        <nav className="nav-list" aria-label="控制台导航">
+        <nav className="nav-list" aria-label="Console navigation">
           {navigation.map((item) => {
             const Icon = item.icon;
             return (

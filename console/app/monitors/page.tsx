@@ -163,21 +163,21 @@ function monitorPriceObservation(monitor: Dict, rules: Dict[], latestRun: Dict, 
 
 function ruleCondition(rule: Dict): string {
   const ruleType = String(rule.rule_type ?? "");
-  if (ruleType === "PRICE_ABOVE") return `高于 $${String(rule.price_threshold ?? "—")}`;
-  if (ruleType === "PRICE_BELOW") return `低于 $${String(rule.price_threshold ?? "—")}`;
-  if (ruleType === "RISK_OVERALL_AT_LEAST") return `组合风险至少 ${String(rule.risk_status_threshold ?? "—")}`;
-  const comparator = { GT: ">", GTE: "≥", LT: "<", LTE: "≤", EQ: "=", OCCURRED: "已发生" }[String(rule.comparator ?? "")] ?? String(rule.comparator ?? "—");
+  if (ruleType === "PRICE_ABOVE") return `Above $${String(rule.price_threshold ?? "—")}`;
+  if (ruleType === "PRICE_BELOW") return `Below $${String(rule.price_threshold ?? "—")}`;
+  if (ruleType === "RISK_OVERALL_AT_LEAST") return `Portfolio risk at least ${String(rule.risk_status_threshold ?? "—")}`;
+  const comparator = { GT: ">", GTE: "≥", LT: "<", LTE: "≤", EQ: "=", OCCURRED: "Occurred" }[String(rule.comparator ?? "")] ?? String(rule.comparator ?? "—");
   const threshold = rule.comparator === "OCCURRED" ? "" : ` ${String(rule.numeric_threshold ?? "—")}`;
   const interval = rule.fact_type === "TECHNICAL" ? ` · ${String(rule.technical_interval ?? "1d")}` : "";
-  const recovery = rule.recovery_threshold === null || rule.recovery_threshold === undefined ? "" : ` · 恢复 ${String(rule.recovery_threshold)}`;
-  return `${String(rule.fact_type ?? "事实")} · ${String(rule.metric_key ?? "—")}${interval} ${comparator}${threshold}${recovery}`;
+  const recovery = rule.recovery_threshold === null || rule.recovery_threshold === undefined ? "" : ` · recover ${String(rule.recovery_threshold)}`;
+  return `${String(rule.fact_type ?? "Fact")} · ${String(rule.metric_key ?? "—")}${interval} ${comparator}${threshold}${recovery}`;
 }
 
 function diagnosticStage(value: unknown): string {
   return {
-    weekend_quote_request: "周末代理行情请求",
-    weekend_quote: "周末代理行情",
-  }[String(value ?? "")] ?? String(value ?? "Provider 请求");
+    weekend_quote_request: "Weekend proxy quote request",
+    weekend_quote: "Weekend proxy quote",
+  }[String(value ?? "")] ?? String(value ?? "Provider request");
 }
 
 function diagnosticStatus(diagnostic: Dict): string {
@@ -185,7 +185,7 @@ function diagnosticStatus(diagnostic: Dict): string {
     return `HTTP ${String(diagnostic.status_code)}`;
   }
   if (diagnostic.status_class) return `HTTP ${String(diagnostic.status_class)}`;
-  return "无 HTTP 响应";
+  return "No HTTP response";
 }
 
 function monitorMatchesInstrument(item: Dict, query: string): boolean {
@@ -248,7 +248,7 @@ export default function MonitorsPage() {
   }, [items.length]);
 
   async function runDue() {
-    if (!window.confirm("将评估当前到期的 Monitor，并可能创建事件及发送已配置的通知。确认继续？")) return;
+    if (!window.confirm("Evaluate currently due Monitors? This may create events and send configured notifications.")) return;
     setRunning(true);
     setRunError(null);
     try {
@@ -259,7 +259,7 @@ export default function MonitorsPage() {
       setRunReceipt(receipt);
       result.refresh();
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : "运行失败");
+      setRunError(error instanceof Error ? error.message : "Run failed");
     } finally {
       setRunning(false);
     }
@@ -267,8 +267,8 @@ export default function MonitorsPage() {
 
   async function archiveMonitor(monitor: Dict) {
     const monitorId = String(monitor.monitor_id ?? "");
-    const name = String(monitor.name ?? "未命名 Monitor");
-    if (!monitorId || !window.confirm(`确认归档「${name}」？\n\n系统会追加一个 ARCHIVED 版本；历史版本、运行记录和事件不会被删除。`)) return;
+    const name = String(monitor.name ?? "Untitled Monitor");
+    if (!monitorId || !window.confirm(`Archive “${name}”?\n\nAn ARCHIVED version will be appended. Historical versions, runs, and events will not be deleted.`)) return;
     setArchivingId(monitorId);
     setRunError(null);
     try {
@@ -278,13 +278,13 @@ export default function MonitorsPage() {
       });
       if (response.ok === false) {
         const first = Array.isArray(response.errors) ? response.errors[0] as Dict | undefined : undefined;
-        throw new Error(String(first?.message ?? "Monitor 归档失败"));
+        throw new Error(String(first?.message ?? "Unable to archive Monitor"));
       }
       if (String(editingMonitor?.monitor_id ?? "") === monitorId) setEditingMonitor(undefined);
       setRunReceipt(response);
       await result.refresh();
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : "Monitor 归档失败");
+      setRunError(error instanceof Error ? error.message : "Unable to archive Monitor");
     } finally {
       setArchivingId(null);
     }
@@ -292,11 +292,11 @@ export default function MonitorsPage() {
 
   async function changeMonitorStatus(monitor: Dict, status: "ACTIVE" | "PAUSED") {
     const monitorId = String(monitor.monitor_id ?? "");
-    const name = String(monitor.name ?? "未命名 Monitor");
+    const name = String(monitor.name ?? "Untitled Monitor");
     const action = status === "ACTIVE"
-      ? String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "恢复并激活" : "重新激活"
-      : "暂停";
-    if (!monitorId || !window.confirm(`确认${action}「${name}」？\n\n系统会追加新的 ${status} 版本并保留全部历史。`)) return;
+      ? String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "restore and activate" : "reactivate"
+      : "pause";
+    if (!monitorId || !window.confirm(`Confirm ${action} for “${name}”?\n\nA new ${status} version will be appended and all history will be preserved.`)) return;
     setLifecycleId(monitorId);
     setRunError(null);
     try {
@@ -307,12 +307,12 @@ export default function MonitorsPage() {
       });
       const envelope = response.result as Dict | undefined;
       if (envelope?.ok === false) {
-        throw new Error(displayJson(envelope.errors ?? `Monitor ${action}失败`));
+        throw new Error(displayJson(envelope.errors ?? `Unable to ${action} Monitor`));
       }
       setRunReceipt(response);
       await result.refresh();
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : `Monitor ${action}失败`);
+      setRunError(error instanceof Error ? error.message : `Unable to ${action} Monitor`);
     } finally {
       setLifecycleId(null);
     }
@@ -332,11 +332,11 @@ export default function MonitorsPage() {
     if (!resolutionDraft) return;
     const note = resolutionDraft.note.trim();
     if (!note) {
-      setResolutionError("请填写处理说明。说明会进入不可变审计记录。");
+      setResolutionError("Enter a resolution note. It will become part of the immutable audit record.");
       return;
     }
-    const actionLabel = resolutionDraft.action === "RESOLVE" ? "标记为已解决" : "确认已知";
-    if (!window.confirm(`确认将该事件${actionLabel}？`)) return;
+    const actionLabel = resolutionDraft.action === "RESOLVE" ? "resolved" : "acknowledged";
+    if (!window.confirm(`Mark this event as ${actionLabel}?`)) return;
     setResolvingEvent(true);
     setResolutionError(null);
     try {
@@ -358,43 +358,43 @@ export default function MonitorsPage() {
       setResolutionDraft(null);
       result.refresh();
     } catch (error) {
-      setResolutionError(error instanceof Error ? error.message : "事件处理失败");
+      setResolutionError(error instanceof Error ? error.message : "Event update failed");
     } finally {
       setResolvingEvent(false);
     }
   }
 
   return (
-    <ConsoleShell active="monitors" eyebrow="Deterministic monitoring" title="Monitor 运行与事件">
+    <ConsoleShell active="monitors" eyebrow="Deterministic monitoring" title="Monitor Runs & Events">
       <DataBoundary loading={result.loading} error={result.error}>
         <div className="toolbar">
-          <p>展示持久化定义、每条规则的最新状态、不可变运行观测与状态转换事件。</p>
-          <div className="toolbar-actions"><ActionButton onClick={() => setEditingMonitor(null)}>新建 Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>运行到期 Monitor</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
+          <p>Inspect durable definitions, the latest state of every rule, immutable run observations, and transition events.</p>
+          <div className="toolbar-actions"><ActionButton onClick={() => setEditingMonitor(null)}>New Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>Run Due Monitors</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
         </div>
         {runError && <div className="inline-error">{runError}</div>}
         {resolutionError && <div className="inline-error" role="alert">{resolutionError}</div>}
-        {runReceipt !== null && <details className="run-receipt"><summary>查看本次运行回执</summary><pre>{displayJson(runReceipt)}</pre></details>}
+        {runReceipt !== null && <details className="run-receipt"><summary>View run receipt</summary><pre>{displayJson(runReceipt)}</pre></details>}
         {editingMonitor === null && <MonitorEditor onClose={() => setEditingMonitor(undefined)} onSaved={(saved) => { setRunReceipt(saved); setEditingMonitor(undefined); result.refresh(); }} />}
         <Card
           className="monitor-list-panel"
           kicker="MONITOR DEFINITIONS"
-          title="Monitor 列表"
+          title="Monitor List"
           action={(
             <div className="monitor-header-tools">
               <label className="monitor-status-filter">
-                <span>状态</span>
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as (typeof MONITOR_STATUSES)[number])} aria-label="按 Monitor 状态筛选">
+                <span>Status</span>
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as (typeof MONITOR_STATUSES)[number])} aria-label="Filter by Monitor status">
                   {MONITOR_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
                 </select>
               </label>
               <label className="monitor-search-box">
-                <span>标的筛选</span>
+                <span>Target Filter</span>
                 <input
                   type="search"
                   value={instrumentFilter}
                   onChange={(event) => setInstrumentFilter(event.target.value)}
-                  placeholder="TTWO、TSLA、equity:US:TTWO"
-                  aria-label="按标的代码筛选 Monitor"
+                  placeholder="TTWO, TSLA, equity:US:TTWO"
+                  aria-label="Filter Monitors by target symbol"
                 />
               </label>
               <span className="monitor-filter-result" aria-live="polite">{filteredItems.length} / {items.length}</span>
@@ -402,7 +402,7 @@ export default function MonitorsPage() {
           )}
         >
           <div className="monitor-list">
-          {items.length === 0 ? <Empty>尚无 Monitor 定义。</Empty> : filteredItems.length === 0 ? <Empty>没有匹配该标的的 Monitor。</Empty> : filteredItems.map((item) => {
+          {items.length === 0 ? <Empty>No Monitor definitions yet.</Empty> : filteredItems.length === 0 ? <Empty>No Monitors match this target.</Empty> : filteredItems.map((item) => {
             const monitor = (item.monitor ?? {}) as Dict;
             const rules = listOf<Dict>(monitor, "rules");
             const states = listOf<Dict>(item, "rule_states");
@@ -423,54 +423,54 @@ export default function MonitorsPage() {
                 <div className="monitor-title-row">
                   <div className="symbol-tile large">{shortId(monitor.primary_instrument_id)}</div>
                   <div className="monitor-copy">
-                    <h2>{String(monitor.name ?? "未命名 Monitor")}</h2>
+                    <h2>{String(monitor.name ?? "Untitled Monitor")}</h2>
                     <span className="mono">{String(monitor.monitor_id)} · v{String(monitor.version ?? "—")}</span>
                   </div>
                   <div className="monitor-title-actions">
-                    <button type="button" className={selectedMonitorId === String(monitor.monitor_id) ? "selected" : ""} onClick={() => setSelectedMonitorId((current) => current === String(monitor.monitor_id) ? null : String(monitor.monitor_id))}>{selectedMonitorId === String(monitor.monitor_id) ? "关闭详情" : "运行详情"}</button>
-                    <button type="button" onClick={() => setEditingMonitor(monitor)}>编辑</button>
-                    {String(monitor.status ?? "").toUpperCase() === "ACTIVE" ? <button type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "PAUSED"); }}>{lifecycleId === String(monitor.monitor_id) ? "处理中…" : "暂停"}</button> : <button className="restore-text" type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "ACTIVE"); }}>{lifecycleId === String(monitor.monitor_id) ? "处理中…" : String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "恢复并激活" : "激活"}</button>}
-                    {String(monitor.status ?? "").toUpperCase() !== "ARCHIVED" && <button className="monitor-delete-button" type="button" disabled={archivingId === String(monitor.monitor_id)} onClick={() => { void archiveMonitor(monitor); }}>{archivingId === String(monitor.monitor_id) ? "归档中…" : "归档"}</button>}
+                    <button type="button" className={selectedMonitorId === String(monitor.monitor_id) ? "selected" : ""} onClick={() => setSelectedMonitorId((current) => current === String(monitor.monitor_id) ? null : String(monitor.monitor_id))}>{selectedMonitorId === String(monitor.monitor_id) ? "Close Details" : "Run Details"}</button>
+                    <button type="button" onClick={() => setEditingMonitor(monitor)}>Edit</button>
+                    {String(monitor.status ?? "").toUpperCase() === "ACTIVE" ? <button type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "PAUSED"); }}>{lifecycleId === String(monitor.monitor_id) ? "Working…" : "Pause"}</button> : <button className="restore-text" type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "ACTIVE"); }}>{lifecycleId === String(monitor.monitor_id) ? "Working…" : String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "Restore & Activate" : "Activate"}</button>}
+                    {String(monitor.status ?? "").toUpperCase() !== "ARCHIVED" && <button className="monitor-delete-button" type="button" disabled={archivingId === String(monitor.monitor_id)} onClick={() => { void archiveMonitor(monitor); }}>{archivingId === String(monitor.monitor_id) ? "Archiving…" : "Archive"}</button>}
                     <Badge value={String(monitor.status ?? "—")} />
                   </div>
                 </div>
                 <div className="monitor-runtime-strip">
                   {priceObservation && (
-                    <section className={`monitor-price-observation ${priceObservation.kind}`} aria-label="最近运行价格">
+                    <section className={`monitor-price-observation ${priceObservation.kind}`} aria-label="Latest run price">
                       <div className="monitor-price-value">
-                        <span>最新价</span>
+                        <span>Latest Price</span>
                         <strong>{priceObservation.kind === "available" ? formatDecimal(priceObservation.value, 4) : "—"}</strong>
                       </div>
                       <div className="monitor-price-time">
-                        <span>{priceObservation.kind === "mixed" ? "观测状态" : "事实时间"}</span>
-                        <strong>{priceObservation.kind === "mixed" ? "存在多个价格观测" : formatDate(priceObservation.factAsOf)}</strong>
+                        <span>{priceObservation.kind === "mixed" ? "Observation State" : "Fact Time"}</span>
+                        <strong>{priceObservation.kind === "mixed" ? "Multiple price observations" : formatDate(priceObservation.factAsOf)}</strong>
                         <small>
                           {priceObservation.kind === "unavailable"
-                            ? "未取得可用价格"
+                            ? "No usable price"
                             : priceObservation.kind === "mixed"
-                              ? "请查看各价格规则"
+                              ? "Inspect individual price rules"
                               : priceObservation.extendedHours
-                                ? "盘前/盘后"
-                                : "收盘观测"}
+                                ? "Pre/Post Market"
+                                : "Close Observation"}
                         </small>
                       </div>
                     </section>
                   )}
                   <div className="monitor-facts">
                     <span>Cadence <strong>{String(monitor.cadence ?? "—")}</strong></span>
-                    <span>创建 <strong>{formatDate(item.monitor_created_at ?? monitor.created_at)}</strong></span>
-                    <span>最近编辑 <strong>{formatDate(item.monitor_updated_at ?? monitor.created_at)}</strong></span>
-                    <span>最近运行 <strong>{formatDate(latest.completed_at)}</strong></span>
-                    <span>规则 <strong>{rules.length}</strong></span>
-                    <span>事件 <strong>{String(latest.events_created ?? 0)}</strong></span>
+                    <span>Created <strong>{formatDate(item.monitor_created_at ?? monitor.created_at)}</strong></span>
+                    <span>Last Edited <strong>{formatDate(item.monitor_updated_at ?? monitor.created_at)}</strong></span>
+                    <span>Latest Run <strong>{formatDate(latest.completed_at)}</strong></span>
+                    <span>Rules <strong>{rules.length}</strong></span>
+                    <span>Events <strong>{String(latest.events_created ?? 0)}</strong></span>
                   </div>
                 </div>
                 {latestJudgment.judgment_id && <section className={`monitor-judgment-card ${String(latestJudgment.urgency ?? "watch").toLowerCase()}`}>
-                  <header><strong>LLM 复合判断 · {String(latestJudgment.conclusion ?? latestJudgment.status ?? "—")}</strong><Badge value={String(latestJudgment.urgency ?? latestJudgment.status ?? "—")} /></header>
+                  <header><strong>Composite LLM Judgment · {String(latestJudgment.conclusion ?? latestJudgment.status ?? "—")}</strong><Badge value={String(latestJudgment.urgency ?? latestJudgment.status ?? "—")} /></header>
                   <p>{String(latestJudgment.market_state ?? latestJudgment.summary ?? "")}</p>
-                  <div><span>阶段 {String(latestJudgment.phase ?? "—")}</span><span>背离 {String(latestJudgment.divergence ?? "—")}</span><span>数量 {String(latestJudgment.quantity_min ?? 0)}–{String(latestJudgment.quantity_max ?? 0)}</span><span>{String(latestJudgment.provider ?? "—")} / {String(latestJudgment.model ?? "—")}</span></div>
-                  <small>下一触发：{String(latestJudgment.next_trigger ?? "—")} · 失效：{String(latestJudgment.invalidation ?? "—")}</small>
-                  {Boolean(latestJudgment.web_search_used) && <details><summary>联网搜索来源 · {judgmentWebSources.length}</summary><div>{judgmentWebSources.map((url) => <a href={url} key={url} rel="noreferrer" target="_blank">{url}</a>)}</div></details>}
+                  <div><span>Phase {String(latestJudgment.phase ?? "—")}</span><span>Divergence {String(latestJudgment.divergence ?? "—")}</span><span>Quantity {String(latestJudgment.quantity_min ?? 0)}–{String(latestJudgment.quantity_max ?? 0)}</span><span>{String(latestJudgment.provider ?? "—")} / {String(latestJudgment.model ?? "—")}</span></div>
+                  <small>Next trigger: {String(latestJudgment.next_trigger ?? "—")} · Invalidation: {String(latestJudgment.invalidation ?? "—")}</small>
+                  {Boolean(latestJudgment.web_search_used) && <details><summary>Web Search Sources · {judgmentWebSources.length}</summary><div>{judgmentWebSources.map((url) => <a href={url} key={url} rel="noreferrer" target="_blank">{url}</a>)}</div></details>}
                 </section>}
                 <div className="rule-grid">
                   {rules.map((rule) => {
@@ -485,9 +485,9 @@ export default function MonitorsPage() {
                             <span className={`rule-severity ${String(rule.severity ?? "").toLowerCase()}`}>{String(rule.severity ?? "—")}</span>
                           </div>
                         </div>
-                        <strong className="rule-description">{String(rule.description ?? "旧版本未填写具体释义")}</strong>
+                        <strong className="rule-description">{String(rule.description ?? "Legacy version has no human-readable meaning")}</strong>
                         <small className="rule-condition">{ruleCondition(rule)}</small>
-                        {showIndividualObservation && <span className="rule-observed">当前 {String(state.observed_value ?? "N/A")}</span>}
+                        {showIndividualObservation && <span className="rule-observed">Current {String(state.observed_value ?? "N/A")}</span>}
                         {showIndividualObservation && <time>{formatDate(state.fact_as_of)}</time>}
                       </article>
                     );
@@ -514,12 +514,12 @@ export default function MonitorsPage() {
           </div>
         </Card>
         <div className="monitor-detail-heading">
-          <div><p className="card-kicker">RUN & EVENT DRILL-DOWN</p><h2>{selectedMonitor ? `${shortId(((selectedMonitor.monitor ?? {}) as Dict).primary_instrument_id)} · ${String(((selectedMonitor.monitor ?? {}) as Dict).name ?? "Monitor")}` : "全部 Monitor"}</h2></div>
-          {selectedMonitorId && <button className="close-button" type="button" onClick={() => setSelectedMonitorId(null)}>清除筛选</button>}
+          <div><p className="card-kicker">RUN & EVENT DRILL-DOWN</p><h2>{selectedMonitor ? `${shortId(((selectedMonitor.monitor ?? {}) as Dict).primary_instrument_id)} · ${String(((selectedMonitor.monitor ?? {}) as Dict).name ?? "Monitor")}` : "All Monitors"}</h2></div>
+          {selectedMonitorId && <button className="close-button" type="button" onClick={() => setSelectedMonitorId(null)}>Clear Filter</button>}
         </div>
         <div className="two-column monitor-drilldown">
-          <Card kicker="IMMUTABLE OBSERVATIONS" title={`最近运行 · ${visibleRuns.length}`}>
-            {visibleRuns.length === 0 ? <Empty>当前筛选没有运行。</Empty> : (
+          <Card kicker="IMMUTABLE OBSERVATIONS" title={`Recent Runs · ${visibleRuns.length}`}>
+            {visibleRuns.length === 0 ? <Empty>No runs match the current filter.</Empty> : (
               <div className="timeline-list">
                 {visibleRuns.slice(0, 20).map((run) => {
                     const identity = monitorRunPresentation(run, dashboardItems);
@@ -532,7 +532,7 @@ export default function MonitorsPage() {
                       <div className="run-identity">
                         {identity.targets.length === 1 ? <Link className="monitor-run-link" href={`#${monitorAnchorId(identity.targets[0].monitorId)}`}>{identity.symbolLabel} · {identity.nameLabel}</Link> : <strong>{identity.symbolLabel} · {identity.nameLabel}</strong>}
                         <span>{String(run.cadence ?? "MANUAL")} · {formatDate(run.completed_at)} · {String(run.rules_evaluated ?? 0)} rules</span>
-                        <details className="run-error-drilldown"><summary>Run receipt · {String(run.run_id)}</summary><div className="run-code-groups">{warningCodes.length > 0 && <div><strong>Warnings</strong><span>{warningCodes.join(" · ")}</span></div>}{errorCodes.length > 0 && <div><strong>Errors</strong><span>{errorCodes.join(" · ")}</span></div>}{warningCodes.length === 0 && errorCodes.length === 0 && <span>无 run-level warning/error code。</span>}</div><div className="run-observations">{observations.map((observation) => <div key={`${String(observation.monitor_id)}-${String(observation.rule_code)}`}><header><strong>{String(observation.rule_code)}</strong><Badge value={String(observation.state ?? "—")} /></header><span>{String(observation.message ?? "")}</span><small>事实 {formatDate(observation.fact_as_of)} · observed {String(observation.observed_value ?? "N/A")} · threshold {String(observation.threshold_value ?? "N/A")}</small>{listOf<string>(observation, "warning_codes").length > 0 && <code>{listOf<string>(observation, "warning_codes").join(" · ")}</code>}{listOf<string>(observation, "error_codes").length > 0 && <code className="text-red">{listOf<string>(observation, "error_codes").join(" · ")}</code>}{listOf<Dict>(observation, "diagnostics").map((diagnostic, index) => <section className="provider-diagnostic" key={`${String(diagnostic.provider)}-${String(diagnostic.stage)}-${index}`}><header><strong>{String(diagnostic.provider).toUpperCase()}</strong><span>{diagnosticStage(diagnostic.stage)}</span></header><dl><div><dt>失败</dt><dd>{String(diagnostic.error_code)}</dd></div><div><dt>类型</dt><dd>{String(diagnostic.error_type ?? "unknown")}</dd></div><div><dt>状态</dt><dd>{diagnosticStatus(diagnostic)}</dd></div><div><dt>尝试</dt><dd>{String(diagnostic.attempt_count)} 次</dd></div><div><dt>可重试</dt><dd>{diagnostic.retryable ? "是" : "否"}</dd></div></dl></section>)}</div>)}</div></details>
+                        <details className="run-error-drilldown"><summary>Run receipt · {String(run.run_id)}</summary><div className="run-code-groups">{warningCodes.length > 0 && <div><strong>Warnings</strong><span>{warningCodes.join(" · ")}</span></div>}{errorCodes.length > 0 && <div><strong>Errors</strong><span>{errorCodes.join(" · ")}</span></div>}{warningCodes.length === 0 && errorCodes.length === 0 && <span>No run-level warning or error codes.</span>}</div><div className="run-observations">{observations.map((observation) => <div key={`${String(observation.monitor_id)}-${String(observation.rule_code)}`}><header><strong>{String(observation.rule_code)}</strong><Badge value={String(observation.state ?? "—")} /></header><span>{String(observation.message ?? "")}</span><small>Fact {formatDate(observation.fact_as_of)} · observed {String(observation.observed_value ?? "N/A")} · threshold {String(observation.threshold_value ?? "N/A")}</small>{listOf<string>(observation, "warning_codes").length > 0 && <code>{listOf<string>(observation, "warning_codes").join(" · ")}</code>}{listOf<string>(observation, "error_codes").length > 0 && <code className="text-red">{listOf<string>(observation, "error_codes").join(" · ")}</code>}{listOf<Dict>(observation, "diagnostics").map((diagnostic, index) => <section className="provider-diagnostic" key={`${String(diagnostic.provider)}-${String(diagnostic.stage)}-${index}`}><header><strong>{String(diagnostic.provider).toUpperCase()}</strong><span>{diagnosticStage(diagnostic.stage)}</span></header><dl><div><dt>Failure</dt><dd>{String(diagnostic.error_code)}</dd></div><div><dt>Type</dt><dd>{String(diagnostic.error_type ?? "unknown")}</dd></div><div><dt>Status</dt><dd>{diagnosticStatus(diagnostic)}</dd></div><div><dt>Attempts</dt><dd>{String(diagnostic.attempt_count)}</dd></div><div><dt>Retryable</dt><dd>{diagnostic.retryable ? "Yes" : "No"}</dd></div></dl></section>)}</div>)}</div></details>
                       </div>
                       <Badge value={String(run.status ?? "—")} />
                     </article>
@@ -541,8 +541,8 @@ export default function MonitorsPage() {
               </div>
             )}
           </Card>
-          <Card kicker="STATE TRANSITIONS" title={`事件流 · ${visibleEvents.length}`}>
-            {visibleEvents.length === 0 ? <Empty>当前筛选没有状态转换事件。</Empty> : (
+          <Card kicker="STATE TRANSITIONS" title={`Event Stream · ${visibleEvents.length}`}>
+            {visibleEvents.length === 0 ? <Empty>No transition events match the current filter.</Empty> : (
               <div className="timeline-list">
                 {visibleEvents.slice(0, 20).map((event) => (
                   <article key={String(event.event_id)}>
@@ -552,14 +552,14 @@ export default function MonitorsPage() {
                       <span>{formatDate(event.created_at)} · {String(event.severity ?? "—")} · {String(event.observed_value ?? "N/A")} / {String(event.threshold_value ?? "N/A")}</span>
                       <small>{String(event.message ?? "")}</small>
                       {event.latest_resolution ? (
-                        <small className="event-resolution">已处理：{String((event.latest_resolution as Dict).action ?? "—")} · {String((event.latest_resolution as Dict).note ?? "")}</small>
+                        <small className="event-resolution">Handled: {String((event.latest_resolution as Dict).action ?? "—")} · {String((event.latest_resolution as Dict).note ?? "")}</small>
                       ) : resolutionDraft?.eventId === String(event.event_id) ? (
                         <div className="event-resolution-editor">
-                          <label><span>处理说明</span><input autoFocus value={resolutionDraft.note} onChange={(change) => setResolutionDraft({ ...resolutionDraft, note: change.target.value })} placeholder="记录判断、后续动作或解决原因" /></label>
-                          <div><ActionButton onClick={submitResolution} busy={resolvingEvent}>{resolutionDraft.action === "RESOLVE" ? "确认解决" : "确认已知"}</ActionButton><button type="button" onClick={() => setResolutionDraft(null)}>取消</button></div>
+                          <label><span>Resolution Note</span><input autoFocus value={resolutionDraft.note} onChange={(change) => setResolutionDraft({ ...resolutionDraft, note: change.target.value })} placeholder="Record the judgment, follow-up action, or resolution reason" /></label>
+                          <div><ActionButton onClick={submitResolution} busy={resolvingEvent}>{resolutionDraft.action === "RESOLVE" ? "Confirm Resolution" : "Confirm Acknowledgement"}</ActionButton><button type="button" onClick={() => setResolutionDraft(null)}>Cancel</button></div>
                         </div>
                       ) : (
-                        <div className="event-actions"><button type="button" onClick={() => beginResolution(String(event.event_id), "ACKNOWLEDGE")}>确认已知</button><button type="button" onClick={() => beginResolution(String(event.event_id), "RESOLVE")}>标记解决</button></div>
+                        <div className="event-actions"><button type="button" onClick={() => beginResolution(String(event.event_id), "ACKNOWLEDGE")}>Acknowledge</button><button type="button" onClick={() => beginResolution(String(event.event_id), "RESOLVE")}>Resolve</button></div>
                       )}
                     </div>
                     <Badge value={String(event.event_type ?? "—")} />

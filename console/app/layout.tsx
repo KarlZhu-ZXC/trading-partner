@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Trading Partner · Local Control Room",
-  description: "无内置聊天模型的 Trading Partner 本地操作与投资研究控制台。",
+  description: "Trading Partner local operations and investment research console without a built-in chat model.",
 };
 
 const appearanceInitScript = `
@@ -39,7 +39,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html data-theme="light" lang="zh-CN" suppressHydrationWarning>
+    <html data-theme="light" lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: appearanceInitScript }} />
       </head>

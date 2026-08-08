@@ -31,15 +31,15 @@ const FACT_TYPES = [
 ];
 
 const FACT_CONFIG: Record<string, { placeholder: string; help: string; requiresInstrument: boolean }> = {
-  PRICE: { placeholder: "last", help: "当前价格固定使用 last。", requiresInstrument: true },
-  VOLUME: { placeholder: "volume", help: "日线成交量固定使用 volume。", requiresInstrument: true },
-  TECHNICAL: { placeholder: "rsi_14", help: "例如 rsi_14、macd、macd_signal、macd_histogram、atr_14。", requiresInstrument: true },
-  FUNDAMENTAL: { placeholder: "revenue", help: "A 股使用标准财务指标代码；美股可用 revenue 或 reported:revenue。", requiresInstrument: true },
-  COMPANY_EVENT: { placeholder: "ANY", help: "ANY 表示任意公司事件；比较方式必须为“已发生”。", requiresInstrument: true },
-  MACRO: { placeholder: "CPIAUCSL", help: "填写 FRED series ID，例如 CPIAUCSL。", requiresInstrument: false },
-  SENTIMENT: { placeholder: "sample_count", help: "美股可用 sample_count、weighted_score、disagreement；也可追加来源。", requiresInstrument: true },
-  THESIS_STATE: { placeholder: "status:thesis_…:active", help: "例如 status:<thesis_id>:active 或 hard_invalidation_triggered:<thesis_id>。", requiresInstrument: false },
-  PORTFOLIO_RISK: { placeholder: "overall_status", help: "组合风险固定使用 overall_status，数值等级为 PASS=0、WARN=1、BREACH=2、INCOMPLETE=3。", requiresInstrument: false },
+  PRICE: { placeholder: "last", help: "Current price always uses last.", requiresInstrument: true },
+  VOLUME: { placeholder: "volume", help: "Daily volume always uses volume.", requiresInstrument: true },
+  TECHNICAL: { placeholder: "rsi_14", help: "Examples: rsi_14, macd, macd_signal, macd_histogram, atr_14.", requiresInstrument: true },
+  FUNDAMENTAL: { placeholder: "revenue", help: "A-shares use normalized metric codes; US equities support revenue or reported:revenue.", requiresInstrument: true },
+  COMPANY_EVENT: { placeholder: "ANY", help: "ANY matches any company event; comparator must be OCCURRED.", requiresInstrument: true },
+  MACRO: { placeholder: "CPIAUCSL", help: "Enter a FRED series ID such as CPIAUCSL.", requiresInstrument: false },
+  SENTIMENT: { placeholder: "sample_count", help: "US equities support sample_count, weighted_score, and disagreement, optionally with a source suffix.", requiresInstrument: true },
+  THESIS_STATE: { placeholder: "status:thesis_…:active", help: "Example: status:<thesis_id>:active or hard_invalidation_triggered:<thesis_id>.", requiresInstrument: false },
+  PORTFOLIO_RISK: { placeholder: "overall_status", help: "Portfolio risk always uses overall_status: PASS=0, WARN=1, BREACH=2, INCOMPLETE=3.", requiresInstrument: false },
 };
 
 const TECHNICAL_METRICS = [
@@ -196,11 +196,11 @@ export function MonitorEditor({
       const data = envelope?.data as Dict | undefined;
       const instrument = data?.instrument as Dict | undefined;
       const instrumentId = typeof instrument?.instrument_id === "string" ? instrument.instrument_id : "";
-      if (!instrumentId) throw new Error("没有找到唯一标的，请检查市场和代码。");
+      if (!instrumentId) throw new Error("No unique instrument was found. Check the market and symbol.");
       setPrimaryInstrumentId(instrumentId);
       setRules((items) => items.map((item) => item.instrument_id ? item : { ...item, instrument_id: instrumentId }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "标的解析失败");
+      setError(cause instanceof Error ? cause.message : "Instrument resolution failed");
     } finally {
       setResolving(false);
     }
@@ -236,30 +236,30 @@ export function MonitorEditor({
   }
 
   function validate(): string | null {
-    if (!name.trim()) return "请填写 Monitor 名称。";
-    if (rules.length === 0) return "至少需要一条条件。";
+    if (!name.trim()) return "Enter a Monitor name.";
+    if (rules.length === 0) return "At least one condition is required.";
     for (const [index, rule] of rules.entries()) {
-      if (!rule.rule_code.trim()) return `第 ${index + 1} 条条件缺少 rule code。`;
-      if (!rule.description.trim()) return `第 ${index + 1} 条条件缺少具体释义。`;
-      if (!Number.isInteger(Number(rule.max_fact_age_seconds)) || Number(rule.max_fact_age_seconds) <= 0) return `第 ${index + 1} 条条件的数据时效必须是正整数秒。`;
-      if ((rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && (!rule.instrument_id.trim() || !(Number(rule.price_threshold) > 0))) return `第 ${index + 1} 条价格条件需要标的和正数阈值。`;
-      if (rule.rule_type === "FACT_COMPARISON" && !rule.metric_key.trim()) return `第 ${index + 1} 条事实条件需要 metric key。`;
-      if (rule.rule_type === "FACT_COMPARISON" && FACT_CONFIG[rule.fact_type]?.requiresInstrument && !rule.instrument_id.trim()) return `第 ${index + 1} 条 ${rule.fact_type} 条件需要标的。`;
-      if (rule.rule_type === "FACT_COMPARISON" && rule.fact_type === "COMPANY_EVENT" && rule.comparator !== "OCCURRED") return `第 ${index + 1} 条公司事件条件必须使用“已发生”。`;
-      if (rule.rule_type === "FACT_COMPARISON" && rule.fact_type === "PORTFOLIO_RISK" && rule.metric_key !== "overall_status") return `第 ${index + 1} 条组合风险条件必须使用 overall_status。`;
-      if (rule.rule_type === "FACT_COMPARISON" && rule.comparator !== "OCCURRED" && (!rule.numeric_threshold.trim() || !Number.isFinite(Number(rule.numeric_threshold)))) return `第 ${index + 1} 条事实条件需要数值阈值。`;
-      if (rule.recovery_threshold.trim() && !Number.isFinite(Number(rule.recovery_threshold))) return `第 ${index + 1} 条恢复阈值必须是数值。`;
-      if (rule.recovery_threshold.trim() && ["EQ", "OCCURRED"].includes(rule.comparator)) return `第 ${index + 1} 条比较方式不支持恢复阈值。`;
-      if (rule.recovery_threshold.trim() && ["GT", "GTE"].includes(rule.comparator) && Number(rule.recovery_threshold) >= Number(rule.numeric_threshold)) return `第 ${index + 1} 条上穿规则的恢复阈值必须低于触发阈值。`;
-      if (rule.recovery_threshold.trim() && ["LT", "LTE"].includes(rule.comparator) && Number(rule.recovery_threshold) <= Number(rule.numeric_threshold)) return `第 ${index + 1} 条下穿规则的恢复阈值必须高于触发阈值。`;
+      if (!rule.rule_code.trim()) return `Condition ${index + 1} is missing a rule code.`;
+      if (!rule.description.trim()) return `Condition ${index + 1} is missing a human-readable meaning.`;
+      if (!Number.isInteger(Number(rule.max_fact_age_seconds)) || Number(rule.max_fact_age_seconds) <= 0) return `Condition ${index + 1} fact age must be a positive integer number of seconds.`;
+      if ((rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && (!rule.instrument_id.trim() || !(Number(rule.price_threshold) > 0))) return `Price condition ${index + 1} requires an instrument and a positive threshold.`;
+      if (rule.rule_type === "FACT_COMPARISON" && !rule.metric_key.trim()) return `Fact condition ${index + 1} requires a metric key.`;
+      if (rule.rule_type === "FACT_COMPARISON" && FACT_CONFIG[rule.fact_type]?.requiresInstrument && !rule.instrument_id.trim()) return `${rule.fact_type} condition ${index + 1} requires an instrument.`;
+      if (rule.rule_type === "FACT_COMPARISON" && rule.fact_type === "COMPANY_EVENT" && rule.comparator !== "OCCURRED") return `Company event condition ${index + 1} must use OCCURRED.`;
+      if (rule.rule_type === "FACT_COMPARISON" && rule.fact_type === "PORTFOLIO_RISK" && rule.metric_key !== "overall_status") return `Portfolio risk condition ${index + 1} must use overall_status.`;
+      if (rule.rule_type === "FACT_COMPARISON" && rule.comparator !== "OCCURRED" && (!rule.numeric_threshold.trim() || !Number.isFinite(Number(rule.numeric_threshold)))) return `Fact condition ${index + 1} requires a numeric threshold.`;
+      if (rule.recovery_threshold.trim() && !Number.isFinite(Number(rule.recovery_threshold))) return `Recovery threshold ${index + 1} must be numeric.`;
+      if (rule.recovery_threshold.trim() && ["EQ", "OCCURRED"].includes(rule.comparator)) return `Comparator ${index + 1} does not support a recovery threshold.`;
+      if (rule.recovery_threshold.trim() && ["GT", "GTE"].includes(rule.comparator) && Number(rule.recovery_threshold) >= Number(rule.numeric_threshold)) return `Recovery threshold ${index + 1} must be below the trigger threshold for an upward rule.`;
+      if (rule.recovery_threshold.trim() && ["LT", "LTE"].includes(rule.comparator) && Number(rule.recovery_threshold) <= Number(rule.numeric_threshold)) return `Recovery threshold ${index + 1} must be above the trigger threshold for a downward rule.`;
     }
-    if (cadence === "INTERVAL" && (Number(intervalMinutes) < 60 || Number(intervalMinutes) % 60 !== 0)) return "INTERVAL 必须是至少 60 分钟的整小时。";
+    if (cadence === "INTERVAL" && (Number(intervalMinutes) < 60 || Number(intervalMinutes) % 60 !== 0)) return "INTERVAL must be a whole-hour interval of at least 60 minutes.";
     if (judgmentEnabled) {
-      if (!judgmentPlaybook.trim()) return "LLM 判断策略需要 Playbook。";
-      if (!judgmentInstruments.split("\n").some((item) => item.trim())) return "LLM 判断策略至少需要一个参考标的。";
-      try { JSON.parse(confirmedState); } catch { return "确认状态必须是合法 JSON。"; }
+      if (!judgmentPlaybook.trim()) return "LLM judgment requires a Playbook.";
+      if (!judgmentInstruments.split("\n").some((item) => item.trim())) return "LLM judgment requires at least one reference instrument.";
+      try { JSON.parse(confirmedState); } catch { return "Confirmed state must be valid JSON."; }
       for (const line of relativePairs.split("\n").filter((item) => item.trim())) {
-        if (line.split("|").map((item) => item.trim()).length !== 3) return "相对强弱每行必须是：名称 | 分子标的 | 分母标的。";
+        if (line.split("|").map((item) => item.trim()).length !== 3) return "Each relative-strength line must be: name | numerator instrument | denominator instrument.";
       }
     }
     return null;
@@ -268,7 +268,7 @@ export function MonitorEditor({
   async function submit() {
     const validation = validate();
     if (validation) { setError(validation); return; }
-    if (!window.confirm(editing ? "确认保存新的 Monitor 版本？" : "确认创建并启用这个 Monitor？")) return;
+    if (!window.confirm(editing ? "Save a new Monitor version?" : "Create and activate this Monitor?")) return;
     const request: Dict = {
       operation: editing ? "update" : "create",
       name: name.trim(),
@@ -304,12 +304,12 @@ export function MonitorEditor({
       });
       const envelope = response.result as Dict | undefined;
       if (envelope?.ok === false) {
-        throw new Error(displayJson(envelope.errors ?? "Monitor 保存失败"));
+        throw new Error(displayJson(envelope.errors ?? "Unable to save Monitor"));
       }
       setReceipt(response);
       onSaved(response);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Monitor 保存失败");
+      setError(cause instanceof Error ? cause.message : "Unable to save Monitor");
     } finally {
       setSaving(false);
     }
@@ -317,50 +317,50 @@ export function MonitorEditor({
 
   return (
     <section className={`monitor-editor${embedded ? " monitor-editor-embedded" : ""}`}>
-      <header><div><p className="card-kicker">MONITOR BUILDER</p><h2>{editing ? "编辑 Monitor" : "新建 Monitor"}</h2></div><button className="close-button" type="button" onClick={onClose}>关闭</button></header>
+      <header><div><p className="card-kicker">MONITOR BUILDER</p><h2>{editing ? "Edit Monitor" : "New Monitor"}</h2></div><button className="close-button" type="button" onClick={onClose}>Close</button></header>
       <div className="monitor-form-grid">
-        <label><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：TTWO 关键价位监控" /></label>
-        <label><span>关联研究档案 ID（可选）</span><input value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder="case_…" /></label>
-        <div className="instrument-resolver"><label><span>市场</span><select value={market} onChange={(event) => updateMarket(event.target.value as ResolverMarket)}><option value="US">美股</option><option value="A_SHARE">A 股</option><option value="KR">韩股</option></select></label><label><span>代码/名称</span><input value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value)} placeholder="TTWO / 600519 / 005930" /></label><ActionButton onClick={resolveInstrument} busy={resolving}>解析标的</ActionButton></div>
-        <label><span>主标的 Instrument ID</span><input value={primaryInstrumentId} onChange={(event) => setPrimaryInstrumentId(event.target.value)} placeholder="equity:US:TTWO" /><small>解析后自动填入，也可以直接输入规范 ID。</small></label>
-        <label><span>Cadence</span><select value={cadence} onChange={(event) => setCadence(event.target.value)}><option value="ON_DEMAND">按需</option><option value="INTERVAL">固定间隔</option><option value="A_SHARE_POST_MARKET">A 股收盘后</option><option value="US_POST_MARKET">美股收盘后</option><option value="KR_POST_MARKET">韩股收盘后</option></select></label>
-        {cadence === "INTERVAL" && <label><span>间隔分钟</span><input type="number" min="60" step="60" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>}
-        {editing && <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">ACTIVE</option><option value="PAUSED">PAUSED</option><option value="ARCHIVED">ARCHIVED</option></select></label>}
-        <label><span>有效期（可选）</span><input type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
+        <label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: TTWO key-level monitor" /></label>
+        <label><span>Research Subject ID (optional)</span><input value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder="case_…" /></label>
+        <div className="instrument-resolver"><label><span>Market</span><select value={market} onChange={(event) => updateMarket(event.target.value as ResolverMarket)}><option value="US">US</option><option value="A_SHARE">A-Share</option><option value="KR">Korea</option></select></label><label><span>Symbol / Name</span><input value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value)} placeholder="TTWO / 600519 / 005930" /></label><ActionButton onClick={resolveInstrument} busy={resolving}>Resolve</ActionButton></div>
+        <label><span>Primary Instrument ID</span><input value={primaryInstrumentId} onChange={(event) => setPrimaryInstrumentId(event.target.value)} placeholder="equity:US:TTWO" /><small>Filled after resolution, or enter a canonical ID directly.</small></label>
+        <label><span>Cadence</span><select value={cadence} onChange={(event) => setCadence(event.target.value)}><option value="ON_DEMAND">On Demand</option><option value="INTERVAL">Fixed Interval</option><option value="A_SHARE_POST_MARKET">A-Share Post-Market</option><option value="US_POST_MARKET">US Post-Market</option><option value="KR_POST_MARKET">Korea Post-Market</option></select></label>
+        {cadence === "INTERVAL" && <label><span>Interval Minutes</span><input type="number" min="60" step="60" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>}
+        {editing && <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">ACTIVE</option><option value="PAUSED">PAUSED</option><option value="ARCHIVED">ARCHIVED</option></select></label>}
+        <label><span>Valid Until (optional)</span><input type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
       </div>
 
       <div className="judgment-editor">
-        <label className="judgment-toggle"><input type="checkbox" checked={judgmentEnabled} onChange={(event) => setJudgmentEnabled(event.target.checked)} /><span>启用 LLM 复合判断</span></label>
-        <p>确定性规则仍是硬门禁；LLM 仅解释已验证特征，不会修改确认持仓、阶段或订单。</p>
+        <label className="judgment-toggle"><input type="checkbox" checked={judgmentEnabled} onChange={(event) => setJudgmentEnabled(event.target.checked)} /><span>Enable Composite LLM Judgment</span></label>
+        <p>Deterministic rules remain hard gates. The LLM interprets validated features only and cannot change confirmed positions, phases, or orders.</p>
         {judgmentEnabled && <div className="judgment-editor-grid">
-          <label className="wide"><span>Playbook</span><textarea rows={10} value={judgmentPlaybook} onChange={(event) => setJudgmentPlaybook(event.target.value)} placeholder="描述跨标的关系、阶段、触发条件和通知要求。" /></label>
-          <label><span>参考标的（每行一个 Instrument ID）</span><textarea rows={7} value={judgmentInstruments} onChange={(event) => setJudgmentInstruments(event.target.value)} placeholder={"commodity_spot:OTC:XAUUSD\netf:US:GDX\netf:US:GLD"} /></label>
-          <label><span>相对强弱（名称 | 分子 | 分母）</span><textarea rows={7} value={relativePairs} onChange={(event) => setRelativePairs(event.target.value)} placeholder="GDX_GLD | etf:US:GDX | etf:US:GLD" /></label>
-          <label className="wide"><span>用户确认状态（JSON）</span><textarea rows={7} value={confirmedState} onChange={(event) => setConfirmedState(event.target.value)} placeholder={'{"confirmed_position":50,"phase_B_remaining":"150-200"}'} /></label>
+          <label className="wide"><span>Playbook</span><textarea rows={10} value={judgmentPlaybook} onChange={(event) => setJudgmentPlaybook(event.target.value)} placeholder="Describe cross-instrument relationships, phases, triggers, and notification requirements." /></label>
+          <label><span>Reference Instruments (one Instrument ID per line)</span><textarea rows={7} value={judgmentInstruments} onChange={(event) => setJudgmentInstruments(event.target.value)} placeholder={"commodity_spot:OTC:XAUUSD\netf:US:GDX\netf:US:GLD"} /></label>
+          <label><span>Relative Strength (name | numerator | denominator)</span><textarea rows={7} value={relativePairs} onChange={(event) => setRelativePairs(event.target.value)} placeholder="GDX_GLD | etf:US:GDX | etf:US:GLD" /></label>
+          <label className="wide"><span>User-Confirmed State (JSON)</span><textarea rows={7} value={confirmedState} onChange={(event) => setConfirmedState(event.target.value)} placeholder={'{"confirmed_position":50,"phase_B_remaining":"150-200"}'} /></label>
         </div>}
       </div>
 
-      <div className="rules-heading"><div><p className="card-kicker">CONDITIONS</p><h3>触发条件</h3></div><ActionButton onClick={() => setRules((items) => [...items, blankRule(primaryInstrumentId)])}>添加条件</ActionButton></div>
+      <div className="rules-heading"><div><p className="card-kicker">CONDITIONS</p><h3>Trigger Conditions</h3></div><ActionButton onClick={() => setRules((items) => [...items, blankRule(primaryInstrumentId)])}>Add Condition</ActionButton></div>
       <div className="rule-editor-list">
         {rules.map((rule, index) => (
           <article className="rule-editor" key={`rule-${index}`}>
-            <header><strong>条件 {index + 1}</strong><button type="button" onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}>删除</button></header>
+            <header><strong>Condition {index + 1}</strong><button type="button" onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Delete</button></header>
             <div className="rule-editor-grid">
-              <label><span>Rule code</span><input value={rule.rule_code} onChange={(event) => updateRule(index, { rule_code: event.target.value.toUpperCase().replaceAll(" ", "_") })} placeholder="TTWO_FIRST_ZONE_FAIL" /><small>稳定机器标识；实际点位填写在阈值字段。</small></label>
-              <label className="rule-description-input"><span>具体释义</span><input value={rule.description} onChange={(event) => updateRule(index, { description: event.target.value })} placeholder="例如：第一支撑区失效" maxLength={500} /></label>
-              <label><span>类型</span><select value={rule.rule_type} onChange={(event) => updateRule(index, { rule_type: event.target.value as RuleType })}><option value="PRICE_ABOVE">价格高于</option><option value="PRICE_BELOW">价格低于</option><option value="FACT_COMPARISON">事实比较</option><option value="RISK_OVERALL_AT_LEAST">组合风险至少</option></select></label>
-              <label><span>严重度</span><select value={rule.severity} onChange={(event) => updateRule(index, { severity: event.target.value as RuleDraft["severity"] })}><option value="INFO">INFO</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option></select></label>
-              <label><span>最大事实年龄（秒）</span><input type="number" min="1" value={rule.max_fact_age_seconds} onChange={(event) => updateRule(index, { max_fact_age_seconds: event.target.value })} /></label>
-              {(rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && <><label><span>标的</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={primaryInstrumentId || "equity:US:TTWO"} /></label><label><span>价格阈值</span><input inputMode="decimal" value={rule.price_threshold} onChange={(event) => updateRule(index, { price_threshold: event.target.value })} placeholder="250.00" /></label></>}
-              {rule.rule_type === "RISK_OVERALL_AT_LEAST" && <label><span>风险阈值</span><select value={rule.risk_status_threshold} onChange={(event) => updateRule(index, { risk_status_threshold: event.target.value as RuleDraft["risk_status_threshold"] })}><option value="WARN">WARN</option><option value="BREACH">BREACH</option></select></label>}
+              <label><span>Rule Code</span><input value={rule.rule_code} onChange={(event) => updateRule(index, { rule_code: event.target.value.toUpperCase().replaceAll(" ", "_") })} placeholder="TTWO_FIRST_ZONE_FAIL" /><small>Stable machine identity; enter the actual level in the threshold field.</small></label>
+              <label className="rule-description-input"><span>Human Meaning</span><input value={rule.description} onChange={(event) => updateRule(index, { description: event.target.value })} placeholder="Example: First support zone failed" maxLength={500} /></label>
+              <label><span>Type</span><select value={rule.rule_type} onChange={(event) => updateRule(index, { rule_type: event.target.value as RuleType })}><option value="PRICE_ABOVE">Price Above</option><option value="PRICE_BELOW">Price Below</option><option value="FACT_COMPARISON">Fact Comparison</option><option value="RISK_OVERALL_AT_LEAST">Portfolio Risk At Least</option></select></label>
+              <label><span>Severity</span><select value={rule.severity} onChange={(event) => updateRule(index, { severity: event.target.value as RuleDraft["severity"] })}><option value="INFO">INFO</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option></select></label>
+              <label><span>Maximum Fact Age (seconds)</span><input type="number" min="1" value={rule.max_fact_age_seconds} onChange={(event) => updateRule(index, { max_fact_age_seconds: event.target.value })} /></label>
+              {(rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && <><label><span>Instrument</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={primaryInstrumentId || "equity:US:TTWO"} /></label><label><span>Price Threshold</span><input inputMode="decimal" value={rule.price_threshold} onChange={(event) => updateRule(index, { price_threshold: event.target.value })} placeholder="250.00" /></label></>}
+              {rule.rule_type === "RISK_OVERALL_AT_LEAST" && <label><span>Risk Threshold</span><select value={rule.risk_status_threshold} onChange={(event) => updateRule(index, { risk_status_threshold: event.target.value as RuleDraft["risk_status_threshold"] })}><option value="WARN">WARN</option><option value="BREACH">BREACH</option></select></label>}
               {rule.rule_type === "FACT_COMPARISON" && <>
-                <label><span>标的{FACT_CONFIG[rule.fact_type]?.requiresInstrument ? "" : "（可选）"}</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.requiresInstrument ? (primaryInstrumentId || "equity:US:TTWO") : "该事实类型通常不需要标的"} /></label>
-                <label><span>事实类型</span><select value={rule.fact_type} onChange={(event) => updateRule(index, factTypePatch(event.target.value))}>{FACT_TYPES.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-                <label><span>{rule.fact_type === "TECHNICAL" ? "技术指标" : "Metric key"}</span><input list={rule.fact_type === "TECHNICAL" ? "technical-metric-presets" : undefined} value={rule.metric_key} onChange={(event) => updateRule(index, { metric_key: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.placeholder} readOnly={["PRICE", "VOLUME", "PORTFOLIO_RISK"].includes(rule.fact_type)} /><small>{FACT_CONFIG[rule.fact_type]?.help}</small></label>
-                {rule.fact_type === "TECHNICAL" && <label><span>指标周期</span><select value={rule.technical_interval} onChange={(event) => updateRule(index, { technical_interval: event.target.value as "1d" | "1w" })}><option value="1d">日线</option><option value="1w">周线</option></select></label>}
-                <label><span>比较</span><select value={rule.comparator} onChange={(event) => updateRule(index, { comparator: event.target.value as RuleDraft["comparator"] })} disabled={rule.fact_type === "COMPANY_EVENT"}><option value="GT">&gt;</option><option value="GTE">≥</option><option value="LT">&lt;</option><option value="LTE">≤</option><option value="EQ">=</option><option value="OCCURRED">已发生</option></select></label>
-                {rule.comparator !== "OCCURRED" && <><label><span>触发阈值</span><input inputMode="decimal" value={rule.numeric_threshold} onChange={(event) => updateRule(index, { numeric_threshold: event.target.value })} /></label><label><span>恢复阈值（可选）</span><input inputMode="decimal" value={rule.recovery_threshold} onChange={(event) => updateRule(index, { recovery_threshold: event.target.value })} placeholder={rule.comparator === "LT" || rule.comparator === "LTE" ? "例如 RSI 触发 30、恢复 35" : "例如 RSI 触发 70、恢复 65"} /><small>设置后使用迟滞区间，避免指标在阈值附近反复告警。</small></label></>}
-                <label><span>事件起点（可选）</span><input type="datetime-local" value={rule.event_after} onChange={(event) => updateRule(index, { event_after: event.target.value })} /></label>
+                <label><span>Instrument{FACT_CONFIG[rule.fact_type]?.requiresInstrument ? "" : " (optional)"}</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.requiresInstrument ? (primaryInstrumentId || "equity:US:TTWO") : "This fact type usually does not require an instrument"} /></label>
+                <label><span>Fact Type</span><select value={rule.fact_type} onChange={(event) => updateRule(index, factTypePatch(event.target.value))}>{FACT_TYPES.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+                <label><span>{rule.fact_type === "TECHNICAL" ? "Technical Metric" : "Metric Key"}</span><input list={rule.fact_type === "TECHNICAL" ? "technical-metric-presets" : undefined} value={rule.metric_key} onChange={(event) => updateRule(index, { metric_key: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.placeholder} readOnly={["PRICE", "VOLUME", "PORTFOLIO_RISK"].includes(rule.fact_type)} /><small>{FACT_CONFIG[rule.fact_type]?.help}</small></label>
+                {rule.fact_type === "TECHNICAL" && <label><span>Metric Interval</span><select value={rule.technical_interval} onChange={(event) => updateRule(index, { technical_interval: event.target.value as "1d" | "1w" })}><option value="1d">Daily</option><option value="1w">Weekly</option></select></label>}
+                <label><span>Comparator</span><select value={rule.comparator} onChange={(event) => updateRule(index, { comparator: event.target.value as RuleDraft["comparator"] })} disabled={rule.fact_type === "COMPANY_EVENT"}><option value="GT">&gt;</option><option value="GTE">≥</option><option value="LT">&lt;</option><option value="LTE">≤</option><option value="EQ">=</option><option value="OCCURRED">Occurred</option></select></label>
+                {rule.comparator !== "OCCURRED" && <><label><span>Trigger Threshold</span><input inputMode="decimal" value={rule.numeric_threshold} onChange={(event) => updateRule(index, { numeric_threshold: event.target.value })} /></label><label><span>Recovery Threshold (optional)</span><input inputMode="decimal" value={rule.recovery_threshold} onChange={(event) => updateRule(index, { recovery_threshold: event.target.value })} placeholder={rule.comparator === "LT" || rule.comparator === "LTE" ? "Example: RSI triggers at 30, recovers at 35" : "Example: RSI triggers at 70, recovers at 65"} /><small>Creates a hysteresis band to prevent repeated alerts near the threshold.</small></label></>}
+                <label><span>Event Start (optional)</span><input type="datetime-local" value={rule.event_after} onChange={(event) => updateRule(index, { event_after: event.target.value })} /></label>
               </>}
             </div>
           </article>
@@ -368,8 +368,8 @@ export function MonitorEditor({
       </div>
       <datalist id="technical-metric-presets">{TECHNICAL_METRICS.map((metric) => <option value={metric} key={metric} />)}</datalist>
       {error && <div className="inline-error">{error}</div>}
-      {receipt !== null && <div className="save-success"><Badge value="SUCCEEDED" /> Monitor 已保存。</div>}
-      <footer><span>保存会创建不可变版本；不会修改 Thesis、持仓或订单。</span><div><button className="close-button" type="button" onClick={onClose}>取消</button><ActionButton onClick={submit} busy={saving}>{editing ? "保存新版本" : "创建 Monitor"}</ActionButton></div></footer>
+      {receipt !== null && <div className="save-success"><Badge value="SUCCEEDED" /> Monitor saved.</div>}
+      <footer><span>Saving creates an immutable version and never changes a Thesis, position, or order.</span><div><button className="close-button" type="button" onClick={onClose}>Cancel</button><ActionButton onClick={submit} busy={saving}>{editing ? "Save New Version" : "Create Monitor"}</ActionButton></div></footer>
     </section>
   );
 }
