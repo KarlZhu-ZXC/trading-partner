@@ -95,15 +95,15 @@ export function monitorRunPresentation(run: Dict, dashboardItems: Dict[]): Monit
   const visibleSymbols = symbols.slice(0, 3);
   const symbolLabel = visibleSymbols.length
     ? `${visibleSymbols.join(" / ")}${symbols.length > visibleSymbols.length ? ` +${symbols.length - visibleSymbols.length}` : ""}`
-    : "未记录标的";
+    : "Target not recorded";
 
-  let nameLabel = "未解析 Monitor";
+  let nameLabel = "Unresolved Monitor";
   if (targets.length === 1) {
     const target = targets[0];
     nameLabel = target.monitorName
       ?? `Monitor ${shortMonitorId(target.monitorId)}${target.version === null ? "" : ` · v${target.version}`}`;
   } else if (targets.length > 1) {
-    nameLabel = `${targets.length} 个 Monitor`;
+    nameLabel = `${targets.length} Monitors`;
   }
 
   return { nameLabel, symbolLabel, targets };

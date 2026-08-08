@@ -28,7 +28,7 @@ function stringList(value: unknown): string[] {
 }
 
 function formatRunTime(value: unknown): string {
-  if (!value || typeof value !== "string") return "时间未记录";
+  if (!value || typeof value !== "string") return "Time not recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", {
@@ -41,7 +41,7 @@ function formatRunTime(value: unknown): string {
 }
 
 function instrumentSymbol(instrumentId: unknown): string {
-  if (typeof instrumentId !== "string" || !instrumentId) return "未知标的";
+  if (typeof instrumentId !== "string" || !instrumentId) return "Unknown target";
   return instrumentId.split(":").at(-1) ?? instrumentId;
 }
 
@@ -51,7 +51,7 @@ function monitorInfo(item: Dict): { id: string; name: string; status: string; sy
   if (!id) return null;
   return {
     id,
-    name: stringValue(monitor.name) ?? "未命名 Monitor",
+    name: stringValue(monitor.name) ?? "Untitled Monitor",
     status: String(monitor.status ?? "UNKNOWN").toUpperCase(),
     symbol: instrumentSymbol(monitor.primary_instrument_id),
   };
@@ -60,15 +60,15 @@ function monitorInfo(item: Dict): { id: string; name: string; status: string; sy
 function runReason(run: Dict): string {
   const codes = [...stringList(run.error_codes), ...stringList(run.warning_codes)];
   if (codes.includes("OIL_WEEKEND_REFERENCE_UNAVAILABLE")) {
-    return "周末备用参考源在该次运行不可用；下一次计划运行会重新评估，不代表当前仍无数据";
+    return "The weekend reference was unavailable for this run; the next scheduled run will evaluate again and this does not mean data is currently unavailable";
   }
-  if (codes.includes("MARKET_CLOSED")) return "市场休市，调度器会在下一观察窗口自动恢复";
-  if (codes.includes("NO_ACTIVE_MONITORS")) return "目标 Monitor 已停止或归档";
-  if (codes.includes("PROVIDER_ADMISSION_TIMEOUT")) return "Provider 请求排队超时，下一次调度会自动重试";
-  if (codes.includes("PROVIDER_RATE_LIMIT_ERROR")) return "上游 Provider 限流，下一次调度会自动重试";
-  if (codes.includes("DATA_CONTRACT_ERROR")) return "上游数据格式与预期不符，需要检查 Provider 路由";
-  if (codes.length > 0) return `原因代码：${codes.slice(0, 2).join(" / ")}`;
-  return "运行未完成，详情中没有记录明确原因";
+  if (codes.includes("MARKET_CLOSED")) return "The market is closed; the scheduler will resume at the next observation window";
+  if (codes.includes("NO_ACTIVE_MONITORS")) return "The target Monitor is paused or archived";
+  if (codes.includes("PROVIDER_ADMISSION_TIMEOUT")) return "The Provider request timed out in the local queue and will retry on the next schedule";
+  if (codes.includes("PROVIDER_RATE_LIMIT_ERROR")) return "The upstream Provider rate-limited the request and the next schedule will retry";
+  if (codes.includes("DATA_CONTRACT_ERROR")) return "The upstream data format did not match the contract; inspect the Provider route";
+  if (codes.length > 0) return `Reason codes: ${codes.slice(0, 2).join(" / ")}`;
+  return "The run did not complete and no explicit reason was recorded";
 }
 
 function isAutomaticRun(run: Dict): boolean {
@@ -82,10 +82,10 @@ function isAutomaticRun(run: Dict): boolean {
 }
 
 function accountProviderLabel(value: unknown): string {
-  const provider = String(value ?? "账户").toLowerCase();
+  const provider = String(value ?? "account").toLowerCase();
   if (provider === "moomoo") return "Moomoo";
   if (provider === "schwab") return "Schwab";
-  return provider === "账户" ? provider : provider.toUpperCase();
+  return provider === "account" ? provider : provider.toUpperCase();
 }
 
 function qualityIssueHref(issue: Dict): string {
@@ -121,13 +121,13 @@ function qualityNotice(
       (value) => value && typeof value === "object" && String((value as Dict).state) === "NOT_EVALUATED",
     ).length;
     const reason = stringList(quality.warning_codes).includes("OIL_WEEKEND_REFERENCE_UNAVAILABLE")
-      ? "周末备用参考源仅在该次运行不可用；下一次计划运行会重新评估"
-      : "最近一次运行存在无法评估的规则，请查看事实新鲜度与 Provider 回执";
+      ? "The weekend reference was unavailable only for this run; the next scheduled run will evaluate again"
+      : "The latest run contains unevaluated rules; inspect fact freshness and Provider receipts";
     return {
       key: `quality-${code}-${subject}`,
       severity: "WAITING",
       title: `${monitor.symbol} · ${monitor.name}`,
-      detail: `${observedAt} 运行 · ${count || "部分"} 条规则未评估 · ${reason}`,
+      detail: `${observedAt} run · ${count || "some"} rules not evaluated · ${reason}`,
       href,
     };
   }
@@ -137,7 +137,7 @@ function qualityNotice(
       key: `quality-${code}-${subject}`,
       severity: "ATTENTION",
       title: `${monitor.symbol} · ${monitor.name}`,
-      detail: `当前 v${String(((monitorItem?.monitor ?? {}) as Dict).version ?? "—")} 尚未运行，请执行一次 Monitor Run`,
+      detail: `Current v${String(((monitorItem?.monitor ?? {}) as Dict).version ?? "—")} has not run; execute a Monitor Run`,
       href,
     };
   }
@@ -146,8 +146,8 @@ function qualityNotice(
     return {
       key: `quality-${code}-${subject}`,
       severity: "LIMITATION",
-      title: `${provider} 账户快照带数据限制`,
-      detail: `${observedAt} 快照 · 估值可用；具体限制见账户数据质量说明`,
+      title: `${provider} account snapshot has data limitations`,
+      detail: `${observedAt} snapshot · valuation is available; see account data-quality details for limitations`,
       href,
     };
   }
@@ -156,8 +156,8 @@ function qualityNotice(
     return {
       key: `quality-${code}-${subject}`,
       severity: "LIMITATION",
-      title: `${provider} 持仓价格缺少券商原始时间`,
-      detail: `${observedAt} 快照 · 这是接口/接入覆盖说明，不需要用户操作`,
+      title: `${provider} position prices lack broker-native timestamps`,
+      detail: `${observedAt} snapshot · this is an API coverage disclosure and requires no user action`,
       href,
     };
   }
@@ -166,13 +166,13 @@ function qualityNotice(
     const receipt = activityByRef.get(subject) ?? {};
     const gaps = stringList(receipt.gap_codes);
     const gapText = gaps.includes("ACCOUNT_SNAPSHOTS_UNAVAILABLE")
-      ? "所选交易窗口内没有可用于对账的账户快照"
-      : "部分活动类型或费用尚未完整接入";
+      ? "No account snapshot is available for reconciliation in the selected window"
+      : "Some activity categories or fees are not fully available";
     return {
       key: `quality-${code}-${subject}`,
       severity: "LIMITATION",
-      title: `${provider} 账户活动覆盖不完整`,
-      detail: `${formatRunTime(receipt.fetched_at ?? issue.observed_at)} 回执 · ${gapText}；不要求用户补数据`,
+      title: `${provider} account activity coverage is incomplete`,
+      detail: `${formatRunTime(receipt.fetched_at ?? issue.observed_at)} receipt · ${gapText}; no user-supplied data is required`,
       href,
     };
   }
@@ -182,8 +182,8 @@ function qualityNotice(
     return {
       key: `quality-${code}-${subject}`,
       severity: "OBSERVE",
-      title: `${subject || "Provider"} 最近 24h 有失败回执`,
-      detail: `${String(route.failure_count ?? "部分")} / ${String(route.execution_count ?? "—")} 次失败 · 最近 ${formatRunTime(route.latest_at ?? issue.observed_at)} · ${String(route.latest_error_code ?? "原因未记录")}`,
+      title: `${subject || "Provider"} has failed receipts in the last 24h`,
+      detail: `${String(route.failure_count ?? "some")} / ${String(route.execution_count ?? "—")} failed · latest ${formatRunTime(route.latest_at ?? issue.observed_at)} · ${String(route.latest_error_code ?? "reason not recorded")}`,
       href,
     };
   }
@@ -192,7 +192,7 @@ function qualityNotice(
     key: `quality-${code}-${subject}`,
     severity: String(issue.severity ?? "ATTENTION").toUpperCase(),
     title: code.replaceAll("_", " "),
-    detail: `${observedAt} · ${String(issue.detail ?? "查看详情")}`,
+    detail: `${observedAt} · ${String(issue.detail ?? "View details")}`,
     href,
   };
 }
@@ -210,7 +210,7 @@ function dedupeQuality(items: ConsoleNotice[]): ConsoleNotice[] {
   }
   return [...grouped.values()].map(({ count, ...item }) => ({
     ...item,
-    title: count > 1 ? `${item.title} · ${count} 个账户` : item.title,
+    title: count > 1 ? `${item.title} · ${count} accounts` : item.title,
   }));
 }
 
@@ -236,8 +236,8 @@ export function buildConsoleNotices({
   const actionItems: ConsoleNotice[] = researchAttention.map((item) => ({
     key: `research-${String(item.subject_id)}`,
     severity: "ATTENTION",
-    title: `${String(item.title ?? "Research Subject")} · ${String(item.pending_count)} 个候选待确认`,
-    detail: "需要你确认、拒绝或撤回候选变更",
+    title: `${String(item.title ?? "Research Subject")} · ${String(item.pending_count)} candidates awaiting review`,
+    detail: "Confirm, reject, or withdraw the proposed changes",
     href: `/research#subject-${String(item.subject_id)}`,
   }));
   const automaticItems: ConsoleNotice[] = [];
@@ -266,7 +266,7 @@ export function buildConsoleNotices({
         key: `run-${runId}-${target.monitorId}`,
         severity: isAutomaticRun(run) ? "WAITING" : status === "FAILED" ? "ERROR" : "ATTENTION",
         title: `${info.symbol} · ${info.name}`,
-        detail: `${formatRunTime(run.completed_at ?? run.started_at)} 运行${status === "FAILED" ? "失败" : "未完整完成"} · ${runReason(run)}`,
+        detail: `${formatRunTime(run.completed_at ?? run.started_at)} run ${status === "FAILED" ? "failed" : "completed partially"} · ${runReason(run)}`,
         href: `/monitors#${monitorAnchorId(target.monitorId)}`,
       };
       (isAutomaticRun(run) ? automaticItems : actionItems).push(notice);
@@ -277,8 +277,8 @@ export function buildConsoleNotices({
     actionItems.push({
       key: "outbox-dead",
       severity: "ERROR",
-      title: `${String(notifications?.dead_letter)} 条通知投递失败`,
-      detail: "需要检查通知配置与投递回执",
+      title: `${String(notifications?.dead_letter)} notification deliveries failed`,
+      detail: "Inspect notification configuration and delivery receipts",
       href: "/operations",
     });
   }
