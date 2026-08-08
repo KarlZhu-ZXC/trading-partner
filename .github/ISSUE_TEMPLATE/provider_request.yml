@@ -1,0 +1,38 @@
+name: Data Provider request
+description: Propose a free or optional Provider integration
+title: "[Provider]: "
+labels: ["provider", "triage"]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and official documentation
+      placeholder: Provider name and direct documentation URL
+    validations:
+      required: true
+  - type: textarea
+    id: facts
+    attributes:
+      label: Required facts
+      description: Specify instruments, fields, history depth, interval, market sessions, and expected use.
+    validations:
+      required: true
+  - type: textarea
+    id: access
+    attributes:
+      label: Access and limits
+      description: Document pricing, authentication, redistribution terms, quotas, and geographic restrictions.
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Identity and provenance
+      description: Explain whether the data is official, exchange, broker, OTC, derived, delayed, adjusted, or a proxy.
+    validations:
+      required: true
+  - type: textarea
+    id: fallback
+    attributes:
+      label: Proposed routing and failure behavior
+      description: State primary/fallback position and which typed degradations must remain visible.

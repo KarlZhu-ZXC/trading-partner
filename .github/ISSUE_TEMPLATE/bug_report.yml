@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible Trading Partner defect
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, broker tokens, account identifiers, positions, or raw personal data.
+        Use redacted envelopes and typed error codes whenever possible.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its user impact.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include the MCP tool/operation or CLI command, with all sensitive values removed.
+      placeholder: |
+        1. Start ...
+        2. Call ...
+        3. Observe error code ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - MCP schema or host integration
+        - Research memory or judgment
+        - Market-data Provider
+        - Accounts, Watchlist, portfolio, or risk
+        - Monitoring or notifications
+        - Local Console
+        - Installation, packaging, or documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.5.0 or commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Add typed errors, warnings, freshness, source, and relevant logs. Never paste secrets or raw account payloads.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, account identifiers, positions, and other personal data.
+          required: true
