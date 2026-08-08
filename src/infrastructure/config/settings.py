@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, NoDecode, SettingsConfigDict
 
 from domain.common.enums import AppEnvironment, DataCategory, LogLevel
 from domain.common.errors import ConfigurationError
@@ -761,7 +761,16 @@ class AppSettings(BaseSettings):
                         f"env_file does not exist: {path}",
                         details={"env_file": str(path)},
                     )
-                return cls(_env_file=path)  # type: ignore[call-arg]
+                # An explicitly selected runtime file is the process contract.
+                # Loading it as init data keeps ambient variables inherited from
+                # desktop hosts or CI from silently redirecting its database or
+                # Provider configuration.
+                values = DotEnvSettingsSource(
+                    cls,
+                    env_file=path,
+                    env_file_encoding="utf-8",
+                )()
+                return cls(_env_file=None, **values)  # type: ignore[call-arg]
             if source_layout:
                 default_env = PROJECT_ROOT / ".env"
                 if default_env.is_file():

@@ -12,8 +12,11 @@ from interfaces.cli import initialize as initialize_cli
 
 def test_initialize_creates_owner_only_config_and_upgrades_idempotently(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_home = tmp_path / "runtime"
+    ambient_database = tmp_path / "ambient.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{ambient_database}")
 
     first = initialize_cli.initialize(runtime_home)
     second = initialize_cli.initialize(runtime_home)
@@ -24,6 +27,7 @@ def test_initialize_creates_owner_only_config_and_upgrades_idempotently(
     assert second["created"] is False
     assert env_file.is_file()
     assert database.is_file()
+    assert not ambient_database.exists()
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert "API_KEY" not in env_file.read_text(encoding="utf-8")
     engine = create_engine(f"sqlite:///{database}")
