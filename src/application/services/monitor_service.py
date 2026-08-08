@@ -17,6 +17,7 @@ from application.dto.monitoring import (
     MonitorEventListInput,
     MonitorEventResolveInput,
     MonitorGetInput,
+    MonitorJudgmentDTO,
     MonitorLatestRunSummaryDTO,
     MonitorListDTO,
     MonitorListInput,
@@ -98,6 +99,9 @@ class MonitorService:
             idempotency_key=request.idempotency_key.strip(),
             created_at=now,
             valid_until=valid_until,
+            judgment_policy=(
+                request.judgment_policy.to_domain() if request.judgment_policy is not None else None
+            ),
         )
         self._repository.create(value)
         return MonitorDetailDTO(
@@ -140,6 +144,9 @@ class MonitorService:
             idempotency_key=request.idempotency_key.strip(),
             created_at=self._clock.now(),
             valid_until=valid_until,
+            judgment_policy=(
+                request.judgment_policy.to_domain() if request.judgment_policy is not None else None
+            ),
         )
         self._repository.append_version(value)
         return self.get(MonitorGetInput(monitor_id=value.monitor_id))
@@ -189,6 +196,7 @@ class MonitorService:
                 else None
             ),
             schema_version=current.schema_version,
+            judgment_policy=current.judgment_policy,
         )
         self._repository.append_version(value)
         return self.get(MonitorGetInput(monitor_id=value.monitor_id))
@@ -204,6 +212,11 @@ class MonitorService:
         return MonitorDetailDTO(
             monitor=MonitorDefinitionDTO.from_domain(monitor),
             rule_states=tuple(MonitorRuleStateDTO.from_domain(item) for item in states),
+            latest_judgment=(
+                MonitorJudgmentDTO.from_domain(value)
+                if (value := self._repository.latest_judgment(monitor.monitor_id)) is not None
+                else None
+            ),
         )
 
     def list(self, request: MonitorListInput) -> MonitorListDTO:
@@ -241,6 +254,12 @@ class MonitorService:
                     latest_run=(
                         MonitorLatestRunSummaryDTO.from_domain(latest)
                         if latest is not None
+                        else None
+                    ),
+                    latest_judgment=(
+                        MonitorJudgmentDTO.from_domain(value)
+                        if (value := self._repository.latest_judgment(monitor.monitor_id))
+                        is not None
                         else None
                     ),
                     last_run_at=latest.completed_at if latest is not None else None,
@@ -403,6 +422,8 @@ class MonitorService:
             and value.interval_minutes == request.interval_minutes
             and value.rules == rules
             and value.valid_until == valid_until
+            and value.judgment_policy
+            == (request.judgment_policy.to_domain() if request.judgment_policy else None)
             and value.confirmed_by == request.confirmed_by
         )
 
@@ -427,5 +448,7 @@ class MonitorService:
             and value.status is request.status
             and value.rules == rules
             and value.valid_until == valid_until
+            and value.judgment_policy
+            == (request.judgment_policy.to_domain() if request.judgment_policy else None)
             and value.confirmed_by == request.confirmed_by
         )

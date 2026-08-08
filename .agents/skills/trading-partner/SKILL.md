@@ -75,9 +75,16 @@ Its title identifies that object/question and its summary defines stable researc
 scope. Never copy an entry, add/trim, take-profit, stop-loss, sizing, or position
 plan into Research Subject metadata; put the current investment judgment in the Thesis and
 conditional execution intent in the Trade Plan. A Research Subject's type and primary
-Instrument are immutable after creation. Use `DRAFT`, `ACTIVE`, and `ARCHIVED` for
-new Research Subject lifecycle decisions; legacy `STRENGTHENED`, `WEAKENED`, and `INVALIDATED`
-Research Subject values remain readable, but conviction semantics belong to the Thesis.
+Instrument are immutable after creation. Research Subject lifecycle is exactly
+`DRAFT`, `ACTIVE`, and `ARCHIVED`; conviction semantics belong to the Thesis.
+
+For questions such as choosing among several A-share innovation-drug ETFs, create
+a `THEME` Research Subject with no primary Instrument. Manage canonical candidate
+Instrument IDs through its Research WatchlistItems: `WATCHING` → `SHORTLISTED` →
+exactly one `SELECTED`, or `REJECTED`. Selecting or rejecting requires a durable
+rationale and the ordinary Propose → explicit Confirm gate. Do not rewrite the
+Research Subject's primary Instrument after selection. Use the selected Instrument
+as the execution `instrument_id` when proposing the Trade Plan.
 
 A Draft/non-tracking Research Subject can hold research artifacts and proposed candidates, but
 cannot receive an ACTIVE/STRENGTHENED/WEAKENED Thesis or ACTIVE Trade Plan. Activate
@@ -88,6 +95,15 @@ tracking while a live Thesis or ACTIVE/PAUSED Trade Plan remains. Preserve typed
 Existing Thesis revisions preserve status unless `thesis_status` is explicit, and
 an actual status transition requires strict review. Close state inside-out: archive
 the ACTIVE/PAUSED Trade Plan, retire the live Thesis, then archive the Research Subject.
+One Research Subject may contain multiple concurrent Thesis threads. Exactly one
+PRIMARY may be live (`ACTIVE`/`STRENGTHENED`/`WEAKENED`); multiple sibling SUB
+Theses may point to that PRIMARY, while COMPETITOR and BEAR preserve alternative
+or contrary judgments. A SUB parent must be a PRIMARY in the same Research Subject,
+and every rival reference must remain in that Subject. Validate parent/rival scope
+both when proposing and confirming. Relationship and role changes are confirmed
+Thesis-revision metadata changes; never silently create, promote, or merge a Thesis.
+A live SUB requires a live PRIMARY parent. Retire live SUB children before retiring
+their PRIMARY, and detach every SUB before changing that PRIMARY to another role.
 Child research references must stay inside their owner scope: an Assumption or
 Invalidation must name a Thesis/revision in the same Research Subject, and an Open Question or
 Watchlist transition must target the candidate's own durable object. Never reuse a
@@ -192,6 +208,18 @@ broker quote midpoint must not be relabelled as a traded price.
 `cfd:OTC:LIGHT_CMD_USD` maps to Dukascopy `LIGHT.CMD-USD`; `USOIL` is only a
 lookup alias. It is an OTC rolling light-oil CFD, not WTI spot, NYMEX `CL`, a
 specific futures contract, or a continuous futures series.
+During the Dukascopy weekend closure, current XAUUSD price rules may use Binance
+PAXG/USDC spot, and current LIGHT.CMD-USD/USOIL rules may use Hyperliquid XYZ
+CL/USDC. Treat PAXG as tokenized gold and XYZ CL as a HIP-3 perpetual; preserve
+USDC peg, liquidity, and basis-risk warnings. Optional IG Weekend Gold is only a
+last-resort XAUUSD fallback. None of these sources provides requested-instrument
+bars or historical cutoff-safe facts.
+Retryable weekend-reference calls receive at most three bounded attempts. When a
+Monitor observation is unavailable, inspect its structured Provider diagnostics in
+the Run before summarizing the cause. Diagnostics may identify Provider, route
+stage, typed error, HTTP status, attempt, and retryability; they must never expose a
+URL, proxy value, header, response body, or exception text. Older Runs may have no
+diagnostic sidecar, which means the exact historical cause is unknown.
 The default route is the keyless Jetta bucket API used by current `dukascopy-node`;
 `DUKASCOPY_API_KEY` only enables the legacy compatibility fallback.
 Preserve basis comparability, offer side, volume-basis, delay, and warning fields.
@@ -469,6 +497,13 @@ price, volume, technical, fundamental, company-event, macro, sentiment, Thesis-s
 and portfolio-risk facts. `monitor_manage` operations `create` and `update` may bind an
 exact Trade Plan version and compile its `MONITORABLE` conditions; `MANUAL`
 conditions stay human-only.
+Technical fact rules accept `technical_interval="1d"|"1w"` (legacy omissions mean
+`1d`) and any metric key emitted by Technical Engine v2, including `rsi_14`, MACD,
+ADX, ATR, moving averages, Bollinger Bands, MFI, OBV, and relative volume. Numeric
+ordered comparisons may set `recovery_threshold` to create a deterministic
+hysteresis band: a lower trigger recovers at or above the higher recovery threshold;
+an upper trigger recovers at or below the lower recovery threshold. Do not claim
+hourly/4-hour technical monitoring, compound Boolean rules, or a backtested signal.
 Treat stale or unavailable facts as `NOT_EVALUATED`, not
 quiet. Repeated unchanged conditions do not create another event; a later recovery
 does. A version may set an aware `valid_until`; after that inclusive deadline it is
@@ -487,12 +522,31 @@ The dashboard embeds only a compact latest-run summary per Monitor. A run query
 filtered by `monitor_id` returns only that Monitor's observations, even when the
 underlying scheduled run evaluated several Monitors together; querying by `run_id`
 still returns the immutable full batch.
+Optional composite Monitor judgment policies may contain a bounded Playbook, 1–12
+reference Instrument IDs, relative-strength pairs, and user-confirmed execution
+state. The runtime computes 1h/4h/1d/3d returns, rule state, provenance, and
+session alignment before calling the configured server-side LLM adapter. Alibaba
+Cloud Model Studio `qwen3.8-max` is the default, while the existing DeepSeek
+Provider remains selectable with `LLM_PROVIDER=deepseek`. Only Bailian may use
+built-in web search for current
+macro-event context; actual use and bounded source URLs are persisted, while
+prices, positions, levels, returns, and quantities remain deterministic-only.
+Explanations are Chinese. The LLM has no mutation or order port. Only real feature IDs may be cited; quantity
+ranges are clamped to confirmed-position/runner/remaining-add limits, and
+session-misaligned divergence actions are downgraded to WAIT. Unchanged qualitative
+feature signatures skip the LLM call; only material judgment changes emit
+`JUDGMENT_CHANGED`, and repeated failures do not spam alerts. Never treat a model
+suggestion as a fill or update confirmed state from it. The latest judgment is
+included in Monitor definition and dashboard reads.
+
 Monitoring never changes a Thesis, policy, position, or order. The external
 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` (or
 `A_SHARE_POST_MARKET` / `KR_POST_MARKET`) remains an explicit diagnostic force-run and is not a
 scheduler. On macOS, `uv run trading-partner-monitor-scheduler
 install` installs one hourly launchd wake that runs `trading-partner-monitor-run
-due`; this deterministic path does not open a Codex task and consumes no LLM tokens.
+due`; this path does not open a Codex task or consume Codex tokens. Ordinary Monitors
+remain deterministic; only an explicitly configured composite judgment policy may
+call the server-side LLM, and unchanged feature signatures skip that call.
 Do not duplicate Monitor evaluation inside Codex market-review Automations.
 When Telegram notifications are enabled, the notification Outbox is linked to
 either an INTERVAL transition event or an A-share/US/KR post-market run and committed
@@ -594,6 +648,7 @@ args = ["run", "trading-partner-mcp"]
 
 ## Later phases (not yet available)
 
-Additional brokers, automated evidence ingestion, runtime LLM synthesis, automated
-backtest execution, and order execution remain out
+Additional brokers, automated evidence ingestion, general-purpose/autonomous runtime
+LLM synthesis outside the explicitly enabled composite Monitor judgment boundary,
+automated backtest execution, and order execution remain out
 of scope. Do not call tools that are not registered.

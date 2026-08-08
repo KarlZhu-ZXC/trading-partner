@@ -104,9 +104,20 @@ class ThesisRevisionCandidatePayload(BaseModel):
     invalidations: tuple[InvalidationPayload, ...] = ()
     thesis_role: ThesisRole | None = None
     parent_thesis_id: str | None = None
-    rival_thesis_ids: tuple[str, ...] = ()
+    rival_thesis_ids: tuple[str, ...] | None = None
     replaces_revision_no: int | None = None
     thesis_status: ThesisStatus | None = None
+
+    @field_validator("rival_thesis_ids")
+    @classmethod
+    def _unique_rival_thesis_ids(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if len(value) != len(set(value)):
+            raise ValueError("rival_thesis_ids must be unique")
+        return value
 
     @model_validator(mode="after")
     def _role_parent_rules(self) -> Self:
@@ -192,6 +203,14 @@ class WatchlistCandidatePayload(BaseModel):
     market: Market | None = None
     symbol: str | None = Field(default=None, max_length=32)
     display_name: str | None = Field(default=None, max_length=128)
+    instrument_id: str | None = Field(
+        default=None,
+        max_length=160,
+        description=(
+            "Canonical candidate Instrument for selection inside a Research Subject. "
+            "When supplied, market and symbol are derived and may be omitted."
+        ),
+    )
     thesis_hint: str | None = Field(default=None, max_length=1000)
     triggers: tuple[str, ...] = ()
     subject_id: str | None = Field(
@@ -207,6 +226,19 @@ class WatchlistCandidatePayload(BaseModel):
         serialization_alias="promoted_to_case_id",
     )
     triggered_reason: str | None = None
+    selection_reason: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4000,
+        description="Required durable rationale when selecting or rejecting a candidate.",
+    )
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _instrument_id(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_instrument_id(value)
+        return value
 
     @field_validator("expires_at")
     @classmethod
@@ -218,10 +250,19 @@ class WatchlistCandidatePayload(BaseModel):
     @model_validator(mode="after")
     def _action_fields(self) -> Self:
         if self.action == "create":
-            if self.market is None:
-                raise ValueError("create watchlist_item requires market")
-            if self.symbol is None or not self.symbol.strip():
-                raise ValueError("create watchlist_item requires symbol")
+            if self.instrument_id is None:
+                if self.market is None:
+                    raise ValueError("create watchlist_item requires market or instrument_id")
+                if self.symbol is None or not self.symbol.strip():
+                    raise ValueError("create watchlist_item requires symbol or instrument_id")
+            else:
+                _, instrument_market, instrument_symbol = parse_instrument_id(
+                    self.instrument_id
+                )
+                if self.market is not None and self.market != instrument_market:
+                    raise ValueError("market must match instrument_id")
+                if self.symbol is not None and self.symbol.strip() != instrument_symbol:
+                    raise ValueError("symbol must match instrument_id")
             if self.display_name is None or not self.display_name.strip():
                 raise ValueError("create watchlist_item requires display_name")
             if self.thesis_hint is None or not self.thesis_hint.strip():
@@ -230,11 +271,25 @@ class WatchlistCandidatePayload(BaseModel):
                 raise ValueError("create watchlist_item must not set item_id")
             if self.new_status is not None:
                 raise ValueError("create watchlist_item must not set new_status")
+            if self.selection_reason is not None:
+                raise ValueError("create watchlist_item must not set selection_reason")
         elif self.action == "update_status":
             if self.item_id is None:
                 raise ValueError("update_status watchlist_item requires item_id")
             if self.new_status is None:
                 raise ValueError("update_status watchlist_item requires new_status")
+            if self.instrument_id is not None:
+                raise ValueError("update_status watchlist_item must not set instrument_id")
+            if self.new_status in {
+                WatchlistItemStatus.SELECTED,
+                WatchlistItemStatus.REJECTED,
+            }:
+                if self.selection_reason is None or not self.selection_reason.strip():
+                    raise ValueError("selected/rejected candidate requires selection_reason")
+            elif self.selection_reason is not None:
+                raise ValueError(
+                    "selection_reason is only valid for selected/rejected candidate"
+                )
             if (
                 self.new_status == WatchlistItemStatus.PROMOTED_TO_SUBJECT
                 and self.promoted_to_subject_id is None
@@ -824,6 +879,8 @@ class WatchlistItemDTO(_BaseResearchDTO):
     promoted_to_subject_id: str | None
     triggered_at: datetime | None
     triggered_reason: str | None
+    instrument_id: str | None = None
+    selection_reason: str | None = None
 
     @field_validator("created_at", "updated_at", "expires_at", "triggered_at")
     @classmethod
@@ -849,6 +906,8 @@ class WatchlistItemDTO(_BaseResearchDTO):
             promoted_to_subject_id=item.promoted_to_subject_id,
             triggered_at=item.triggered_at,
             triggered_reason=item.triggered_reason,
+            instrument_id=item.instrument_id,
+            selection_reason=item.selection_reason,
         )
 
     @classmethod

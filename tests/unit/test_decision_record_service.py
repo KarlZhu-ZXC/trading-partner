@@ -172,14 +172,21 @@ def _link_evidence(evidence: EvidenceService, *, subject_id: str, title: str = "
     return env.data.evidence_id
 
 
-def _add_revision(factory, ids, *, subject_id: str, confirmed_at: datetime = EARLIER) -> str:  # type: ignore[no-untyped-def]
+def _add_revision(
+    factory,
+    ids,
+    *,
+    subject_id: str,
+    confirmed_at: datetime = EARLIER,
+    role: ThesisRole = ThesisRole.PRIMARY,
+) -> str:  # type: ignore[no-untyped-def]
     rev_id = ids.new(EntityIdPrefix.REV)
     thesis_id = ids.new(EntityIdPrefix.THESIS)
     thesis = Thesis(
         thesis_id=thesis_id,
         subject_id=subject_id,
         title="Primary",
-        role=ThesisRole.PRIMARY,
+        role=role,
         status=ThesisStatus.ACTIVE,
         current_revision_no=1,
         latest_revision_id=rev_id,
@@ -392,7 +399,7 @@ def test_same_key_tuple_order_only_is_duplicate_not_conflict(harness) -> None:  
     eid2 = _link_evidence(evidence, subject_id=subject_id, title="ev-b")
     rid1 = _add_revision(factory, ids, subject_id=subject_id)
     # Second revision needs distinct thesis ids from helper (new each call).
-    rid2 = _add_revision(factory, ids, subject_id=subject_id)
+    rid2 = _add_revision(factory, ids, subject_id=subject_id, role=ThesisRole.COMPETITOR)
     rep1 = archive.archive_report(
         subject_id=subject_id,
         report_type=ResearchReportType.AD_HOC,

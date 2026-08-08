@@ -35,8 +35,10 @@ from application.services._research_support import (
 )
 from application.services.research_state_invariants import (
     ensure_active_trade_plan_dependencies,
+    ensure_single_live_primary_thesis,
     ensure_subject_can_host_live_thesis,
     ensure_subject_can_leave_tracking,
+    ensure_thesis_relationship_dependencies,
     ensure_thesis_status_transition,
 )
 from application.services.subject_metadata_policy import validate_subject_metadata
@@ -58,6 +60,7 @@ from domain.common.errors import (
     DataContractError,
     InputValidationError,
     InvalidationConditionNarrowingForbidden,
+    ResearchStateConflict,
     StrictReviewRequired,
     UnauthorizedReviewer,
 )
@@ -121,6 +124,12 @@ class ThesisRevisionService:
                             "thesis_id does not belong to subject_id",
                             details={"thesis_id": thesis_id, "subject_id": subject_id},
                         )
+                self._validate_thesis_relationships(
+                    uow,
+                    subject_id=subject_id,
+                    thesis_id=thesis_id,
+                    payload=payload,
+                )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
@@ -362,6 +371,20 @@ class ThesisRevisionService:
                     )
             if kind != CandidateKind.WATCHLIST_ITEM and subject_id is None:
                 raise InputValidationError("subject_id is required for non-watchlist candidates")
+            if (
+                isinstance(payload, WatchlistCandidatePayload)
+                and payload.action == "update_status"
+                and payload.new_status
+                in {
+                    WatchlistItemStatus.SHORTLISTED,
+                    WatchlistItemStatus.SELECTED,
+                    WatchlistItemStatus.REJECTED,
+                }
+                and subject_id is None
+            ):
+                raise InputValidationError(
+                    "subject_id is required for Instrument Selection transitions"
+                )
 
             with self._uow_factory() as uow:
                 subject = uow.subjects.get(subject_id) if subject_id is not None else None
@@ -838,6 +861,7 @@ class ThesisRevisionService:
         if subject_id is None:
             raise DataContractError("trade_plan candidate requires subject_id")
         subject = uow.subjects.get(subject_id)
+
         thesis = uow.theses.get(payload.thesis_id)
         if thesis.subject_id != subject_id:
             raise DataContractError("Trade Plan thesis does not belong to Subject")
@@ -943,6 +967,83 @@ class ThesisRevisionService:
         )
         uow.subjects.update(updated)
 
+    @staticmethod
+    def _validate_thesis_relationships(
+        uow: ResearchUnitOfWork,
+        *,
+        subject_id: str,
+        thesis_id: str | None,
+        payload: ThesisRevisionCandidatePayload,
+    ) -> tuple[ThesisRole, str | None, tuple[str, ...]]:
+        current = uow.theses.get(thesis_id) if thesis_id is not None else None
+        role = (
+            ThesisRole(payload.thesis_role)
+            if payload.thesis_role is not None
+            else current.role
+            if current is not None
+            else ThesisRole.PRIMARY
+        )
+        if payload.thesis_role is not None:
+            parent_id = payload.parent_thesis_id if role is ThesisRole.SUB else None
+        elif "parent_thesis_id" in payload.model_fields_set:
+            parent_id = payload.parent_thesis_id
+        else:
+            parent_id = current.parent_thesis_id if current is not None else None
+        rival_ids = (
+            payload.rival_thesis_ids
+            if payload.rival_thesis_ids is not None
+            else current.rival_thesis_ids
+            if current is not None
+            else ()
+        )
+
+        if role is ThesisRole.SUB:
+            if parent_id is None:
+                raise InputValidationError("SUB Thesis requires parent_thesis_id")
+            if parent_id == thesis_id:
+                raise InputValidationError("Thesis cannot be its own parent")
+            parent = uow.theses.get(parent_id)
+            if parent.subject_id != subject_id:
+                raise InputValidationError(
+                    "parent_thesis_id does not belong to subject_id",
+                    details={"parent_thesis_id": parent_id, "subject_id": subject_id},
+                )
+            if parent.role is not ThesisRole.PRIMARY:
+                raise InputValidationError(
+                    "SUB Thesis parent must be a PRIMARY Thesis",
+                    details={"parent_thesis_id": parent_id, "parent_role": parent.role.value},
+                )
+        elif parent_id is not None:
+            raise InputValidationError("Only SUB Thesis may set parent_thesis_id")
+
+        if parent_id is not None and parent_id in rival_ids:
+            raise InputValidationError("parent_thesis_id cannot also be a rival")
+        for rival_id in rival_ids:
+            if rival_id == thesis_id:
+                raise InputValidationError("Thesis cannot rival itself")
+            rival = uow.theses.get(rival_id)
+            if rival.subject_id != subject_id:
+                raise InputValidationError(
+                    "rival_thesis_id does not belong to subject_id",
+                    details={"rival_thesis_id": rival_id, "subject_id": subject_id},
+                )
+        attempted_status = (
+            ThesisStatus(payload.thesis_status)
+            if payload.thesis_status is not None
+            else current.status
+            if current is not None
+            else ThesisStatus.ACTIVE
+        )
+        ensure_thesis_relationship_dependencies(
+            uow,
+            subject_id=subject_id,
+            thesis_id=thesis_id,
+            attempted_role=role,
+            attempted_status=attempted_status,
+            parent_thesis_id=parent_id,
+        )
+        return role, parent_id, rival_ids
+
     def _apply_thesis_revision(
         self,
         uow: ResearchUnitOfWork,
@@ -964,11 +1065,13 @@ class ThesisRevisionService:
 
         subject = uow.subjects.get(subject_id)
 
-        role = (
-            ThesisRole(payload.thesis_role)
-            if payload.thesis_role is not None
-            else ThesisRole.PRIMARY
+        role, parent_thesis_id, rival_thesis_ids = self._validate_thesis_relationships(
+            uow,
+            subject_id=subject_id,
+            thesis_id=candidate.thesis_id,
+            payload=payload,
         )
+
         thesis_status = (
             ThesisStatus(payload.thesis_status)
             if payload.thesis_status is not None
@@ -987,17 +1090,13 @@ class ThesisRevisionService:
                 subject,
                 attempted_child_status=thesis_status,
             )
+            ensure_single_live_primary_thesis(
+                uow,
+                subject_id=subject_id,
+                thesis_role=role,
+                attempted_child_status=thesis_status,
+            )
             # New thesis: revision_no = 1
-            if role == ThesisRole.PRIMARY and thesis_status == ThesisStatus.ACTIVE:
-                existing_primaries = uow.subjects.list_active_primary_thesis_ids(subject_id)
-                if existing_primaries:
-                    raise DataContractError(
-                        "active primary thesis already exists for subject",
-                        details={
-                            "subject_id": subject_id,
-                            "existing": list(existing_primaries),
-                        },
-                    )
             thesis_id = self._id_generator.new(EntityIdPrefix.THESIS)
             revision_id = self._id_generator.new(EntityIdPrefix.REV)
             revision_no = 1
@@ -1010,8 +1109,8 @@ class ThesisRevisionService:
                 status=thesis_status,
                 current_revision_no=1,
                 latest_revision_id=revision_id,
-                parent_thesis_id=payload.parent_thesis_id,
-                rival_thesis_ids=payload.rival_thesis_ids,
+                parent_thesis_id=parent_thesis_id,
+                rival_thesis_ids=rival_thesis_ids,
                 created_at=now,
                 updated_at=now,
                 archived_at=None,
@@ -1051,6 +1150,7 @@ class ThesisRevisionService:
                 subject,
                 thesis,
                 attempted_child_status=thesis_status,
+                attempted_role=role,
             )
             revision_no = uow.revisions.next_revision_no(thesis_id)
             supersedes = thesis.current_revision_no
@@ -1084,6 +1184,13 @@ class ThesisRevisionService:
                 thesis_id,
                 new_revision_no=revision_no,
                 new_latest_revision_id=revision_id,
+            )
+            uow.theses.update_metadata(
+                thesis_id,
+                title=payload.title,
+                role=role,
+                parent_thesis_id=parent_thesis_id,
+                rival_thesis_ids=rival_thesis_ids,
             )
             if thesis_status is not thesis.status:
                 uow.theses.update_status(
@@ -1325,13 +1432,24 @@ class ThesisRevisionService:
 
         if payload.action == "create":
             market_value = payload.market
+            symbol = (payload.symbol or "").strip()
+            if payload.instrument_id is not None:
+                from domain.common.values import parse_instrument_id
+
+                _, instrument_market, instrument_symbol = parse_instrument_id(
+                    payload.instrument_id
+                )
+                market_value = instrument_market
+                symbol = instrument_symbol
             if market_value is None:
-                raise DataContractError("create watchlist payload requires market")
+                raise DataContractError(
+                    "create watchlist payload requires market or instrument_id"
+                )
             item_id = self._id_generator.new(EntityIdPrefix.SNAPSHOT)
             item = WatchlistItem(
                 item_id=item_id,
                 market=Market(str(market_value)),
-                symbol=(payload.symbol or "").strip(),
+                symbol=symbol,
                 display_name=(payload.display_name or "").strip(),
                 thesis_hint=(payload.thesis_hint or "").strip(),
                 triggers=payload.triggers,
@@ -1345,6 +1463,8 @@ class ThesisRevisionService:
                 promoted_to_subject_id=None,
                 triggered_at=None,
                 triggered_reason=None,
+                instrument_id=payload.instrument_id,
+                selection_reason=None,
             )
             uow.watchlist.add(item)
             return "watchlist_item", item_id
@@ -1352,6 +1472,22 @@ class ThesisRevisionService:
         assert payload.item_id is not None
         assert payload.new_status is not None
         new_status = WatchlistItemStatus(payload.new_status)
+        current_item = uow.watchlist.get(payload.item_id)
+        if candidate.subject_id is not None and current_item.subject_id != candidate.subject_id:
+            raise DataContractError("candidate item does not belong to Research Subject")
+        if new_status is WatchlistItemStatus.SELECTED:
+            if current_item.subject_id is None:
+                raise DataContractError("selected candidate requires Research Subject")
+            selected = uow.watchlist.list(
+                subject_id=current_item.subject_id,
+                status=WatchlistItemStatus.SELECTED,
+                limit=2,
+            )
+            if any(item.item_id != current_item.item_id for item in selected):
+                raise ResearchStateConflict(
+                    "Research Subject already has a selected Instrument candidate; "
+                    "reject or archive it before selecting another"
+                )
         triggered_at = now if new_status is WatchlistItemStatus.TRIGGERED else None
         uow.watchlist.update_status(
             payload.item_id,
@@ -1360,6 +1496,7 @@ class ThesisRevisionService:
             triggered_reason=payload.triggered_reason,
             promoted_to_subject_id=payload.promoted_to_subject_id,
             expires_at=payload.expires_at,
+            selection_reason=payload.selection_reason,
         )
         return "watchlist_item", payload.item_id
 

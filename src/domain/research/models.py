@@ -800,6 +800,8 @@ class WatchlistItem:
     promoted_to_subject_id: str | None
     triggered_at: datetime | None
     triggered_reason: str | None
+    instrument_id: str | None = None
+    selection_reason: str | None = None
 
     def __post_init__(self) -> None:
         require_aware_datetime(self.created_at, field_name="created_at")
@@ -823,6 +825,25 @@ class WatchlistItem:
         elif self.triggered_at is not None or self.triggered_reason is not None:
             raise DataContractError(
                 "non-TRIGGERED watchlist item must not set triggered_at/triggered_reason"
+            )
+        if self.instrument_id is not None:
+            from domain.common.values import parse_instrument_id
+
+            _, instrument_market, instrument_symbol = parse_instrument_id(self.instrument_id)
+            if instrument_market is not self.market or instrument_symbol != self.symbol:
+                raise DataContractError(
+                    "candidate instrument_id must match market and symbol"
+                )
+        if self.status in {WatchlistItemStatus.SELECTED, WatchlistItemStatus.REJECTED}:
+            if self.subject_id is None:
+                raise DataContractError("selected/rejected candidate requires Research Subject")
+            if self.instrument_id is None:
+                raise DataContractError("selected/rejected candidate requires instrument_id")
+            if self.selection_reason is None or not self.selection_reason.strip():
+                raise DataContractError("selected/rejected candidate requires selection_reason")
+        elif self.selection_reason is not None:
+            raise DataContractError(
+                "selection_reason is only valid for selected/rejected candidate"
             )
 
 

@@ -13,6 +13,7 @@ from datetime import datetime
 from types import MappingProxyType
 
 from application.dto.tool_envelope import WarningInfo
+from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import (
     AdjustmentMethod,
     CacheDisposition,
@@ -101,6 +102,7 @@ class ProviderResultMeta:
     adjustment: AdjustmentMethod | None
     data_delay_seconds: int | None
     warnings: tuple[str, ...]
+    diagnostics: tuple[ProviderFailureDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.vendor, VendorId):
@@ -136,9 +138,7 @@ class ProviderResultMeta:
                     "type": type(self.cache_disposition).__name__,
                 },
             )
-        if self.adjustment is not None and not isinstance(
-            self.adjustment, AdjustmentMethod
-        ):
+        if self.adjustment is not None and not isinstance(self.adjustment, AdjustmentMethod):
             raise DataContractError(
                 "adjustment must be AdjustmentMethod or None",
                 details={
@@ -149,10 +149,12 @@ class ProviderResultMeta:
         require_aware_datetime(self.as_of, field_name="as_of")
         require_aware_datetime(self.fetched_at, field_name="fetched_at")
         _require_optional_nonnegative_int(self.latency_ms, field_name="latency_ms")
-        _require_optional_nonnegative_int(
-            self.data_delay_seconds, field_name="data_delay_seconds"
-        )
+        _require_optional_nonnegative_int(self.data_delay_seconds, field_name="data_delay_seconds")
         _require_warning_codes(self.warnings)
+        if not isinstance(self.diagnostics, tuple) or any(
+            not isinstance(item, ProviderFailureDiagnostic) for item in self.diagnostics
+        ):
+            raise DataContractError("diagnostics must contain ProviderFailureDiagnostic values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,14 +338,10 @@ class ToolDataPolicy:
         )
         object.__setattr__(self, "required_categories", required)
         object.__setattr__(self, "optional_categories", optional)
-        object.__setattr__(
-            self, "category_chain_overrides", MappingProxyType(frozen_overrides)
-        )
+        object.__setattr__(self, "category_chain_overrides", MappingProxyType(frozen_overrides))
 
     @staticmethod
-    def _normalize_category_tuple(
-        value: object, *, field_name: str
-    ) -> tuple[DataCategory, ...]:
+    def _normalize_category_tuple(value: object, *, field_name: str) -> tuple[DataCategory, ...]:
         if not isinstance(value, tuple):
             raise DataContractError(
                 f"{field_name} must be a tuple of DataCategory",
@@ -397,8 +395,7 @@ class ToolDataPolicy:
                 )
             if key not in declared:
                 raise DataContractError(
-                    "category_chain_overrides may only reference "
-                    "required or optional categories",
+                    "category_chain_overrides may only reference required or optional categories",
                     details={
                         "field": "category_chain_overrides",
                         "rule": "override_category_not_declared",

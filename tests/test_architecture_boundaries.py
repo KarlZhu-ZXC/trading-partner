@@ -195,7 +195,10 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     from bootstrap import ApplicationContainer
 
     bootstrap = SRC / "bootstrap.py"
-    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_000
+    # Optional account, notification, weekend-reference, and bounded Monitor-LLM
+    # wiring remains explicit in the sole composition root. Keep a tight ceiling
+    # without forcing infrastructure factories to import application services.
+    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_050
     assert set(ApplicationContainer.__dataclass_fields__) == {
         "settings",
         "context",
@@ -217,7 +220,7 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     declaration_modules = [
         path for path in orm_root.glob("*.py") if path.name not in {"__init__.py", "common.py"}
     ]
-    assert len(declaration_modules) == 10
+    assert len(declaration_modules) == 11
     largest_module = max(
         len(path.read_text(encoding="utf-8").splitlines()) for path in declaration_modules
     )

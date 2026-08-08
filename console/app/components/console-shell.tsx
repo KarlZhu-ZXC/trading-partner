@@ -20,8 +20,8 @@ type NavigationItem = { href: string; label: string; key: string; icon: LucideIc
 
 const navigation: NavigationItem[] = [
   { href: "/", label: "Overview", icon: LayoutDashboard, key: "overview" },
-  { href: "/monitors", label: "Monitors", icon: Radar, key: "monitors" },
   { href: "/research", label: "Research", icon: BookOpenText, key: "research" },
+  { href: "/monitors", label: "Monitors", icon: Radar, key: "monitors" },
   { href: "/capabilities", label: "Capabilities", icon: Blocks, key: "capabilities" },
   { href: "/portfolio", label: "Portfolio", icon: BriefcaseBusiness, key: "portfolio" },
   { href: "/operations", label: "Operations", icon: SlidersHorizontal, key: "operations" },
@@ -44,7 +44,9 @@ export function ConsoleShell({
 
   useEffect(() => {
     try {
-      setCollapsed(window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true");
+      const storedCollapsed = window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+      document.documentElement.classList.toggle("sidebar-collapsed", storedCollapsed);
+      setCollapsed(storedCollapsed);
     } catch {
       // The expanded default remains usable when storage is unavailable.
     }
@@ -53,6 +55,7 @@ export function ConsoleShell({
   function toggleSidebar() {
     setCollapsed((current) => {
       const next = !current;
+      document.documentElement.classList.toggle("sidebar-collapsed", next);
       try {
         window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
       } catch {

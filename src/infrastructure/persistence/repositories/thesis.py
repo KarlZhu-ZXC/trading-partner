@@ -115,6 +115,42 @@ class SqlAlchemyThesisRepository:
         row.archived_at = dt_opt_to_db(next_domain.archived_at)
         row.updated_at = dt_to_db(next_domain.updated_at)
 
+    def update_metadata(
+        self,
+        thesis_id: str,
+        *,
+        title: str,
+        role: ThesisRole,
+        parent_thesis_id: str | None,
+        rival_thesis_ids: tuple[str, ...],
+    ) -> None:
+        row = self._session.get(ThesisRow, thesis_id, with_for_update=True)
+        if row is None:
+            raise ThesisNotFound(
+                f"Thesis not found: {thesis_id}",
+                details={"thesis_id": thesis_id},
+            )
+        current = _to_domain(row)
+        updated = Thesis(
+            thesis_id=current.thesis_id,
+            subject_id=current.subject_id,
+            title=title,
+            role=role,
+            status=current.status,
+            current_revision_no=current.current_revision_no,
+            latest_revision_id=current.latest_revision_id,
+            parent_thesis_id=parent_thesis_id,
+            rival_thesis_ids=rival_thesis_ids,
+            created_at=current.created_at,
+            updated_at=self._clock.now(),
+            archived_at=current.archived_at,
+        )
+        row.title = updated.title
+        row.role = updated.role.value
+        row.parent_thesis_id = updated.parent_thesis_id
+        row.rival_thesis_ids_json = updated.rival_thesis_ids
+        row.updated_at = dt_to_db(updated.updated_at)
+
     def advance_current_revision(
         self,
         thesis_id: str,

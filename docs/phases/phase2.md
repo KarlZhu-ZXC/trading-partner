@@ -73,10 +73,11 @@ Research WatchlistItem
 = thesis hint, triggers, status, expiry, and Research Subject association
 ```
 
-The existing Phase 1 `WatchlistItem` remains unchanged. It is research metadata,
-not an external membership row. An external add does not fabricate a thesis hint.
-An external remove never archives/deletes a Research WatchlistItem or Investment
-Research Subject.
+The existing Phase 1 `WatchlistItem` remains separate from the external Watchlist
+Hub. It is research metadata and also owns the confirmed Instrument Selection
+candidate lifecycle (`WATCHING` / `SHORTLISTED` / `SELECTED` / `REJECTED`), not an
+external membership row. An external add does not fabricate a thesis hint. An
+external remove never archives/deletes a Research WatchlistItem or Research Subject.
 
 ## 3. Source selection
 
@@ -522,6 +523,16 @@ Definitions are append-only versions with optimistic concurrency, explicit
 must match that market, preventing an A-share rule from being evaluated after the
 US close (or vice versa) against an inevitably stale quote. V1 rules are:
 
+- legacy price-above/price-below and portfolio-risk thresholds; and
+- deterministic fact comparisons across price, volume, technical, fundamental,
+  company-event, macro, sentiment, Thesis-state, and portfolio-risk facts.
+
+Technical rules can select daily or weekly Technical Engine v2 metrics. Missing
+intervals remain daily for compatibility. Ordered numeric rules can define a
+separate recovery threshold, creating a deterministic hysteresis band such as RSI
+below 30 to trigger and RSI at/above 35 to recover. Hourly/4-hour technical metrics
+and compound Boolean expressions remain out of scope.
+
 Each version may also have an aware `valid_until` timestamp. The timestamp is an
 inclusive alarm lifetime, not a market-data freshness limit: once `as_of` is later
 than it, the evaluator skips the Monitor before any provider request, state write,
@@ -654,25 +665,45 @@ Runs created before migration `0023` remain readable with
 `observation_history_complete=false`; missing historical observations are not
 backfilled or inferred.
 
+An optional schema-v3 `judgment_policy` adds bounded cross-instrument interpretation
+without replacing deterministic rules. The policy stores a Playbook, up to 12
+reference Instruments, relative-strength pairs, and explicit user-confirmed state.
+The runtime derives 1h/4h/1d/3d returns, session alignment, rule states, and
+provenance before a selectable server-side LLM call. Alibaba Cloud Model Studio
+`qwen3.8-max` is the default, while the retained DeepSeek Provider remains available
+through `LLM_PROVIDER=deepseek`. Optional Bailian built-in web search may add current macro-event context; usage and bounded
+source URLs are persisted, but market/account facts remain deterministic-only.
+Chinese explanations, evidence IDs, and quantity ranges are validated; non-aligned
+divergence actions are downgraded to WAIT, and unchanged
+qualitative signatures skip the LLM call. Results are immutable receipts; only
+material changes create judgment events/Telegram messages. The LLM has no write or
+order port and never converts a suggested quantity into a confirmed fill.
+
 Deferred Monitoring extensions include announcement/filing deltas, earnings
 windows, technical-cross rules, capital-flow rules, snooze/cooldown policy, and
 market-specific due calendars.
 
-Dukascopy precious-metal INTERVAL schedules are the first venue-specific closed
-window exception. XAUUSD/XAGUSD skip the New-York-aligned weekend closure and daily
+Dukascopy OTC INTERVAL schedules are the first venue-specific closed-window
+exception. XAUUSD/XAGUSD/light-oil skip the New-York-aligned weekend closure and daily
 17:00–18:00 ET maintenance break before Provider access. The dashboard reports
 `MARKET_CLOSED` with the next observation window; it does not persist a false
-`NOT_EVALUATED` transition merely because the venue is closed. An optional,
-current-only IG Weekend Gold browser fallback can evaluate XAUUSD price rules inside
-IG's own weekend window, but the observation remains explicitly labelled as a
-separate CFD proxy and never supplies spot bars, technicals, or historical facts.
+`NOT_EVALUATED` transition merely because the venue is closed. Current-only weekend
+references use Binance PAXG/USDC for XAUUSD and Hyperliquid XYZ CL/USDC for light
+oil, with explicit token/perpetual, USDC, and basis warnings. Optional IG Weekend
+Gold is a final XAUUSD fallback. None supplies requested-instrument bars,
+technicals, or historical facts. Retryable weekend-reference calls use at most
+three bounded attempts. Every failed hop is stored on the immutable Run observation
+as a secret-safe structured diagnostic containing only Provider, stage, typed error,
+HTTP status, attempt, and retryability. The Console renders that chain directly;
+URLs, proxy values, headers, bodies, and exception text are never persisted.
 
 Current acceptance evidence (2026-07-29):
 
 - the public surface remains exactly 28 tools; `monitor_read` has four closed
-  operations and the current surface schema is `compact-v12`;
+  operations and the current surface schema is `compact-v19`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`,
-  `0028_provider_route_history`, and `0030_generic_notification_outbox` pass
+  `0028_provider_route_history`, `0030_generic_notification_outbox`, and
+  `0036_monitor_provider_diagnostics` pass
   clean upgrade/downgrade/upgrade checks;
 - focused tests cover transition deduplication, immutable observations, whole-hour
   schedule validation, due/skip behavior, compact schema, and launchd arguments;

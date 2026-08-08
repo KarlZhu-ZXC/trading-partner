@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from domain.common.errors import DataContractError
+from domain.common.errors import DataContractError, ProviderUnavailableError
 from infrastructure.providers.account.manual_csv import ManualCsvAccountAdapter
 from infrastructure.providers.account.moomoo import MoomooAccountAdapter
 from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDOperation
@@ -75,6 +76,12 @@ class _Context:
 
     def position_list_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
         self.calls.append("positions")
+        assert kwargs == {
+            "trd_env": "REAL",
+            "acc_id": 998877,
+            "refresh_cache": True,
+            "currency": "USD",
+        }
         return 0, [
             {
                 "code": "US.NVDA",
@@ -82,14 +89,31 @@ class _Context:
                 "qty": 2,
                 "can_sell_qty": 2,
                 "average_cost": 100,
+                "nominal_price": 125,
                 "market_val": 250,
                 "unrealized_pl": 50,
                 "currency": "USD",
             }
         ]
 
-    def order_list_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
+    def order_list_query(
+        self,
+        *,
+        trd_env: str,
+        acc_id: int,
+        refresh_cache: bool,
+        status_filter_list: tuple[str, ...],
+    ) -> tuple[int, list[dict[str, object]]]:
         self.calls.append("orders")
+        assert trd_env == "REAL"
+        assert acc_id == 998877
+        assert refresh_cache is True
+        assert status_filter_list == (
+            "WAITING_SUBMIT",
+            "SUBMITTING",
+            "SUBMITTED",
+            "FILLED_PART",
+        )
         return 0, []
 
     def close(self) -> None:
@@ -129,7 +153,12 @@ async def test_moomoo_adapter_calls_only_read_surface_and_redacts_account_id() -
     assert context.calls == ["accounts", "funds", "positions", "orders", "close"]
     assert snapshot.positions[0].instrument_id == "equity:US:NVDA"
     assert snapshot.base_currency == "USD"
-    assert snapshot.positions[0].market_price is None
+    assert snapshot.positions[0].market_price == Decimal("125")
+    assert snapshot.positions[0].market_price_at == snapshot.fetched_at
+    assert "PRICE_TIME_IS_FETCH_TIME" in snapshot.warning_codes
+    assert "PRICE_TIME_UNAVAILABLE" not in snapshot.warning_codes
+    assert "PRICE_TIME_IS_FETCH_TIME" in result.meta.warnings
+    assert "PRICE_TIME_UNAVAILABLE" not in result.meta.warnings
     assert "998877" not in repr(result)
     assert [operation for operation, _scope in limiter.calls] == [
         MoomooOpenDOperation.ACCOUNT_FUNDS,
@@ -144,3 +173,28 @@ def test_moomoo_production_adapter_has_no_trade_write_surface() -> None:
     source = Path("src/infrastructure/providers/account/moomoo.py").read_text(encoding="utf-8")
     forbidden = ("unlock_", "place_", "modify_order", "cancel_", "acctradinginfo")
     assert not any(name in source for name in forbidden)
+
+
+@pytest.mark.asyncio
+async def test_moomoo_adapter_maps_raw_sdk_snapshot_failure_to_typed_error() -> None:
+    class _BrokenContext(_Context):
+        def get_acc_list(self) -> tuple[int, list[dict[str, object]]]:
+            raise TypeError("raw sdk mismatch")
+
+    adapter = MoomooAccountAdapter(
+        _Ids(),
+        enabled=True,
+        host="127.0.0.1",
+        port=11111,
+        clock=_Clock(),
+        context_factory=lambda _host, _port: _BrokenContext(),
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        await adapter.get_account_snapshots(as_of=datetime(2026, 7, 18, 12, tzinfo=UTC))
+
+    assert caught.value.code == "MOOMOO_ACCOUNT_SNAPSHOT_UNAVAILABLE"
+    assert caught.value.details == {
+        "vendor": "moomoo",
+        "operation": "account_snapshot",
+    }

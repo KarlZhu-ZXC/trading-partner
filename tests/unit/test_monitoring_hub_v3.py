@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +26,7 @@ from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_notification_service import MonitorNotificationService
 from application.services.monitor_schedule_service import MonitorScheduleService
+from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import Freshness, TradingSession
 from domain.monitoring.enums import (
     MonitorCadence,
@@ -141,6 +143,21 @@ def _xauusd_interval_monitor() -> MonitorDefinition:
     )
 
 
+def _light_oil_interval_monitor() -> MonitorDefinition:
+    monitor = _interval_monitor()
+    rule = replace(
+        monitor.rules[0],
+        instrument_id="cfd:OTC:LIGHT_CMD_USD",
+    )
+    return replace(
+        monitor,
+        name="Light oil two-hour conditions",
+        primary_instrument_id="cfd:OTC:LIGHT_CMD_USD",
+        interval_minutes=120,
+        rules=(rule,),
+    )
+
+
 class _USCalendar:
     def session_at(self, moment: datetime) -> MarketSession | None:
         if moment.date() == date(2026, 7, 29):
@@ -238,6 +255,63 @@ async def test_hourly_dispatch_skips_until_due_and_keeps_full_observations(
     assert skipped.disposition is MonitorDispatchDisposition.NO_DUE_MONITORS
     assert skipped.next_due_at == NOW.replace(minute=0) + timedelta(hours=4)
     assert market.get_market_snapshot.await_count == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_monitor_run_persists_safe_provider_diagnostics(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-diagnostic.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    repository.create(_interval_monitor())
+    diagnostic = ProviderFailureDiagnostic(
+        provider="hyperliquid",
+        stage="weekend_quote_request",
+        error_code="PROVIDER_TIMEOUT_ERROR",
+        retryable=True,
+        attempt_count=3,
+        error_type="timeout",
+        status_class="none",
+    )
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(
+        return_value=SimpleNamespace(
+            ok=True,
+            data=SimpleNamespace(last=Decimal("4055.7"), quote_at=NOW),
+            sources=(),
+            warnings=(
+                SimpleNamespace(
+                    code="PROVIDER_ATTEMPT_DIAGNOSTIC",
+                    details={
+                        "provider": diagnostic.provider,
+                        "stage": diagnostic.stage,
+                        "error_code": diagnostic.error_code,
+                        "retryable": diagnostic.retryable,
+                        "attempt_count": diagnostic.attempt_count,
+                        "error_type": diagnostic.error_type,
+                        "status_class": diagnostic.status_class,
+                        "status_code": diagnostic.status_code,
+                    },
+                ),
+            ),
+            errors=(),
+        )
+    )
+    result = await MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    ).evaluate(MonitorEvaluateInput(monitor_ids=(MONITOR_ID,)))
+
+    assert result.observations[0].diagnostics == (diagnostic,)
+    persisted = repository.get_run(result.run_id)
+    assert persisted is not None
+    assert persisted.observations[0].diagnostics == (diagnostic,)
     engine.dispose()
 
 
@@ -388,6 +462,24 @@ def test_xauusd_interval_is_due_during_enabled_ig_weekend_window() -> None:
     assert status.due is True
 
 
+@pytest.mark.parametrize(
+    "monitor",
+    (_xauusd_interval_monitor(), _light_oil_interval_monitor()),
+)
+def test_weekend_rwa_references_keep_gold_and_oil_intervals_due(
+    monitor: MonitorDefinition,
+) -> None:
+    saturday = datetime(2026, 8, 1, 11, 0, tzinfo=UTC)
+    status = MonitorScheduleService(weekend_rwa_proxy_enabled=True).status(
+        monitor,
+        None,
+        saturday,
+    )
+
+    assert status.health == "OVERDUE"
+    assert status.due is True
+
+
 def test_xauusd_interval_waits_for_ig_open_after_friday_close() -> None:
     friday = datetime(2026, 7, 31, 22, 0, tzinfo=UTC)
     status = MonitorScheduleService(ig_weekend_gold_enabled=True).status(
@@ -517,6 +609,44 @@ async def test_monitor_scoped_run_history_never_returns_sibling_observations(
         first.monitor_id,
         second.monitor_id,
     }
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_monitor_scoped_latest_run_is_partial_when_fact_was_not_evaluated(
+    tmp_path, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'monitor-scoped-partial.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    monitor = _interval_monitor()
+    monitor = replace(
+        monitor,
+        rules=(replace(monitor.rules[0], max_fact_age_seconds=60),),
+    )
+    repository.create(monitor)
+    evaluation_time = NOW + timedelta(hours=2)
+    fixed_clock.set(evaluation_time)
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(return_value=_quote())
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(monitor_ids=(monitor.monitor_id,), as_of=evaluation_time)
+    )
+    latest = repository.latest_run_for_monitor(monitor.monitor_id)
+
+    assert run.status is MonitorRunStatus.PARTIAL
+    assert latest is not None
+    assert latest.status is MonitorRunStatus.PARTIAL
+    assert latest.observations[0].state is MonitorRuleStateValue.NOT_EVALUATED
     engine.dispose()
 
 

@@ -158,12 +158,20 @@ class SqlAlchemyResearchSubjectRepository:
         row.decision_ids_json = validated.decision_ids
         row.schema_version = validated.schema_version
 
-    def list_active_primary_thesis_ids(self, subject_id: str) -> tuple[str, ...]:
+    def list_live_primary_thesis_ids(self, subject_id: str) -> tuple[str, ...]:
         stmt = (
             select(ThesisRow.thesis_id)
             .where(ThesisRow.subject_id == subject_id)
             .where(ThesisRow.role == ThesisRole.PRIMARY.value)
-            .where(ThesisRow.status == ThesisStatus.ACTIVE.value)
+            .where(
+                ThesisRow.status.in_(
+                    (
+                        ThesisStatus.ACTIVE.value,
+                        ThesisStatus.STRENGTHENED.value,
+                        ThesisStatus.WEAKENED.value,
+                    )
+                )
+            )
             .order_by(ThesisRow.thesis_id)
         )
         return tuple(self._session.scalars(stmt).all())

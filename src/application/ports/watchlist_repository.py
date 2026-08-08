@@ -33,4 +33,5 @@ class WatchlistRepository(Protocol):
         triggered_reason: str | None,
         promoted_to_subject_id: str | None,
         expires_at: datetime | None,
+        selection_reason: str | None = None,
     ) -> None: ...

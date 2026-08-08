@@ -63,6 +63,8 @@ class SpotVenueBasis(StrEnum):
 
     DUKASCOPY_SWFX = "dukascopy_swfx"
     IG_WEEKEND_CFD = "ig_weekend_cfd"
+    PAXG_USDC_SPOT_PROXY = "paxg_usdc_spot_proxy"
+    CL_USDC_PERPETUAL_PROXY = "cl_usdc_perpetual_proxy"
     AGGREGATED_OTC = "aggregated_otc"
     EXCHANGE_REFERENCE = "exchange_reference"
     UNKNOWN = "unknown"

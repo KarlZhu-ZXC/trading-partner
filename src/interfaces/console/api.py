@@ -720,7 +720,7 @@ async def overview(request: Request) -> dict[str, Any]:
             await _invoke_capability(
                 request,
                 "monitor_read",
-                {"request": {"operation": "runs", "limit": 5}},
+                {"request": {"operation": "runs", "limit": 20}},
             )
         ),
         "post_market_sync": container.operations.post_market_sync.status().model_dump(mode="json"),

@@ -54,6 +54,10 @@ Monitor 页面提供专用编辑器，不需要手写 MCP JSON：可按市场和
 方向/阈值、严重度、当前观测和状态一起展示。Monitor 卡片分别显示原始创建时间和最近运行时间。
 总览及 Monitor 页的最近 Run 会显示本次 observation 实际记录的标的代码；只有 Run 版本
 与当前 Monitor 版本一致时才附带当前名称，避免 Monitor 改版后把旧运行误标成新标的。
+失败 observation 的详情会直接展示结构化 Provider 诊断链：Provider、请求阶段、typed error、
+HTTP 状态、attempt 和 retryability。诊断是为定位“解析失败、主源失败还是 fallback 失败”而
+设计的，不保存 URL、代理地址、请求头、响应正文或异常原文。迁移 `0036` 之前的 Run 没有
+诊断 sidecar 时，页面明确显示缺失，不能从顶层 warning 猜测具体失败环节。
 
 能力工作台按选定 operation 的 schema 预填必需字段，并把
 `technical_render_chart` 返回的 PNG image block 直接显示在结果区。账户页只按原币种汇总

@@ -91,7 +91,7 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compact_v15_keeps_legacy_case_transport_discoverable_and_callable() -> None:
+async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable() -> None:
     container = _container()
     legacy_case_id = "case_00000000-0000-7000-8000-000000000001"
     container.services.research_subjects.get_subject.return_value = _Envelope(
@@ -107,12 +107,13 @@ async def test_compact_v15_keeps_legacy_case_transport_discoverable_and_callable
 
     assert "Research Subjects (标的)" in tools["investment_case_read"].description
     assert "Legacy transport" in tools["investment_case_manage"].description
-    manage_definitions = tools["investment_case_manage"].inputSchema["$defs"].values()
-    manage_properties = [definition.get("properties", {}) for definition in manage_definitions]
-    assert any("case_type" in properties for properties in manage_properties)
-    assert any("case_id" in properties for properties in manage_properties)
-    assert any("linked_case_ids" in properties for properties in manage_properties)
-    assert any("title" in properties for properties in manage_properties)
+    serialized_manage_schema = json.dumps(
+        tools["investment_case_manage"].inputSchema, separators=(",", ":")
+    )
+    assert '"case_type"' in serialized_manage_schema
+    assert '"case_id"' in serialized_manage_schema
+    assert '"linked_case_ids"' in serialized_manage_schema
+    assert '"title"' in serialized_manage_schema
     manage_validator = Draft202012Validator(tools["investment_case_manage"].inputSchema)
     assert not list(
         manage_validator.iter_errors(
@@ -150,6 +151,47 @@ async def test_technical_tools_publish_canonical_interval_enums() -> None:
 
     assert snapshot["intervals"]["items"]["enum"] == ["1d", "1w"]
     assert chart["interval"]["enum"] == ["1d", "1w"]
+
+
+@pytest.mark.asyncio
+async def test_monitor_schema_exposes_technical_timeframe_and_hysteresis() -> None:
+    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    schema = tools["monitor_manage"].inputSchema
+    serialized = json.dumps(schema)
+
+    assert '"technical_interval"' in serialized
+    assert '"recovery_threshold"' in serialized
+    validator = Draft202012Validator(schema)
+    errors = list(
+        validator.iter_errors(
+            {
+                "request": {
+                    "operation": "create",
+                    "name": "NVDA weekly RSI",
+                    "cadence": "US_POST_MARKET",
+                    "rules": [
+                        {
+                            "rule_code": "RSI_OVERSOLD",
+                            "description": "Weekly RSI below 30; recover at 35.",
+                            "rule_type": "FACT_COMPARISON",
+                            "severity": "MEDIUM",
+                            "instrument_id": "equity:US:NVDA",
+                            "max_fact_age_seconds": 691200,
+                            "fact_type": "TECHNICAL",
+                            "metric_key": "rsi_14",
+                            "comparator": "LT",
+                            "numeric_threshold": "30",
+                            "recovery_threshold": "35",
+                            "technical_interval": "1w",
+                        }
+                    ],
+                    "confirmed_by": "user",
+                    "idempotency_key": "weekly-rsi-monitor",
+                }
+            }
+        )
+    )
+    assert errors == []
 
 
 @pytest.mark.asyncio
@@ -220,11 +262,13 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
         schema = tools[name].inputSchema
         assert schema["required"] == ["request"]
         request = schema["properties"]["request"]
-        assert request["discriminator"]["propertyName"] == "operation"
+        assert "discriminator" not in request
+        assert request["required"][0] == "operation"
+        assert request["unevaluatedProperties"] is False
         assert len(request["oneOf"]) == variant_count
         for variant in request["oneOf"]:
-            definition = variant["$ref"].rsplit("/", 1)[-1]
-            assert "operation" in schema["$defs"][definition]["required"]
+            assert "const" in variant["properties"]["operation"]
+            assert "type" not in variant
 
 
 @pytest.mark.asyncio
@@ -241,13 +285,13 @@ async def test_judgment_confirmation_schema_exposes_chat_authorization_provenanc
 async def test_compact_wire_schema_and_each_tool_stay_bounded() -> None:
     compact = await create_mcp_server(_container()).list_tools()
 
-    assert _wire_size(compact) <= 64 * 1024
+    assert _wire_size(compact) <= 48 * 1024
     assert (
         sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact)
-        <= 36 * 1024
+        <= 30 * 1024
     )
     for tool in compact:
-        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 8 * 1024, tool.name
+        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 5 * 1024, tool.name
 
 
 @pytest.mark.asyncio
@@ -258,9 +302,8 @@ async def test_compact_schema_compression_keeps_every_local_ref_resolvable() -> 
         Draft202012Validator.check_schema(tool.inputSchema)
         definitions = tool.inputSchema.get("$defs", {})
         assert _local_definition_refs(tool.inputSchema) <= set(definitions), tool.name
-    a_share = next(tool for tool in compact if tool.name == "a_share_get_facts")
-    assert len(a_share.inputSchema["$defs"]) < 36
-    assert all(len(name) == 1 for name in a_share.inputSchema["$defs"])
+    for tool in compact:
+        assert all(len(name) == 1 for name in tool.inputSchema.get("$defs", {}))
 
 
 @pytest.mark.asyncio
@@ -276,6 +319,26 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
         )
     )
     assert errors
+
+    monitor_validator = Draft202012Validator(tools["monitor_manage"].inputSchema)
+    assert list(
+        monitor_validator.iter_errors(
+            {
+                "request": {
+                    "operation": "resolve_event",
+                    "event_id": "event_1",
+                    "action": "RESOLVE",
+                    "note": "reviewed",
+                    "confirmed_by": "user",
+                    "idempotency_key": "resolve-1",
+                    "judgment_policy": {
+                        "playbook": "must not belong to resolve_event",
+                        "reference_instrument_ids": ["equity:US:NVDA"],
+                    },
+                }
+            }
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -314,7 +377,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "compact_28",
         "public_tool_count": 28,
-        "surface_schema_version": "compact-v15",
+        "surface_schema_version": "compact-v19",
     }
 
 

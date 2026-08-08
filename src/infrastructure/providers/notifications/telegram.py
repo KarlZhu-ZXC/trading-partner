@@ -439,6 +439,8 @@ def _change_footer(changes: list[str]) -> str:
 def _display_source_names(value: str) -> str:
     labels = {
         "ig_weekend_gold": "IG Weekend Gold（Apify）",
+        "binance": "Binance PAXG/USDC",
+        "hyperliquid": "Hyperliquid XYZ CL/USDC",
         "yfinance": "yfinance",
     }
     return ", ".join(labels.get(item.strip(), item.strip()) for item in value.split(","))

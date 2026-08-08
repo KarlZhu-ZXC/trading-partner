@@ -10,6 +10,7 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
+    MonitorJudgment,
     MonitorRuleState,
     MonitorRun,
 )
@@ -39,6 +40,7 @@ class MonitorRepository(Protocol):
         states: tuple[MonitorRuleState, ...],
         events: tuple[MonitorEvent, ...],
         notifications: tuple[NotificationMessage, ...],
+        judgments: tuple[MonitorJudgment, ...] = (),
     ) -> MonitorRun: ...
 
     def get_run(self, run_id: str) -> MonitorRun | None: ...
@@ -46,6 +48,10 @@ class MonitorRepository(Protocol):
     def list_runs(self, monitor_id: str | None, limit: int) -> tuple[MonitorRun, ...]: ...
 
     def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None: ...
+
+    def latest_judgment(self, monitor_id: str) -> MonitorJudgment | None: ...
+
+    def list_judgments(self, monitor_id: str, limit: int) -> tuple[MonitorJudgment, ...]: ...
 
     def get_event(self, event_id: str) -> MonitorEvent | None: ...
 

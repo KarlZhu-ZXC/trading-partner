@@ -22,15 +22,15 @@ type Dict = Record<string, unknown>;
 type SubjectAggregate = { subject?: Dict; state?: Dict };
 type MonitorAggregate = { monitor?: Dict; [key: string]: unknown };
 
-const SUBJECT_STATUSES = ["draft", "active", "strengthened", "weakened", "invalidated", "archived"];
+const SUBJECT_STATUSES = ["draft", "active", "archived"];
 const SUBJECT_TYPES = ["company", "theme", "macro", "catalyst", "portfolio_concern"];
-// SUB requires a parent_thesis_id selector; keep this first editor bounded to
-// roles that are valid without an additional relationship field.
-const THESIS_ROLES = ["primary", "competitor", "bear"];
+const THESIS_ROLES = ["primary", "sub", "competitor", "bear"];
 const THESIS_STATUSES = ["draft", "active", "strengthened", "weakened", "invalidated", "archived"];
+const LIVE_THESIS_STATUSES = new Set(["active", "strengthened", "weakened"]);
 const CONFIDENCE_BANDS = ["low", "medium", "high"];
 const RATINGS = ["avoid", "watch", "speculative_buy", "buy", "sell", "hold"];
 const INVALIDATION_SEVERITIES = ["soft", "hard"];
+const SELECTION_STATUSES = new Set(["watching", "shortlisted", "selected", "rejected"]);
 
 function text(value: unknown, fallback = "—"): string {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -146,7 +146,7 @@ function SubjectEditor({
       <p className="card-note">研究档案元数据写入会留下可审计的确认记录；它不会修改 Thesis revision，也不会操作仓位。</p>
       <div className="research-form-grid">
         <Field label="研究档案类型"><select value={draft.subjectType} disabled={editing} onChange={(event) => onChange({ ...draft, subjectType: event.target.value })}>{SUBJECT_TYPES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
-        <Field label="主标的 Instrument ID"><input value={draft.instrument} disabled={editing} onChange={(event) => onChange({ ...draft, instrument: event.target.value })} placeholder="equity:US:NVDA" /></Field>
+        <Field label={draft.subjectType === "company" || draft.subjectType === "catalyst" ? "主标的 Instrument ID（必填）" : "主标的 Instrument ID（可选）"}><input value={draft.instrument} disabled={editing} onChange={(event) => onChange({ ...draft, instrument: event.target.value })} placeholder={draft.subjectType === "theme" ? "主题遴选阶段可以留空" : "equity:US:NVDA"} /><small>{draft.subjectType === "theme" ? "例如“创新药 ETF 选择”应保持为空，候选 ETF 在下方候选池管理。" : "该字段定义研究对象身份，创建后不可修改。"}</small></Field>
         <Field label="标题" className="research-field-wide"><input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} placeholder="例如：NVDA AI 基础设施跟踪" /></Field>
         <Field label="摘要" className="research-field-wide"><textarea value={draft.summary} onChange={(event) => onChange({ ...draft, summary: event.target.value })} rows={5} placeholder="记录这个研究标的要长期回答的问题、范围和边界。" /></Field>
         <Field label="主题标签"><input value={draft.tags} onChange={(event) => onChange({ ...draft, tags: event.target.value })} placeholder="ai, valuation, catalyst" /></Field>
@@ -168,6 +168,8 @@ type ThesisDraft = {
   invalidationCheckNote: string;
   thesisRole: string;
   thesisStatus: string;
+  parentThesisId: string;
+  rivalThesisIds: string[];
   replacesRevisionNo: string;
   assumptions: AssumptionDraft[];
   invalidations: InvalidationDraft[];
@@ -182,6 +184,8 @@ const EMPTY_THESIS_DRAFT: ThesisDraft = {
   invalidationCheckNote: "",
   thesisRole: "primary",
   thesisStatus: "draft",
+  parentThesisId: "",
+  rivalThesisIds: [],
   replacesRevisionNo: "",
   assumptions: [],
   invalidations: [],
@@ -197,6 +201,8 @@ function thesisDraftFrom(thesis: Dict | undefined, revision: Dict | undefined, r
     invalidationCheckNote: text(revision?.invalidation_check_note, ""),
     thesisRole: text(revision?.thesis_role, text(thesis?.role, "primary")),
     thesisStatus: text(revision?.thesis_status, text(thesis?.status, "active")),
+    parentThesisId: text(thesis?.parent_thesis_id, ""),
+    rivalThesisIds: stringList(thesis?.rival_thesis_ids),
     replacesRevisionNo: revision?.revision_no == null ? "" : String(revision.revision_no),
     assumptions: revisionAssumptions.map((item) => ({
       statement: text(item.statement, ""),
@@ -214,6 +220,7 @@ function thesisDraftFrom(thesis: Dict | undefined, revision: Dict | undefined, r
 function ThesisEditor({
   draft,
   thesisId,
+  availableTheses,
   statusExplicit,
   subjectStatus,
   busy,
@@ -224,6 +231,7 @@ function ThesisEditor({
 }: {
   draft: ThesisDraft;
   thesisId: string | null;
+  availableTheses: Dict[];
   statusExplicit: boolean;
   subjectStatus: string;
   busy: boolean;
@@ -232,6 +240,8 @@ function ThesisEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const relationshipTargets = availableTheses.filter((item) => text(item.thesis_id) !== thesisId);
+  const primaryTargets = relationshipTargets.filter((item) => text(item.role) === "primary");
   function updateAssumption(index: number, key: keyof AssumptionDraft, value: string) {
     const assumptions = draft.assumptions.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item);
     onChange({ ...draft, assumptions });
@@ -246,7 +256,9 @@ function ThesisEditor({
       <p className="card-note">不会直接改写历史 revision。保存后只会生成 pending candidate，必须显式 Confirm 或 Reject。</p>
       <div className="research-form-grid">
         <Field label="标题" className="research-field-wide"><input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} /></Field>
-        <Field label="Thesis Role"><select value={draft.thesisRole} onChange={(event) => onChange({ ...draft, thesisRole: event.target.value })}>{THESIS_ROLES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+        <Field label="Thesis Role"><select value={draft.thesisRole} onChange={(event) => onChange({ ...draft, thesisRole: event.target.value, parentThesisId: event.target.value === "sub" ? draft.parentThesisId : "" })}>{THESIS_ROLES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+        {draft.thesisRole === "sub" && <Field label="父 PRIMARY Thesis"><select value={draft.parentThesisId} onChange={(event) => onChange({ ...draft, parentThesisId: event.target.value, rivalThesisIds: draft.rivalThesisIds.filter((id) => id !== event.target.value) })}><option value="">请选择父 Thesis</option>{primaryTargets.map((item) => <option value={text(item.thesis_id)} key={text(item.thesis_id)}>{text(item.title, "未命名 PRIMARY")} · {text(item.status)}</option>)}</select></Field>}
+        <Field label="Rival Theses" className="research-field-wide"><div className="research-thesis-relation-options">{relationshipTargets.length === 0 ? <span className="muted">暂无其他 Thesis。</span> : relationshipTargets.map((item) => { const id = text(item.thesis_id); const disabled = id === draft.parentThesisId; return <label key={id}><input type="checkbox" checked={draft.rivalThesisIds.includes(id)} disabled={disabled} onChange={(event) => onChange({ ...draft, rivalThesisIds: event.target.checked ? [...draft.rivalThesisIds, id] : draft.rivalThesisIds.filter((value) => value !== id) })} /><span>{text(item.title, "未命名 Thesis")} · {text(item.role).toUpperCase()} · {text(item.status)}</span></label>; })}</div><small>用于声明竞争解释或对立判断；父 Thesis 不能同时标记为 rival。</small></Field>
         <Field label="候选状态"><div className="research-status-control">{thesisId && <label className="research-status-toggle"><input type="checkbox" checked={statusExplicit} onChange={(event) => onStatusExplicitChange(event.target.checked)} /><span>同时修改状态</span></label>}<select value={draft.thesisStatus} disabled={Boolean(thesisId) && !statusExplicit} onChange={(event) => onChange({ ...draft, thesisStatus: event.target.value })}>{THESIS_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></div></Field>
         <Field label="Confidence"><select value={draft.confidenceBand} onChange={(event) => onChange({ ...draft, confidenceBand: event.target.value })}>{CONFIDENCE_BANDS.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
         <Field label="Rating"><select value={draft.rating} onChange={(event) => onChange({ ...draft, rating: event.target.value })}>{RATINGS.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
@@ -286,9 +298,25 @@ function ThesisSummary({ thesis, revision, assumptions, invalidations }: { thesi
       <header><div><strong>{text(thesis.title, "未命名 Thesis")}</strong><small className="mono">{text(thesis.thesis_id)}</small></div><div className="research-thesis-badges"><Badge value={text(thesis.status, "UNKNOWN").toUpperCase()} /><span className="research-role">{text(thesis.role).toUpperCase()}</span></div></header>
       <div className="research-revision-grid"><div className="research-statement"><span>Latest revision · statement</span><p>{text(revision?.statement, "没有 latest revision statement。")}</p></div><div><span>Rating</span><strong>{text(revision?.rating).toUpperCase()}</strong></div><div><span>Confidence</span><strong>{text(revision?.confidence_band).toUpperCase()}</strong></div><div><span>Current revision</span><strong>v{text(thesis.current_revision_no)}</strong><small>latest v{text(revision?.revision_no)}</small></div><div><span>Status</span><strong>{text(thesis.status).toUpperCase()}</strong></div><div><span>Role</span><strong>{text(thesis.role).toUpperCase()}</strong></div></div>
       {revision && <div className="research-thesis-detail-grid"><div><span>Rationale</span><p>{text(revision.rationale)}</p></div><div><span>Invalidation check</span><p>{text(revision.invalidation_check_note)}</p></div></div>}
+      {(text(thesis.parent_thesis_id, "") || stringList(thesis.rival_thesis_ids).length > 0) && <div className="research-thesis-relations">{text(thesis.parent_thesis_id, "") && <span>父 Thesis · <code>{shortId(thesis.parent_thesis_id)}</code></span>}{stringList(thesis.rival_thesis_ids).length > 0 && <span>Rivals · {stringList(thesis.rival_thesis_ids).map((id) => <code key={id}>{shortId(id)}</code>)}</span>}</div>}
       <div className="research-inline-columns"><div><span>假设 · {assumptions.length}</span>{assumptions.length === 0 ? <small className="muted">无</small> : <ul>{assumptions.map((item) => <li key={text(item.assumption_id)}>{text(item.statement)}</li>)}</ul>}</div><div><span>失效条件 · {invalidations.length}</span>{invalidations.length === 0 ? <small className="muted">无</small> : <ul>{invalidations.map((item) => <li key={text(item.invalidation_id)}>{text(item.description)}</li>)}</ul>}</div></div>
     </article>
   );
+}
+
+function ThesisRelationshipList({ theses, revisions, assumptions, invalidations, onEdit }: { theses: Dict[]; revisions: Map<string, Dict>; assumptions: Dict[]; invalidations: Dict[]; onEdit: (target?: Dict, createNew?: boolean) => void }) {
+  const byId = new Map(theses.map((item) => [text(item.thesis_id), item]));
+  const roots = theses.filter((item) => text(item.role) !== "sub" || !byId.has(text(item.parent_thesis_id, "")));
+  const childrenByParent = new Map<string, Dict[]>();
+  for (const item of theses.filter((candidate) => text(candidate.role) === "sub")) {
+    const parentId = text(item.parent_thesis_id, "");
+    childrenByParent.set(parentId, [...(childrenByParent.get(parentId) ?? []), item]);
+  }
+  const renderThesis = (thesis: Dict, depth: number): ReactNode => {
+    const thesisId = text(thesis.thesis_id);
+    return <div className={`research-thesis-node depth-${depth}`} key={thesisId}><ThesisSummary thesis={thesis} revision={revisions.get(thesisId)} assumptions={assumptions.filter((item) => String(item.thesis_id) === thesisId)} invalidations={invalidations.filter((item) => String(item.thesis_id) === thesisId)} /><div className="research-thesis-actions"><button className="close-button" type="button" onClick={() => onEdit(thesis)}>编辑 Thesis · 新建 Revision</button></div>{(childrenByParent.get(thesisId) ?? []).map((child) => renderThesis(child, depth + 1))}</div>;
+  };
+  return <div className="research-thesis-list">{roots.map((thesis) => renderThesis(thesis, 0))}</div>;
 }
 
 function PendingCandidate({ candidate, subjectStatus, onConfirm, onReject, onWithdraw, busy }: { candidate: Dict; subjectStatus: string; onConfirm: (candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) => void; onReject: (candidate: Dict) => void; onWithdraw: (candidate: Dict) => void; busy: boolean }) {
@@ -296,10 +324,13 @@ function PendingCandidate({ candidate, subjectStatus, onConfirm, onReject, onWit
   const payload = candidate.payload && typeof candidate.payload === "object" ? candidate.payload as Dict : {};
   const kind = text(payload.kind, text(candidate.kind, "thesis_revision"));
   const isSubjectStatus = kind === "subject_status_change" || kind === "case_status_change";
+  const isInstrumentCandidate = kind === "watchlist_item";
   const summary = isSubjectStatus
     ? `${subjectStatus.toUpperCase()} → ${text(payload.new_status, "UNKNOWN").toUpperCase()}`
-    : text(payload.statement, text(payload.title, "候选 revision"));
-  const confirmCopy = isSubjectStatus ? `确认应用研究档案状态变更：${summary}？` : "确认应用这个 Thesis candidate？历史 revision 不会被改写。";
+    : isInstrumentCandidate
+      ? payload.action === "create" ? `添加候选标的：${text(payload.display_name)} · ${text(payload.instrument_id)}` : `候选状态 → ${text(payload.new_status).toUpperCase()}${payload.selection_reason ? ` · ${text(payload.selection_reason)}` : ""}`
+      : text(payload.statement, text(payload.title, "候选 revision"));
+  const confirmCopy = isSubjectStatus ? `确认应用研究档案状态变更：${summary}？` : isInstrumentCandidate ? `确认应用 Instrument Selection 变更：${summary}？` : "确认应用这个 Thesis candidate？历史 revision 不会被改写。";
   return <article className="research-candidate"><header><div><strong>{text(candidate.candidate_id)}</strong><small>{kind} · {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><div className="research-candidate-actions"><ActionButton onClick={() => { if (window.confirm(confirmCopy)) onConfirm(candidate, "confirm"); }} busy={busy}>确认</ActionButton><input value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="拒绝原因（必填）" aria-label="候选拒绝原因" /><ActionButton tone="warning" onClick={() => { if (!rejectionReason.trim()) { window.alert("拒绝需要填写原因。"); return; } if (window.confirm("确认拒绝这个候选？")) onReject({ ...candidate, rejectionReason }); }} busy={busy}>拒绝</ActionButton><button className="close-button" type="button" disabled={busy} onClick={() => { if (window.confirm("确认撤回这个尚未处理的候选？")) onWithdraw(candidate); }}>撤回</button></div></article>;
 }
 
@@ -328,6 +359,7 @@ function ResearchSubjectDetail({
   const assumptions = listOf<Dict>(state, "assumptions");
   const invalidations = listOf<Dict>(state, "invalidations");
   const openQuestions = listOf<Dict>(state, "open_questions");
+  const instrumentCandidates = listOf<Dict>(state, "watchlist_items").filter((candidate) => SELECTION_STATUSES.has(text(candidate.status, "")));
   const pendingCandidates = listOf<Dict>(state, "pending_candidates");
   const [subjectEditor, setSubjectEditor] = useState(false);
   const [subjectDraft, setSubjectDraft] = useState(() => subjectDraftFrom(researchSubject));
@@ -335,6 +367,9 @@ function ResearchSubjectDetail({
   const [thesisId, setThesisId] = useState<string | null>(null);
   const [thesisDraft, setThesisDraft] = useState<ThesisDraft>(EMPTY_THESIS_DRAFT);
   const [thesisStatusExplicit, setThesisStatusExplicit] = useState(false);
+  const [candidateInstrumentId, setCandidateInstrumentId] = useState("");
+  const [candidateDisplayName, setCandidateDisplayName] = useState("");
+  const [candidateThesisHint, setCandidateThesisHint] = useState("");
 
   useEffect(() => {
     setSubjectDraft(subjectDraftFrom(researchSubject));
@@ -342,6 +377,9 @@ function ResearchSubjectDetail({
     setThesisEditor(false);
     setThesisId(null);
     setThesisStatusExplicit(false);
+    setCandidateInstrumentId("");
+    setCandidateDisplayName("");
+    setCandidateThesisHint("");
   }, [researchSubject.subject_id, researchSubject.updated_at]);
 
 
@@ -427,7 +465,7 @@ function ResearchSubjectDetail({
     const revisionInvalidations = invalidations.filter((item) => String(item.thesis_id) === thesisKey && (revisionNo === null || String(item.revision_no) === revisionNo));
     const draft = thesisDraftFrom(thesis, revision, revisionAssumptions, revisionInvalidations);
     if (!thesis) draft.thesisStatus = String(researchSubject.status).toLowerCase() === "draft" ? "draft" : "active";
-    if (!thesis && theses.some((item) => text(item.role) === "primary" && text(item.status) === "active")) {
+    if (!thesis && theses.some((item) => text(item.role) === "primary" && LIVE_THESIS_STATUSES.has(text(item.status)))) {
       draft.thesisRole = "competitor";
     }
     setThesisDraft(draft);
@@ -443,6 +481,10 @@ function ResearchSubjectDetail({
     const subjectStatus = String(researchSubject.status).toLowerCase();
     const changesToLiveStatus = ["active", "strengthened", "weakened"].includes(thesisDraft.thesisStatus) && (!thesisId || thesisStatusExplicit);
     if (subjectStatus === "draft" && changesToLiveStatus) { window.alert("草稿研究档案不能确认 live Thesis。请先激活研究档案，或选择 DRAFT 状态。"); return; }
+    if (thesisDraft.thesisRole === "sub" && !thesisDraft.parentThesisId) { window.alert("SUB Thesis 必须选择一个父 PRIMARY Thesis。"); return; }
+    const effectiveLive = thesisStatusExplicit || !thesisId ? LIVE_THESIS_STATUSES.has(thesisDraft.thesisStatus) : LIVE_THESIS_STATUSES.has(text(theses.find((item) => text(item.thesis_id) === thesisId)?.status, ""));
+    const otherLivePrimary = theses.some((item) => text(item.thesis_id) !== thesisId && text(item.role) === "primary" && LIVE_THESIS_STATUSES.has(text(item.status)));
+    if (thesisDraft.thesisRole === "primary" && effectiveLive && otherLivePrimary) { window.alert("这个研究标的已经有一个 live PRIMARY Thesis。请改为 SUB、COMPETITOR 或 BEAR，或先退役现有 PRIMARY。"); return; }
     const payload: Dict = {
       kind: "thesis_revision",
       title: thesisDraft.title.trim(),
@@ -454,6 +496,8 @@ function ResearchSubjectDetail({
       assumptions: thesisDraft.assumptions.filter((item) => item.statement.trim()).map((item) => ({ statement: item.statement.trim(), basis: item.basis.trim(), falsifiability: item.falsifiability.trim() })),
       invalidations: thesisDraft.invalidations.filter((item) => item.description.trim()).map((item) => ({ description: item.description.trim(), observable: item.observable.trim(), severity: item.severity })),
       thesis_role: thesisDraft.thesisRole,
+      parent_thesis_id: thesisDraft.thesisRole === "sub" ? thesisDraft.parentThesisId : null,
+      rival_thesis_ids: thesisDraft.rivalThesisIds,
       replaces_revision_no: thesisDraft.replacesRevisionNo ? Number(thesisDraft.replacesRevisionNo) : null,
     };
     if (!thesisId || thesisStatusExplicit) payload.thesis_status = thesisDraft.thesisStatus;
@@ -475,6 +519,61 @@ function ResearchSubjectDetail({
     } catch { /* onWrite keeps the local error visible */ }
   }
 
+  async function proposeInstrumentCandidate() {
+    if (!candidateInstrumentId.trim() || !candidateDisplayName.trim() || !candidateThesisHint.trim()) {
+      window.alert("Instrument ID、名称和入选理由都不能为空。");
+      return;
+    }
+    try {
+      await onWrite("research_judgment_propose", {
+        operation: "research_state",
+        case_id: text(researchSubject.subject_id),
+        payload: {
+          kind: "watchlist_item",
+          action: "create",
+          instrument_id: candidateInstrumentId.trim(),
+          display_name: candidateDisplayName.trim(),
+          thesis_hint: candidateThesisHint.trim(),
+          triggers: [],
+        },
+        confirmation_mode: "strict_review",
+        proposed_by: "user",
+        proposed_by_rationale: "用户通过本地 Research 工作区维护 Instrument Selection 候选池",
+        idempotency_key: idempotencyKey("instrument-candidate-create"),
+      }, "research_judgment_propose");
+      setCandidateInstrumentId("");
+      setCandidateDisplayName("");
+      setCandidateThesisHint("");
+      onRefresh();
+    } catch { /* onWrite keeps the local error visible */ }
+  }
+
+  async function proposeCandidateStatus(candidate: Dict, newStatus: string) {
+    let selectionReason: string | null = null;
+    if (newStatus === "selected" || newStatus === "rejected") {
+      selectionReason = window.prompt(newStatus === "selected" ? "请输入最终选定理由：" : "请输入淘汰理由：")?.trim() || null;
+      if (!selectionReason) return;
+    }
+    try {
+      await onWrite("research_judgment_propose", {
+        operation: "research_state",
+        case_id: text(researchSubject.subject_id),
+        payload: {
+          kind: "watchlist_item",
+          action: "update_status",
+          item_id: text(candidate.item_id),
+          new_status: newStatus,
+          selection_reason: selectionReason,
+        },
+        confirmation_mode: "strict_review",
+        proposed_by: "user",
+        proposed_by_rationale: "用户通过本地 Research 工作区更新 Instrument Selection 状态",
+        idempotency_key: idempotencyKey(`instrument-candidate-${newStatus}`),
+      }, "research_judgment_propose");
+      onRefresh();
+    } catch { /* onWrite keeps the local error visible */ }
+  }
+
   const tags = stringList(researchSubject.topic_tags);
   return (
     <div className="research-detail-stack">
@@ -486,8 +585,13 @@ function ResearchSubjectDetail({
         {failure && <div className="research-state-error" role="status"><strong>局部读取失败</strong><span>{failure}</span><small>研究档案元数据仍可操作；修复状态读取后再编辑 Thesis。</small></div>}
       </Card>
       {subjectEditor && <SubjectEditor draft={subjectDraft} editing busy={busy} onChange={setSubjectDraft} onCancel={() => setSubjectEditor(false)} onSave={() => { void saveSubject(); }} />}
+      <Card className="research-selection-card" kicker="INSTRUMENT SELECTION" title="候选标的与最终选择" action={<Badge value={`${instrumentCandidates.length} CANDIDATES`} />}>
+        <p className="card-note">主题研究档案可以不绑定主 Instrument。候选池变更必须先提出并确认；只有 `SELECTED` 标的才应进入后续 Trade Plan，选择不会反向改写研究档案身份。</p>
+        <div className="research-selection-create"><Field label="Instrument ID"><input value={candidateInstrumentId} onChange={(event) => setCandidateInstrumentId(event.target.value)} placeholder="etf:A_SHARE:159992" /></Field><Field label="显示名称"><input value={candidateDisplayName} onChange={(event) => setCandidateDisplayName(event.target.value)} placeholder="创新药 ETF" /></Field><Field label="进入候选池的理由"><input value={candidateThesisHint} onChange={(event) => setCandidateThesisHint(event.target.value)} placeholder="指数覆盖、流动性或费率值得比较" /></Field><ActionButton onClick={() => { void proposeInstrumentCandidate(); }} busy={busy}>提出候选</ActionButton></div>
+        {instrumentCandidates.length === 0 ? <Empty>尚无候选标的。对于主题型研究，请先加入 2–5 个可比较的 ETF。</Empty> : <div className="research-selection-list">{instrumentCandidates.map((candidate) => <article className={`research-selection-item status-${text(candidate.status)}`} key={text(candidate.item_id)}><div><strong>{text(candidate.display_name)}</strong><small>{text(candidate.instrument_id, `${text(candidate.market)}:${text(candidate.symbol)}`)}</small><p>{text(candidate.thesis_hint)}</p>{text(candidate.selection_reason) ? <p className="research-selection-reason">决策理由：{text(candidate.selection_reason)}</p> : null}</div><div className="research-selection-actions"><Badge value={text(candidate.status).toUpperCase()} />{text(candidate.status) === "watching" && <button className="close-button" type="button" disabled={busy} onClick={() => { void proposeCandidateStatus(candidate, "shortlisted"); }}>入围</button>}{text(candidate.status) !== "selected" && <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void proposeCandidateStatus(candidate, "selected"); }}>选定</button>}{text(candidate.status) !== "rejected" && <button className="close-button warning-text" type="button" disabled={busy} onClick={() => { void proposeCandidateStatus(candidate, "rejected"); }}>淘汰</button>}</div></article>)}</div>}
+      </Card>
       <Card className="research-theses-card" kicker="CURRENT JUDGMENT" title="Thesis" action={!thesisEditor ? <ActionButton onClick={() => startThesisEditor(undefined, true)}>新建 Thesis</ActionButton> : <Badge value="EDITING" />}>
-        {thesisEditor ? <ThesisEditor draft={thesisDraft} thesisId={thesisId} statusExplicit={thesisStatusExplicit} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onChange={setThesisDraft} onStatusExplicitChange={setThesisStatusExplicit} onCancel={() => setThesisEditor(false)} onSave={() => { void saveThesis(); }} /> : theses.length === 0 ? <div className="research-no-thesis"><p>此研究档案暂无 Thesis。可以直接创建新的 Thesis candidate；草稿研究档案默认创建 DRAFT Thesis。</p><ActionButton onClick={() => startThesisEditor(undefined, true)}>创建 Thesis</ActionButton></div> : <div className="research-thesis-list">{theses.map((thesis) => <div key={text(thesis.thesis_id)}><ThesisSummary thesis={thesis} revision={revisions.get(String(thesis.thesis_id))} assumptions={assumptions.filter((item) => String(item.thesis_id) === String(thesis.thesis_id))} invalidations={invalidations.filter((item) => String(item.thesis_id) === String(thesis.thesis_id))} /><div className="research-thesis-actions"><button className="close-button" type="button" onClick={() => startThesisEditor(thesis)}>编辑 Thesis · 新建 Revision</button></div></div>)}</div>}
+        {thesisEditor ? <ThesisEditor draft={thesisDraft} thesisId={thesisId} availableTheses={theses} statusExplicit={thesisStatusExplicit} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onChange={setThesisDraft} onStatusExplicitChange={setThesisStatusExplicit} onCancel={() => setThesisEditor(false)} onSave={() => { void saveThesis(); }} /> : theses.length === 0 ? <div className="research-no-thesis"><p>此研究档案暂无 Thesis。可以直接创建新的 Thesis candidate；草稿研究档案默认创建 DRAFT Thesis。</p><ActionButton onClick={() => startThesisEditor(undefined, true)}>创建 Thesis</ActionButton></div> : <ThesisRelationshipList theses={theses} revisions={revisions} assumptions={assumptions} invalidations={invalidations} onEdit={startThesisEditor} />}
       </Card>
       {pendingCandidates.length > 0 && <Card className="research-candidates-card" kicker="REVIEW QUEUE" title="待审候选" action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onConfirm={(item, action) => { void decideCandidate(item, action); }} onReject={(item) => { void decideCandidate(item, "reject", text(item.rejectionReason)); }} onWithdraw={(item) => { void decideCandidate(item, "withdraw"); }} />)}</Card>}
       <ResearchContinuity subject={researchSubject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} />
@@ -503,7 +607,7 @@ export default function ResearchPage() {
   const result = useApi<Dict>("/api/research");
   const monitorResult = useApi<Dict>("/api/monitors?run_limit=1&event_limit=1");
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("ALL");
+  const [status, setStatus] = useState("ACTIVE");
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [subjectEditor, setSubjectEditor] = useState(false);
   const [subjectDraft, setSubjectDraft] = useState<SubjectDraft>(EMPTY_SUBJECT_DRAFT);

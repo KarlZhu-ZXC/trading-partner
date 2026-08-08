@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  globalIgnores(["dist/**", ".next/**", ".vinext/**", ".wrangler/**", "worker-configuration.d.ts"]),
+  globalIgnores(["dist/**", ".next/**"]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

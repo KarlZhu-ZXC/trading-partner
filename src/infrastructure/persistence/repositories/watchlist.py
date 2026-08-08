@@ -25,6 +25,7 @@ def _to_domain(row: WatchlistItemRow) -> WatchlistItem:
         item_id=row.item_id,
         market=Market(row.market),
         symbol=row.symbol,
+        instrument_id=row.instrument_id,
         display_name=row.display_name,
         thesis_hint=row.thesis_hint,
         triggers=tuple(row.triggers_json),
@@ -36,6 +37,7 @@ def _to_domain(row: WatchlistItemRow) -> WatchlistItem:
         promoted_to_subject_id=row.promoted_to_subject_id,
         triggered_at=dt_opt_from_db(row.triggered_at, field_name="triggered_at"),
         triggered_reason=row.triggered_reason,
+        selection_reason=row.selection_reason,
     )
 
 
@@ -44,6 +46,7 @@ def _to_row(item: WatchlistItem) -> WatchlistItemRow:
         item_id=item.item_id,
         market=item.market.value,
         symbol=item.symbol,
+        instrument_id=item.instrument_id,
         display_name=item.display_name,
         thesis_hint=item.thesis_hint,
         triggers_json=item.triggers,
@@ -55,6 +58,7 @@ def _to_row(item: WatchlistItem) -> WatchlistItemRow:
         promoted_to_subject_id=item.promoted_to_subject_id,
         triggered_at=dt_opt_to_db(item.triggered_at),
         triggered_reason=item.triggered_reason,
+        selection_reason=item.selection_reason,
     )
 
 
@@ -104,6 +108,7 @@ class SqlAlchemyWatchlistRepository:
         triggered_reason: str | None,
         promoted_to_subject_id: str | None,
         expires_at: datetime | None,
+        selection_reason: str | None = None,
     ) -> None:
         row = self._session.get(WatchlistItemRow, item_id, with_for_update=True)
         if row is None:
@@ -140,10 +145,17 @@ class SqlAlchemyWatchlistRepository:
             promoted_to_subject_id=effective_promoted,
             triggered_at=effective_triggered_at,
             triggered_reason=effective_triggered_reason,
+            instrument_id=current.instrument_id,
+            selection_reason=(
+                selection_reason
+                if new_status in {WatchlistItemStatus.SELECTED, WatchlistItemStatus.REJECTED}
+                else None
+            ),
         )
         row.status = next_domain.status.value
         row.triggered_at = dt_opt_to_db(next_domain.triggered_at)
         row.triggered_reason = next_domain.triggered_reason
+        row.selection_reason = next_domain.selection_reason
         row.promoted_to_subject_id = next_domain.promoted_to_subject_id
         row.expires_at = dt_opt_to_db(next_domain.expires_at)
         row.updated_at = dt_to_db(next_domain.updated_at)

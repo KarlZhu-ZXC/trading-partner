@@ -19,7 +19,9 @@ from application.ports.monitor_repository import MonitorRepository
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_fact_resolver import MonitorFactResolver
+from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
+from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import Market
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
@@ -35,6 +37,7 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
+    MonitorJudgment,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
@@ -54,6 +57,52 @@ class _Fact:
     error_codes: tuple[str, ...]
     closed_session_last_known: bool = False
     source_names: tuple[str, ...] = ()
+    diagnostics: tuple[ProviderFailureDiagnostic, ...] = ()
+
+
+def _diagnostics_from_envelope(envelope: Any) -> tuple[ProviderFailureDiagnostic, ...]:
+    values: list[ProviderFailureDiagnostic] = []
+    for item in (*getattr(envelope, "warnings", ()), *getattr(envelope, "errors", ())):
+        details = getattr(item, "details", {})
+        if not isinstance(details, dict):
+            continue
+        candidates = details.get("provider_diagnostics")
+        raw_values = candidates if isinstance(candidates, list) else [details]
+        for raw in raw_values:
+            if not isinstance(raw, dict):
+                continue
+            provider = raw.get("provider")
+            stage = raw.get("stage")
+            error_code = raw.get("error_code") or getattr(item, "code", None)
+            attempt_count = raw.get("attempt_count")
+            if not (
+                isinstance(provider, str)
+                and isinstance(stage, str)
+                and isinstance(error_code, str)
+                and isinstance(attempt_count, int)
+            ):
+                continue
+            values.append(
+                ProviderFailureDiagnostic(
+                    provider=provider,
+                    stage=stage,
+                    error_code=error_code,
+                    retryable=bool(raw.get("retryable", getattr(item, "retryable", False))),
+                    attempt_count=attempt_count,
+                    error_type=(
+                        raw.get("error_type") if isinstance(raw.get("error_type"), str) else None
+                    ),
+                    status_class=(
+                        raw.get("status_class")
+                        if isinstance(raw.get("status_class"), str)
+                        else None
+                    ),
+                    status_code=(
+                        raw.get("status_code") if isinstance(raw.get("status_code"), int) else None
+                    ),
+                )
+            )
+    return tuple(dict.fromkeys(values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +150,7 @@ class MonitorEvaluationService:
         clock: Clock,
         id_generator: IdGenerator,
         fact_resolver: MonitorFactResolver | None = None,
+        judgment_service: MonitorJudgmentService | None = None,
     ) -> None:
         self._repository = repository
         self._a_share = a_share
@@ -109,6 +159,7 @@ class MonitorEvaluationService:
         self._clock = clock
         self._ids = id_generator
         self._fact_resolver = fact_resolver
+        self._judgment_service = judgment_service
 
     async def evaluate(self, request: MonitorEvaluateInput) -> MonitorRun:
         started_at = self._clock.now()
@@ -124,6 +175,7 @@ class MonitorEvaluationService:
         events: list[MonitorEvent] = []
         notifications: list[NotificationMessage] = []
         observations: list[MonitorRunObservation] = []
+        judgments: list[MonitorJudgment] = []
         warnings = list(selection_warnings)
         errors: list[str] = []
         rules_evaluated = 0
@@ -169,6 +221,7 @@ class MonitorEvaluationService:
                         rule.fact_type,
                         rule.instrument_id,
                         rule.metric_key,
+                        rule.technical_interval,
                         rule.event_after,
                     )
                     fact = generic_cache.get(cache_key)
@@ -197,7 +250,13 @@ class MonitorEvaluationService:
                 # timestamp. Judge freshness at the actual evaluation moment;
                 # explicit historical ``as_of`` requests remain strict cutoffs.
                 evaluated_at = as_of if request.as_of is not None else self._clock.now()
-                state = self._evaluate_rule(monitor, rule, fact, evaluated_at)
+                state = self._evaluate_rule(
+                    monitor,
+                    rule,
+                    fact,
+                    evaluated_at,
+                    previous.get(rule.rule_code),
+                )
                 states.append(state)
                 observation = _run_observation(
                     run_id=run_id,
@@ -219,18 +278,37 @@ class MonitorEvaluationService:
                 if event is not None:
                     events.append(event)
                     monitor_events.append(event)
+            if self._judgment_service is not None and monitor.judgment_policy is not None:
+                judgment_result = await self._judgment_service.evaluate(
+                    run_id=run_id,
+                    monitor=monitor,
+                    observations=tuple(monitor_observations),
+                    hard_transition=bool(monitor_events),
+                )
+                if judgment_result is not None:
+                    judgments.append(judgment_result.judgment)
+                    warnings.extend(judgment_result.judgment.warning_codes)
+                    errors.extend(judgment_result.judgment.error_codes)
+                    if judgment_result.event is not None:
+                        events.append(judgment_result.event)
+                        monitor_events.append(judgment_result.event)
+                    if judgment_result.notification is not None:
+                        notifications.append(judgment_result.notification)
             # Post-market runs persist each transition event for the durable
             # event history, but their Telegram delivery is consolidated into
             # one run-linked digest below. Other cadences retain one
             # event-linked notification per transition event.
-            if monitor_events and request.cadence not in _POST_MARKET_CADENCES:
+            deterministic_events = tuple(
+                item for item in monitor_events if item.rule_code != "COMPOSITE_JUDGMENT"
+            )
+            if deterministic_events and request.cadence not in _POST_MARKET_CADENCES:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
                 )
                 notifications.extend(
                     _notification_messages(
                         monitor,
-                        tuple(monitor_events),
+                        deterministic_events,
                         tuple(monitor_observations),
                         previous,
                         tuple(dict.fromkeys(monitor_sources)),
@@ -285,7 +363,7 @@ class MonitorEvaluationService:
                     run,
                     monitors,
                     self._ids,
-                    events=tuple(events),
+                    events=tuple(item for item in events if item.rule_code != "COMPOSITE_JUDGMENT"),
                     previous_states_by_monitor=previous_states_by_monitor,
                     monitor_sources_by_monitor=monitor_sources_by_monitor,
                 )
@@ -295,6 +373,7 @@ class MonitorEvaluationService:
             tuple(states),
             tuple(events),
             tuple(notifications),
+            tuple(judgments),
         )
 
     def _select(
@@ -383,6 +462,7 @@ class MonitorEvaluationService:
                             in {item.code for item in market_envelope.warnings}
                         ),
                         source_names=tuple(item.name for item in market_envelope.sources),
+                        diagnostics=_diagnostics_from_envelope(market_envelope),
                     )
             return _Fact(
                 None,
@@ -390,6 +470,7 @@ class MonitorEvaluationService:
                 tuple(item.code for item in market_envelope.warnings),
                 tuple(item.code for item in market_envelope.errors)
                 or ("MONITOR_PRICE_UNAVAILABLE",),
+                diagnostics=_diagnostics_from_envelope(market_envelope),
             )
         return _Fact(None, None, (), ("MONITOR_UNSUPPORTED_MARKET",))
 
@@ -414,6 +495,7 @@ class MonitorEvaluationService:
         rule: MonitorRule,
         fact: _Fact,
         as_of: datetime,
+        previous: MonitorRuleState | None = None,
     ) -> MonitorRuleState:
         if fact.value is None or fact.as_of is None:
             return MonitorRuleState(
@@ -453,7 +535,19 @@ class MonitorEvaluationService:
                 triggered = fact.value >= 1
             else:
                 assert rule.numeric_threshold is not None
-                triggered = _compare(fact.value, rule.numeric_threshold, rule.comparator)
+                if (
+                    rule.recovery_threshold is not None
+                    and previous is not None
+                    and previous.monitor_version == monitor.version
+                    and previous.state is MonitorRuleStateValue.TRIGGERED
+                ):
+                    triggered = not _recovered(
+                        fact.value,
+                        rule.recovery_threshold,
+                        rule.comparator,
+                    )
+                else:
+                    triggered = _compare(fact.value, rule.numeric_threshold, rule.comparator)
         return MonitorRuleState(
             monitor_id=monitor.monitor_id,
             monitor_version=monitor.version,
@@ -548,6 +642,18 @@ def _compare(observed: Decimal, threshold: Decimal, comparator: TradePlanCompara
     raise DataContractError("OCCURRED comparator must use event evaluation")
 
 
+def _recovered(
+    observed: Decimal,
+    recovery_threshold: Decimal,
+    comparator: TradePlanComparator,
+) -> bool:
+    if comparator in {TradePlanComparator.GT, TradePlanComparator.GTE}:
+        return observed <= recovery_threshold
+    if comparator in {TradePlanComparator.LT, TradePlanComparator.LTE}:
+        return observed >= recovery_threshold
+    raise DataContractError("recovery_threshold requires an ordered comparator")
+
+
 def _run_observation(
     *,
     run_id: str,
@@ -588,6 +694,7 @@ def _run_observation(
         warning_codes=fact.warning_codes,
         error_codes=fact.error_codes,
         message=state.message,
+        diagnostics=fact.diagnostics,
     )
 
 
@@ -650,6 +757,16 @@ def _notification_messages(
     if "IG_WEEKEND_GOLD_CFD_FALLBACK" in warning_codes:
         lines.append(
             "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；不是现货黄金或 LBMA 基准价。"
+        )
+    if "PAXG_USDC_WEEKEND_PROXY" in warning_codes:
+        lines.append(
+            "周末口径：Binance PAXG/USDC 仅作为 XAUUSD 周末波动代理；"
+            "它是代币化黄金现货，不是 XAUUSD 或 LBMA 基准价。"
+        )
+    if "CL_USDC_WEEKEND_PROXY" in warning_codes:
+        lines.append(
+            "周末口径：Hyperliquid XYZ CL/USDC 仅作为 LIGHT.CMD-USD/USOIL "
+            "周末波动代理；它是 USDC 保证金永续合约，不是 WTI 现货或 NYMEX CL。"
         )
     if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
@@ -1077,7 +1194,15 @@ def _rule_condition(rule: MonitorRule) -> str:
         if rule.event_after is not None
         else "事件发生"
     )
-    return f"{rule.metric_key} {comparator} {threshold}"
+    interval = (
+        f"[{rule.technical_interval or '1d'}] "
+        if rule.fact_type is TradePlanFactType.TECHNICAL
+        else ""
+    )
+    recovery = (
+        f"；恢复阈值 {rule.recovery_threshold}" if rule.recovery_threshold is not None else ""
+    )
+    return f"{interval}{rule.metric_key} {comparator} {threshold}{recovery}"
 
 
 def _format_rule_table(rows: tuple[tuple[str, ...], ...]) -> str:

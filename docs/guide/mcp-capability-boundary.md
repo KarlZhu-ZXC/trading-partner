@@ -92,6 +92,12 @@ Instrument 是客观标的身份；研究档案是围绕它建立的主观、可
 档案可以跨越多个标的或没有主标的。创建草稿研究档案只是在研究记忆中建立档案，
 不代表看多、看空、开始长期跟踪或确认 Thesis。
 
+例如研究“A股创新药 ETF 选择”时，应创建没有主 Instrument 的 `theme` Research
+Subject，并通过其 Research WatchlistItems 维护规范 Instrument 候选池。候选状态为
+`WATCHING`、`SHORTLISTED`、`SELECTED`、`REJECTED`；选定或淘汰必须记录理由，
+同一研究档案最多一个 `SELECTED`。所有变更仍走 Propose → 用户显式 Confirm。
+最终选择不会改写研究档案身份，只可作为后续 Trade Plan 的执行 `instrument_id`。
+
 研究档案标题必须标识稳定的研究对象或研究问题，摘要用于界定研究范围。加仓、减仓、
 止盈、止损、仓位大小和进出场计划不得复制为研究档案元数据：当前投资判断属于
 Thesis，条件化的执行意图属于 Trade Plan。研究档案创建后不能通过 metadata update
@@ -109,7 +115,10 @@ Trade Plan，再以 STRICT_REVIEW 确认 Thesis 归档，最后归档研究档�
 ```text
 标的 Instrument
 └── 标的研究档案 Research Subject
-    ├── 当前投资判断 Thesis
+    ├── PRIMARY：综合投资判断（最多一个 live）
+    │   ├── SUB：并列驱动因素 A
+    │   └── SUB：并列驱动因素 B
+    ├── COMPETITOR / BEAR：替代解释与反方判断
     ├── 判断修订历史
     └── 证据、报告、事件、日志、决策与质询
 ```
@@ -132,10 +141,14 @@ Codex 不得自主选择确认或
 拒绝；但用户在当前聊天中明确表达决定时，该表达就是用户授权，Codex 应立即按
 `reviewed_by="user"`、`submitted_via="codex_chat"` 转交，并把原始授权语句写入
 `authorization_note`。这不是 Codex 自确认，也不需要额外审核界面；目标或动作不明确时才需澄清。
-Assumption、Invalidation、Open Question 等子对象不仅要“存在”，还必须属于 candidate
-声明的同一研究档案/Thesis/revision，且提议与确认阶段都应校验。当前通用 candidate 路径尚未
-统一完成这层 owner-scope guard，已记录为 `RESEARCH-STATE-002`；在修复前不得借用其他
-研究档案的子对象 ID。
+一个研究档案可以同时拥有多条 Thesis，但 live PRIMARY 在
+`ACTIVE`/`STRENGTHENED`/`WEAKENED` 中合计最多一个。多个 SUB 可以共享同一个
+PRIMARY 作为并列驱动，COMPETITOR/BEAR 用于替代解释与反方判断。SUB 的父 Thesis
+必须是同档案 PRIMARY，rival 也必须属于同一档案；提议和确认两个阶段都会重新校验。
+live SUB 必须依附 live PRIMARY；必须先退休 live SUB 才能退休其 PRIMARY，且有 SUB
+子节点时不能直接把 PRIMARY 改成其他角色。
+Assumption、Invalidation、Open Question 等子对象同样不仅要“存在”，还必须属于 candidate
+声明的同一研究档案/Thesis/revision。
 
 ### 3.3 Instrument 与研究记忆
 
@@ -403,7 +416,7 @@ API。导入后 `REMOTE_RUN_ATTESTATION_UNAVAILABLE` 与
 point-in-time 数据集。导入器以正式 `statistics` 为绩效口径、保留冲突的 runtime 展示值，
 并检查实际运行日期是否与 manifest 一致；可用的 QuantConnect Benchmark 曲线只作为明确
 标注的导出曲线对比，不冒充官方总回报指数。完整操作见
-[Phase 3C-0 QuantConnect Free bridge](../plans/phase3c-quantconnect-free-bridge.md)。
+[QuantConnect Free manual validation guide](quantconnect-free-bridge.md)。
 
 ### 3.12 Watchlist Hub
 
@@ -452,7 +465,7 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 | `monitor_read` (`definitions`) | 传 `monitor_id` 恢复一个定义，否则列出定义、状态和最新规则结果 |
 | `monitor_manage` (`update`) | 以 expected version、确认人和幂等键追加新版本，可暂停或归档 |
 | `monitor_evaluate` | 评估 ACTIVE Monitor，保存全部逐规则观察；仅状态变化时创建事件 |
-| `monitor_read` (`events`) | 读取 TRIGGERED、RECOVERED、NOT_EVALUATED 事件 |
+| `monitor_read` (`events`) | 读取 TRIGGERED、RECOVERED、NOT_EVALUATED，以及可选复合判断的 JUDGMENT_CHANGED/JUDGMENT_UNAVAILABLE 事件 |
 | `monitor_read` (`dashboard`) | 一次读取全部当前 Monitor、紧凑最近运行摘要、下一到期时间及全部规则状态 |
 | `monitor_read` (`runs`) | 按 run_id 读取完整批次，或按 monitor_id 只读取该 Monitor 的不可变逐规则观察值 |
 | `monitor_manage` (`resolve_event`) | 经确认和幂等键确认已读或解决一个事件 |
@@ -461,13 +474,42 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 `us_post_market` 和 `price_below` 会在 DTO 边界规范化为 uppercase。MCP schema、
 响应、领域对象和数据库仍只使用规范的 uppercase 枚举值。
 
-V1 只支持 A 股/美股/韩股价格上穿、价格下穿，以及组合 Risk 总体状态达到
-`WARN`/`BREACH`。每条规则都有最大事实年龄；上游失败或事实过期返回
+除价格上穿、价格下穿和组合 Risk 外，`FACT_COMPARISON` 还支持成交量、技术指标、
+基本面、公司事件、宏观、情绪、Thesis 状态和组合风险。技术指标可明确选择日线 `1d`
+或周线 `1w`；旧规则未提供周期时按日线读取。支持 Technical Engine v2 输出的
+`rsi_14`、MACD、ADX、ATR、均线、布林带、MFI、OBV、相对成交量等 metric key。
+有序数值比较可额外设置 `recovery_threshold` 形成迟滞区间，例如 RSI 低于 30 触发、
+回到 35 以上才恢复。当前不支持小时/4 小时技术指标、复合布尔条件或把指标称为回测信号。
+每条规则都有最大事实年龄；上游失败或事实过期返回
 `NOT_EVALUATED`，不会当作安静状态。相同条件连续运行不会重复生成事件，恢复后才产生
 `RECOVERED`。Monitor 版本可设置带时区的 `valid_until`：截止时刻仍有效，之后评估器会在
 访问 Provider、写规则状态和创建事件之前跳过它，并返回 `MONITOR_EXPIRED`；历史记录保留。
 这与规则的 `max_fact_age_seconds` 是两个独立概念。Monitoring 不会修改 Thesis、Policy、
 仓位或订单。
+
+`monitor_manage` 的 create/update 可附带可选 `judgment_policy`，包含自然语言 Playbook、
+1–12 个参考 Instrument、最多 12 组相对强弱关系，以及只由用户明确成交更新的
+`confirmed_state`。每次运行先确定性拉取 60 分钟与日线 bars，计算 1h/4h/1d/3d
+变化、相对强弱、规则状态和跨市场时段对齐，再把带 provenance 的紧凑特征交给
+可配置的服务端 LLM Provider 判断。当前默认启用阿里云百炼 `qwen3.8-max`
+Responses API；旧 DeepSeek Provider 和独立配置仍保留，可通过
+`LLM_PROVIDER=deepseek` 切换。百炼默认使用
+`reasoning.effort=max`；若模型把完整输出预算耗在推理而未返回正文，仅重试一次
+`high` 并在 receipt 中记录实际等级。启用 `BAILIAN_WEB_SEARCH_ENABLED` 后，百炼模型可按需调用
+百炼内置 `web_search` 补充近期宏观事件；是否调用及最多十个来源 URL 会持久化，但搜索
+不得覆盖确定性行情、仓位、点位、收益率或数量事实。结果只能来自封闭的
+urgency/divergence/conclusion 枚举，解释字段必须为简体中文，最多引用
+三条真实 feature ID。数量建议会被当前确认持仓、runner 下限与剩余加仓额度硬裁剪；
+美股与黄金时段未对齐时，系统会取消严格背离并把依赖背离的买卖动作降级为 WAIT。
+LLM 没有仓位、Research Subject、Thesis、Trade Plan 或订单写端口。
+
+系统用定性方向、规则状态与时段状态形成 feature signature；签名未变化且没有硬规则迁移
+时，不调用 LLM。每次执行/跳过/失败仍写入不可变 judgment receipt，但只有结论、阶段、
+背离、紧急度或数量区间发生实质变化时才创建 `JUDGMENT_CHANGED` 与 Telegram 通知；
+相同失败也不会重复推送。`MONITOR_JUDGMENT_ENABLED=false` 是安全默认值，启用时本机
+`.env` 必须提供当前 Provider 对应的 `BAILIAN_API_KEY` 或 `DEEPSEEK_API_KEY`；
+百炼还必须使用与 Token Plan Key 配套的 Base URL。
+密钥不会进入 Monitor、Run、事件、通知或日志。
 
 显式 `uv run trading-partner-monitor-run --cadence US_POST_MARKET` 或
 `--cadence A_SHARE_POST_MARKET` 保留为诊断 force-run，本身不是 scheduler。正常调度统一使用
@@ -475,7 +517,8 @@ V1 只支持 A 股/美股/韩股价格上穿、价格下穿，以及组合 Risk 
 A 股/美股/韩股盘后组，未到期时不请求 Provider；韩股使用 XKRX 日历；每个市场组在对应交易日收盘加配置延迟后至多
 执行一次。Codex 的盘后/市场复盘 Automation 不再调用 Monitor 工具，也不重复发送告警。
 macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯一的每小时 launchd
-唤醒器。它直接运行确定性 CLI，不启动 Codex、不调用 LLM，因此不会产生 Codex token 用量。
+唤醒器。它不启动 Codex，因此不会产生 Codex token 用量；普通 Monitor 全程确定性，只有
+显式配置 `judgment_policy` 的 Monitor 才可能调用服务端 LLM，且 feature signature 未变化时跳过。
 `INTERVAL` 是整小时槽位：成功 run 以启动小时为锚点计算下一次到期，避免 Provider 的几十秒
 耗时让两小时定义错过 `:05` 唤醒而滑成三小时；partial/failed run 在下一小时槽重试。
 `due` 发起的是实时评估，不把 Provider 请求前的筛选时刻冒充历史 `as_of` cutoff。
@@ -484,14 +527,19 @@ macOS 可运行 `uv run trading-partner-monitor-scheduler install`，安装唯�
 `0023` 之前的旧运行回执会明确标记 `observation_history_complete=false`，系统不会反推或
 伪造当时未保存的逐规则观察。
 
-Dukascopy `XAUUSD`/`XAGUSD` 的 `INTERVAL` Monitor 会在 Provider 公布的周五收盘至周日
+Dukascopy `XAUUSD`/`XAGUSD`/轻质原油 CFD 的 `INTERVAL` Monitor 会在周五收盘至周日
 重开区间，以及每日维护休市时段，在访问行情前返回调度状态 `MARKET_CLOSED` 并把
 `next_due_at` 指向下一观察窗口。休市不是数据故障，因此不会再每小时制造新的
-`NOT_EVALUATED` run/event。若显式启用 `IG_WEEKEND_GOLD_ENABLED` 且配置 Apify，XAUUSD
-价格规则可在 IG 公布的 Weekend Gold 时段使用一次受限浏览器抓取；结果强制标记
-`ig_weekend_cfd`、抓取时间、`WEEKEND_PROXY_NOT_SPOT`，不能称为 XAUUSD 现货或 LBMA
-黄金。该 fallback 不支持 XAGUSD、历史 `as_of`、K 线或技术指标；抓取失败仍回到
-Dukascopy 最近观察并由原有 freshness 规则决定是否 `NOT_EVALUATED`。
+`NOT_EVALUATED` run/event。启用 keyless weekend reference 后，当前 XAUUSD 价格规则
+优先使用 Binance `PAXG/USDC`，当前 LIGHT.CMD-USD/USOIL 规则使用 Hyperliquid XYZ
+`CL/USDC`；前者是代币化黄金现货，后者是 HIP-3 永续，两者都必须披露 USDC、流动性
+和基差风险。若 PAXG 路径失败且已配置 Apify，IG Weekend Gold 才作为黄金末级兜底。
+这些 fallback 均不支持 XAGUSD、历史 `as_of`、K 线或技术指标。
+周末 reference 对可重试的网络、超时、限流和 5xx 失败最多尝试三次；仍失败时，完整的
+Provider 尝试链会以脱敏结构写入 immutable Monitor observation。Console 的 Run drill-down
+可查看 Provider、请求阶段、typed error、HTTP 状态类别/状态码、尝试次数和 retryable，
+但永不保存或显示 URL、代理地址、请求/响应正文、header 或底层异常文本。旧 Run 没有该
+sidecar 时继续按空诊断读取，不伪造历史细节。
 
 ### 3.15 Technical Engine v2（1 个新增工具，1 个升级工具）
 

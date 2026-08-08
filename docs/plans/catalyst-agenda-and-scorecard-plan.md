@@ -34,7 +34,7 @@ Thesis，不修改 Trade Plan，也不产生订单。
 每个逻辑事项拥有稳定 identity 和 append-only version：
 
 - `agenda_item_id`、`version`、`supersedes_version`；
-- `instrument_id` 可空（宏观事项），`case_id` 可空，但两者不能同时为空；
+- `instrument_id` 可空（宏观事项），`subject_id` 可空，但两者不能同时为空；
 - `kind`：`EARNINGS`、`FILING`、`DIVIDEND`、`CORPORATE_ACTION`、`INVESTOR_EVENT`、
   `MACRO_RELEASE`、`POLICY`、`INDUSTRY`、`USER_DEFINED`；
 - `title`、可选 `fiscal_period` 或上游稳定 event key；

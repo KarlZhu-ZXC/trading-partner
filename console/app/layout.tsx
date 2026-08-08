@@ -14,15 +14,22 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Trading Partner · Local Control Room",
-  description: "无需 LLM 的 Trading Partner 本地操作与投资研究控制台。",
+  description: "无内置聊天模型的 Trading Partner 本地操作与投资研究控制台。",
 };
 
-const themeInitScript = `
+const appearanceInitScript = `
   try {
     var storedTheme = localStorage.getItem("trading-partner-theme");
     document.documentElement.dataset.theme = storedTheme === "dark" ? "dark" : "light";
   } catch (_) {
     document.documentElement.dataset.theme = "light";
+  }
+
+  try {
+    var sidebarCollapsed = localStorage.getItem("trading-partner-sidebar-collapsed") === "true";
+    document.documentElement.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  } catch (_) {
+    document.documentElement.classList.remove("sidebar-collapsed");
   }
 `;
 
@@ -34,7 +41,7 @@ export default function RootLayout({
   return (
     <html data-theme="light" lang="zh-CN" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script dangerouslySetInnerHTML={{ __html: appearanceInitScript }} />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}

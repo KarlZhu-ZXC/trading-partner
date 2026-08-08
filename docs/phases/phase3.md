@@ -4,8 +4,8 @@ Phase 3 grows Trading Partner beyond A-share/US equity research while preserving
 the same provenance, read-only, and no-fabrication rules. The current product scope
 is implemented. Phase 3C prepares a QuantConnect Free package and imports a
 user-downloaded result, but Trading Partner does not own historical datasets, run a
-backtest engine, automate QuantConnect, or execute an order. One user-operated
-prepare -> web backtest -> import smoke remains the operational closeout check.
+backtest engine, automate QuantConnect, or execute an order. The manual prepare →
+web backtest → import path has been exercised with a user-exported result.
 
 To keep ownership and dependencies clear, Phase 3 is consolidated into four tracks:
 
@@ -27,11 +27,6 @@ KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizi
 > Status: free continuous proxies, formal CME metal contracts, DCE live-hog EOD
 > facts, Dukascopy OTC gold/silver and rolling copper/light-oil CFDs implemented.
 > LME remains a non-blocking licensing/discovery item.
->
-> The proposed provider selection, domain model, MCP migration, implementation
-> slices, and review decisions are documented in
-> [the Phase 3A review plan](../plans/phase3a-formal-futures-cross-asset-plan.md).
-> The plan now serves as the implementation and acceptance record.
 
 The existing public tools support six continuous metal-futures proxies without
 adding another public tool. The current compact
@@ -273,8 +268,8 @@ integration in Phase 3A.
 
 > Status: the current Phase 3C scope was implemented on 2026-07-30. The MCP
 > prepares hashed LEAN packages and imports user-exported QuantConnect result JSON.
-> The first user-operated end-to-end smoke remains an operational acceptance item.
-> See the [QuantConnect Free bridge record](../plans/phase3c-quantconnect-free-bridge.md).
+> The user-operated end-to-end path has been exercised. See the
+> [QuantConnect Free guide](../guide/quantconnect-free-bridge.md).
 
 The existing `research_workflow_run` tool now has
 `historical_validation_prepare` and `historical_validation_import` operations.

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from application.dto.portfolio import AccountGetSnapshotInput
 from bootstrap import build_application
 from domain.common.enums import AppEnvironment, LogLevel, VendorId
-from domain.common.errors import ProviderAuthenticationError
+from domain.common.errors import ProviderAuthenticationError, ProviderUnavailableError
 from domain.portfolio.enums import AccountPositionSide, AccountTransactionSide
 from infrastructure.config.settings import AppSettings
 from infrastructure.providers.account.schwab import (
@@ -173,6 +173,26 @@ async def test_schwab_snapshot_normalizes_selected_account_without_plain_identit
 
 
 @pytest.mark.asyncio
+async def test_schwab_snapshot_maps_raw_client_failure_to_typed_error(
+    id_generator: object, fixed_clock: object
+) -> None:
+    class _BrokenClient(_Client):
+        def account_numbers(self) -> object:
+            raise AttributeError("raw client mismatch")
+
+    adapter = _adapter(id_generator, fixed_clock, _BrokenClient())
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        await adapter.get_account_snapshots(as_of=_NOW)
+
+    assert caught.value.code == "SCHWAB_ACCOUNT_SNAPSHOT_UNAVAILABLE"
+    assert caught.value.details == {
+        "vendor": "schwab",
+        "operation": "account_snapshot",
+    }
+
+
+@pytest.mark.asyncio
 async def test_schwab_unsupported_asset_is_explicitly_degraded_and_no_write_surface(
     id_generator: object, fixed_clock: object
 ) -> None:
@@ -241,12 +261,11 @@ async def test_schwab_transactions_use_instruction_and_page_vendor_windows(
     ]
     assert result.value.transactions[1].fees == Decimal("1.25")
     assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" in result.meta.warnings
+    assert "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN" not in result.value.coverage[0].gap_codes
     assert client.transaction_windows[0][0] == datetime(2026, 1, 1, tzinfo=UTC)
     assert client.transaction_windows[-1][1] == _NOW
     assert len(client.transaction_windows) == 4
-    assert all(
-        end - start <= timedelta(days=60) for start, end in client.transaction_windows
-    )
+    assert all(end - start <= timedelta(days=60) for start, end in client.transaction_windows)
     assert "SCHWAB_TRANSACTION_WINDOW_PAGED" in result.meta.warnings
     assert "101" not in repr(result) and _ACCOUNT_HASH not in repr(result)
 

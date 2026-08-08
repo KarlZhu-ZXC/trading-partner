@@ -412,7 +412,7 @@ def _copy_handler(
 
 
 def _legacy_subject_transport(value: Any) -> Any:
-    """Keep the compact-v15 legacy ``case_*`` vocabulary at the MCP boundary.
+    """Keep the compact-v19 legacy ``case_*`` vocabulary at the MCP boundary.
 
     Research Subject is the canonical product/domain term. Existing MCP clients
     nevertheless discover and send ``case_id``, ``case_type``, and
@@ -483,6 +483,7 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     minimized = cast(dict[str, Any], clean(schema))
     _close_discriminated_request_union(minimized)
+    _hoist_common_request_properties(minimized)
     definitions = minimized.get("$defs", {})
     if not definitions:
         return minimized
@@ -504,6 +505,7 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     rewrite_refs(minimized)
     _share_repeated_property_schemas(minimized)
+    _inline_request_variants(minimized)
     return minimized
 
 
@@ -533,6 +535,11 @@ def _close_discriminated_request_union(schema: dict[str, Any]) -> None:
         if not isinstance(variant, dict) or not isinstance(variant.get("$ref"), str):
             return
         variant_names.append(variant["$ref"].rsplit("/", 1)[-1])
+    # The literal operation in each branch is sufficient dispatch metadata; the
+    # generated discriminator annotation repeats it without affecting validation.
+    request.pop("discriminator", None)
+    request["type"] = "object"
+    request["required"] = ["operation"]
     # JSON Schema 2020-12 applies this after the successful ``oneOf`` branch.
     # A field owned only by another operation is therefore unevaluated and rejected.
     request["unevaluatedProperties"] = False
@@ -540,6 +547,111 @@ def _close_discriminated_request_union(schema: dict[str, Any]) -> None:
         definition = definitions.get(name)
         if isinstance(definition, dict):
             definition.pop("additionalProperties", None)
+            definition.pop("type", None)
+            required = [
+                field_name
+                for field_name in definition.get("required", [])
+                if field_name != "operation"
+            ]
+            if required:
+                definition["required"] = required
+            else:
+                definition.pop("required", None)
+
+
+def _hoist_common_request_properties(schema: dict[str, Any]) -> None:
+    """Publish identical fields shared by every operation only once."""
+
+    definitions = schema.get("$defs")
+    request = schema.get("properties", {}).get("request")
+    if not isinstance(definitions, dict) or not isinstance(request, dict):
+        return
+    variants = request.get("oneOf")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_definitions: list[dict[str, Any]] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or not isinstance(variant.get("$ref"), str):
+            return
+        definition = definitions.get(variant["$ref"].rsplit("/", 1)[-1])
+        if not isinstance(definition, dict) or not isinstance(
+            definition.get("properties"), dict
+        ):
+            return
+        variant_definitions.append(definition)
+
+    common_names = set(cast(dict[str, Any], variant_definitions[0]["properties"]))
+    for definition in variant_definitions[1:]:
+        common_names.intersection_update(
+            cast(dict[str, Any], definition["properties"])
+        )
+    common_names.discard("operation")
+
+    shared: dict[str, Any] = {}
+    for field_name in sorted(common_names):
+        field_schemas = [
+            cast(dict[str, Any], definition["properties"])[field_name]
+            for definition in variant_definitions
+        ]
+        encoded = {
+            json.dumps(item, sort_keys=True, separators=(",", ":"))
+            for item in field_schemas
+        }
+        if len(encoded) == 1:
+            shared[field_name] = field_schemas[0]
+    if not shared:
+        return
+
+    request["properties"] = shared
+    request["type"] = "object"
+    required_by_all = set(variant_definitions[0].get("required", []))
+    for definition in variant_definitions[1:]:
+        required_by_all.intersection_update(definition.get("required", []))
+    shared_required = [name for name in shared if name in required_by_all]
+    if shared_required:
+        request["required"].extend(shared_required)
+
+    for definition in variant_definitions:
+        properties = cast(dict[str, Any], definition["properties"])
+        for field_name in shared:
+            properties.pop(field_name)
+        required = [
+            field_name
+            for field_name in definition.get("required", [])
+            if field_name not in shared_required
+        ]
+        if required:
+            definition["required"] = required
+        else:
+            definition.pop("required", None)
+
+
+def _inline_request_variants(schema: dict[str, Any]) -> None:
+    """Inline one-use operation branches and discard their reference wrappers."""
+
+    definitions = schema.get("$defs")
+    request = schema.get("properties", {}).get("request")
+    if not isinstance(definitions, dict) or not isinstance(request, dict):
+        return
+    variants = request.get("oneOf")
+    if not isinstance(variants, list):
+        return
+    inlined: list[dict[str, Any]] = []
+    names: list[str] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or not isinstance(variant.get("$ref"), str):
+            return
+        name = variant["$ref"].rsplit("/", 1)[-1]
+        definition = definitions.get(name)
+        if not isinstance(definition, dict):
+            return
+        names.append(name)
+        inlined.append(definition)
+    request["oneOf"] = inlined
+    for name in names:
+        definitions.pop(name, None)
+    if not definitions:
+        schema.pop("$defs", None)
 
 
 def _share_repeated_property_schemas(schema: dict[str, Any]) -> None:
@@ -603,7 +715,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="compact_28",
             public_tool_count=28,
-            surface_schema_version="compact-v15",
+            surface_schema_version="compact-v19",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -704,7 +816,8 @@ def create_compact_capability_registry(
         registry,
         name="research_judgment_propose",
         description=(
-            "Propose a research-state, Trade Plan, or Thesis revision candidate; never confirm it."
+            "Propose Research state, Instrument Selection, Trade Plan, or Thesis "
+            "changes; never confirm them."
         ),
         variants=(
             _spec(
@@ -1327,7 +1440,9 @@ def _register_watchlist_risk_monitoring(
         name="monitor_manage",
         description=(
             "Create/update a versioned Monitor or resolve one event; never mutate Thesis "
-            "or positions. A Trade Plan-bound Monitor may observe a condition reference "
+            "or positions. Optional composite judgment policies use deterministic facts "
+            "plus a server-side bounded LLM; they never mutate confirmed state. A Trade "
+            "Plan-bound Monitor may observe a condition reference "
             "instrument distinct from the plan execution instrument."
         ),
         variants=(

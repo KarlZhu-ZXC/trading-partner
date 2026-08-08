@@ -17,6 +17,7 @@ from application.dto.monitoring import (
     MonitorEventListInput,
     MonitorEventResolveInput,
     MonitorGetInput,
+    MonitorJudgmentPolicyInput,
     MonitorListInput,
     MonitorRuleInput,
     MonitorRunListInput,
@@ -45,6 +46,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         trade_plan_id: str | None = None,
         trade_plan_version: int | None = None,
         compile_trade_plan_conditions: bool = False,
+        judgment_policy: MonitorJudgmentPolicyInput | None = None,
     ) -> dict[str, Any]:
         """Create a monitor from explicit rules and/or one confirmed Trade Plan version.
 
@@ -65,6 +67,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "trade_plan_id": trade_plan_id,
                     "trade_plan_version": trade_plan_version,
                     "compile_trade_plan_conditions": compile_trade_plan_conditions,
+                    "judgment_policy": judgment_policy,
                     "confirmed_by": confirmed_by,
                     "idempotency_key": idempotency_key,
                 }
@@ -150,6 +153,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
         trade_plan_id: str | None = None,
         trade_plan_version: int | None = None,
         compile_trade_plan_conditions: bool = False,
+        judgment_policy: MonitorJudgmentPolicyInput | None = None,
     ) -> dict[str, Any]:
         """Append a confirmed monitor version, including pause/archive changes.
 
@@ -172,6 +176,7 @@ def build_monitoring_adapters(container: ApplicationContainer) -> SimpleNamespac
                     "trade_plan_id": trade_plan_id,
                     "trade_plan_version": trade_plan_version,
                     "compile_trade_plan_conditions": compile_trade_plan_conditions,
+                    "judgment_policy": judgment_policy,
                     "confirmed_by": confirmed_by,
                     "idempotency_key": idempotency_key,
                 }

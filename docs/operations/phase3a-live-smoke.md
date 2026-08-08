@@ -15,12 +15,15 @@ uv run trading-partner-mcp
 上游服务此刻可达。实际连通性必须用下方只读行情请求验证。
 
 若运行环境不能直连这些公开域名，可在 `.env` 设置一个通用
-`PROVIDER_PROXY_URL`。它只供 CME、DCE、Dukascopy 和 Polymarket 使用；不设置时直连。
+`PROVIDER_PROXY_URL`。它只供 CME、DCE、Dukascopy、周末参考源和 Polymarket 使用；
+不设置时直连。
 代理地址属于敏感配置，不得进入日志、错误详情或提交历史。
 
 Dukascopy 默认走与当前 `dukascopy-node` 相同的 keyless Jetta 分桶接口：1 分钟按 UTC
 日、1 小时按 UTC 月、日线按 UTC 年请求；每批最多 10 个并发请求，跨批等待 1 秒，
-完整历史桶进程内缓存，带 `from` 的活动桶不缓存，默认不自动重试。Dukascopy 未公开
+完整历史桶进程内缓存，带 `from` 的活动桶不缓存，Jetta 分桶请求默认不自动重试。
+Dukascopy 周末闭市期间使用的独立 current-only 参考链会对可重试失败最多尝试三次，并把
+每一跳的 secret-safe 结构化诊断写入 Monitor Run；这不改变 Jetta 历史分桶策略。Dukascopy 未公开
 可验证的固定每分钟配额，因此这些是客户端节流策略，不是服务端额度声明。
 
 `DUKASCOPY_API_KEY` 不是默认链必需项，只在 Jetta 失败且用户仍持有旧 Trading Tools key
@@ -30,8 +33,8 @@ Dukascopy 默认走与当前 `dukascopy-node` 相同的 keyless Jetta 分桶接�
 ## 2. 代表性 MCP 请求
 
 - `instrument_resolve(market="CME", query="future:CME:GCZ26", asset_type_hint="future")`
-- `market_get_snapshot(instrument_id="future:CME:GCZ26", operation="quote")`
-- `market_get_bars(instrument_id="commodity_spot:OTC:XAUUSD", interval="60m", ...)`
+- `market_data_get(request={"operation":"quote","instrument_id":"future:CME:GCZ26"})`
+- `market_data_get(request={"operation":"bars","instrument_id":"commodity_spot:OTC:XAUUSD","interval":"60m",...})`
 - `market_data_get(request={"operation":"quote","instrument_id":"cfd:OTC:LIGHT_CMD_USD"})`
 - `market_data_get(request={"operation":"bars","instrument_id":"cfd:OTC:LIGHT_CMD_USD","interval":"60m",...})`
 - `market_data_get(request={"operation":"futures_curve","product_key":"CME:GC","price_basis":"settlement",...})`
@@ -62,5 +65,8 @@ uv run trading-partner-futures-sync --product DCE:LH --trade-date 2026-07-24
   使用固定映射 `XAU-USD`、`XAG-USD`、`COPPER.CMD-USD`、`LIGHT.CMD-USD`；旧接口的整数 instrument id
   解析只属于可选 legacy fallback。
 - DCE 没有免费分钟 OHLCV：Technical/price Monitor 保持 `NOT_EVALUATED`。
+- 周末参考链失败：在 Console 的 Monitor Run 详情检查 Provider、stage、typed error、HTTP
+  status、attempt 和 retryability。URL、代理值、header、body 与异常原文不会被持久化；
+  迁移 `0036` 之前的 Run 无诊断 sidecar 时不能反推失败原因。
 
 Live smoke 不进入默认 CI，以免公开端点、网络和反爬造成随机失败。

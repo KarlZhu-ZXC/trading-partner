@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
@@ -23,7 +24,12 @@ from domain.common.enums import (
     TradingSession,
     VendorId,
 )
-from domain.common.errors import DataContractError, ProviderNotConfigured, ProviderUnavailableError
+from domain.common.errors import (
+    DataContractError,
+    ProviderNotConfigured,
+    ProviderUnavailableError,
+    TradingPartnerError,
+)
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
 from domain.common.values import build_instrument_id
@@ -171,7 +177,16 @@ class MoomooAccountAdapter:
         require_aware_datetime(as_of, field_name="as_of")
         if not self._enabled:
             raise ProviderNotConfigured("Moomoo account provider is disabled")
-        return await asyncio.to_thread(self._read_current)
+        try:
+            return await asyncio.to_thread(self._read_current)
+        except TradingPartnerError:
+            raise
+        except Exception:
+            raise ProviderUnavailableError(
+                "Moomoo account snapshot read failed",
+                details={"vendor": VendorId.MOOMOO.value, "operation": "account_snapshot"},
+                code="MOOMOO_ACCOUNT_SNAPSHOT_UNAVAILABLE",
+            ) from None
 
     async def get_account_transactions(
         self,
@@ -300,7 +315,12 @@ class MoomooAccountAdapter:
                 item.buying_power,
                 item.net_assets,
                 item.margin_used,
-                item.positions,
+                tuple(
+                    replace(position, market_price_at=fetched_at)
+                    if position.market_price is not None
+                    else position
+                    for position in item.positions
+                ),
                 item.open_orders,
                 item.degraded,
                 item.warning_codes,
@@ -319,7 +339,7 @@ class MoomooAccountAdapter:
             CacheDisposition.MISS,
             None,
             0,
-            ("PRICE_TIME_UNAVAILABLE", "ASSET_TYPE_ASSUMED_EQUITY"),
+            tuple(sorted({code for item in normalized for code in item.warning_codes})),
         )
         return ProviderSuccess(normalized, meta)
 
@@ -340,22 +360,25 @@ class MoomooAccountAdapter:
         raw_id = account.get("acc_id")
         if raw_id in {None, ""}:
             raise DataContractError("Moomoo account id is missing")
-        kwargs: dict[str, object] = {
+        common_kwargs: dict[str, object] = {
             "trd_env": "REAL",
             "acc_id": raw_id,
             "refresh_cache": True,
-            # OpenD otherwise defaults this query to HKD, even for US-only
-            # accounts. Keep account-level funds in one explicit base currency.
+        }
+        currency_kwargs = {
+            **common_kwargs,
+            # OpenD otherwise defaults funds and positions to a provider-specific
+            # currency. Keep account-level values in one explicit base currency.
             "currency": self._base_currency,
         }
         self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_FUNDS, raw_id)
-        info_rows = self._query(context.accinfo_query(**kwargs))
+        info_rows = self._query(context.accinfo_query(**currency_kwargs))
         self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_POSITIONS, raw_id)
-        position_rows = self._query(context.position_list_query(**kwargs))
+        position_rows = self._query(context.position_list_query(**currency_kwargs))
         self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_ORDERS, raw_id)
         order_rows = self._query(
             context.order_list_query(
-                **kwargs,
+                **common_kwargs,
                 status_filter_list=(
                     "WAITING_SUBMIT",
                     "SUBMITTING",
@@ -365,26 +388,42 @@ class MoomooAccountAdapter:
             )
         )
         info = info_rows[0] if info_rows else {}
+        fetched_at = self._clock.now()
+        positions = tuple(self._position(row, market_price_at=fetched_at) for row in position_rows)
         return AccountSnapshot(
             snapshot_id=self._ids.new(EntityIdPrefix.SNAPSHOT),
             account_ref=_account_ref(raw_id),
             provider=self.vendor_id,
             environment=AccountEnvironment.REAL,
             base_currency=str(info.get("currency") or self._base_currency).upper(),
-            account_as_of=self._clock.now(),
-            fetched_at=self._clock.now(),
+            account_as_of=fetched_at,
+            fetched_at=fetched_at,
             cash=_decimal(info.get("cash")),
             buying_power=_decimal(info.get("power")),
             net_assets=_decimal(info.get("total_assets")),
             margin_used=_decimal(info.get("initial_margin")),
-            positions=tuple(self._position(row) for row in position_rows),
+            positions=positions,
             open_orders=tuple(self._order(row) for row in order_rows),
             degraded=True,
-            warning_codes=("PRICE_TIME_UNAVAILABLE", "ASSET_TYPE_ASSUMED_EQUITY"),
+            warning_codes=self._warning_codes(positions),
         )
 
     @staticmethod
-    def _position(row: Mapping[str, object]) -> AccountPosition:
+    def _warning_codes(positions: Sequence[AccountPosition]) -> tuple[str, ...]:
+        codes = {"ASSET_TYPE_ASSUMED_EQUITY"}
+        if any(position.market_price is not None for position in positions):
+            codes.add("PRICE_TIME_IS_FETCH_TIME")
+        if any(
+            position.market_value is not None and position.market_price_at is None
+            for position in positions
+        ):
+            codes.add("PRICE_TIME_UNAVAILABLE")
+        return tuple(sorted(codes))
+
+    @staticmethod
+    def _position(
+        row: Mapping[str, object], *, market_price_at: datetime
+    ) -> AccountPosition:
         side = (
             AccountPositionSide.SHORT
             if str(row.get("position_side", "")).upper() == "SHORT"
@@ -393,6 +432,7 @@ class MoomooAccountAdapter:
         quantity = _decimal(row.get("qty"))
         if quantity is None:
             raise DataContractError("Moomoo position quantity is invalid")
+        market_price = _decimal(row.get("nominal_price"))
         return AccountPosition(
             instrument_id=_instrument_id(row.get("code")),
             side=side,
@@ -400,8 +440,8 @@ class MoomooAccountAdapter:
             sellable_quantity=_decimal(row.get("can_sell_qty")),
             average_cost=_decimal(row.get("average_cost")),
             diluted_cost=_decimal(row.get("diluted_cost")),
-            market_price=None,
-            market_price_at=None,
+            market_price=market_price,
+            market_price_at=(market_price_at if market_price is not None else None),
             market_value=_decimal(row.get("market_val")),
             unrealized_pnl=_decimal(row.get("unrealized_pl")),
             realized_pnl=_decimal(row.get("realized_pl")),

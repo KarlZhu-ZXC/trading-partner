@@ -81,6 +81,8 @@ _REAL_US_VENDORS = (
     VendorId.DCE_OFFICIAL,
     VendorId.DUKASCOPY,
     VendorId.IG_WEEKEND_GOLD,
+    VendorId.BINANCE,
+    VendorId.HYPERLIQUID,
 )
 _EXPECTED_REGISTERED = (
     frozenset(_REAL_A_SHARE_VENDORS) | frozenset(_REAL_US_VENDORS) | frozenset({VendorId.NULL})

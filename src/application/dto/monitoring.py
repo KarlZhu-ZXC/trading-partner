@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Self
@@ -21,6 +22,7 @@ from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventAction,
     MonitorEventType,
+    MonitorJudgmentConclusion,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -31,6 +33,8 @@ from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
     MonitorEventResolution,
+    MonitorJudgment,
+    MonitorJudgmentPolicy,
     MonitorRule,
     MonitorRuleState,
     MonitorRun,
@@ -76,6 +80,8 @@ class MonitorRuleInput(_DTO):
     metric_key: str | None = Field(default=None, min_length=1, max_length=128)
     comparator: TradePlanComparatorInput | None = None
     numeric_threshold: Decimal | None = None
+    recovery_threshold: Decimal | None = None
+    technical_interval: Literal["1d", "1w"] | None = None
     event_after: datetime | None = None
 
     @field_validator("event_after")
@@ -104,7 +110,39 @@ class MonitorRuleInput(_DTO):
             metric_key=self.metric_key,
             comparator=self.comparator,
             numeric_threshold=self.numeric_threshold,
+            recovery_threshold=self.recovery_threshold,
+            technical_interval=self.technical_interval,
             event_after=self.event_after,
+        )
+
+
+class MonitorRelativeStrengthPairInput(_DTO):
+    name: str = Field(min_length=1, max_length=64)
+    numerator_instrument_id: str
+    denominator_instrument_id: str
+
+
+class MonitorJudgmentPolicyInput(_DTO):
+    playbook: str = Field(min_length=1, max_length=16000)
+    reference_instrument_ids: tuple[str, ...] = Field(min_length=1, max_length=12)
+    relative_strength_pairs: tuple[MonitorRelativeStrengthPairInput, ...] = Field(
+        default=(), max_length=12
+    )
+    confirmed_state: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, max_length=50
+    )
+
+    def to_domain(self) -> MonitorJudgmentPolicy:
+        return MonitorJudgmentPolicy(
+            playbook=self.playbook.strip(),
+            reference_instrument_ids=self.reference_instrument_ids,
+            relative_strength_pairs=tuple(
+                (item.name.strip(), item.numerator_instrument_id, item.denominator_instrument_id)
+                for item in self.relative_strength_pairs
+            ),
+            confirmed_state_json=json.dumps(
+                self.confirmed_state, separators=(",", ":"), sort_keys=True
+            ),
         )
 
 
@@ -126,6 +164,7 @@ class MonitorCreateInput(_DTO):
     trade_plan_version: int | None = Field(default=None, ge=1)
     compile_trade_plan_conditions: bool = False
     valid_until: datetime | None = None
+    judgment_policy: MonitorJudgmentPolicyInput | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
 
@@ -168,6 +207,7 @@ class MonitorUpdateInput(_DTO):
     trade_plan_version: int | None = Field(default=None, ge=1)
     compile_trade_plan_conditions: bool = False
     valid_until: datetime | None = None
+    judgment_policy: MonitorJudgmentPolicyInput | None = None
     confirmed_by: Literal["user", "external_agent"]
     idempotency_key: str = Field(min_length=1, max_length=200)
 
@@ -263,7 +303,27 @@ class MonitorRuleDTO(_DTO):
     metric_key: str | None
     comparator: TradePlanComparator | None
     numeric_threshold: DecimalWire | None
+    recovery_threshold: DecimalWire | None
+    technical_interval: Literal["1d", "1w"] | None
     event_after: datetime | None
+
+
+class MonitorJudgmentPolicyDTO(_DTO):
+    playbook: str
+    reference_instrument_ids: tuple[str, ...]
+    relative_strength_pairs: tuple[tuple[str, str, str], ...]
+    confirmed_state: dict[str, str | int | float | bool | None]
+    prompt_version: str
+
+    @classmethod
+    def from_domain(cls, value: MonitorJudgmentPolicy) -> MonitorJudgmentPolicyDTO:
+        return cls(
+            playbook=value.playbook,
+            reference_instrument_ids=value.reference_instrument_ids,
+            relative_strength_pairs=value.relative_strength_pairs,
+            confirmed_state=json.loads(value.confirmed_state_json),
+            prompt_version=value.prompt_version,
+        )
 
 
 class MonitorDefinitionDTO(_DTO):
@@ -283,10 +343,33 @@ class MonitorDefinitionDTO(_DTO):
     idempotency_key: str
     created_at: datetime
     schema_version: int
+    judgment_policy: MonitorJudgmentPolicyDTO | None
 
     @classmethod
     def from_domain(cls, value: MonitorDefinition) -> MonitorDefinitionDTO:
-        return cls.model_validate(value)
+        return cls(
+            monitor_id=value.monitor_id,
+            version=value.version,
+            name=value.name,
+            subject_id=value.subject_id,
+            primary_instrument_id=value.primary_instrument_id,
+            cadence=value.cadence,
+            interval_minutes=value.interval_minutes,
+            status=value.status,
+            rules=tuple(MonitorRuleDTO.model_validate(item) for item in value.rules),
+            trade_plan_id=value.trade_plan_id,
+            trade_plan_version=value.trade_plan_version,
+            valid_until=value.valid_until,
+            confirmed_by=value.confirmed_by,
+            idempotency_key=value.idempotency_key,
+            created_at=value.created_at,
+            schema_version=value.schema_version,
+            judgment_policy=(
+                MonitorJudgmentPolicyDTO.from_domain(value.judgment_policy)
+                if value.judgment_policy is not None
+                else None
+            ),
+        )
 
 
 class MonitorRuleStateDTO(_DTO):
@@ -304,9 +387,44 @@ class MonitorRuleStateDTO(_DTO):
         return cls.model_validate(value)
 
 
+class MonitorJudgmentDTO(_DTO):
+    judgment_id: str
+    run_id: str
+    monitor_id: str
+    monitor_version: int
+    status: Literal["SUCCEEDED", "SKIPPED", "FAILED"]
+    urgency: Literal["WATCH", "ACTION", "URGENT"] | None
+    phase: str | None
+    market_state: str | None
+    divergence: Literal["BULLISH", "BEARISH", "NONE"] | None
+    conclusion: MonitorJudgmentConclusion | None
+    quantity_min: int | None
+    quantity_max: int | None
+    summary: str
+    evidence_feature_ids: tuple[str, ...]
+    next_trigger: str | None
+    invalidation: str | None
+    feature_signature: str
+    result_fingerprint: str | None
+    provider: str
+    model: str
+    reasoning_effort: str
+    prompt_version: str
+    warning_codes: tuple[str, ...]
+    error_codes: tuple[str, ...]
+    created_at: datetime
+    web_search_used: bool = False
+    web_source_urls: tuple[str, ...] = ()
+
+    @classmethod
+    def from_domain(cls, value: MonitorJudgment) -> MonitorJudgmentDTO:
+        return cls.model_validate(value)
+
+
 class MonitorDetailDTO(_DTO):
     monitor: MonitorDefinitionDTO
     rule_states: tuple[MonitorRuleStateDTO, ...]
+    latest_judgment: MonitorJudgmentDTO | None = None
     execution_effect: Literal[False] = False
 
 
@@ -363,6 +481,17 @@ class MonitorEventListDTO(_DTO):
     execution_effect: Literal[False] = False
 
 
+class ProviderFailureDiagnosticDTO(_DTO):
+    provider: str
+    stage: str
+    error_code: str
+    retryable: bool
+    attempt_count: int
+    error_type: str | None = None
+    status_class: str | None = None
+    status_code: int | None = None
+
+
 class MonitorRunObservationDTO(_DTO):
     run_id: str
     monitor_id: str
@@ -380,6 +509,7 @@ class MonitorRunObservationDTO(_DTO):
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
     message: str
+    diagnostics: tuple[ProviderFailureDiagnosticDTO, ...] = ()
 
     @classmethod
     def from_domain(cls, value: MonitorRunObservation) -> MonitorRunObservationDTO:
@@ -444,6 +574,7 @@ class MonitorDashboardItemDTO(_DTO):
     monitor_updated_at: datetime
     rule_states: tuple[MonitorRuleStateDTO, ...]
     latest_run: MonitorLatestRunSummaryDTO | None
+    latest_judgment: MonitorJudgmentDTO | None
     last_run_at: datetime | None
     next_due_at: datetime | None
     due: bool

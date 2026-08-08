@@ -90,7 +90,7 @@ class MonitorFactResolver:
             TechnicalAnalysisInput(
                 instrument_id=rule.instrument_id,
                 as_of=as_of,
-                intervals=("1d",),
+                intervals=(rule.technical_interval or "1d",),
             )
         )
         if not envelope.ok or envelope.data is None:
@@ -100,18 +100,18 @@ class MonitorFactResolver:
                 _codes(envelope.warnings),
                 _codes(envelope.errors) or ("MONITOR_TECHNICAL_UNAVAILABLE",),
             )
-        daily = envelope.data.timeframes[0]
-        metric = next((item for item in daily.metrics if item.name == metric_key), None)
+        timeframe = envelope.data.timeframes[0]
+        metric = next((item for item in timeframe.metrics if item.name == metric_key), None)
         if metric is None or metric.value is None:
             return MonitorFact(
                 None,
-                daily.bar_as_of,
+                timeframe.bar_as_of,
                 _codes(envelope.warnings),
                 ("MONITOR_METRIC_UNAVAILABLE",),
             )
         return MonitorFact(
             metric.value,
-            daily.bar_as_of,
+            timeframe.bar_as_of,
             _codes(envelope.warnings),
             (),
             "CLOSED_SESSION_LAST_KNOWN" in _codes(envelope.warnings),

@@ -69,6 +69,7 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy }: { subj
   const plans = listOf<Dict>(state, "trade_plan_versions");
   const current = state.current_trade_plan && typeof state.current_trade_plan === "object" ? state.current_trade_plan as Dict : null;
   const theses = listOf<Dict>(state, "theses");
+  const selectedCandidate = listOf<Dict>(state, "watchlist_items").find((item) => value(item.status, "").toLowerCase() === "selected");
   const liveTheses = theses.filter((item) => ["active", "strengthened", "weakened"].includes(value(item.status, "").toLowerCase()));
   const [editing, setEditing] = useState(false);
   const [compareVersion, setCompareVersion] = useState("");
@@ -89,7 +90,7 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy }: { subj
 
   function openEditor() {
     setThesisId(value(current?.thesis_id, value(liveTheses[0]?.thesis_id, "")));
-    setInstrument(value(current?.instrument_id, value(subject.primary_instrument_id, "")));
+    setInstrument(value(current?.instrument_id, value(subject.primary_instrument_id, value(selectedCandidate?.instrument_id, ""))));
     setStatus(value(current?.status, "DRAFT"));
     setCurrency(value(current?.currency, "USD"));
     setReferencePrice(value(current?.reference_price, ""));

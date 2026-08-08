@@ -8,7 +8,7 @@ repositories or persistence.
 from __future__ import annotations
 
 from application.ports.research_unit_of_work import ResearchUnitOfWork
-from domain.common.enums import ResearchSubjectStatus, ThesisStatus
+from domain.common.enums import ResearchSubjectStatus, ThesisRole, ThesisStatus
 from domain.common.errors import ResearchStateConflict
 from domain.research.models import ResearchSubject, Thesis
 from domain.trade_plan.enums import TradePlanStatus
@@ -18,8 +18,6 @@ from domain.trade_plan.enums import TradePlanStatus
 TRACKING_SUBJECT_STATUSES = frozenset(
     {
         ResearchSubjectStatus.ACTIVE,
-        ResearchSubjectStatus.STRENGTHENED,
-        ResearchSubjectStatus.WEAKENED,
     }
 )
 LIVE_THESIS_STATUSES = frozenset(
@@ -64,6 +62,95 @@ def ensure_subject_can_host_live_thesis(
         )
 
 
+def ensure_single_live_primary_thesis(
+    uow: ResearchUnitOfWork,
+    *,
+    subject_id: str,
+    thesis_role: ThesisRole,
+    attempted_child_status: ThesisStatus,
+    current_thesis_id: str | None = None,
+) -> None:
+    """Allow one live PRIMARY while retaining parallel SUB/COMPETITOR/BEAR theses."""
+
+    if thesis_role is not ThesisRole.PRIMARY or attempted_child_status not in LIVE_THESIS_STATUSES:
+        return
+    existing = tuple(
+        thesis_id
+        for thesis_id in uow.subjects.list_live_primary_thesis_ids(subject_id)
+        if thesis_id != current_thesis_id
+    )
+    if not existing:
+        return
+    raise ResearchStateConflict(
+        "Research Subject already has a live PRIMARY Thesis",
+        details={
+            "subject_id": subject_id,
+            "attempted_child_status": _status_value(attempted_child_status),
+            "current_thesis_id": current_thesis_id,
+            "live_primary_thesis_ids": existing,
+        },
+    )
+
+
+def ensure_thesis_relationship_dependencies(
+    uow: ResearchUnitOfWork,
+    *,
+    subject_id: str,
+    thesis_id: str | None,
+    attempted_role: ThesisRole,
+    attempted_status: ThesisStatus,
+    parent_thesis_id: str | None,
+) -> None:
+    """Keep PRIMARY/SUB relationships coherent across role and status changes."""
+
+    if attempted_role is ThesisRole.SUB and attempted_status in LIVE_THESIS_STATUSES:
+        if parent_thesis_id is None:
+            raise ResearchStateConflict(
+                "live SUB Thesis requires a parent PRIMARY Thesis",
+                details={"subject_id": subject_id, "thesis_id": thesis_id},
+            )
+        parent = uow.theses.get(parent_thesis_id)
+        if parent.status not in LIVE_THESIS_STATUSES:
+            raise ResearchStateConflict(
+                "live SUB Thesis requires a live PRIMARY Thesis",
+                details={
+                    "subject_id": subject_id,
+                    "thesis_id": thesis_id,
+                    "parent_thesis_id": parent_thesis_id,
+                    "parent_status": _status_value(parent.status),
+                },
+            )
+
+    if thesis_id is None:
+        return
+    children = tuple(
+        thesis
+        for thesis in uow.theses.list_by_subject(subject_id)
+        if thesis.role is ThesisRole.SUB and thesis.parent_thesis_id == thesis_id
+    )
+    if attempted_role is not ThesisRole.PRIMARY and children:
+        raise ResearchStateConflict(
+            "PRIMARY Thesis with SUB children cannot change role",
+            details={
+                "subject_id": subject_id,
+                "thesis_id": thesis_id,
+                "sub_thesis_ids": tuple(child.thesis_id for child in children),
+            },
+        )
+    live_children = tuple(
+        child.thesis_id for child in children if child.status in LIVE_THESIS_STATUSES
+    )
+    if attempted_status not in LIVE_THESIS_STATUSES and live_children:
+        raise ResearchStateConflict(
+            "PRIMARY Thesis cannot retire while live SUB Theses remain",
+            details={
+                "subject_id": subject_id,
+                "thesis_id": thesis_id,
+                "live_sub_thesis_ids": live_children,
+            },
+        )
+
+
 def ensure_active_trade_plan_dependencies(
     subject: ResearchSubject,
     thesis: Thesis,
@@ -103,6 +190,7 @@ def ensure_thesis_status_transition(
     thesis: Thesis,
     *,
     attempted_child_status: ThesisStatus,
+    attempted_role: ThesisRole | None = None,
 ) -> None:
     """Validate an existing Thesis status transition against its Subject/Plan."""
 
@@ -110,6 +198,13 @@ def ensure_thesis_status_transition(
         ensure_subject_can_host_live_thesis(
             subject,
             attempted_child_status=attempted_child_status,
+        )
+        ensure_single_live_primary_thesis(
+            uow,
+            subject_id=subject.subject_id,
+            thesis_role=attempted_role or thesis.role,
+            attempted_child_status=attempted_child_status,
+            current_thesis_id=thesis.thesis_id,
         )
 
     if thesis.status not in LIVE_THESIS_STATUSES or attempted_child_status in LIVE_THESIS_STATUSES:

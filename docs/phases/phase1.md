@@ -104,6 +104,10 @@ company/catalyst flow, `Instrument` is the objective security identity and the
 Research Subject is the durable, subjective research file opened around that Instrument; `Thesis` is one
 current, falsifiable investment judgment inside the file. Theme, macro, and
 portfolio-concern Research Subjects may instead span instruments or have no primary Instrument.
+For those files, Research WatchlistItems also provide an explicitly confirmed
+Instrument Selection pool. Canonical candidates can be watching, shortlisted,
+selected, or rejected; one selected Instrument may feed a later Trade Plan without
+mutating the Research Subject identity.
 A research file owns or links its current judgments,
 append-only revisions, assumptions, invalidation conditions, open questions,
 reports, events, decisions, journals, challenge reviews, and optional WatchlistItem
@@ -139,10 +143,9 @@ a confirmed investment judgment. `create_case=false` preserves ad-hoc research.
 Research Subject title identifies a stable research object/question and summary defines research
 scope. Action levels, add/trim or exit instructions, sizing, and position plans live
 in the Thesis/Trade Plan rather than Research Subject metadata. Research Subject type and primary Instrument
-are immutable after creation. New Research Subject lifecycle writes use DRAFT/ACTIVE/ARCHIVED;
-legacy conviction-like Research Subject states remain read-compatible while Thesis owns judgment.
-An ACTIVE/STRENGTHENED/WEAKENED Thesis requires its Research Subject to be in one of the same
-tracking states; an ACTIVE Trade Plan additionally requires a live Thesis. The
+are immutable after creation. Research Subject lifecycle is exactly DRAFT/ACTIVE/ARCHIVED,
+while Thesis owns conviction state. An ACTIVE/STRENGTHENED/WEAKENED Thesis requires
+an ACTIVE Research Subject; an ACTIVE Trade Plan additionally requires a live Thesis. The
 confirmation path returns non-retryable `RESEARCH_STATE_CONFLICT` instead of
 implicitly activating or cascading another entity. A tracking Research Subject cannot leave
 tracking while a live Thesis or ACTIVE/PAUSED Trade Plan remains.
