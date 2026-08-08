@@ -117,11 +117,11 @@ function MarketLens() {
         const resolved = data?.instrument_id ?? (data?.instrument as Dict | undefined)?.instrument_id;
         if (typeof resolved === "string") setInstrumentId(resolved);
       }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "事实读取失败"); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Fact retrieval failed"); }
     finally { setRunning(null); }
   }
 
-  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="快速事实工作区"><p className="card-note">解析标的后可直接读取当前报价、日/周技术快照或渲染图表。所有结果保留来源、事实时间和 warnings；不会生成交易指令。</p><div className="market-lens-controls"><label><span>Market</span><select value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Symbol / query</span><input value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>解析标的</ActionButton><label className="market-lens-instrument"><span>Instrument ID</span><input value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div>{error && <div className="inline-error">{error}</div>}{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>事实回执</summary><pre>{displayJson(result)}</pre></details>}</Card>;
+  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><span>Market</span><select value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Symbol / query</span><input value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><span>Instrument ID</span><input value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div>{error && <div className="inline-error">{error}</div>}{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>Fact receipt</summary><pre>{displayJson(result)}</pre></details>}</Card>;
 }
 
 export default function CapabilitiesPage() {
@@ -170,14 +170,14 @@ export default function CapabilitiesPage() {
     try {
       argumentsValue = JSON.parse(argumentsText) as Record<string, unknown>;
     } catch {
-      setRunError("参数不是有效 JSON。");
+      setRunError("Arguments are not valid JSON.");
       return;
     }
     if (selected.confirmation_required && !confirmed) {
-      setRunError("请先勾选明确确认。后端仍会执行原有幂等和用户确认校验。");
+      setRunError("Explicit confirmation is required. The backend still enforces its idempotency and user-confirmation checks.");
       return;
     }
-    if (selected.confirmation_required && !window.confirm(`确认执行 ${selected.name}？`)) return;
+    if (selected.confirmation_required && !window.confirm(`Run ${selected.name}?`)) return;
     setRunning(true);
     setRunError(null);
     try {
@@ -188,42 +188,42 @@ export default function CapabilitiesPage() {
       });
       setRunResult(value);
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : "执行失败");
+      setRunError(error instanceof Error ? error.message : "Execution failed");
     } finally {
       setRunning(false);
     }
   }
 
   return (
-    <ConsoleShell active="capabilities" eyebrow="Compact MCP surface" title="全部 MCP 能力">
+    <ConsoleShell active="capabilities" eyebrow="Compact MCP surface" title="MCP Capabilities">
       <DataBoundary loading={result.loading} error={result.error}>
         <MarketLens />
         {selected && (
-          <Card className="workbench" kicker="MCP TOOL WORKBENCH" title={selected.name} action={<button className="close-button" type="button" onClick={() => setSelected(null)}>关闭</button>}>
+          <Card className="workbench" kicker="MCP TOOL WORKBENCH" title={selected.name} action={<button className="close-button" type="button" onClick={() => setSelected(null)}>Close</button>}>
             <div className="workbench-grid">
               <div>
-                <p className="workbench-help">直接调用与 Codex 相同的公开 MCP 适配器。已按 schema 预填必填字段；写入类工具不会绕过候选确认、幂等键或 actor gate。</p>
+                <p className="workbench-help">Invoke the same public MCP adapter used by Codex. Required fields are prefilled from the schema; write tools never bypass candidate review, idempotency keys, or actor gates.</p>
                 {selected.operations.length > 0 && <div className="operation-picker">{selected.operations.map((operation) => <button key={operation} type="button" onClick={() => openWorkbench(selected, operation)}>{operation}</button>)}</div>}
                 <label className="editor-label" htmlFor="tool-arguments">Arguments JSON</label>
                 <textarea id="tool-arguments" className="json-editor" spellCheck={false} value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} />
-                {selected.confirmation_required && <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我明确要求执行这个受控操作，并理解仍需满足工具自身确认字段。</span></label>}
-                <div className="workbench-actions"><ActionButton onClick={invoke} busy={running} tone={selected.destructive ? "warning" : "default"}>执行工具</ActionButton><Badge value={selected.confirmation_required ? "CONFIRM" : selected.effect} /></div>
+                {selected.confirmation_required && <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I explicitly request this controlled action and understand that the tool&apos;s own confirmation fields still apply.</span></label>}
+                <div className="workbench-actions"><ActionButton onClick={invoke} busy={running} tone={selected.destructive ? "warning" : "default"}>Run Tool</ActionButton><Badge value={selected.confirmation_required ? "CONFIRM" : selected.effect} /></div>
                 {runError && <div className="inline-error">{runError}</div>}
               </div>
               <div>
-                <div className="result-head"><span>RESULT</span>{runResult !== null && <button type="button" onClick={copyResult}>{copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}</button>}</div>
-                <span className="sr-only" aria-live="polite">{copyState === "copied" ? "结果已复制" : copyState === "failed" ? "复制失败" : ""}</span>
+                <div className="result-head"><span>RESULT</span>{runResult !== null && <button type="button" onClick={copyResult}>{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}</button>}</div>
+                <span className="sr-only" aria-live="polite">{copyState === "copied" ? "Result copied" : copyState === "failed" ? "Copy failed" : ""}</span>
                 {images.length > 0 && <div className="tool-images">{images.map((item, index) => (
-                  <img alt={`技术图表 ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />
+                  <img alt={`Technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />
                 ))}</div>}
-                <pre className="result-view">{runResult === null ? "等待执行…" : displayJson(runResult)}</pre>
-                <details className="schema-details"><summary>查看 input schema</summary><pre>{displayJson(selected.input_schema)}</pre></details>
+                <pre className="result-view">{runResult === null ? "Waiting to run…" : displayJson(runResult)}</pre>
+                <details className="schema-details"><summary>View input schema</summary><pre>{displayJson(selected.input_schema)}</pre></details>
               </div>
             </div>
           </Card>
         )}
         <div className="toolbar capability-toolbar">
-          <div className="search-box"><span>⌕</span><input aria-label="搜索能力" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工具、operation 或说明…" /></div>
+          <div className="search-box"><span>⌕</span><input aria-label="Search capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools, operations, or descriptions…" /></div>
           <div className="toolbar-count"><strong>{filtered.length}</strong> / {result.data?.count ?? 0} tools</div>
           <RefreshButton onClick={result.refresh} loading={result.loading} />
         </div>
@@ -239,7 +239,7 @@ export default function CapabilitiesPage() {
                     <div className="operation-pills">
                       {capability.operations.length ? capability.operations.map((operation) => <button type="button" onClick={() => openWorkbench(capability, operation)} key={operation}>{operation}</button>) : <button type="button" onClick={() => openWorkbench(capability)}>open tool</button>}
                     </div>
-                    <footer><span>{capability.open_world ? "Provider access" : "Local state"}</span><button type="button" onClick={() => openWorkbench(capability)}>操作 →</button></footer>
+                    <footer><span>{capability.open_world ? "Provider access" : "Local state"}</span><button type="button" onClick={() => openWorkbench(capability)}>Open →</button></footer>
                   </Card>
                 ))}
               </div>
