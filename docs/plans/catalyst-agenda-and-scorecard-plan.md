@@ -1,8 +1,7 @@
 # Catalyst Agenda 与 Judgment Scorecard 实施计划
 
-状态：设计冻结，尚未进入 runtime 实施  
-优先级：A1 真实券商报表签收之后；A2/A3 可并行设计但不得提前宣称精确收益率  
-公共 MCP 边界：保持 28 个工具，不引入运行时 LLM、订单或自动 Thesis 修改
+状态：C0–C3 与 Judgment Scorecard S1 已实现
+公共边界：Agenda/Scorecard 复用 grouped tools；当前 vNext Shadow 总计 27 个 MCP 工具，二者均无订单效果
 
 ## 1. 产品结果
 
@@ -34,7 +33,8 @@ Thesis，不修改 Trade Plan，也不产生订单。
 每个逻辑事项拥有稳定 identity 和 append-only version：
 
 - `agenda_item_id`、`version`、`supersedes_version`；
-- `instrument_id` 可空（宏观事项），`subject_id` 可空，但两者不能同时为空；
+- `instrument_id` 与 `subject_id` 通常至少有一个；只有 `MACRO_RELEASE`/`POLICY`
+  可使用显式 GLOBAL scope；
 - `kind`：`EARNINGS`、`FILING`、`DIVIDEND`、`CORPORATE_ACTION`、`INVESTOR_EVENT`、
   `MACRO_RELEASE`、`POLICY`、`INDUSTRY`、`USER_DEFINED`；
 - `title`、可选 `fiscal_period` 或上游稳定 event key；
@@ -43,7 +43,8 @@ Thesis，不修改 Trade Plan，也不产生订单。
 - `status`：`UPCOMING`、`OCCURRED`、`CANCELLED`、`SUPERSEDED`；
 - `source_vendor`、`source_reference`、`source_visible_at`、`last_verified_at`；
 - `expected_question`：事件后需要验证的原判断，允许为空但不得由 Provider/LLM 自动生成；
-- `linked_event_id`、`linked_report_id`：只在事实已落库后设置；
+- `linked_event_id`、`linked_report_id`、`linked_evidence_id`：只在事实已落库后设置；
+- `outcome_occurred_at` 与 `outcome_note`：区分事实发生时间、人工完成关联时间与修订原因；
 - `created_by`、`confirmed_by`、`idempotency_key`、`recorded_at`。
 
 上游改期创建新 version；旧日期保留。不得原地更新，也不得按“symbol + date”去重。优先使用
@@ -82,7 +83,8 @@ Watchlist 或 Provider。
    - 返回 items、每标的 coverage、分页和 limitation；
    - 不隐式访问 Yahoo、FRED、巨潮或券商。
 2. `research_memory_append(request={"operation":"agenda_item", ...})`
-   - 仅创建/修订/取消用户确认事项；沿用 confirmer、idempotency 和 actor gate；
+   - 创建/修订/取消用户确认事项，或 append-only 关联/修订结果事实；沿用 confirmer、
+     expected-version、idempotency 和 actor gate；
    - 当前聊天中用户明确授权时可由 Codex 转交，规则与 Journal/Decision 相同；
    - 不用于伪造 Provider 事实。
 3. `uv run trading-partner-catalyst-sync`
@@ -114,7 +116,18 @@ API 明确说明默认会排除尚无数据的未来 release date，必须显式
 
 ## 6. 分阶段实现
 
-### C0 — 契约与迁移（下一开发项）
+### S0 — 当前判断基线（已实现）
+
+- 以一条明确 Thesis 的当前最新 revision 为输入，生成 append-only、不可变的维度卡；
+- 确定性检查 revision 定义、exact-revision evidence、当前失效状态、Trade Plan/Monitor
+  覆盖、行动意图时序和已有 Trade Retro findings；
+- 无 assumption-to-evidence 关联或历史失效事件时明确返回 `NOT_EVALUATED`/`PARTIAL`；
+- Console 可选择 Research Subject 与 Thesis、生成并浏览历史；
+- 复用 `research_workflow_run/judgment_scorecard` 与
+  `research_judgment_get/scorecard_history`，不增加公共工具；
+- 不接受任意历史 `as_of`，未来校准只比较已经持久化的不可变 Scorecard run。
+
+### C0 — 契约与迁移（已实现）
 
 - domain enums/models、append-only migration、repository/UoW；
 - owner/actor/idempotency/as-of invariant；
@@ -123,7 +136,7 @@ API 明确说明默认会排除尚无数据的未来 release date，必须显式
 
 退出：手工事项可在对话中确认创建，未来窗口可 durable-only 查询，改期保留历史。
 
-### C1 — Scope 与 coverage
+### C1 — Scope 与 coverage（已实现）
 
 - 合并最新 durable Portfolio、Watchlist、active 研究档案；
 - 去重 `scope_reasons`，返回无覆盖标的；
@@ -132,26 +145,29 @@ API 明确说明默认会排除尚无数据的未来 release date，必须显式
 
 退出：即使没有 Provider，系统也能诚实说明“哪些标的有日程、哪些没有可靠日程”。
 
-### C2 — 免费同步
+### C2 — 免费同步（已实现）
 
-- yfinance 美股 calendar adapter 与固定 cache/rate limit；
+- yfinance 美股 calendar adapter 复用 Provider Router 的 `CORPORATE_ACTIONS` admission/cache；
+- FRED 日历复用既有 `MACRO` admission/cache；不新增专用 Provider category/TTL；
 - FRED release date adapter；
 - `trading-partner-catalyst-sync`、sync receipt、失败类型和 Data Quality Center 汇总；
 - 不把查询失败解释为“无事件”。
 
 退出：一条显式 CLI 可刷新未来 30 天的美股财报与选定宏观发布，并能审计日期漂移。
 
-### C3 — 事实闭环与通知
+### C3 — 事实闭环与通知（已实现）
 
-- 发生后显式链接 ResearchEvent/Report/Evidence；
+- 发生后显式链接 ResearchEvent/Report/Evidence，并保存发生时间与人工 outcome note；
+- OCCURRED 结果允许以新 version 修订关联，不覆盖历史版本；
 - 可选 Telegram 每日 agenda 摘要使用 durable Outbox；改期/取消只在状态变化时通知；
+- Console 从 durable timeline/search 提供候选事实，也保留直接 ID 输入；
 - 验证 A 股预约披露源后再接入；无稳定契约则继续保留 limitation。
 
 退出：计划事项、实际事实和复盘材料可追溯，且不重复 Monitor 价格规则通知。
 
-### S1 — Judgment Scorecard
+### S1 — Judgment Scorecard 事件校准升级（已实现）
 
-Scorecard 必须晚于 C3：
+S0 已经提供当前可证明的纪律基线；下列事件结果能力必须晚于 C3：
 
 - 输入锁定为当时可见的 Thesis/Trade Plan/Monitor/Agenda version；
 - 只统计可机器核验项目：假设得到支持/反证/未评估、失效规则触发与恢复、证据更新时间、
@@ -170,8 +186,8 @@ Scorecard 必须晚于 C3：
 5. compact schema/eval：新 operation 可发现、跨 operation 字段被拒绝、工具总数仍为 28；
 6. 一个真实只读 smoke，只记录 event 数量、warning code 和来源，不打印个人 scope。
 
-预计 C0–C1 新增约 25–35 个聚焦测试；C2 每个 Provider 再增加 6–10 个，不复制现有 Router
-重试/缓存矩阵。
+最终 Agenda、Provider sync、notification 与 Scorecard 四个聚焦文件合计 31 个测试；Router、
+admission、cache 与 generic Outbox 的既有矩阵均直接复用，没有复制 Provider × 状态全排列。
 
 ## 8. 明确不做
 

@@ -178,7 +178,10 @@ def _format_notification_html(title: str, body: str) -> str:
     price_change = _prefixed_value(lines, "价格变化：")
     changes_start = lines.index("CHANGES") + 1 if "CHANGES" in lines else rules_index
     changes = lines[changes_start:rules_index]
-    rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
+    judgment_index = lines.index("JUDGMENT") if "JUDGMENT" in lines else None
+    rule_end = judgment_index if judgment_index is not None else len(lines)
+    rows, notes = _parse_rule_rows(lines[rules_index + 1 : rule_end])
+    judgment_lines = lines[judgment_index + 1 :] if judgment_index is not None else []
     if not rows:
         return render_plain_text_html(title, body)
     compact_cards = any(len(row) >= 7 and not row[0] for row in rows)
@@ -224,6 +227,11 @@ def _format_notification_html(title: str, body: str) -> str:
     sections.append("<b>全部监控规则</b>\n\n" + _format_rule_cards(rows))
     if notes:
         sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
+    if judgment_lines:
+        sections.append(
+            "🧭 <b>复合判断</b>\n"
+            + "\n".join(html.escape(line) for line in judgment_lines if line.strip())
+        )
     return "\n\n".join(sections)
 
 
@@ -293,7 +301,10 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         if changes_index is not None and changes_index < rules_index
         else []
     )
-    rows, notes = _parse_rule_rows(lines[rules_index + 1 :])
+    judgment_index = lines.index("JUDGMENT") if "JUDGMENT" in lines else None
+    rule_end = judgment_index if judgment_index is not None else len(lines)
+    rows, notes = _parse_rule_rows(lines[rules_index + 1 : rule_end])
+    judgment_lines = lines[judgment_index + 1 :] if judgment_index is not None else []
     if not rows:
         return None
     heading = symbol or name
@@ -330,6 +341,11 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     for note in notes:
         if note not in {price_basis}:
             parts.append(f"<i>{html.escape(note)}</i>")
+    if judgment_lines:
+        parts.append(
+            "⚠️ <b>复合判断状态</b>\n"
+            + "\n".join(html.escape(line) for line in judgment_lines if line.strip())
+        )
     parts.append(_format_rule_cards(rows))
     return "\n".join(parts)
 

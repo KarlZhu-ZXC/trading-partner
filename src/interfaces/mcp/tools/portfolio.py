@@ -20,6 +20,7 @@ from application.dto.portfolio import (
     PortfolioAnalyzeInput,
     PortfolioSimulateAdditionInput,
 )
+from application.dto.trade_retro import TradeRetroHistoryInput
 from bootstrap import ApplicationContainer
 from interfaces.mcp.validation import unexpected_failure as _unexpected_failure
 
@@ -158,6 +159,21 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def portfolio_get_retro_history(
+        run_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Read immutable Trade Retro Run/review history without contacting Providers."""
+        try:
+            inp = TradeRetroHistoryInput.model_validate(
+                {"run_id": run_id, "limit": limit}
+            )
+            return container.services.trade_retro.history(inp).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     # ------------------------------------------- Phase 1L transactions/workflows
 
     async def account_get_transactions(
@@ -205,4 +221,5 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         portfolio_simulate_addition=portfolio_simulate_addition,
         portfolio_get_coverage=portfolio_get_coverage,
         portfolio_get_performance_summary=portfolio_get_performance_summary,
+        portfolio_get_retro_history=portfolio_get_retro_history,
     )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from application.dto.research import (
     AssumptionCandidatePayload,
     CandidateRevisionDTO,
@@ -33,8 +35,10 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from application.services.research_link_invariants import validate_linked_subject_ids
 from application.services.research_state_invariants import (
     ensure_active_trade_plan_dependencies,
+    ensure_no_live_monitors,
     ensure_single_live_primary_thesis,
     ensure_subject_can_host_live_thesis,
     ensure_subject_can_leave_tracking,
@@ -60,6 +64,7 @@ from domain.common.errors import (
     DataContractError,
     InputValidationError,
     InvalidationConditionNarrowingForbidden,
+    PersistenceError,
     ResearchStateConflict,
     StrictReviewRequired,
     UnauthorizedReviewer,
@@ -68,6 +73,7 @@ from domain.common.ids import EntityIdPrefix
 from domain.research.models import (
     RESEARCH_SCHEMA_VERSION,
     Assumption,
+    CandidateThesisRevision,
     InvalidationCondition,
     OpenQuestion,
     ResearchSubject,
@@ -97,6 +103,291 @@ class ThesisRevisionService:
         self._clock = clock
         self._id_generator = id_generator
         self._redactor = secret_redactor
+
+    # ---------------------------------------------------------- scope guards
+
+    @staticmethod
+    def _scope_violation(
+        *,
+        confirmation: bool,
+        message: str,
+        details: dict[str, object] | None = None,
+    ) -> NoReturn:
+        """Raise a typed, non-retryable scope validation failure.
+
+        Proposal-time input is reported as ``INPUT_VALIDATION_ERROR`` while a
+        candidate that no longer validates at confirmation is a durable data
+        contract violation.  Both paths intentionally remain non-retryable.
+        """
+
+        if confirmation:
+            raise DataContractError(message, details=details)
+        raise InputValidationError(message, details=details)
+
+    @classmethod
+    def _validate_thesis_revision_reference(
+        cls,
+        uow: ResearchUnitOfWork,
+        *,
+        subject_id: str,
+        thesis_id: str,
+        revision_no: int,
+        confirmation: bool,
+    ) -> None:
+        """Validate a thesis and exact revision are owned by one subject.
+
+        Revision numbers are scoped to a thesis rather than globally unique,
+        so a lookup by ``revision_no`` must be performed through the referenced
+        thesis and the returned revision's own subject/thesis fields are still
+        checked for corrupted or cross-scope durable rows.
+        """
+
+        thesis = uow.theses.get(thesis_id)
+        if thesis.subject_id != subject_id:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="thesis_id does not belong to subject_id",
+                details={
+                    "thesis_id": thesis_id,
+                    "subject_id": subject_id,
+                    "thesis_subject_id": thesis.subject_id,
+                },
+            )
+
+        revision = next(
+            (
+                item
+                for item in uow.revisions.list_by_thesis(thesis_id)
+                if item.revision_no == revision_no
+            ),
+            None,
+        )
+        if revision is None:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="revision_no does not exist for thesis_id",
+                details={
+                    "thesis_id": thesis_id,
+                    "revision_no": revision_no,
+                    "subject_id": subject_id,
+                },
+            )
+        if revision.thesis_id != thesis_id or revision.subject_id != subject_id:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="thesis revision does not belong to the candidate subject and thesis",
+                details={
+                    "thesis_id": thesis_id,
+                    "revision_no": revision_no,
+                    "subject_id": subject_id,
+                    "revision_thesis_id": revision.thesis_id,
+                    "revision_subject_id": revision.subject_id,
+                },
+            )
+
+    @classmethod
+    def _validate_invalidation_reference(
+        cls,
+        uow: ResearchUnitOfWork,
+        *,
+        subject_id: str,
+        thesis_id: str,
+        revision_no: int,
+        relaxes_invalidation_id: str | None,
+        confirmation: bool,
+    ) -> InvalidationCondition | None:
+        """Validate thesis/revision scope and an optional relaxed condition."""
+
+        cls._validate_thesis_revision_reference(
+            uow,
+            subject_id=subject_id,
+            thesis_id=thesis_id,
+            revision_no=revision_no,
+            confirmation=confirmation,
+        )
+        if relaxes_invalidation_id is None:
+            return None
+
+        try:
+            existing = uow.invalidations.get(relaxes_invalidation_id)
+        except PersistenceError:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="relaxes_invalidation_id does not reference an existing invalidation",
+                details={
+                    "relaxes_invalidation_id": relaxes_invalidation_id,
+                    "subject_id": subject_id,
+                    "thesis_id": thesis_id,
+                    "revision_no": revision_no,
+                },
+            )
+        # A revision may explicitly relax a condition carried by an earlier
+        # revision of the same Thesis.  The target itself must be owned by the
+        # same Research Subject + Thesis, but its revision number is allowed to
+        # differ from the candidate's new revision.
+        if existing.subject_id != subject_id or existing.thesis_id != thesis_id:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="relaxed invalidation does not belong to the candidate subject and thesis",
+                details={
+                    "relaxes_invalidation_id": relaxes_invalidation_id,
+                    "subject_id": subject_id,
+                    "thesis_id": thesis_id,
+                    "revision_no": revision_no,
+                    "invalidation_subject_id": existing.subject_id,
+                    "invalidation_thesis_id": existing.thesis_id,
+                    "invalidation_revision_no": existing.revision_no,
+                },
+            )
+        return existing
+
+    @classmethod
+    def _validate_open_question_reference(
+        cls,
+        uow: ResearchUnitOfWork,
+        *,
+        subject_id: str,
+        question_id: str,
+        confirmation: bool,
+    ) -> OpenQuestion:
+        question = uow.questions.get(question_id)
+        if question.subject_id != subject_id:
+            cls._scope_violation(
+                confirmation=confirmation,
+                message="question_id does not belong to subject_id",
+                details={
+                    "question_id": question_id,
+                    "subject_id": subject_id,
+                    "question_subject_id": question.subject_id,
+                },
+            )
+        return question
+
+    @classmethod
+    def _validate_candidate_scope(
+        cls,
+        uow: ResearchUnitOfWork,
+        candidate: CandidateThesisRevision,
+        payload: object,
+        *,
+        confirmation: bool,
+    ) -> None:
+        """Revalidate references carried by a persisted candidate payload."""
+
+        if isinstance(payload, AssumptionCandidatePayload):
+            subject_id = candidate.subject_id
+            if subject_id is None:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate requires subject_id for assumption",
+                    details={"candidate_id": candidate.candidate_id},
+                )
+            if candidate.thesis_id != payload.thesis_id:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate thesis_id does not match assumption payload",
+                    details={
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_thesis_id": candidate.thesis_id,
+                        "payload_thesis_id": payload.thesis_id,
+                    },
+                )
+            if candidate.target_revision_no != payload.revision_no:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate target_revision_no does not match assumption payload",
+                    details={
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_target_revision_no": candidate.target_revision_no,
+                        "payload_revision_no": payload.revision_no,
+                    },
+                )
+            cls._validate_thesis_revision_reference(
+                uow,
+                subject_id=subject_id,
+                thesis_id=payload.thesis_id,
+                revision_no=payload.revision_no,
+                confirmation=confirmation,
+            )
+            return
+
+        if isinstance(payload, InvalidationCandidatePayload):
+            subject_id = candidate.subject_id
+            if subject_id is None:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate requires subject_id for invalidation",
+                    details={"candidate_id": candidate.candidate_id},
+                )
+            if candidate.thesis_id != payload.thesis_id:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate thesis_id does not match invalidation payload",
+                    details={
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_thesis_id": candidate.thesis_id,
+                        "payload_thesis_id": payload.thesis_id,
+                    },
+                )
+            if candidate.target_revision_no != payload.revision_no:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate target_revision_no does not match invalidation payload",
+                    details={
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_target_revision_no": candidate.target_revision_no,
+                        "payload_revision_no": payload.revision_no,
+                    },
+                )
+            cls._validate_invalidation_reference(
+                uow,
+                subject_id=subject_id,
+                thesis_id=payload.thesis_id,
+                revision_no=payload.revision_no,
+                relaxes_invalidation_id=payload.relaxes_invalidation_id,
+                confirmation=confirmation,
+            )
+            return
+
+        if isinstance(payload, OpenQuestionCandidatePayload):
+            subject_id = candidate.subject_id
+            if subject_id is None:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="candidate requires subject_id for open_question",
+                    details={"candidate_id": candidate.candidate_id},
+                )
+            if payload.action != "create":
+                if payload.question_id is None:
+                    cls._scope_violation(
+                        confirmation=confirmation,
+                        message=f"{payload.action} open_question requires question_id",
+                        details={"candidate_id": candidate.candidate_id},
+                    )
+                cls._validate_open_question_reference(
+                    uow,
+                    subject_id=subject_id,
+                    question_id=payload.question_id,
+                    confirmation=confirmation,
+                )
+            return
+
+        if isinstance(payload, SubjectUpdateCandidatePayload):
+            if payload.action != "update" or payload.linked_subject_ids is None:
+                return
+            subject_id = candidate.subject_id
+            if subject_id is None:
+                cls._scope_violation(
+                    confirmation=confirmation,
+                    message="subject update candidate requires subject_id",
+                    details={"candidate_id": candidate.candidate_id},
+                )
+            validate_linked_subject_ids(
+                uow,
+                owner_subject_id=subject_id,
+                linked_subject_ids=payload.linked_subject_ids,
+                confirmation=confirmation,
+            )
 
     # ------------------------------------------------------------------ propose
 
@@ -197,9 +488,13 @@ class ThesisRevisionService:
                 )
             with self._uow_factory() as uow:
                 uow.subjects.get(subject_id)
-                thesis = uow.theses.get(thesis_id)
-                if thesis.subject_id != subject_id:
-                    raise InputValidationError("thesis_id does not belong to subject_id")
+                self._validate_thesis_revision_reference(
+                    uow,
+                    subject_id=subject_id,
+                    thesis_id=thesis_id,
+                    revision_no=revision_no,
+                    confirmation=False,
+                )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
@@ -277,11 +572,15 @@ class ThesisRevisionService:
                     pass
             with self._uow_factory() as uow:
                 uow.subjects.get(subject_id)
-                thesis = uow.theses.get(thesis_id)
-                if thesis.subject_id != subject_id:
-                    raise InputValidationError("thesis_id does not belong to subject_id")
-                if body.relaxes_invalidation_id is not None:
-                    existing = uow.invalidations.get(body.relaxes_invalidation_id)
+                existing = self._validate_invalidation_reference(
+                    uow,
+                    subject_id=subject_id,
+                    thesis_id=thesis_id,
+                    revision_no=revision_no,
+                    relaxes_invalidation_id=body.relaxes_invalidation_id,
+                    confirmation=False,
+                )
+                if existing is not None:
                     is_hard_to_soft = (
                         existing.severity == InvalidationSeverity.HARD
                         and body.severity == InvalidationSeverity.SOFT
@@ -398,11 +697,28 @@ class ThesisRevisionService:
                         title=payload.title if payload.title is not None else subject.title,
                         summary=payload.summary if payload.summary is not None else subject.summary,
                     )
+                    if payload.linked_subject_ids is not None:
+                        validate_linked_subject_ids(
+                            uow,
+                            owner_subject_id=subject.subject_id,
+                            linked_subject_ids=payload.linked_subject_ids,
+                        )
                 target_revision_no: int | None = None
                 resolved_thesis = thesis_id
                 if isinstance(payload, AssumptionCandidatePayload):
                     resolved_thesis = payload.thesis_id
                     target_revision_no = payload.revision_no
+                    if subject_id is None:
+                        raise InputValidationError(
+                            "assumption candidate requires subject_id",
+                        )
+                    self._validate_thesis_revision_reference(
+                        uow,
+                        subject_id=subject_id,
+                        thesis_id=payload.thesis_id,
+                        revision_no=payload.revision_no,
+                        confirmation=False,
+                    )
                 elif isinstance(payload, InvalidationCandidatePayload):
                     resolved_thesis = payload.thesis_id
                     target_revision_no = payload.revision_no
@@ -412,6 +728,34 @@ class ThesisRevisionService:
                     ):
                         raise StrictReviewRequired(
                             "relaxing invalidation requires STRICT_REVIEW",
+                        )
+                    if subject_id is None:
+                        raise InputValidationError(
+                            "invalidation candidate requires subject_id",
+                        )
+                    self._validate_invalidation_reference(
+                        uow,
+                        subject_id=subject_id,
+                        thesis_id=payload.thesis_id,
+                        revision_no=payload.revision_no,
+                        relaxes_invalidation_id=payload.relaxes_invalidation_id,
+                        confirmation=False,
+                    )
+                elif isinstance(payload, OpenQuestionCandidatePayload):
+                    if payload.action != "create":
+                        if subject_id is None:
+                            raise InputValidationError(
+                                "open_question candidate requires subject_id",
+                            )
+                        if payload.question_id is None:
+                            raise InputValidationError(
+                                f"{payload.action} open_question requires question_id",
+                            )
+                        self._validate_open_question_reference(
+                            uow,
+                            subject_id=subject_id,
+                            question_id=payload.question_id,
+                            confirmation=False,
                         )
                 elif isinstance(payload, ThesisRevisionCandidatePayload):
                     target_revision_no = payload.replaces_revision_no
@@ -533,6 +877,13 @@ class ThesisRevisionService:
                         details={"candidate_id": candidate_id},
                     )
 
+                payload = parse_candidate_payload(candidate.payload_json)
+                self._validate_candidate_scope(
+                    uow,
+                    candidate,
+                    payload,
+                    confirmation=True,
+                )
                 affected_type, affected_id = self._apply_confirmed_payload(
                     uow,
                     candidate,
@@ -895,6 +1246,17 @@ class ThesisRevisionService:
                 )
             plan_id = current.plan_id
             version = current.version + 1
+
+        if (
+            current is not None
+            and current.status in {TradePlanStatus.ACTIVE, TradePlanStatus.PAUSED}
+            and status not in {TradePlanStatus.ACTIVE, TradePlanStatus.PAUSED}
+        ):
+            ensure_no_live_monitors(
+                uow,
+                trade_plan_id=current.plan_id,
+                action="Trade Plan retirement",
+            )
 
         conditions = tuple(
             TradePlanCondition(

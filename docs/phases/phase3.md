@@ -22,6 +22,13 @@ quote/bars, shared technical analysis, Manual CSV Watchlist membership, price
 Monitoring, and XKRX post-market dispatch. It does not add DART/company research,
 KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizing.
 
+Two post-3D judgment-continuity slices are also implemented without expanding the
+27-tool MCP vNext Shadow surface: Catalyst Agenda C0–C3 separates future known events from
+observed facts and syncs free current Yahoo/FRED dates explicitly; Judgment Scorecard
+S1 persists nine deterministic calibration cards for one exact Thesis revision,
+including Agenda outcome calibration. Neither produces a total score, order, or
+automatic Thesis/Trade Plan mutation.
+
 ## Phase 3A — Formal futures and cross-asset market facts
 
 > Status: free continuous proxies, formal CME metal contracts, DCE live-hog EOD
@@ -159,7 +166,7 @@ practical current-only fallback.
 ### Optional hog-cycle dataset
 
 The existing `a_share_get_facts` tool adds the closed operation
-`industry_cycle`; these capabilities now route through the 28-tool compact surface.
+`industry_cycle`; these capabilities now route through the grouped vNext surface.
 
 ```json
 {
@@ -273,7 +280,7 @@ integration in Phase 3A.
 
 The existing `research_workflow_run` tool now has
 `historical_validation_prepare` and `historical_validation_import` operations.
-They write owner-only, gitignored artifacts and preserve the 28-tool surface.
+They write owner-only, gitignored artifacts and do not add public tools.
 QuantConnect login, web compilation and the Backtest click remain user-operated.
 Imported metrics are degraded because the free export cannot attest the exact
 remote code hash or immutable dataset version.
@@ -297,7 +304,7 @@ live execution.
 
 ## Phase 3D — Judgment-to-plan controls
 
-> Status: implemented on 2026-07-26 and retained in the 28-tool compact public surface.
+> Status: implemented on 2026-07-26 and retained in the grouped public surface.
 
 Monitoring extensions, Trade Plan, Position Sizing, and Risk Engine extensions are
 one dependency chain and are therefore planned together:
@@ -341,6 +348,40 @@ Monitoring v2 resolves price, volume, technical, fundamental, company event, mac
 sentiment, Thesis-state, and portfolio-risk facts deterministically. Provider failures,
 unsupported fields, and stale observations transition to `NOT_EVALUATED`; repeated
 unchanged states remain event-free. A linked Monitor cannot outlive a finite Trade Plan.
+
+## Trade Retro — transaction-versus-plan discipline
+
+> Status: implemented on 2026-08-09 without adding a public MCP tool. Migrations
+> `0037_trade_retro` and `0038_trade_retro_reviews` add immutable plan snapshots,
+> runs, append-only human review revisions, and export receipts.
+
+Trade Retro replaces the former broad “performance attribution completion” roadmap
+with a narrower, auditable product loop. It does not calculate benchmark attribution
+or pretend that later plans describe earlier intent:
+
+1. `prepare` captures current Trade Plans and confirmed Decision Records for ACTIVE
+   Research Subjects before the requested period;
+2. `run` reads durable normalized broker transactions and coverage receipts, accepts
+   only an eligible pre-period snapshot, and persists deterministic discipline findings;
+3. optional Bailian `qwen3.8-max` narration receives only those bounded facts and must
+   answer in Chinese; model failure leaves the deterministic report intact;
+4. `review` appends an explicitly confirmed human-review revision with optimistic
+   version checking. The latest revision can accept/dispute/resolve individual
+   Findings and record correction notes/action items without rewriting the Run;
+5. `export` atomically replaces only Trading Partner's marker block in the configured
+   Obsidian weekly note, preserving handwritten content and including the latest review;
+6. `portfolio_analyze/retro_history` and the Console Trade Retro page read immutable
+   Run and review history without contacting a Provider.
+
+The first algorithm reports incomplete activity coverage, missing, ambiguous, or
+inactive pre-trade plans, missing invalidation, unmatched buy/sell Decision Records,
+within-period round trips, and same-day sell/re-entry. It cannot infer a fill, mutate a
+Research Subject/Thesis/Trade Plan, change a position, or execute an order.
+
+`RESEARCH-STATE-004` is also closed: ACTIVE/PAUSED Monitors require an ACTIVE
+Research Subject, and linked ACTIVE/PAUSED Monitors block Research Subject or live
+Trade Plan retirement until the caller explicitly archives them. No lifecycle state
+is cascaded implicitly.
 
 ## Phase 3 public-surface rule
 

@@ -44,11 +44,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def resolve_service(tmp_path: Path) -> InstrumentResolveService:
-    path = tmp_path / "resolve.db"
-    eng = create_engine(f"sqlite:///{path}")
+def resolve_service(orm_sqlite_url: str) -> InstrumentResolveService:
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     clock = FixedClock(NOW)
 
     def factory() -> SqlAlchemyInstrumentUnitOfWork:

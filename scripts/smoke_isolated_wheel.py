@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import venv
+from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +99,7 @@ try:
     server = create_mcp_server(container)
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert names == set(PUBLIC_TOOL_NAMES), (len(names), sorted(names))
-    assert len(names) == len(PUBLIC_TOOL_NAMES) == 28
+    assert len(names) == len(PUBLIC_TOOL_NAMES) == 27
 finally:
     container.close()
 
@@ -177,11 +178,11 @@ def main() -> int:
             )
             return 1
         runtime_db = runtime_home / "trading_partner.db"
-        with sqlite3.connect(runtime_db) as connection:
+        with closing(sqlite3.connect(runtime_db)) as connection:
             revision = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()
-        if revision != ("0036_monitor_provider_diagnostics",):
+        if revision != ("0046_agent_channel_handoffs",):
             print(f"unexpected packaged migration head: {revision}", file=sys.stderr)
             return 1
 

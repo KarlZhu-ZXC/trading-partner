@@ -52,6 +52,17 @@ def _stdio_env(database_path: Path, project_root: Path) -> dict[str, str]:
         "MCP_SERVER_NAME": "trading-partner-research-stdio-test",
         "DEFAULT_TIMEZONE": "UTC",
         "PROVIDER_TIMEOUT_SECONDS": "5",
+        # The stdio contract is deterministic and must never depend on public
+        # A-share endpoints. Provider routing behavior has fixture-backed
+        # contract coverage in tests/contracts/a_share/.
+        "EASTMONEY_ENABLED": "false",
+        "TENCENT_ENABLED": "false",
+        "CNINFO_ENABLED": "false",
+        "NAHS_ENABLED": "false",
+        "SINA_ENABLED": "false",
+        "THS_ENABLED": "false",
+        "CLS_ENABLED": "false",
+        "IWENCAI_ENABLED": "false",
     }
 
 
@@ -79,8 +90,6 @@ class _CompactSession:
         "thesis_revision_propose": ("research_judgment_propose", "thesis_revision"),
         "thesis_history_get": ("research_judgment_get", "thesis_history"),
     }
-    _RENAMED = {"thesis_revision_confirm": "research_judgment_confirm"}
-
     def __init__(self, session: ClientSession) -> None:
         self._session = session
 
@@ -91,7 +100,12 @@ class _CompactSession:
                 target,
                 {"request": {"operation": operation, **arguments}},
             )
-        return await self._session.call_tool(self._RENAMED.get(name, name), arguments)
+        if name == "thesis_revision_confirm":
+            return await self._session.call_tool(
+                "research_judgment_confirm",
+                {"request": {"operation": "candidate", **arguments}},
+            )
+        return await self._session.call_tool(name, arguments)
 
 
 def _revision_payload(**overrides: Any) -> dict[str, Any]:
@@ -142,11 +156,11 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         await session.initialize()
         api = _CompactSession(session)
 
-        # ---- exact tool list: 1A(2)+1B(9)+1C(6)+1D(1)+1E(7)=25 ----
+        # One real subprocess owns the public-surface and transport contract.
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert names == EXPECTED_TOOLS
-        assert len(names) == 28
+        assert len(names) == 27
         # No old aliases or internal Evidence writes.
         assert "open_question_create" not in names
         assert "thesis_revision_reject" not in names
@@ -157,6 +171,44 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         # Phase 1A health tool remains wired.
         health = _parse_envelope(await api.call_tool("system_health", {}))
         assert health["ok"] is True
+
+        # Local-first resolution stays covered across the real stdio transport.
+        a_share = _parse_envelope(
+            await api.call_tool(
+                "instrument_resolve",
+                {"market": "A_SHARE", "query": "600519"},
+            )
+        )
+        assert a_share["ok"] is True
+        assert a_share["data"]["instrument"]["instrument_id"] == (
+            "equity:A_SHARE:600519.SH"
+        )
+        us_equity = _parse_envelope(
+            await api.call_tool(
+                "instrument_resolve",
+                {"market": "US", "query": "NVDA"},
+            )
+        )
+        assert us_equity["ok"] is True
+        assert us_equity["data"]["instrument"]["instrument_id"] == "equity:US:NVDA"
+
+        # Exercise the grouped A-share schema/serialization without a live
+        # Provider. A deterministic unavailable envelope is a valid transport
+        # result; fixture-backed tests own successful Provider semantics.
+        snapshot = _parse_envelope(
+            await api.call_tool(
+                "a_share_get_facts",
+                {
+                    "request": {
+                        "operation": "snapshot",
+                        "instrument_id": "equity:A_SHARE:600519.SH",
+                    }
+                },
+            )
+        )
+        assert snapshot["market"] == "A_SHARE"
+        assert str(snapshot["request_id"]).startswith("req_")
+        assert snapshot.get("data") is None or isinstance(snapshot["data"], dict)
 
         # ---- investment_case create / query ----
         created = _parse_envelope(

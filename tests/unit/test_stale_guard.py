@@ -214,6 +214,7 @@ def test_active_sessions_use_age_only() -> None:
         TradingSession.REGULAR,
         TradingSession.PRE_MARKET,
         TradingSession.POST_MARKET,
+        TradingSession.OVERNIGHT,
     ):
         _assert(
             latest_bar_time=bar,
@@ -225,6 +226,7 @@ def test_active_sessions_use_age_only() -> None:
         TradingSession.REGULAR,
         TradingSession.PRE_MARKET,
         TradingSession.POST_MARKET,
+        TradingSession.OVERNIGHT,
     ):
         with pytest.raises(StaleMarketData) as exc_info:
             _assert(

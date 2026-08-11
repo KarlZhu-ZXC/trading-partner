@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
 from domain.common.errors import DataContractError
 from infrastructure.persistence import orm as _orm  # noqa: F401
 from infrastructure.persistence.metadata import Base
@@ -49,7 +52,6 @@ FORBIDDEN_TABLES = frozenset(
     }
 )
 FORBIDDEN_RUNTIME_DEPENDENCIES = ("tradingagents", "langgraph", "minimax", "grok")
-EXPECTED_MIGRATION_HEADS = frozenset({"0034_research_subject_lifecycle"})
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -171,15 +173,16 @@ class DeliveryAuditReceipt:
 
 def audit_delivery(project_root: Path, public_tools: frozenset[str]) -> DeliveryAuditReceipt:
     root = project_root.resolve()
-    if len(public_tools) != 28 or public_tools & FORBIDDEN_EVAL_TOOLS:
+    if len(public_tools) != 27 or public_tools & FORBIDDEN_EVAL_TOOLS:
         raise DataContractError("Public tool surface is invalid")
     tables = frozenset(Base.metadata.tables)
     if tables & FORBIDDEN_TABLES:
         raise DataContractError("Forbidden execution/backtest tables are present")
-    for head in EXPECTED_MIGRATION_HEADS:
-        path = root / "migrations" / "versions" / f"{head}.py"
-        if not path.is_file():
-            raise DataContractError(f"Migration head is missing: {head}")
+    alembic_config = Config(str(root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(root / "migrations"))
+    migration_heads = tuple(sorted(ScriptDirectory.from_config(alembic_config).get_heads()))
+    if not migration_heads:
+        raise DataContractError("Migration graph has no head")
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = tuple(
         str(item).lower() for item in pyproject.get("project", {}).get("dependencies", ())
@@ -195,5 +198,5 @@ def audit_delivery(project_root: Path, public_tools: frozenset[str]) -> Delivery
     return DeliveryAuditReceipt(
         public_tool_count=len(public_tools),
         table_count=len(tables),
-        migration_head=",".join(sorted(EXPECTED_MIGRATION_HEADS)),
+        migration_head=",".join(migration_heads),
     )

@@ -1,22 +1,18 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-09
+> Updated: 2026-08-11
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
 ## Active queue
 
 The 2026-08-07 durable-data audit found no existing cross-subject child references or
-illegal Research Subject → Thesis → Trade Plan combinations. The items below are reachable
-prevention gaps or explicit model debt; they are not claims that stored data is
-already corrupt.
+illegal Research Subject → Thesis → Trade Plan combinations. The remaining item is an
+explicit transport boundary, not a claim that stored data is already corrupt.
 
 | ID | Status | Boundary | Summary |
 |---|---|---|---|
 | `AUTH-001` | deferred | Confirmation identity | Local stdio confirmation fields are caller assertions. Authenticated principal binding must be supplied by a future authenticated MCP host/transport. |
-| `RESEARCH-STATE-002` | open / P0 | Candidate scope | Generic Assumption, Invalidation, and Open Question candidate paths verify that referenced IDs exist but do not consistently prove that they belong to the candidate's Research Subject, Thesis, and revision at both proposal and confirmation. Relaxed Invalidation targets need the same owner check. |
-| `RESEARCH-STATE-003` | open / P1 | Research graph | `linked_case_ids` (canonical application field: `linked_subject_ids`) still need uniform existence, self-link, and confirmation-time validation. Parent/rival Thesis ownership is already enforced at proposal and confirmation. JSON-held Subject links do not receive relational-FK protection. |
-| `RESEARCH-STATE-004` | open / P1 | Monitor lifecycle | A Monitor can be created against a non-tracking Research Subject, and a bound Monitor is not automatically reconciled when its Research Subject or Trade Plan retires. The intended fix is an explicit lifecycle guard, not a hidden cascade. |
 
 `ActorContext` already distinguishes `CALLER_ASSERTED` from `AUTHENTICATED` and
 rejects trusted-principal/`confirmed_by` mismatches. The local stdio server cannot
@@ -34,19 +30,15 @@ These are deliberate product boundaries, not open defects:
   fallback handles rate limiting or unavailability.
 - CME/DCE/Dukascopy/Polymarket public endpoints may be unavailable through a
   particular network. `PROVIDER_PROXY_URL` is optional and failures stay typed.
-- Risk v2 evaluates durable positions but does not consume broker open orders.
-  Moomoo snapshots retain open orders for read-only display; Schwab open orders are
-  not ingested. Pending-order exposure and duplicate-order prevention therefore
-  remain unavailable rather than being treated as a pass.
 - The scheduled account plus Watchlist synchronization is keyed to the XNYS close.
   QMT, A-share account synchronization, and FX aggregation are intentionally
   deferred for at least two months; A-share monitoring remains fact-only and does
   not imply an A-share broker snapshot.
 - Local stdio MCP exposes no authenticated user identity, order write, fill,
-  execution, or automated backtest runner. Runtime LLM use is limited to a Monitor
-  whose composite judgment policy is explicitly enabled; it receives deterministic
-  features, has no mutation/order port, and is skipped when the qualitative feature
-  signature has not changed.
+  execution, or automated backtest runner. Runtime LLM use is limited to an enabled
+  composite Monitor judgment or optional Trade Retro narration. Both receive only
+  bounded deterministic facts and have no mutation/order port; Trade Retro remains
+  valid with its deterministic Chinese fallback when no model is configured.
 
 ## Resolved index
 
@@ -60,7 +52,7 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Account persistence | Sanitized integrity classification, deterministic SQLite foreign keys, and parent-first snapshot persistence |
 | Workflows | Request claim before provider access and durable terminal fact replay |
 | Challenge Review | Payload-hashed idempotent start and resolution |
-| Architecture | Sole 28-tool compact MCP surface and capability-split provider adapters |
+| Architecture | Sole 27-tool MCP vNext Shadow surface and capability-split provider adapters |
 | Release identity | Python package metadata, health, and Console API share one application version source |
 | KR Console Monitor | Monitor builder resolves KR instruments and exposes `KR_POST_MARKET` without changing backend scope |
 | Instrument first use | One shared local-first discovery gateway across market, technical, research, context, workflow, and Monitor facts |
@@ -76,6 +68,10 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Telegram changed-point identity | Transition banners list each changed condition/threshold, bounded meaning, severity, and state instead of a bare `TRIGGERED`/`RECOVERED` label |
 | Telegram post-market duplication | A market-close run persists transition events but sends exactly one run-linked digest; no duplicate per-symbol event cards, and price-change percentages keep two decimals |
 | Provider burst admission | Router-managed Provider calls atomically reserve bounded current/future slots and wait asynchronously; local queue expiry is `PROVIDER_ADMISSION_TIMEOUT`, distinct from an upstream `PROVIDER_RATE_LIMIT_ERROR` |
+| Research/Monitor lifecycle (`RESEARCH-STATE-004`) | ACTIVE/PAUSED Monitors require an ACTIVE Research Subject; a Research Subject or live Trade Plan cannot retire while a linked Monitor remains ACTIVE/PAUSED. Callers must archive the Monitor explicitly; no hidden cascade occurs. |
+| Candidate child scope (`RESEARCH-STATE-002`) | Assumption, Invalidation, relaxed-Invalidation, and Open Question references are checked against their owning Subject/Thesis/revision at proposal and again at confirmation; cross-scope or tampered candidates fail atomically. |
+| Research Subject links (`RESEARCH-STATE-003`) | JSON-held `linked_subject_ids` reject missing targets, self-links, and duplicates on direct writes and Candidate proposal, then revalidate before confirmation. |
+| Pending-order risk | Risk v2 includes safely valued remaining BUY open-order notional in prospective exposure and explicitly reports SELL orders, unknown status, and incomplete valuation instead of treating pending exposure as absent. |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
 [Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the

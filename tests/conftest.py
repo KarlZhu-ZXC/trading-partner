@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import shutil
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine as create_sqlalchemy_engine
+from sqlalchemy import event
+from sqlalchemy.pool import Pool
 
 from domain.common.enums import AppEnvironment, AssetType, LogLevel, Market
 from domain.common.ids import EntityIdPrefix
@@ -143,9 +151,90 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _set_migrated_test_env(monkeypatch: pytest.MonkeyPatch, database_url: str) -> None:
+    for key in list(os.environ):
+        if key in APP_SETTINGS_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_NAME", "shared-migrated-test")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("MCP_SERVER_NAME", "shared-migrated-test")
+    monkeypatch.setenv("DEFAULT_TIMEZONE", "UTC")
+    monkeypatch.setenv("PROVIDER_TIMEOUT_SECONDS", "5")
+
+
+@pytest.fixture(scope="session")
+def migrated_sqlite_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create one immutable migration-complete SQLite baseline per test session."""
+    root = Path(__file__).resolve().parents[1]
+    path = tmp_path_factory.mktemp("migrated-schema") / "template.db"
+    database_url = f"sqlite:///{path}"
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    with pytest.MonkeyPatch.context() as patch:
+        _set_migrated_test_env(patch, database_url)
+        command.upgrade(config, "head")
+    return path
+
+
+@pytest.fixture
+def migrated_sqlite_url(
+    migrated_sqlite_template: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Give one test an isolated copy of the migrated database baseline."""
+    target = tmp_path / "test.db"
+    shutil.copyfile(migrated_sqlite_template, target)
+    database_url = f"sqlite:///{target}"
+    _set_migrated_test_env(monkeypatch, database_url)
+    return database_url
+
+
+@pytest.fixture(scope="session")
+def orm_sqlite_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create the full ORM-only schema once for isolated repository tests."""
+    import infrastructure.persistence.orm  # noqa: F401
+    from infrastructure.persistence.metadata import Base
+
+    path = tmp_path_factory.mktemp("orm-schema") / "template.db"
+    engine = create_sqlalchemy_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    return path
+
+
+@pytest.fixture
+def orm_sqlite_url(orm_sqlite_template: Path, tmp_path: Path) -> str:
+    """Give one test an isolated copy of the complete ORM-only schema."""
+    target = tmp_path / "orm-test.db"
+    shutil.copyfile(orm_sqlite_template, target)
+    return f"sqlite:///{target}"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Prevent accidental leakage of host * into unit tests."""
     # Do not clear everything — only ensure tests that construct AppSettings
     # explicitly pass values. Integration tests that need env set it themselves.
     yield
+
+
+@pytest.fixture(autouse=True)
+def _close_test_database_connections() -> Iterator[None]:
+    """Close DBAPI connections created by a test, including helper-owned ones."""
+    connections: set[object] = set()
+
+    def remember_connection(connection: object, _record: object) -> None:
+        connections.add(connection)
+
+    event.listen(Pool, "connect", remember_connection)
+    try:
+        yield
+    finally:
+        event.remove(Pool, "connect", remember_connection)
+        for connection in connections:
+            with contextlib.suppress(Exception):
+                connection.close()  # type: ignore[attr-defined]

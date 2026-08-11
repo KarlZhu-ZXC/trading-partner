@@ -35,7 +35,6 @@ from domain.us_context.enums import (
     USSentimentSource,
 )
 from domain.us_context.models import USSentimentSample
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.provider_cache_store import SqlAlchemyProviderCacheStore
 from infrastructure.persistence.provider_health_store import SqlAlchemyProviderHealthStore
 from infrastructure.persistence.provider_rate_limit_store import (
@@ -105,9 +104,8 @@ def _assert_safe_persistence_error(
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> Engine:
-    eng = _configure_sqlite_engine(f"sqlite:///{tmp_path / 'provider_state_stores.db'}")
-    Base.metadata.create_all(eng)
+def engine(orm_sqlite_url: str) -> Engine:
+    eng = _configure_sqlite_engine(orm_sqlite_url)
     yield eng  # type: ignore[misc]
     eng.dispose()
 

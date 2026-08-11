@@ -16,28 +16,40 @@ from application.dto.tool_envelope import SourceReference, ToolEnvelope
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import (
     MonitorEvaluationService,
+    _append_judgment_notification,
     _notification_event_label,
+    _notification_event_symbol,
+    _notification_messages,
     _notification_price_change_lines,
     _NotificationPriceContext,
+    _post_market_summary_message,
     _rule_meaning,
 )
+from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.monitor_notification_service import MonitorNotificationService
-from domain.common.enums import Freshness, SourceRole, TradingSession
+from domain.common.enums import Freshness, Market, SourceRole, TradingSession
+from domain.common.errors import ProviderTimeoutError
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventType,
     MonitorNotificationChannel,
     MonitorNotificationStatus,
+    MonitorRuleStateValue,
     MonitorRuleType,
+    MonitorRunStatus,
     MonitorSeverity,
     MonitorStatus,
 )
 from domain.monitoring.models import (
     MonitorDefinition,
     MonitorEvent,
+    MonitorJudgmentPolicy,
     MonitorNotificationOutboxEntry,
+    MonitorRun,
+    MonitorRunObservation,
 )
-from domain.notifications.enums import NotificationSourceType
+from domain.notifications.enums import NotificationChannel, NotificationSourceType
+from domain.notifications.models import NotificationMessage
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 from infrastructure.providers.notifications.telegram import (
@@ -159,6 +171,366 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
     assert "数据提示：DELAYED_US_DATA" in rendered
     assert "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理" in rendered
     assert rendered.index("新触发点位") < rendered.index("当前价格")
+
+
+def test_cross_instrument_title_and_same_run_judgment_are_compact() -> None:
+    rules = {
+        "GDXU_EXIT": MagicMock(instrument_id="etf:US:GDXU"),
+        "GDXU_RSI": MagicMock(instrument_id="etf:US:GDXU"),
+    }
+    events = (
+        MagicMock(rule_code="GDXU_EXIT"),
+        MagicMock(rule_code="GDXU_RSI"),
+    )
+    assert _notification_event_symbol(events, rules, "XAUUSD") == "GDXU"
+
+    base = NotificationMessage(
+        notification_id="monitor_notification_base",
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id="monitor_event_base",
+        channel=NotificationChannel.TELEGRAM,
+        title="🚨 GDXU · 2项变化",
+        body=(
+            "黄金监控\n标的：XAUUSD\n当前价格：4354.8\nCHANGES\n两项确定性变化\n"
+            "RULES\n• 状态：TRIGGERED · 条件：last GTE 132 · 含义：进入阻力区 · 级别：H"
+        ),
+        created_at=NOW,
+    )
+    judgment = NotificationMessage(
+        notification_id="monitor_notification_judgment",
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id="monitor_event_judgment",
+        channel=NotificationChannel.TELEGRAM,
+        title="复合判断",
+        body="结论：WAIT\n状态：盘前报价可用，日线仍截止上一收盘",
+        created_at=NOW,
+    )
+
+    merged = _append_judgment_notification(base, judgment)
+
+    assert merged.source_id == "monitor_event_base"
+    assert "两项确定性变化" in merged.body
+    assert "盘前报价可用" in merged.body
+    assert len(merged.body) <= 4096
+    rendered = _format_notification_html(merged.title, merged.body)
+    assert "🧭 <b>复合判断</b>" in rendered
+    assert "盘前报价可用" in rendered
+
+
+def test_model_degradation_merges_into_deterministic_card_with_same_run_context() -> None:
+    rule = MonitorRuleInput(
+        rule_code="XAU_BREAKOUT_2400",
+        description="黄金突破 2400 后提醒。",
+        rule_type=MonitorRuleType.PRICE_ABOVE,
+        severity=MonitorSeverity.HIGH,
+        instrument_id="commodity_spot:OTC:XAUUSD",
+        price_threshold=Decimal("2400"),
+        max_fact_age_seconds=3600,
+    ).to_domain()
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000101",
+        version=1,
+        name="XAUUSD 关键位",
+        subject_id=None,
+        primary_instrument_id="commodity_spot:OTC:XAUUSD",
+        cadence=MonitorCadence.INTERVAL,
+        interval_minutes=60,
+        status=MonitorStatus.ACTIVE,
+        rules=(rule,),
+        confirmed_by="user",
+        idempotency_key="xau-model-degradation-card",
+        created_at=NOW,
+    )
+    observation = MonitorRunObservation(
+        run_id="monitor_run_00000000-0000-7000-8000-000000000101",
+        monitor_id=monitor.monitor_id,
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        instrument_id=rule.instrument_id,
+        severity=rule.severity,
+        state=MonitorRuleStateValue.TRIGGERED,
+        observed_value=Decimal("2405"),
+        threshold_value=Decimal("2400"),
+        distance_value=Decimal("5"),
+        distance_percent=Decimal("0.2083333333"),
+        fact_as_of=NOW,
+        fact_age_seconds=0,
+        warning_codes=(),
+        error_codes=(),
+        message="Rule condition triggered.",
+    )
+    event = MonitorEvent(
+        event_id="monitor_event_00000000-0000-7000-8000-000000000101",
+        monitor_id=monitor.monitor_id,
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        event_type=MonitorEventType.TRIGGERED,
+        severity=rule.severity,
+        observed_value=Decimal("2405"),
+        threshold_value=Decimal("2400"),
+        fact_as_of=NOW,
+        message="Rule condition triggered.",
+        created_at=NOW,
+    )
+    base = _notification_messages(
+        monitor,
+        (event,),
+        (observation,),
+        {},
+        ("dukascopy",),
+        MagicMock(new=MagicMock(return_value="monitor_notification_base")),
+    )[0]
+    degradation = NotificationMessage(
+        notification_id="monitor_notification_judgment",
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id="monitor_event_00000000-0000-7000-8000-000000000102",
+        channel=NotificationChannel.TELEGRAM,
+        title="🧭 XAUUSD · 判断不可用",
+        body=(
+            "状态：复合判断暂时不可用；确定性规则结果仍然有效。\n"
+            "错误码：PROVIDER_TIMEOUT_ERROR\n"
+            "说明：本轮未生成模型结论；请稍后重试。"
+        ),
+        created_at=NOW,
+    )
+
+    merged = _append_judgment_notification(base, degradation)
+    assert merged.body.count("JUDGMENT") == 1
+    assert "当前价格：2405" in merged.body
+    assert "价格时间：2026-07-29T12:00:00+00:00" in merged.body
+    assert "数据来源：dukascopy" in merged.body
+    assert "条件：> 2400" in merged.body
+    assert "错误码：PROVIDER_TIMEOUT_ERROR" in merged.body
+    assert "未定义" not in merged.body
+    assert "UNKNOWN" not in merged.body
+    assert "建议数量0" not in merged.body
+
+
+@pytest.mark.asyncio
+async def test_evaluator_model_timeout_enqueues_one_same_run_operational_card(
+    migrated_sqlite_url, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(migrated_sqlite_url)
+    repository = SqlAlchemyMonitorRepository(engine)
+    instrument_id = "future:US:GC=F"
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000105",
+        version=1,
+        name="XAUUSD composite monitor",
+        subject_id=None,
+        primary_instrument_id=instrument_id,
+        cadence=MonitorCadence.INTERVAL,
+        interval_minutes=60,
+        status=MonitorStatus.ACTIVE,
+        rules=(
+            MonitorRuleInput(
+                rule_code="XAU_BREAKOUT_2400_TIMEOUT",
+                description="黄金突破 2400 后提醒。",
+                rule_type=MonitorRuleType.PRICE_ABOVE,
+                severity=MonitorSeverity.HIGH,
+                instrument_id=instrument_id,
+                price_threshold=Decimal("2400"),
+                max_fact_age_seconds=3600,
+            ).to_domain(),
+        ),
+        confirmed_by="user",
+        idempotency_key="xau-model-timeout-evaluator",
+        created_at=NOW,
+        judgment_policy=MonitorJudgmentPolicy(
+            playbook="等待确定性确认",
+            reference_instrument_ids=(instrument_id,),
+            confirmed_state_json="{}",
+        ),
+    )
+    repository.create(monitor)
+    quote = ToolEnvelope.success(
+        request_id="req_xau_timeout_quote",
+        market=Market.US,
+        as_of=NOW,
+        fetched_at=NOW,
+        freshness=Freshness.FRESH,
+        sources=(SourceReference(name="yfinance", role=SourceRole.PRIMARY),),
+        data=USQuoteDTO(
+            instrument_id=instrument_id,
+            quote_at=NOW,
+            session=TradingSession.REGULAR,
+            last=Decimal("2395"),
+            open=None,
+            high=None,
+            low=None,
+            previous_close=None,
+            volume=None,
+            average_volume=None,
+            market_cap=None,
+            beta=None,
+            week_52_low=None,
+            week_52_high=None,
+        ),
+    )
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(return_value=quote)
+    market.get_market_bars = AsyncMock()
+    provider = MagicMock(
+        provider_name="bailian",
+        model="qwen3.8-max",
+        reasoning_effort="high",
+    )
+    provider.judge = AsyncMock(side_effect=ProviderTimeoutError("timed out"))
+    judgment_service = MonitorJudgmentService(
+        repository,
+        market,
+        provider,
+        fixed_clock,
+        id_generator,
+    )
+    judgment_service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=(
+            {"warning_codes": (), "sessions_aligned": True},
+            ("sessions_aligned",),
+            "timeout-feature-signature",
+        )
+    )
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+        judgment_service=judgment_service,
+    )
+    fixed_clock.set(NOW)
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(monitor_ids=(monitor.monitor_id,), as_of=NOW)
+    )
+
+    pending = repository.list_due_notifications(
+        MonitorNotificationChannel.TELEGRAM,
+        NOW,
+        20,
+    )
+    assert run.events_created == 1
+    assert len(pending) == 1
+    card = pending[0]
+    assert "当前价格：2395" in card.body
+    assert f"价格时间：{NOW.isoformat()}" in card.body
+    assert "数据来源：yfinance" in card.body
+    assert "条件：> 2400" in card.body
+    assert "含义：黄金突破 2400 后提醒" in card.body
+    assert "错误码：PROVIDER_TIMEOUT_ERROR" in card.body
+    assert "未定义" not in card.body
+    assert "UNKNOWN" not in card.body
+    assert "建议数量0" not in card.body
+    market.get_market_snapshot.assert_awaited_once()
+    market.get_market_bars.assert_not_awaited()
+    engine.dispose()
+
+
+def test_post_market_model_degradation_stays_in_existing_digest() -> None:
+    rule = MonitorRuleInput(
+        rule_code="XAU_BREAKOUT_2400_DIGEST",
+        description="黄金突破 2400 后提醒。",
+        rule_type=MonitorRuleType.PRICE_ABOVE,
+        severity=MonitorSeverity.HIGH,
+        instrument_id="future:US:GC=F",
+        price_threshold=Decimal("2400"),
+        max_fact_age_seconds=3600,
+    ).to_domain()
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000102",
+        version=1,
+        name="XAUUSD 盘后",
+        subject_id=None,
+        primary_instrument_id="future:US:GC=F",
+        cadence=MonitorCadence.US_POST_MARKET,
+        status=MonitorStatus.ACTIVE,
+        rules=(rule,),
+        confirmed_by="user",
+        idempotency_key="xau-model-degradation-digest",
+        created_at=NOW,
+    )
+    observation = MonitorRunObservation(
+        run_id="monitor_run_00000000-0000-7000-8000-000000000102",
+        monitor_id=monitor.monitor_id,
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        instrument_id=rule.instrument_id,
+        severity=rule.severity,
+        state=MonitorRuleStateValue.TRIGGERED,
+        observed_value=Decimal("2405"),
+        threshold_value=Decimal("2400"),
+        distance_value=Decimal("5"),
+        distance_percent=Decimal("0.2083333333"),
+        fact_as_of=NOW,
+        fact_age_seconds=0,
+        warning_codes=(),
+        error_codes=(),
+        message="Rule condition triggered.",
+    )
+    event = MonitorEvent(
+        event_id="monitor_event_00000000-0000-7000-8000-000000000103",
+        monitor_id=monitor.monitor_id,
+        monitor_version=1,
+        rule_code=rule.rule_code,
+        event_type=MonitorEventType.TRIGGERED,
+        severity=rule.severity,
+        observed_value=Decimal("2405"),
+        threshold_value=Decimal("2400"),
+        fact_as_of=NOW,
+        message="Rule condition triggered.",
+        created_at=NOW,
+    )
+    run = MonitorRun(
+        run_id=observation.run_id,
+        requested_monitor_ids=(monitor.monitor_id,),
+        selected_monitor_ids=(monitor.monitor_id,),
+        cadence=MonitorCadence.US_POST_MARKET,
+        as_of=NOW,
+        started_at=NOW,
+        completed_at=NOW,
+        status=MonitorRunStatus.PARTIAL,
+        monitors_evaluated=1,
+        rules_evaluated=1,
+        events_created=2,
+        warning_codes=(),
+        error_codes=("PROVIDER_TIMEOUT_ERROR",),
+        observation_history_complete=True,
+        observations=(observation,),
+    )
+    degradation = NotificationMessage(
+        notification_id="monitor_notification_judgment_digest",
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id="monitor_event_00000000-0000-7000-8000-000000000104",
+        channel=NotificationChannel.TELEGRAM,
+        title="🧭 XAUUSD · 判断不可用",
+        body=(
+            "状态：复合判断暂时不可用；确定性规则结果仍然有效。\n"
+            "错误码：PROVIDER_TIMEOUT_ERROR\n"
+            "说明：本轮未生成模型结论；请稍后重试。"
+        ),
+        created_at=NOW,
+    )
+    message = _post_market_summary_message(
+        run,
+        (monitor,),
+        MagicMock(new=MagicMock(return_value="monitor_notification_digest")),
+        events=(event,),
+        monitor_sources_by_monitor={monitor.monitor_id: ("dukascopy",)},
+        judgment_notifications_by_monitor={monitor.monitor_id: degradation},
+    )
+
+    assert message.source_id == run.run_id
+    assert message.body.count("JUDGMENT") == 1
+    assert message.body.count("错误码：PROVIDER_TIMEOUT_ERROR") == 1
+    rendered = _format_notification_html(message.title, message.body)
+    assert "复合判断状态" in rendered
+    assert "当前价格：2405" in message.body
+    assert "数据来源：dukascopy" in message.body
+    assert "错误码：PROVIDER_TIMEOUT_ERROR" in rendered
+    assert "未定义" not in rendered
+    assert "UNKNOWN" not in rendered
+    assert "建议数量0" not in rendered
 
 
 def test_post_market_digest_formats_zero_change_run_as_mobile_cards() -> None:
@@ -552,6 +924,15 @@ async def test_interval_transition_still_enqueues_event_notification(
                     price_threshold=Decimal("100"),
                     max_fact_age_seconds=3600,
                 ).to_domain(),
+                MonitorRuleInput(
+                    rule_code="TEST_ABOVE_99",
+                    description="Test price is above 99.",
+                    rule_type=MonitorRuleType.PRICE_ABOVE,
+                    severity=MonitorSeverity.MEDIUM,
+                    instrument_id="equity:US:TEST",
+                    price_threshold=Decimal("99"),
+                    max_fact_age_seconds=3600,
+                ).to_domain(),
             ),
             confirmed_by="user",
             idempotency_key="interval-notification-monitor",
@@ -601,10 +982,12 @@ async def test_interval_transition_still_enqueues_event_notification(
         MonitorNotificationChannel.TELEGRAM, NOW, 20
     )
 
-    assert run.events_created == 1
+    assert run.events_created == 2
     assert len(pending) == 1
     assert pending[0].source_event_id is not None
     assert pending[0].source_run_id is None
     assert "条件：> 100" in pending[0].body
+    assert "条件：> 99" in pending[0].body
+    assert "2项变化" in pending[0].title
     assert "含义：Test price is above 100" in pending[0].body
     engine.dispose()

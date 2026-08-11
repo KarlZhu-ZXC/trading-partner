@@ -211,6 +211,9 @@ def test_account_and_monitor_gaps_are_machine_readable() -> None:
         "MONITOR_NEVER_EVALUATED",
     } <= codes
     assert envelope.data.account_snapshots[0].valuation_coverage_ratio == 0
+    actions = {item.code: item.recommended_action_code for item in envelope.data.issues}
+    assert actions["ACCOUNT_SNAPSHOT_DEGRADED"] == "SYNC_ACCOUNTS"
+    assert actions["ACCOUNT_ACTIVITY_COVERAGE_MISSING"] == "SYNC_ACCOUNT_TRANSACTIONS"
 
 
 def test_non_tracking_case_with_live_judgment_is_reported() -> None:
@@ -279,6 +282,13 @@ def test_old_definition_run_does_not_cover_the_current_monitor_version() -> None
     assert "MONITOR_CURRENT_VERSION_NEVER_EVALUATED" in {
         item.code for item in envelope.data.issues
     }
+    issue = next(
+        item
+        for item in envelope.data.issues
+        if item.code == "MONITOR_CURRENT_VERSION_NEVER_EVALUATED"
+    )
+    assert issue.recommended_action_code == "EVALUATE_MONITOR"
+    assert issue.automatic_recovery_expected is False
 
 
 def test_repository_failure_is_redacted_and_does_not_probe_upstream() -> None:

@@ -9,6 +9,9 @@ from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.broker_order_service import BrokerOrderService
+from application.services.cash_sweep_shadow_service import CashSweepShadowService
+from application.services.catalyst_agenda_service import CatalystAgendaService
 from application.services.challenge_review_service import ChallengeReviewService
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
@@ -16,6 +19,7 @@ from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
+from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
@@ -29,6 +33,7 @@ from application.services.research_workflow_orchestrator import ResearchWorkflow
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
+from application.services.trade_retro_service import TradeRetroService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
 from application.services.us_tool_coordinator import USToolCoordinator
@@ -65,6 +70,11 @@ class ApplicationServices:
     workflows: ResearchWorkflowOrchestrator
     historical_validation: HistoricalValidationService
     watchlist: WatchlistHubService
+    trade_retro: TradeRetroService
+    scorecards: JudgmentScorecardService
+    catalyst_agenda: CatalystAgendaService
+    broker_order_preview: CashSweepShadowService
+    broker_orders: BrokerOrderService
 
 
 @dataclass(frozen=True, slots=True)

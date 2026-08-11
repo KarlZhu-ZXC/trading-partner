@@ -32,6 +32,7 @@ from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
 from application.services._research_support import UowFactory
 from application.services.monitor_schedule_service import MonitorScheduleService
+from application.services.research_state_invariants import ensure_subject_can_host_live_monitor
 from domain.common.errors import (
     DataContractError,
     IdempotencyConflict,
@@ -81,7 +82,7 @@ class MonitorService:
                     "idempotency_key belongs to a different monitor definition"
                 )
             return self.get(MonitorGetInput(monitor_id=existing.monitor_id))
-        self._validate_subject(subject_id)
+        self._validate_subject(subject_id, require_tracking=True)
         now = self._clock.now()
         value = MonitorDefinition(
             monitor_id=self._ids.new(EntityIdPrefix.MONITOR),
@@ -127,7 +128,10 @@ class MonitorService:
                     "current_version": current.version,
                 },
             )
-        self._validate_subject(subject_id)
+        self._validate_subject(
+            subject_id,
+            require_tracking=request.status in {MonitorStatus.ACTIVE, MonitorStatus.PAUSED},
+        )
         value = MonitorDefinition(
             monitor_id=current.monitor_id,
             version=current.version + 1,
@@ -324,11 +328,13 @@ class MonitorService:
             raise MonitorNotFound("Monitor was not found", details={"monitor_id": monitor_id})
         return value
 
-    def _validate_subject(self, subject_id: str | None) -> None:
+    def _validate_subject(self, subject_id: str | None, *, require_tracking: bool) -> None:
         if subject_id is None:
             return
         with self._research_uow_factory() as uow:
-            uow.subjects.get(subject_id)
+            subject = uow.subjects.get(subject_id)
+            if require_tracking:
+                ensure_subject_can_host_live_monitor(subject)
 
     def _resolve_definition_inputs(
         self, request: MonitorCreateInput | MonitorUpdateInput

@@ -35,6 +35,45 @@ LIVE_TRADE_PLAN_STATUSES = frozenset(
 )
 
 
+def ensure_subject_can_host_live_monitor(subject: ResearchSubject) -> None:
+    """Require an ACTIVE Research Subject for an ACTIVE/PAUSED Monitor."""
+
+    if subject.status in TRACKING_SUBJECT_STATUSES:
+        return
+    raise ResearchStateConflict(
+        "live Monitor requires an ACTIVE Research Subject",
+        details={
+            "subject_id": subject.subject_id,
+            "subject_status": _status_value(subject.status),
+        },
+    )
+
+
+def ensure_no_live_monitors(
+    uow: ResearchUnitOfWork,
+    *,
+    subject_id: str | None = None,
+    trade_plan_id: str | None = None,
+    action: str,
+) -> None:
+    """Reject parent retirement while linked ACTIVE/PAUSED Monitors remain."""
+
+    monitor_ids = uow.monitor_lifecycle.list_live_ids(
+        subject_id=subject_id,
+        trade_plan_id=trade_plan_id,
+    )
+    if not monitor_ids:
+        return
+    raise ResearchStateConflict(
+        f"{action} requires linked Monitors to be archived first",
+        details={
+            "subject_id": subject_id,
+            "trade_plan_id": trade_plan_id,
+            "live_monitor_ids": monitor_ids,
+        },
+    )
+
+
 def _status_value(status: object) -> str:
     if isinstance(status, (ResearchSubjectStatus, ThesisStatus, TradePlanStatus)):
         return status.value
@@ -254,6 +293,12 @@ def ensure_subject_can_leave_tracking(
         and attempted_subject_status is subject.status
     ):
         return
+
+    ensure_no_live_monitors(
+        uow,
+        subject_id=subject.subject_id,
+        action="Research Subject retirement",
+    )
 
     live_theses = tuple(
         thesis

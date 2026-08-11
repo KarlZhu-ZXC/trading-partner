@@ -30,6 +30,10 @@ def create_engine_from_url(database_url: str) -> Engine:
     connect_args: dict[str, object] = {}
     if database_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+        # Agent message appends and cursor CAS updates can briefly contend
+        # across Console/Telegram processes.  Let SQLite wait for the writer
+        # instead of surfacing an avoidable ``database is locked`` error.
+        connect_args["timeout"] = 30.0
     engine = create_engine(database_url, future=True, connect_args=connect_args)
     if database_url.startswith("sqlite"):
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
@@ -44,6 +48,7 @@ def _enable_sqlite_foreign_keys(
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
     finally:
         cursor.close()
 

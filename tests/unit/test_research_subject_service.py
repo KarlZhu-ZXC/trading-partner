@@ -11,7 +11,6 @@ from sqlalchemy.engine import Engine
 from application.services.research_subject_service import ResearchSubjectService
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import ResearchSubjectStatus, ResearchSubjectType
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
 
@@ -27,11 +26,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def svc(tmp_path):  # type: ignore[no-untyped-def]
-    path = tmp_path / "subject.db"
-    eng = create_engine(f"sqlite:///{path}")
+def svc(orm_sqlite_url: str):  # type: ignore[no-untyped-def]
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     clock = FixedClock(NOW)
     ids = SequentialIdGenerator()
     redactor = DefaultSecretRedactor()
@@ -159,6 +156,73 @@ def test_update_metadata_rejects_codex(svc) -> None:  # type: ignore[no-untyped-
     )
     assert env.ok is False
     assert env.errors[0].code == "UNAUTHORIZED_REVIEWER"
+
+
+def test_subject_links_require_existing_distinct_subjects(svc) -> None:  # type: ignore[no-untyped-def]
+    service, *_ = svc
+    missing = service.create_subject(
+        subject_type=ResearchSubjectType.THEME,
+        title="Theme with missing peer",
+        summary="Research scope",
+        primary_instrument_id=None,
+        topic_tags=(),
+        linked_subject_ids=("subject_missing",),
+        confirmed_by="user",
+        idempotency_key="missing-linked-subject",
+    )
+    assert missing.ok is False
+    assert missing.errors[0].code == "INPUT_VALIDATION_ERROR"
+    assert missing.errors[0].details["linked_subject_id"] == "subject_missing"
+
+    first = service.create_subject(
+        subject_type=ResearchSubjectType.THEME,
+        title="First linked theme",
+        summary="First stable scope",
+        primary_instrument_id=None,
+        topic_tags=(),
+        linked_subject_ids=(),
+        confirmed_by="user",
+        idempotency_key="first-linked-subject",
+    )
+    second = service.create_subject(
+        subject_type=ResearchSubjectType.THEME,
+        title="Second linked theme",
+        summary="Second stable scope",
+        primary_instrument_id=None,
+        topic_tags=(),
+        linked_subject_ids=(),
+        confirmed_by="user",
+        idempotency_key="second-linked-subject",
+    )
+    assert first.data is not None and second.data is not None
+
+    linked = service.update_subject_metadata(
+        first.data.subject_id,
+        linked_subject_ids=(second.data.subject_id,),
+        reviewed_by="user",
+        idempotency_key="valid-linked-subject",
+    )
+    assert linked.ok is True
+    assert linked.data is not None
+    assert linked.data.linked_subject_ids == (second.data.subject_id,)
+
+    self_link = service.update_subject_metadata(
+        first.data.subject_id,
+        linked_subject_ids=(first.data.subject_id,),
+        reviewed_by="user",
+        idempotency_key="self-linked-subject",
+    )
+    assert self_link.ok is False
+    assert self_link.errors[0].code == "INPUT_VALIDATION_ERROR"
+
+    duplicate = service.update_subject_metadata(
+        first.data.subject_id,
+        linked_subject_ids=(second.data.subject_id, second.data.subject_id),
+        reviewed_by="user",
+        idempotency_key="duplicate-linked-subject",
+    )
+    assert duplicate.ok is False
+    assert duplicate.errors[0].code == "INPUT_VALIDATION_ERROR"
 
 
 def test_create_idempotent_same_payload(svc) -> None:  # type: ignore[no-untyped-def]

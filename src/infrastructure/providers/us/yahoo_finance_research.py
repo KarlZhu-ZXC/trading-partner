@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Final
@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpRequest, HttpTransport
+from domain.catalyst_agenda.calendar import CatalystCalendarBatch, CatalystCalendarCandidate
+from domain.catalyst_agenda.enums import AgendaDateCertainty, AgendaItemKind
 from domain.common.enums import (
     AssetType,
     CacheDisposition,
@@ -56,6 +58,11 @@ from infrastructure.providers.us.yahoo_finance import YahooFinanceAdapter
 from infrastructure.providers.us.yfinance_breadth_client import (
     YahooBreadthClient,
     YFinanceBreadthClient,
+)
+from infrastructure.providers.us.yfinance_calendar_client import (
+    YahooCalendarClient,
+    YahooCalendarPayload,
+    YFinanceCalendarClient,
 )
 from infrastructure.providers.us.yfinance_fundamentals_client import (
     YahooFundamentalsClient,
@@ -225,11 +232,14 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         timeout_seconds: float = 15.0,
         breadth_timeout_seconds: float = 30.0,
         user_agent: str = "TradingPartner/1.0",
+        current_window_seconds: int = 300,
         max_fresh_seconds: int = 30,
         max_delayed_seconds: int = 900,
         fundamentals_client: YahooFundamentalsClient | None = None,
         breadth_client: YahooBreadthClient | None = None,
         statements_client: YahooStatementsClient | None = None,
+        calendar_client: YahooCalendarClient | None = None,
+        proxy_url: str | None = None,
     ) -> None:
         super().__init__(
             transport,
@@ -237,6 +247,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
             enabled=enabled,
             timeout_seconds=timeout_seconds,
             user_agent=user_agent,
+            current_window_seconds=current_window_seconds,
             max_fresh_seconds=max_fresh_seconds,
             max_delayed_seconds=max_delayed_seconds,
         )
@@ -266,6 +277,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         self._fundamentals_client = fundamentals_client or YFinanceFundamentalsClient()
         self._breadth_client = breadth_client or YFinanceBreadthClient()
         self._statements_client = statements_client or YFinanceStatementsClient()
+        self._calendar_client = calendar_client or YFinanceCalendarClient(proxy_url=proxy_url)
 
     @property
     def vendor_id(self) -> VendorId:
@@ -283,6 +295,155 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
     def is_configured(self) -> bool:
         return self._enabled
 
+    async def get_catalyst_calendar(
+        self,
+        instrument: Instrument | None,
+        *,
+        start: date,
+        end: date,
+        as_of: datetime,
+        release_ids: tuple[int, ...] = (),
+    ) -> ProviderSuccess[CatalystCalendarBatch]:
+        """Return current-only Yahoo company calendar candidates."""
+        if instrument is None:
+            raise DataContractError("Yahoo catalyst calendar requires an Instrument")
+        if release_ids:
+            raise DataContractError("Yahoo catalyst calendar does not accept release_ids")
+        symbol = self._calendar_instrument(instrument)
+        self._as_of(as_of, current_only=True)
+        if end < start:
+            raise DataContractError("calendar end must be >= start")
+        raw = await self._calendar_client.get_calendar(
+            symbol,
+            start=start,
+            end=end,
+            timeout_seconds=self._timeout,
+        )
+        fetched_at = self._clock.now()
+        candidates = self._calendar_candidates(
+            raw,
+            instrument=instrument,
+            start=start,
+            end=end,
+            fetched_at=fetched_at,
+        )
+        batch = CatalystCalendarBatch(
+            vendor=self.vendor_id,
+            start=start,
+            end=end,
+            candidates=candidates,
+            limitation_codes=("YAHOO_CALENDAR_CURRENT_ONLY",),
+        )
+        return ProviderSuccess(
+            batch,
+            self._research_meta(
+                DataCategory.CORPORATE_ACTIONS,
+                as_of,
+                fetched_at,
+                ("YAHOO_CALENDAR_CURRENT_ONLY",),
+            ),
+        )
+
+    def _calendar_candidates(
+        self,
+        payload: YahooCalendarPayload,
+        *,
+        instrument: Instrument,
+        start: date,
+        end: date,
+        fetched_at: datetime,
+    ) -> tuple[CatalystCalendarCandidate, ...]:
+        output: list[CatalystCalendarCandidate] = []
+        earnings = tuple(day for day in payload.earnings_dates if start <= day <= end)
+        if earnings:
+            first, last = min(earnings), max(earnings)
+            output.append(
+                self._company_calendar_candidate(
+                    instrument,
+                    kind=AgendaItemKind.EARNINGS,
+                    title=f"{instrument.symbol} earnings date",
+                    event_key=(
+                        f"{instrument.symbol}:earnings:{first.year}Q{((first.month - 1) // 3) + 1}"
+                    ),
+                    first=first,
+                    last=last,
+                    certainty=(
+                        AgendaDateCertainty.RANGE
+                        if first != last
+                        else AgendaDateCertainty.ESTIMATED
+                    ),
+                    fetched_at=fetched_at,
+                )
+            )
+        for label, suffix, days in (
+            ("Ex-Dividend Date", "ex", payload.ex_dividend_dates),
+            ("Dividend Date", "pay", payload.dividend_dates),
+        ):
+            for day in days:
+                if start <= day <= end:
+                    output.append(
+                        self._company_calendar_candidate(
+                            instrument,
+                            kind=AgendaItemKind.DIVIDEND,
+                            title=f"{instrument.symbol} {label.lower()}",
+                            event_key=(
+                                f"{instrument.symbol}:dividend:{suffix}:{day.year}-{day.month:02d}"
+                            ),
+                            first=day,
+                            last=day,
+                            certainty=AgendaDateCertainty.ESTIMATED,
+                            fetched_at=fetched_at,
+                        )
+                    )
+        for row in payload.splits:
+            if row.symbol != instrument.symbol.upper():
+                continue
+            for day in (row.event_date,):
+                if start <= day <= end:
+                    output.append(
+                        self._company_calendar_candidate(
+                            instrument,
+                            kind=AgendaItemKind.CORPORATE_ACTION,
+                            title=f"{instrument.symbol} stock split",
+                            event_key=f"{instrument.symbol}:split:{day.isoformat()}",
+                            first=day,
+                            last=day,
+                            certainty=AgendaDateCertainty.ESTIMATED,
+                            fetched_at=fetched_at,
+                        )
+                    )
+        unique = {item.upstream_event_key: item for item in output}
+        return tuple(sorted(unique.values(), key=lambda item: item.window_start))
+
+    @staticmethod
+    def _company_calendar_candidate(
+        instrument: Instrument,
+        *,
+        kind: AgendaItemKind,
+        title: str,
+        event_key: str,
+        first: date,
+        last: date,
+        certainty: AgendaDateCertainty,
+        fetched_at: datetime,
+    ) -> CatalystCalendarCandidate:
+        return CatalystCalendarCandidate(
+            vendor=VendorId.YFINANCE,
+            instrument_id=instrument.instrument_id,
+            kind=kind,
+            title=title,
+            fiscal_period=None,
+            upstream_event_key=event_key,
+            window_start=datetime.combine(first, time.min, tzinfo=_NY),
+            window_end=datetime.combine(last, time.max, tzinfo=_NY),
+            timezone="America/New_York",
+            date_certainty=certainty,
+            source_reference=None,
+            source_visible_at=fetched_at,
+            last_verified_at=fetched_at,
+            historical_vintage=False,
+        )
+
     def _instrument(self, instrument: Instrument) -> str:
         if not isinstance(instrument, Instrument):
             raise DataContractError(
@@ -291,6 +452,21 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         if instrument.market is not Market.US or instrument.asset_type is not AssetType.EQUITY:
             raise DataContractError(
                 "Yahoo research supports US equities only", details={"field": "instrument"}
+            )
+        return quote(instrument.symbol.upper(), safe=".-^")
+
+    def _calendar_instrument(self, instrument: Instrument) -> str:
+        if not isinstance(instrument, Instrument):
+            raise DataContractError(
+                "instrument must be Instrument", details={"field": "instrument"}
+            )
+        if instrument.market is not Market.US or instrument.asset_type not in {
+            AssetType.EQUITY,
+            AssetType.ETF,
+        }:
+            raise DataContractError(
+                "Yahoo calendar supports US equities and ETFs",
+                details={"field": "instrument"},
             )
         return quote(instrument.symbol.upper(), safe=".-^")
 
@@ -643,9 +819,7 @@ class YahooFinanceResearchAdapter(YahooFinanceAdapter):
         cap = 8 if frequency is USStatementFrequency.QUARTERLY else 5
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= cap:
             raise DataContractError(f"limit must be between 1 and {cap}")
-        yf_frequency = (
-            "quarterly" if frequency is USStatementFrequency.QUARTERLY else "yearly"
-        )
+        yf_frequency = "quarterly" if frequency is USStatementFrequency.QUARTERLY else "yearly"
         tables = await self._statements_client.get_tables(
             symbol,
             frequency=yf_frequency,

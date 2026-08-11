@@ -65,11 +65,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def engine(tmp_path):  # type: ignore[no-untyped-def]
-    path = tmp_path / "research.db"
-    eng = create_engine(f"sqlite:///{path}")
+def engine(orm_sqlite_url: str):  # type: ignore[no-untyped-def]
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     yield eng
     eng.dispose()
 

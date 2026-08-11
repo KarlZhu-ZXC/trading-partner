@@ -489,6 +489,13 @@ class SqlAlchemyMonitorRepository:
             )
             return _definition(row) if row is not None else None
 
+    def get_version(self, monitor_id: str, version: int) -> MonitorDefinition | None:
+        """Read one immutable Monitor version; never substitute the current version."""
+
+        with Session(self._engine) as session:
+            row = session.get(MonitorVersionRow, (monitor_id, version))
+            return _definition(row) if row is not None else None
+
     def get_created_at(self, monitor_id: str) -> datetime | None:
         with Session(self._engine) as session:
             value = session.scalar(
@@ -964,6 +971,40 @@ class SqlAlchemyMonitorRepository:
     def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None:
         values = self.list_runs(monitor_id, 1)
         return values[0] if values else None
+
+    def latest_run_for_monitor_version(
+        self, monitor_id: str, version: int
+    ) -> MonitorRun | None:
+        with Session(self._engine) as session:
+            run_id = session.scalar(
+                select(MonitorRunObservationRow.run_id)
+                .where(
+                    MonitorRunObservationRow.monitor_id == monitor_id,
+                    MonitorRunObservationRow.monitor_version == version,
+                )
+                .join(
+                    MonitorRunRow,
+                    MonitorRunRow.run_id == MonitorRunObservationRow.run_id,
+                )
+                .order_by(MonitorRunRow.completed_at.desc())
+                .limit(1)
+            )
+        return self.get_run(run_id) if run_id is not None else None
+
+    def list_events_for_monitor_version(
+        self, monitor_id: str, version: int, limit: int = 100
+    ) -> tuple[MonitorEvent, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(MonitorEventRow)
+                .where(
+                    MonitorEventRow.monitor_id == monitor_id,
+                    MonitorEventRow.monitor_version == version,
+                )
+                .order_by(MonitorEventRow.created_at.desc())
+                .limit(limit)
+            )
+            return tuple(_event(row) for row in rows)
 
     def get_event(self, event_id: str) -> MonitorEvent | None:
         with Session(self._engine) as session:

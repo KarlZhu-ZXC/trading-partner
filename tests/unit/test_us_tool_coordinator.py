@@ -168,12 +168,30 @@ def _context(
     *,
     codes: tuple[str, ...] = ("US_BREADTH_UNAVAILABLE",),
 ) -> USMarketContext:
-    proxy = USMarketProxy(instrument_id="etf:US:SPY", latest=D("500"), change_percent=D("0.5"))
+    proxy = USMarketProxy(
+        instrument_id="etf:US:SPY",
+        latest=D("500"),
+        change_percent=D("0.5"),
+        quote_at=AS_OF,
+        session=TradingSession.REGULAR,
+    )
     return USMarketContext(
         as_of=AS_OF,
         spy=proxy,
-        qqq=USMarketProxy(instrument_id="etf:US:QQQ", latest=D("400"), change_percent=D("0.4")),
-        iwm=USMarketProxy(instrument_id="etf:US:IWM", latest=D("200"), change_percent=D("0.2")),
+        qqq=USMarketProxy(
+            instrument_id="etf:US:QQQ",
+            latest=D("400"),
+            change_percent=D("0.4"),
+            quote_at=AS_OF,
+            session=TradingSession.REGULAR,
+        ),
+        iwm=USMarketProxy(
+            instrument_id="etf:US:IWM",
+            latest=D("200"),
+            change_percent=D("0.2"),
+            quote_at=AS_OF,
+            session=TradingSession.REGULAR,
+        ),
         advancing_count=None,
         declining_count=None,
         warning_codes=codes,
@@ -317,6 +335,11 @@ async def test_five_handlers_delegate_and_return_us_envelope(
         context.get_context_result.assert_awaited_once()
         assert envelope.degraded is True  # breadth always unavailable
         assert any(w.code == "US_BREADTH_UNAVAILABLE" for w in envelope.warnings)
+        assert envelope.data.spy.quote_at == AS_OF
+        assert envelope.data.spy.session is TradingSession.REGULAR
+        assert envelope.data.spy.change_percent_basis == (
+            "previous_completed_regular_session_close"
+        )
     if method == "get_technical_snapshot":
         data.get_bars.assert_awaited_once()
         technical.build_snapshot.assert_called_once()

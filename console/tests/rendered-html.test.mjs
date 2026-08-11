@@ -78,6 +78,7 @@ test("server-renders the local control room", async () => {
   assert.match(html, /Dark/);
   assert.match(html, /Overview/);
   assert.match(html, /Capabilities/);
+  assert.match(html, /Agent rail/);
   assert.doesNotMatch(html, /Your site is taking shape|react-loading-skeleton/);
 });
 
@@ -87,29 +88,132 @@ test("restores the persisted sidebar width before paint and keeps it in sync", a
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.match(layoutSource, /trading-partner-sidebar-collapsed/);
+  assert.match(layoutSource, /trading-partner-agent-rail-collapsed/);
+  assert.match(layoutSource, /matchMedia\("\(max-width: 1100px\)"\)/);
   assert.match(layoutSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed"/);
-  assert.match(shellSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed", storedCollapsed\)/);
+  assert.match(layoutSource, /document\.documentElement\.classList\.toggle\("agent-rail-collapsed"/);
+  assert.match(shellSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed", overlayViewport \|\| storedCollapsed\)/);
   assert.match(shellSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed", next\)/);
   assert.match(styles, /html\.sidebar-collapsed \.app-shell \{ --sidebar-width:76px; \}/);
+  assert.match(styles, /html\.agent-rail-collapsed \.app-shell \{ --agent-rail-width:0px; \}/);
+});
+
+test("provides independent Obsidian-style navigation and Agent panel toggles", async () => {
+  const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
+  const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(shellSource, /aria-controls="console-navigation-panel"/);
+  assert.match(shellSource, /aria-controls="console-agent-panel"/);
+  assert.match(shellSource, /Open navigation panel/);
+  assert.match(shellSource, /Open Agent panel/);
+  assert.match(shellSource, /event\.key === "Escape"/);
+  assert.match(shellSource, /event\.key\.toLowerCase\(\) === "l"/);
+  assert.match(shellSource, /event\.key\.toLowerCase\(\) === "a"/);
+  assert.match(railSource, /id="console-agent-panel"/);
+  assert.match(styles, /workspace-pane-backdrop\.visible/);
+  assert.match(styles, /transform:translateX\(-100%\)/);
+  assert.match(styles, /agent-rail\.collapsed[\s\S]*visibility: hidden/);
 });
 
 test("places Research before Monitors in primary navigation", async () => {
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.ok(shellSource.indexOf('href: "/research"') < shellSource.indexOf('href: "/monitors"'));
+  assert.ok(shellSource.indexOf('href: "/research"') < shellSource.indexOf('href: "/scorecards"'));
+  assert.ok(shellSource.indexOf('href: "/scorecards"') < shellSource.indexOf('href: "/monitors"'));
 });
 
-test("renders all primary local-console routes", async () => {
-  for (const [route, heading] of [
-    ["/monitors", "Monitor Runs &amp; Events"],
-    ["/research", "Research workspace"],
-    ["/capabilities", "MCP Capabilities"],
-    ["/portfolio", "Portfolio"],
-    ["/operations", "Operations Center"],
-  ]) {
+test("automatically authenticates Console writes with a restart-safe session token", async () => {
+  const apiSource = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  assert.match(apiSource, /\/api\/session/);
+  assert.match(apiSource, /X-Trading-Partner-Console-Token/);
+  assert.match(apiSource, /response\.status === 403/);
+});
+
+  test("renders all primary local-console routes", async () => {
+    for (const [route, heading] of [
+      ["/monitors", "Monitor Runs &amp; Events"],
+      ["/research", "Research workspace"],
+      ["/agenda", "Catalyst Agenda"],
+      ["/scorecards", "Judgment Scorecards"],
+      ["/capabilities", "MCP Capabilities"],
+      ["/portfolio", "Portfolio"],
+      ["/retro", "Trade Retro"],
+      ["/operations", "Operations Center"],
+      ["/chat", "Agent Chat"],
+    ]) {
     const response = await render(route);
     assert.equal(response.status, 200);
     assert.match(await response.text(), new RegExp(heading));
-  }
+    }
+  });
+
+test("agenda route uses the durable Catalyst Agenda write contract", async () => {
+  const response = await render("/agenda");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Catalyst Agenda/);
+
+  const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
+  const source = await readFile(new URL("../app/agenda/page.tsx", import.meta.url), "utf8");
+  assert.match(shellSource, /href: "\/agenda"/);
+  assert.match(source, /\/api\/agenda/);
+  assert.match(source, /\/api\/agenda\/summary-preview/);
+  assert.match(source, /\/api\/agenda\/summary-send/);
+  assert.match(source, /research_memory_append/);
+  assert.match(source, /LINK_OUTCOME/);
+  assert.match(source, /event_id/);
+  assert.match(source, /report_id/);
+  assert.match(source, /evidence_id/);
+  assert.match(source, /outcome_occurred_at/);
+  assert.match(source, /outcome_note/);
+  assert.match(source, /linkedEventIds/);
+  assert.match(source, /linkedEvidenceIds/);
+  assert.match(source, /Resolved supporting evidence/);
+  assert.match(source, /statusIsUpcoming\s*\?/);
+  assert.match(source, /statusIsOccurred\s*\?/);
+  assert.match(source, /Revise Outcome/);
+  assert.match(source, /Daily summary queued for delivery/);
+  assert.match(source, /date_drift_count/);
+  assert.match(source, /operation:\s*["']agenda_item["']/);
+  assert.match(source, /AgendaAction|action/);
+  assert.match(source, /idempotency_key:/);
+  assert.match(source, /confirmed_by:\s*["']user["']/);
+  assert.match(source, /authorization_note/);
+  assert.match(source, /agenda_item_id/);
+  assert.match(source, /expected_version/);
+  assert.match(source, /cancellation_reason/);
+  assert.match(source, /extractItems/);
+});
+
+test("monitor evidence labels support explicit and legacy previous-close feature ids", async () => {
+  const source = await readFile(new URL("../app/monitors/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /return_from_previous_regular_session_close_pct/);
+  assert.match(source, /quote_return_pct/);
+  assert.match(source, /return_from_previous_regular_session_close/);
+});
+
+test("scorecards route uses judgment scorecard source-contract calls", async () => {
+  const response = await render("/scorecards");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Judgment Scorecards/);
+
+  const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
+  const source = await readFile(new URL("../app/scorecards/page.tsx", import.meta.url), "utf8");
+
+  assert.match(shellSource, /href: "\/scorecards"/);
+  assert.match(shellSource, /Scorecards/);
+  assert.match(source, /\/api\/scorecards/);
+  assert.match(source, /research_workflow_run/);
+  assert.match(source, /operation:\s*["']judgment_scorecard["']/);
+  assert.match(source, /case_id:\s*subjectId/);
+  assert.match(source, /thesis_id:\s*thesisId/);
+  assert.match(
+    source,
+    /window\.confirm\(\s*"Scorecard generation is read-only and will not modify research state, holdings, or orders\. Continue\?"/,
+  );
+  assert.match(source, /TARGET_DIMENSION_OUTCOMES = \["NOT_EVALUATED", "EVALUATED", "PARTIAL", "PASS", "FAIL"\]/);
 });
 
 test("research console is a responsive Research Subject/Thesis master-detail workspace", async () => {
@@ -200,7 +304,10 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   assert.match(monitorsSource, /MONITOR_STATUSES\)\[number\]>\("ACTIVE"\)/);
   assert.match(monitorsSource, /Archiving…/);
   assert.match(monitorsSource, /monitor-list-panel/);
-  assert.match(monitorsSource, /Web Search Sources/);
+  assert.match(monitorsSource, /CompositeJudgmentCard/);
+  assert.match(monitorsSource, /Current read/);
+  assert.match(monitorsSource, /Next trigger/);
+  assert.match(monitorsSource, /Evidence & diagnostics/);
   assert.match(monitorsSource, /web_source_urls/);
   assert.match(editorSource, /missing a human-readable meaning/);
   assert.match(editorSource, /initialMonitor\?\.subject_id/);
@@ -244,4 +351,40 @@ test("keeps the default console UI copy English-only", async () => {
     const source = await readFile(new URL(file, appRoot), "utf8");
     assert.doesNotMatch(source, /\p{Script=Han}/u, `${file} contains Chinese default UI copy`);
   }
+});
+
+test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
+  const response = await render("/chat");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Agent Chat/);
+  assert.match(html, /Confirmation-gated Agent Runtime/);
+
+  const workspace = await readFile(new URL("../app/chat/chat-workspace.tsx", import.meta.url), "utf8");
+  const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
+  const apiSource = await readFile(new URL("../app/lib/agent-api.ts", import.meta.url), "utf8");
+  const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(shellSource, /label: "Chat"/);
+  assert.match(shellSource, /AgentRail/);
+  assert.match(railSource, /Agent rail/);
+  assert.match(shellSource, /trading-partner-agent-rail-collapsed/);
+  assert.match(railSource, /collectEphemeralContext/);
+  assert.match(railSource, /nativeEvent\.isComposing/);
+  assert.match(railSource, /Stop waiting/);
+  assert.match(railSource, /Confirm/);
+  assert.match(railSource, /Reject/);
+  assert.match(workspace, /Continue in Telegram/);
+  assert.match(workspace, /One-time code/);
+  assert.match(workspace, /\/continue/);
+  assert.match(workspace, /nativeEvent\.isComposing/);
+  assert.match(workspace, /Stop waiting/);
+  assert.doesNotMatch(workspace, /dangerouslySetInnerHTML/);
+  assert.match(apiSource, /messages\/stream/);
+  assert.match(apiSource, /external_message_ref/);
+  assert.match(apiSource, /ephemeral_context/);
+  assert.match(apiSource, /content_excerpt/);
+  assert.match(apiSource, /pending-actions/);
+  assert.match(apiSource, /confirmation_token/);
+  assert.match(workspace, /Confirm exact action/);
+  assert.doesNotMatch(workspace, /localStorage.*confirmation/i);
 });

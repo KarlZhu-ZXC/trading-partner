@@ -39,15 +39,26 @@ Tests must use deterministic fakes or redacted, repository-safe fixtures.
    Vendor Chain, or schema matrices when one representative contract proves the rule.
 3. Update active documentation when behavior, configuration, public MCP schema, or
    an operational workflow changes.
-4. Run the checks that match the change.
+4. Run the checks that match the change. During development, prefer the exact test
+   node or module and lint only changed files. Do not repeatedly run the full suite.
 
-Backend baseline:
+Typical backend inner loop:
+
+```bash
+uv run ruff check src/path/to/changed.py tests/path/to/test_changed.py
+uv run pytest tests/path/to/test_changed.py -q
+```
+
+Before handoff, run the broad backend checkpoint once when the change warrants it:
 
 ```bash
 uv run ruff check .
-uv run mypy src
-uv run pytest
+uv run mypy
+uv run pytest -q
 ```
+
+Migration upgrades, coverage, isolated-wheel smoke, dependency audits, SBOM, and
+secret scans are scoped or CI/release checks rather than inner-loop commands.
 
 Console baseline:
 

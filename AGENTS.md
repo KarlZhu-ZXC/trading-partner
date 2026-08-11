@@ -8,8 +8,9 @@ and structured tools. The implemented Phase 1–3D boundary covers A-share/US re
 Korea Exchange quote/technical monitoring,
 accounts, Research Subjects, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
-analysis, plus a manual QuantConnect Free code/result bridge — **not** an automated
-backtest runner or live order writes.
+analysis, plus a manual QuantConnect Free code/result bridge and narrowly
+confirmation-gated Schwab US stock/ETF order writes — **not** an automated backtest
+runner or autonomous trading system.
 
 Canonical product language is **Research Subject** in English and 标的、研究标的 or
 研究档案 in Chinese, depending on whether the context emphasizes the object or its
@@ -19,10 +20,12 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Implemented boundary
 
-The sole public MCP surface is exactly **28** tools (`compact_28`). Grouped tools
-accept one required `request` object
-whose closed `operation` union rejects fields from other operations. Application
-services remain separate; compact routing belongs only to `interfaces/mcp/`.
+The sole public MCP vNext Shadow surface is exactly **27** tools
+(`mcp_vnext_shadow`). Grouped tools accept one required `request` object. Large
+groups publish a flattened operation schema to reduce host context, then revalidate
+the exact closed operation variant before dispatch, so fields from another operation
+still fail without invoking a service. Application services remain separate; compact
+routing belongs only to `interfaces/mcp/`.
 
 **System and identity**
 
@@ -62,6 +65,25 @@ with their short window; this is not a strict FIFO job queue.
 - `research_judgment_confirm`
 - `research_memory_get` (`search`, `report`, `timeline`)
 - `research_memory_append` (`journal`, `decision`)
+
+The same grouped tools also expose Catalyst Agenda and Judgment Scorecard without
+increasing the public tool surface: `research_memory_get/agenda`,
+`research_memory_append/agenda_item`, `research_judgment_get/scorecard_history`, and
+`research_workflow_run/judgment_scorecard`. Agenda reads are durable-only. Explicit
+`trading-partner-catalyst-sync` routes free current Yahoo calendar dates and selected
+FRED release IDs through the existing Provider Router (`CORPORATE_ACTIONS` for Yahoo,
+`MACRO` for FRED) and stores an append-only sync
+receipt; an empty or failed Provider result is never called “no catalyst.” User
+create/revise/cancel/outcome-link writes retain actor, expected-version, idempotency,
+and point-in-time visibility checks. Outcome links must remain within one Research
+Subject/Instrument scope and may reference durable Event/Report/Evidence facts.
+Outcome closure stores the actual occurrence time and a bounded human note; an
+OCCURRED link correction appends another OCCURRED version. Console candidate choices
+reuse durable timeline/search. A daily notification source ID is stable per date and
+window, so later same-day data changes never enqueue a second summary.
+Judgment Scorecard S1 locks one exact Thesis revision, adds deterministic Catalyst
+outcome calibration to the existing eight discipline cards, preserves S0 runs, has
+no aggregate score, and cannot mutate research state, a position, or an order.
 
 Candidate Propose → Confirm / Reject / Withdraw remains mandatory. Codex must not
 autonomously choose confirm or reject. When the user explicitly states the exact
@@ -115,8 +137,10 @@ their PRIMARY, and detach every SUB before changing that PRIMARY to another role
 Assumption, Invalidation, Open Question, Watchlist, parent/rival Thesis, and linked
 Research Subject references must be validated against their owning Research Subject/Thesis before proposal
 and again before confirmation. Existence alone is insufficient. Retiring a Research Subject or
-Trade Plan never silently pauses or archives a bound Monitor; callers must inspect
-and transition Monitor definitions explicitly.
+Trade Plan never silently pauses or archives a bound Monitor. ACTIVE/PAUSED Monitors
+require an ACTIVE Research Subject, and linked ACTIVE/PAUSED Monitors block Subject
+or live-Plan retirement with `RESEARCH_STATE_CONFLICT`; callers must archive those
+Monitor definitions explicitly.
 
 **Provider facts and technicals**
 
@@ -231,12 +255,17 @@ credentials for it.
   warnings; it never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
-- `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `simulate_addition`)
-- `challenge_review_get`
-- `challenge_review_manage` (`start`, `resolve`)
+- `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `simulate_addition`,
+  `retro_history`)
+- `research_judgment_get` (`challenge_review`) restores a Challenge Review
+- `research_judgment_propose` (`challenge_review`) starts one; explicit resolution
+  uses `research_judgment_confirm` (`challenge_review`)
+- `broker_order_manage` — calculate the SGOV Shadow Preview, or preview/submit/read/
+  cancel one exact Schwab US stock/ETF order through the expiring current-chat
+  confirmation contract; no generic broker request or replacement operation
 - `research_workflow_run` (`deep_dive`, `catalyst_review`,
   `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`,
-  `historical_validation_prepare`, `historical_validation_import`)
+  `historical_validation_prepare`, `historical_validation_import`, `trade_retro`)
 
 The two historical-validation operations parse but never execute LEAN Python,
 write owner-only gitignored artifacts, and import only a user-downloaded
@@ -251,12 +280,43 @@ Peer Comparison accepts one primary and 1–5 caller-specified same-market A-sha
 equity peers. It aligns normalized statements and optional current valuation facts,
 does not discover/rank peers, and never mutates a Research Subject, Thesis, Trade Plan, or account.
 
+Trade Retro is an immutable transaction-versus-plan discipline audit, not another
+performance-attribution engine. `prepare` captures the current Trade Plan and
+confirmed Decision Records before the requested period. `run` compares durable
+broker transactions with the latest eligible pre-period snapshot and persists
+coverage, missing-plan, inactive-plan, missing-invalidation, direction-record,
+ambiguous-plan, round-trip, and same-day-reentry findings. It never treats a post-period plan as
+evidence of prior discipline. Optional Bailian narration receives only bounded
+deterministic facts, must answer in Chinese, and has no research/account/order write
+port; deterministic results remain usable without it. `export` updates only the
+owned marker block in the configured Obsidian weekly note and preserves handwritten
+content. `retro_history` is durable-only and contacts no Provider.
+`review` appends an explicitly confirmed human-review revision; it never overwrites
+the generated Run or Finding. Each write requires an idempotency key,
+`expected_version`, confirmer, and authorization note. It may record an overall
+`OPEN`/`ACCEPTED`/`DISPUTED`/`RESOLVED` status, bounded correction note and action
+items, plus `ACCEPTED`/`DISPUTED`/`RESOLVED` dispositions for exact deterministic
+Finding keys. A disputed Finding requires a note. Stale writers remain
+`TRADE_RETRO_REVIEW_VERSION_CONFLICT`; there is no hidden merge. `export` includes
+the latest review and records that review version while retaining the original Run.
+
 **Scheduled operational CLI (not a public MCP tool)**
 
 - `uv run trading-partner-post-market-sync` checks the XNYS calendar and runs ten
   minutes after the real session close. It refreshes all configured account
   providers before the exact active-source Watchlist sync, persists one terminal
   receipt per market session, and never executes an order.
+- `uv run trading-partner-sgov-plan preview` explicitly refreshes Schwab and prints
+  an immediate all-account Shadow plan. The dedicated launchd scheduler runs once
+  per XNYS session at 15:45 America/New_York, or 15 minutes before an official early
+  close, using a $2,000 hard cash floor plus $200 buffer per account. It persists one
+  idempotent SYSTEM Outbox notification and never calls Codex, an LLM, or an order
+  method. Closed-day and non-due wakes make no Provider request.
+- `uv run trading-partner-retro` prepares, runs, reads, or exports Trade Retro
+  records. `prepare` must run before the period being audited; `run` never refreshes
+  a broker and incomplete transaction coverage remains explicit. `weekly` audits the
+  last completed Monday-to-Saturday UTC US trading week, optionally exports it, and
+  snapshots the following Monday-to-Saturday window for the next run.
 
 **Watchlist, Risk v2, and Monitoring v2**
 
@@ -375,9 +435,18 @@ provider-backed with Yahoo→Alpha Vantage routing. US breadth uses cached Yahoo
 Screener totals over a disclosed listed-security universe that may include ETFs
 and ADRs; sector rotation uses versioned Yahoo sector-index symbols. Neither is
 presented as official exchange common-stock breadth, and unavailable high/low or
-moving-average participation is never fabricated. For near-current non-closed
-requests, a stale Yahoo regular quote may be replaced only by a newer timestamped
-one-minute `includePrePost` bar with an explicit recovery/extended-hours warning;
+moving-average participation is never fabricated. For near-current requests, a
+stale Yahoo regular quote may be replaced only by a newer timestamped one-minute
+`includePrePost` bar with an explicit recovery/extended-hours warning. This check
+also applies after the US post-market window closes so a newer real post-market
+print is not discarded in favor of the regular close; it never implies continuous
+overnight trading. Exchange quote DTOs expose `display_price=last` and
+`price_basis=last`. Equity/ETF/index `previous_close` follows the actual returned
+`quote_at + session`, never the requested session when a fallback observation is older;
+`previous_close_basis=previous_completed_regular_session_close` names that contract.
+Futures instead use `previous_completed_daily_bar_close` and must not be called a
+regular-session close or settlement. A host must say 前收（前一已完成常规交易时段收盘）,
+not 昨收, for the equity-like basis and must never call either basis the prior arbitrary K-line;
 pre/post-market recovery establishes only the latest price/time, so
 open/high/low/volume stay null with `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`;
 historical `as_of` remains cutoff-safe and Yahoo is not presented as complete
@@ -385,15 +454,35 @@ overnight equity coverage. If current pre-market has no same-day minute
 observation, a prior-day post-market value may remain latest-known only with
 `INTRADAY_QUOTE_UNAVAILABLE`; classify it by its own timestamp and derive
 `previous_close` from that day's completed regular session rather than moving the
-baseline back another day. Phase 1G combines current
+baseline back another day.
+Near-current US equity/ETF requests during the Sunday-Thursday 20:00-04:00
+America/New_York overnight window route the local Moomoo OpenD dedicated
+`overnight_*` snapshot fields before Yahoo. The returned session is `OVERNIGHT`,
+`display_price` is the exact instrument's `overnight_price`, and `previous_close`
+remains `prev_close_price`; regular/pre/post fields and related proxies are never
+substituted. OpenD exposes one snapshot `update_time`, not a separate overnight
+trade timestamp, so preserve `MOOMOO_OVERNIGHT_OBSERVED_AT_SNAPSHOT_TIME`, venue/
+liquidity warnings, and source freshness. The snapshot must belong to the same
+overnight window and be at/before the request cutoff. Missing entitlement, OpenD,
+timestamp, or overnight value falls back explicitly with
+`OVERNIGHT_QUOTE_UNAVAILABLE`; never claim full overnight coverage from Yahoo.
+Phase 1G combines current
 Yahoo/Alpha facts with separately based SEC reported facts and preserves filing
 visibility cutoffs. Phase 1H adds dated news,
 vintage-safe FRED observations, source-separated social sentiment, and
 current-only prediction-market probabilities. Phase 1I account ports read Schwab
 through a project-owned `schwab-py` OAuth token, Moomoo OpenD, or a strict manual
 CSV; persist account snapshots; and compute deterministic gross portfolio exposure
-without implicit FX conversion. The Schwab adapter exposes only balances,
-positions, and transactions — no order method or plugin CLI runtime dependency.
+without implicit FX conversion. The Schwab account adapter exposes balances,
+positions, supported active one-leg open orders, transactions, and a read-only quote
+used by SGOV Shadow Preview. A separate closed adapter exposes named
+place/status/cancel endpoints for configured REAL accounts and has no generic request
+or plugin CLI runtime dependency. Every place consumes a 30–300 second durable
+preview and exact current-chat user authorization; unknown responses are persisted
+and never retried automatically. LIMIT and STOP_LIMIT BUY/SELL plus protective
+MARKET/STOP/TRAILING sell orders are supported; AM/PM/SEAMLESS are LIMIT-only and
+SEAMLESS is not overnight. Margin, overselling, shorts, options/complex orders,
+replacement, unattended execution, and unbounded BUY market/stop/trailing orders are blocked.
 Moomoo Hot List is an optional `market_data_get(request={"operation":"us_market",...})` component,
 not directional
 sentiment. It uses the shared cross-process OpenD limiter, is cached in 15-minute
@@ -464,7 +553,8 @@ same-currency gross exposure/NAV, per-account cash and margin ratios, and duplic
 instruments across accounts. Missing NAV, price time, or FX facts produce
 `NOT_EVALUATED`/`INCOMPLETE`, never an implicit pass. The system-default policy is
 always disclosed until confirmed. A hypothetical addition is calculation-only;
-all risk results carry `execution_effect=false` and no order surface exists.
+all risk results carry `execution_effect=false` and cannot invoke the separate
+confirmation-gated broker-order service.
 
 Phase 2C stores explicitly confirmed, append-only Monitor versions and evaluates
 active rules on demand or through the external `trading-partner-monitor-run` CLI.
@@ -518,6 +608,24 @@ caller-asserted—but do preserve this provenance in the audit record.
 Journal and Decision append require explicit `user` or `external_agent`
 confirmation. Decision records are research/position **intent** only — never
 orders, fills, or positions.
+
+## Shared Agent Runtime (Agent-A–D)
+
+The Shared Agent Runtime is disabled by default and provider-neutral. It persists durable
+conversations, explicit channel bindings, append-only messages, bounded model/tool
+receipts, Pending Actions, cursors, and one-time channel handoffs through migrations
+`0044`–`0046`. Console Chat and the strictly allowlisted Telegram poller are implemented;
+Agent broker orders remain unavailable and are not authorized by a research action.
+
+The model sees only private `tp_capability_search`, `tp_read`, and confirmation-preparing
+`tp_prepare_action`; these names are never registered as public MCP tools. Agent-A may
+auto-run durable/provider reads, instrument discovery/cache, and explicitly non-executing
+technical artifacts. All other writes remain denied unless Agent-D's explicit operation
+allowlist creates a Pending Action that the same channel/principal confirms using the
+exact hash, version, expiry, and single-use opaque token. Sync/evaluate, accounts, risk
+policy, and every broker write remain denied. Exact grouped-operation DTO validation and
+the 27-tool MCP inventory remain unchanged. Conversation memory is continuity context,
+never a source of current prices, positions, fills, or research state.
 
 ## Architecture rules
 
@@ -590,10 +698,10 @@ user guides, and historical archives.
 ## Out of scope until later phases
 
 ```text
-local/automated backtest engines, execution, orders, fills
+local/automated backtest engines, autonomous/unattended order execution
 automated evidence ingestion, general-purpose/autonomous runtime LLM synthesis
-outside the explicitly enabled composite Monitor judgment boundary
-order writes
+outside enabled composite Monitor judgment and optional Trade Retro narration
+order replacement, options/complex orders, short selling, Schwab API overnight orders
 ```
 
 ## Upstream
@@ -603,10 +711,33 @@ not runtime dependencies. Do not add MiniMax or Grok as project runtime deps.
 
 ## Verification
 
+Use progressive verification. Test effort must be proportional to the current
+change; do not run every check after every edit.
+
+- Inner loop: run only the exact affected test node/module and lint only changed
+  Python files. Prefer commands such as
+  `uv run pytest tests/unit/test_x.py::test_y -q` and
+  `uv run ruff check path/to/changed.py tests/path/to/test_changed.py`.
+- Feature checkpoint: run the directly affected test directories/modules. Do not
+  add coverage, wheel builds, dependency audits, or the entire suite.
+- Subagents/workers must not run repository-wide pytest, mypy, coverage, frontend
+  builds, wheel smoke, or audits unless the parent explicitly delegates that one
+  check. They report their focused commands and results to the main agent.
+- The main agent owns broad verification and runs it at most once after the last
+  relevant code change. Do not repeat an already successful command when its
+  covered files have not changed.
+- Full coverage, isolated-wheel smoke, dependency audits, SBOM, and secret scans
+  belong to CI/release verification unless the change directly affects that area
+  or the user explicitly requests them.
+- Documentation-only changes require formatting/diff checks, not pytest.
+
+The final local backend checkpoint, when warranted, is:
+
 ```bash
-uv sync
 uv run ruff check .
-uv run mypy src
-uv run pytest
-uv run alembic upgrade head
+uv run mypy
+uv run pytest -q
 ```
+
+Run `uv run alembic upgrade head` only for migration/persistence changes. CI remains
+the authority for the full coverage floor and packaging/security matrix.

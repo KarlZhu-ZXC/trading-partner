@@ -9,15 +9,24 @@ from sqlalchemy.engine import Engine
 
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.account_transaction_repository import AccountTransactionRepository
+from application.ports.agent_conversation_repository import AgentConversationRepository
+from application.ports.agent_handoff_repository import AgentHandoffRepository
+from application.ports.agent_pending_action_repository import AgentPendingActionRepository
+from application.ports.broker_order_repository import BrokerOrderRepository
+from application.ports.catalyst_agenda_repository import CatalystAgendaRepository
+from application.ports.catalyst_agenda_scope_reader import CatalystAgendaScopeReader
+from application.ports.catalyst_agenda_sync_repository import CatalystAgendaSyncRepository
 from application.ports.clock import Clock
 from application.ports.historical_validation_artifact_repository import (
     HistoricalValidationArtifactRepository,
 )
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
+from application.ports.judgment_scorecard_repository import JudgmentScorecardRepository
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
+from application.ports.trade_retro_repository import TradeRetroRepository
 from application.ports.workflow_run_repository import WorkflowRunRepository
 from infrastructure.artifacts.historical_validation import (
     FileHistoricalValidationArtifactRepository,
@@ -29,6 +38,22 @@ from infrastructure.persistence.account_snapshot_repository import (
 from infrastructure.persistence.account_transaction_repository import (
     SqlAlchemyAccountTransactionRepository,
 )
+from infrastructure.persistence.agent_conversation_repository import (
+    SqlAlchemyAgentConversationRepository,
+)
+from infrastructure.persistence.agent_handoff_repository import SqlAlchemyAgentHandoffRepository
+from infrastructure.persistence.agent_pending_action_repository import (
+    SqlAlchemyAgentPendingActionRepository,
+)
+from infrastructure.persistence.broker_order_repository import (
+    SqlAlchemyBrokerOrderRepository,
+)
+from infrastructure.persistence.catalyst_agenda_scope_reader import (
+    SqlAlchemyCatalystAgendaScopeReader,
+)
+from infrastructure.persistence.catalyst_agenda_sync_repository import (
+    SqlAlchemyCatalystAgendaSyncRepository,
+)
 from infrastructure.persistence.database import (
     SqlAlchemyDatabase,
     create_engine_from_url,
@@ -36,10 +61,17 @@ from infrastructure.persistence.database import (
 from infrastructure.persistence.industry_metric_repository import (
     SqlAlchemyIndustryMetricRepository,
 )
+from infrastructure.persistence.judgment_scorecard_repository import (
+    SqlAlchemyJudgmentScorecardRepository,
+)
 from infrastructure.persistence.post_market_sync_run_repository import (
     SqlAlchemyPostMarketSyncRunRepository,
 )
+from infrastructure.persistence.repositories.catalyst_agenda import (
+    SqlAlchemyCatalystAgendaRepository,
+)
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
+from infrastructure.persistence.trade_retro_repository import SqlAlchemyTradeRetroRepository
 from infrastructure.persistence.watchlist_hub_unit_of_work import (
     SqlAlchemyWatchlistHubUnitOfWork,
 )
@@ -59,10 +91,19 @@ class PersistenceInfrastructure:
     database: SqlAlchemyDatabase
     account_snapshots: AccountSnapshotRepository
     account_transactions: AccountTransactionRepository
+    agent_conversations: AgentConversationRepository
+    agent_handoffs: AgentHandoffRepository
+    agent_pending_actions: AgentPendingActionRepository
+    broker_orders: BrokerOrderRepository
     workflow_runs: WorkflowRunRepository
     historical_validation_artifacts: HistoricalValidationArtifactRepository
     industry_metrics: IndustryMetricRepository
     post_market_sync_runs: PostMarketSyncRunRepository
+    trade_retro: TradeRetroRepository
+    scorecards: JudgmentScorecardRepository
+    catalyst_agenda: CatalystAgendaRepository
+    catalyst_agenda_scope: CatalystAgendaScopeReader
+    catalyst_agenda_sync: CatalystAgendaSyncRepository
     research_uow_factory: ResearchUowFactory
     watchlist_uow_factory: WatchlistUowFactory
 
@@ -100,12 +141,21 @@ def build_persistence_infrastructure(
         database=SqlAlchemyDatabase(engine),
         account_snapshots=SqlAlchemyAccountSnapshotRepository(engine),
         account_transactions=SqlAlchemyAccountTransactionRepository(engine),
+        agent_conversations=SqlAlchemyAgentConversationRepository(engine),
+        agent_handoffs=SqlAlchemyAgentHandoffRepository(engine),
+        agent_pending_actions=SqlAlchemyAgentPendingActionRepository(engine),
+        broker_orders=SqlAlchemyBrokerOrderRepository(engine),
         workflow_runs=SqlAlchemyWorkflowRunRepository(engine),
         historical_validation_artifacts=FileHistoricalValidationArtifactRepository(
             PROJECT_ROOT / "data" / "artifacts" / "historical_validation"
         ),
         industry_metrics=SqlAlchemyIndustryMetricRepository(engine),
         post_market_sync_runs=SqlAlchemyPostMarketSyncRunRepository(engine),
+        trade_retro=SqlAlchemyTradeRetroRepository(engine),
+        scorecards=SqlAlchemyJudgmentScorecardRepository(engine),
+        catalyst_agenda=SqlAlchemyCatalystAgendaRepository(engine),
+        catalyst_agenda_scope=SqlAlchemyCatalystAgendaScopeReader(engine),
+        catalyst_agenda_sync=SqlAlchemyCatalystAgendaSyncRepository(engine),
         research_uow_factory=research_uow_factory,
         watchlist_uow_factory=watchlist_uow_factory,
     )

@@ -35,14 +35,16 @@ truth.
 | [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Command-line OpenD lifecycle on macOS |
 | [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Cross-asset free-provider smoke checks and expected typed degradation |
 
-## Active plans
+## Design and implementation records
 
-Only unimplemented or partially implemented work belongs in `plans/`.
+`plans/` retains a small number of reviewed product contracts when their rationale is
+still useful after implementation. Runtime guides and phase specifications remain the
+authority for current operation.
 
 | Document | Status |
 |---|---|
-| [plans/performance-attribution-and-console-plan.md](plans/performance-attribution-and-console-plan.md) | A0/A1 implemented; broker-statement sign-off and A2–A4 remain |
-| [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Approved future design; runtime implementation has not started |
+| [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Implemented C0–C3/S0–S1 contract and bounded TDD record |
+| [plans/schwab-sgov-cash-management.md](plans/schwab-sgov-cash-management.md) | Implemented Shadow Preview, scheduled plan, and confirmation-gated live orders; unattended execution remains future scope |
 
 ## Release history
 
@@ -50,6 +52,7 @@ Only unimplemented or partially implemented work belongs in `plans/`.
 |---|---|
 | [releases/unreleased.md](releases/unreleased.md) | Current unreleased changes |
 | [releases/v0.5.1.md](releases/v0.5.1.md) | v0.5.1 portable MCP onboarding release |
+| [releases/v0.6.0.md](releases/v0.6.0.md) | v0.6.0 agent runtime, decision operations, and execution controls release |
 | [releases/v0.5.0.md](releases/v0.5.0.md) | v0.5.0 release record |
 | [releases/v0.4.0.md](releases/v0.4.0.md) | v0.4.0 release record |
 | [releases/v0.2.0.md](releases/v0.2.0.md) | v0.2.0 release record |

@@ -94,6 +94,27 @@ _HARDENING_TABLES = {
     "research_run_fact_artifacts",
 }
 
+_TRADE_RETRO_TABLES = {
+    "trade_retro_plan_snapshots",
+    "trade_retro_runs",
+    "trade_retro_export_receipts",
+    "trade_retro_review_revisions",
+}
+
+_SCORECARD_TABLES = {"judgment_scorecard_runs"}
+
+_AGENDA_TABLES = {"catalyst_agenda_items", "catalyst_agenda_versions"}
+_BROKER_EXECUTION_TABLES = {"broker_order_intents"}
+_AGENT_RUNTIME_TABLES = {
+    "agent_conversations",
+    "agent_channel_bindings",
+    "agent_messages",
+    "agent_tool_receipts",
+    "agent_pending_actions",
+    "agent_channel_cursors",
+    "agent_channel_handoffs",
+}
+
 _PHASE3_TABLES = {
     "account_activity_coverage_receipts",
     "industry_metric_observations",
@@ -111,7 +132,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0036_monitor_provider_diagnostics"})
+_HEAD_REVISIONS = frozenset({"0046_agent_channel_handoffs"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -173,13 +194,27 @@ def test_migration_round_trip(
     assert _PHASE2_TABLES.issubset(tables_after_first)
     assert _PHASE3_TABLES.issubset(tables_after_first)
     assert _HARDENING_TABLES.issubset(tables_after_first)
+    assert _TRADE_RETRO_TABLES.issubset(tables_after_first)
+    assert _SCORECARD_TABLES.issubset(tables_after_first)
+    assert _AGENDA_TABLES.issubset(tables_after_first)
+    assert _BROKER_EXECUTION_TABLES.issubset(tables_after_first)
+    assert _AGENT_RUNTIME_TABLES.issubset(tables_after_first)
+    agenda_columns = {item["name"] for item in insp.get_columns("catalyst_agenda_versions")}
+    assert {
+        "case_id",
+        "source_type",
+        "source_vendor",
+        "historical_vintage",
+        "source_visible_at",
+        "linked_evidence_id",
+        "outcome_occurred_at",
+        "outcome_note",
+    }.issubset(agenda_columns)
     judgment_columns = {item["name"] for item in insp.get_columns("monitor_judgments")}
     assert {"web_search_used", "web_source_urls"}.issubset(judgment_columns)
     selection_columns = {item["name"] for item in insp.get_columns("watchlist_items")}
     assert {"instrument_id", "selection_reason"}.issubset(selection_columns)
-    observation_columns = {
-        item["name"] for item in insp.get_columns("monitor_run_observations")
-    }
+    observation_columns = {item["name"] for item in insp.get_columns("monitor_run_observations")}
     assert "diagnostics_json" in observation_columns
     assert "uq_watchlist_selected_per_case" in {
         item["name"] for item in insp.get_indexes("watchlist_items")

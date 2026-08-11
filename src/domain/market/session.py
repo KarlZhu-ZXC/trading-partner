@@ -27,6 +27,8 @@ _A_SHARE_AFTERNOON = (time(13, 0), time(15, 0))
 _US_PRE = (time(4, 0), time(9, 30))
 _US_REGULAR = (time(9, 30), time(16, 0))
 _US_POST = (time(16, 0), time(20, 0))
+_US_OVERNIGHT_START = time(20, 0)
+_US_OVERNIGHT_END = time(4, 0)
 _KR_REGULAR = (time(9, 0), time(15, 30))
 
 
@@ -40,6 +42,17 @@ def _safe_timezone_error() -> DataContractError:
 
 def _in_half_open(local_t: time, start: time, end: time) -> bool:
     return start <= local_t < end
+
+
+def is_us_overnight_session(at: datetime) -> bool:
+    """Return whether ``at`` is inside the Sunday-Thursday 20:00-04:00 ET window."""
+    require_aware_datetime(at, field_name="at")
+    local = at.astimezone(ZoneInfo(_MARKET_TIMEZONES[Market.US]))
+    weekday = local.weekday()
+    local_t = local.time()
+    return (local_t >= _US_OVERNIGHT_START and weekday in {0, 1, 2, 3, 6}) or (
+        local_t < _US_OVERNIGHT_END and weekday in {0, 1, 2, 3, 4}
+    )
 
 
 def infer_session_basic(
@@ -96,6 +109,11 @@ def infer_session_basic(
         raise _safe_timezone_error() from None
 
     local = at.astimezone(zone)
+    # US overnight crosses the civil-day and weekend boundary: Sunday 20:00
+    # belongs to Monday's session, while Friday 20:00 and Saturday stay closed.
+    if market is Market.US and is_us_overnight_session(local):
+        return TradingSession.OVERNIGHT
+
     # Monday=0 … Sunday=6
     if local.weekday() >= 5:
         return TradingSession.CLOSED

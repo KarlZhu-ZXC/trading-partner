@@ -12,8 +12,10 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 
 ## Invariants
 
-1. **Research and execution remain separate.** The current repository has no order
-   placement, cancellation, fill, or autonomous position mutation surface.
+1. **Research and execution remain separate.** The current repository has one narrow,
+   confirmation-gated Schwab single-leg US stock/ETF order surface. It has no
+   replacement, options/complex orders, short selling, unattended execution, or
+   autonomous position mutation.
 2. **Facts remain attributable.** Price, account, financial, and event facts carry
    source, time, basis, freshness, warnings, and typed errors.
 3. **Missing data is not a value.** Unavailable or stale facts become degraded,
@@ -21,12 +23,12 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 4. **Durable state requires explicit authority.** Research Subject, Thesis, Trade
    Plan, risk-policy, Watchlist, journal, decision, and Monitor writes retain actor,
    confirmation, version, and idempotency gates.
-5. **The MCP surface stays compact.** The sole public profile is `compact_28` with
-   28 grouped tools and closed operation unions.
-6. **LLMs do interpretation, not data ownership.** Ordinary facts and rule
-   evaluation are deterministic. Optional Monitor judgment uses a sandboxed
-   server-side model only after deterministic feature construction and cannot
-   mutate research state, portfolio state, or orders.
+5. **The MCP surface stays compact.** The sole public profile is `mcp_vnext_shadow` with
+   27 grouped tools and closed operation unions.
+6. **LLMs do interpretation, not data ownership.** Ordinary facts, rule evaluation,
+   and Trade Retro findings are deterministic. Optional Monitor judgment and Trade
+   Retro narration use a sandboxed server-side model only after deterministic
+   feature construction and cannot mutate research state, portfolio state, or orders.
 
 ## Current product boundary
 
@@ -60,15 +62,21 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
   not contact brokers.
 - Native-currency activity coverage, FIFO/broker-basis performance summaries,
   exposure analysis, hypothetical additions, and deterministic Risk Engine checks.
+- Immutable Trade Retro: capture a pre-period Trade Plan/Decision snapshot, compare
+  it with durable broker transactions, persist deterministic discipline findings,
+  optionally add a bounded Chinese narrative, append version-checked human review
+  revisions with Finding dispositions and action items, and safely project the Run
+  plus latest review into an owned Obsidian weekly-note block.
 - Moomoo or manual-CSV Watchlist Hub with complete group/membership history.
 - Versioned Monitoring Hub with price and deterministic fact rules, daily/weekly
   technical indicators, hysteresis, immutable Run observations, transition events,
   and optional Telegram Outbox delivery.
 - One hourly local scheduler for due interval and A-share/US/KR post-market groups.
-- Loopback-only Console with no embedded chat model for Research, Portfolio,
-  Monitoring, Operations, Data Quality, and the compact capability workbench. An
-  explicit Monitor run may call the configured server-side model only for an enabled
-  composite judgment policy.
+- Loopback-only Console for Research, Portfolio, Monitoring, Operations, Data
+  Quality, and the compact capability workbench. Its disabled-by-default shared
+  Agent Runtime uses three private capability tools and does not change the public
+  MCP count; an explicit Monitor run may separately call the configured server-side
+  model only for an enabled composite judgment policy.
 - Manual QuantConnect Free bridge: prepare hashed LEAN code, user runs it on the
   web, then import the downloaded result JSON.
 
@@ -85,34 +93,21 @@ This is continuous work rather than a feature phase:
 - improve data coverage receipts before adding more derived conclusions;
 - keep schedulers, notifications, migrations, backup, and Console state observable;
 - reduce schema and test duplication when coverage is already represented elsewhere;
-- keep public documentation synchronized with the 28-tool runtime contract.
+- keep public documentation synchronized with the 27-tool runtime contract.
 
-### R2 — Performance attribution completion
+### R2 — Catalyst Agenda and judgment calibration（已完成）
 
-The durable activity ledger and native-currency performance summary are implemented.
-Remaining work is deliberately staged:
-
-1. complete one real broker-statement reconciliation and human sign-off;
-2. add return calculations only when endpoint snapshots and cash flows support them;
-3. add contribution/benchmark decomposition with explicit residuals;
-4. compare actual transactions with the versions of Thesis, Trade Plan, Decision,
-   and Risk Check visible at the time.
-
-See the
-[performance attribution plan](../plans/performance-attribution-and-console-plan.md).
-
-### R3 — Catalyst Agenda and judgment calibration
-
-Build a durable future-event agenda that separates scheduled/expected events from
-already observed Research Events. It must provide coverage and date certainty,
-retain revisions when dates move, and never infer that “no returned event” means
-“no catalyst.” Judgment Scorecard work follows only after actual outcomes can be
-linked to agenda items and historical judgment versions.
+The implemented durable future-event agenda separates scheduled/expected events from
+already observed Research Events. It provides coverage and date certainty,
+retains revisions when dates move, and never infers that “no returned event” means
+“no catalyst.” Completed outcomes link to durable Event/Report/Evidence facts, and
+Judgment Scorecard S1 calibrates one exact Thesis revision against those facts without
+creating an opaque aggregate score.
 
 See the
 [Catalyst Agenda plan](../plans/catalyst-agenda-and-scorecard-plan.md).
 
-### R4 — Historical validation only when value is proven
+### R3 — Historical validation only when value is proven
 
 The current QuantConnect Free bridge remains manual. Paid API automation, local
 historical databases, experiment orchestration, walk-forward testing, and bias
@@ -133,7 +128,8 @@ Deferred means unsupported, not “silently approximated through another Provide
 
 ## Explicit non-goals for the current repository
 
-- Live or paper order execution.
+- Autonomous/unattended live orders, paper-trading engines, order replacement,
+  options/complex orders, short selling, or Schwab API overnight execution.
 - Autonomous Thesis confirmation, Trade Plan mutation, or fill inference.
 - A runtime that scrapes arbitrary websites because a formal Provider failed.
 - A general-purpose social network, news terminal, tax engine, or accounting system.

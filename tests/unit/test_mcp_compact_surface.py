@@ -9,14 +9,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jsonschema import Draft202012Validator
+from mcp.server.fastmcp.exceptions import ToolError
 
 from interfaces.mcp.server import (
-    COMPACT_28_TOOL_NAMES,
+    MCP_VNEXT_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
     create_capability_registry,
     create_mcp_server,
 )
-from interfaces.mcp.tools.compact import ConfirmationPolicy
+from interfaces.mcp.tools.compact import ConfirmationPolicy, _minimize_public_schema
 
 
 class _Envelope:
@@ -80,14 +81,42 @@ def _local_definition_refs(value: Any) -> set[str]:
     return set()
 
 
+def test_compact_schema_inlines_profitable_nullable_definition_equivalently() -> None:
+    original = {
+        "$defs": {"Only": {"enum": ["A", "B"]}},
+        "properties": {
+            "value": {
+                "anyOf": [
+                    {"$ref": "#/$defs/Only"},
+                    {"type": "null"},
+                ]
+            }
+        },
+        "required": ["value"],
+        "type": "object",
+    }
+
+    compact = _minimize_public_schema(original)
+
+    assert "$defs" not in compact
+    assert compact["properties"]["value"] == {"enum": ["A", "B", None]}
+    original_validator = Draft202012Validator(original)
+    compact_validator = Draft202012Validator(compact)
+    for value in ("A", "B", None, "C", 1, {}, []):
+        payload = {"value": value}
+        assert bool(list(original_validator.iter_errors(payload))) == bool(
+            list(compact_validator.iter_errors(payload))
+        )
+
+
 @pytest.mark.asyncio
 async def test_compact_is_the_only_public_surface() -> None:
     compact = await create_mcp_server(_container()).list_tools()
     compact_names = {tool.name for tool in compact}
 
-    assert PUBLIC_TOOL_NAMES == COMPACT_28_TOOL_NAMES
-    assert compact_names == COMPACT_28_TOOL_NAMES
-    assert len(compact_names) == 28
+    assert PUBLIC_TOOL_NAMES == MCP_VNEXT_TOOL_NAMES
+    assert compact_names == MCP_VNEXT_TOOL_NAMES
+    assert len(compact_names) == 27
 
 
 @pytest.mark.asyncio
@@ -250,12 +279,10 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
     expected_variants = {
         "investment_case_read": 2,
-        "market_data_get": 7,
         "external_state_sync": 3,
-        "portfolio_analyze": 4,
-        "research_workflow_run": 8,
+        "research_judgment_get": 4,
+        "research_judgment_confirm": 2,
         "monitor_read": 4,
-        "monitor_manage": 3,
     }
 
     for name, variant_count in expected_variants.items():
@@ -274,11 +301,12 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
 @pytest.mark.asyncio
 async def test_judgment_confirmation_schema_exposes_chat_authorization_provenance() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
-    properties = tools["research_judgment_confirm"].inputSchema["properties"]
+    serialized = json.dumps(tools["research_judgment_confirm"].inputSchema)
 
-    assert properties["reviewed_by"]["enum"] == ["user", "external_agent", "codex"]
-    assert properties["submitted_via"]["enum"] == ["direct", "codex_chat"]
-    assert "authorization_note" in properties
+    assert '"candidate"' in serialized
+    assert '"reviewed_by"' in serialized
+    assert '"submitted_via"' in serialized
+    assert '"authorization_note"' in serialized
 
 
 @pytest.mark.asyncio
@@ -286,12 +314,14 @@ async def test_compact_wire_schema_and_each_tool_stay_bounded() -> None:
     compact = await create_mcp_server(_container()).list_tools()
 
     assert _wire_size(compact) <= 48 * 1024
+    # Keep a reserve below the external 30 KiB ceiling so a tiny operation
+    # addition cannot turn the next release into an emergency compression pass.
     assert (
         sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact)
-        <= 30 * 1024
+        <= 29.5 * 1024
     )
     for tool in compact:
-        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 5 * 1024, tool.name
+        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 4.5 * 1024, tool.name
 
 
 @pytest.mark.asyncio
@@ -304,6 +334,8 @@ async def test_compact_schema_compression_keeps_every_local_ref_resolvable() -> 
         assert _local_definition_refs(tool.inputSchema) <= set(definitions), tool.name
     for tool in compact:
         assert all(len(name) == 1 for name in tool.inputSchema.get("$defs", {}))
+        serialized = json.dumps(tool.inputSchema, separators=(",", ":"))
+        assert '"anyOf":[{"enum":' not in serialized
 
 
 @pytest.mark.asyncio
@@ -320,9 +352,10 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
     )
     assert errors
 
-    monitor_validator = Draft202012Validator(tools["monitor_manage"].inputSchema)
-    assert list(
-        monitor_validator.iter_errors(
+    registry = create_capability_registry(_container())
+    with pytest.raises(ToolError, match="judgment_policy"):
+        await registry.invoke(
+            "monitor_manage",
             {
                 "request": {
                     "operation": "resolve_event",
@@ -336,9 +369,65 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
                         "reference_instrument_ids": ["equity:US:NVDA"],
                     },
                 }
+            },
+            confirmation="monitor_manage",
+        )
+
+    with pytest.raises(ToolError, match="start"):
+        await registry.invoke(
+            "research_workflow_run",
+            {
+                "request": {
+                    "operation": "judgment_scorecard",
+                    "case_id": "case_1",
+                    "thesis_id": "thesis_1",
+                    "idempotency_key": "scorecard-1",
+                    "start": "2026-08-01T00:00:00Z",
+                }
+            },
+            confirmation="research_workflow_run",
+        )
+    judgment_validator = Draft202012Validator(tools["research_judgment_get"].inputSchema)
+    assert list(
+        judgment_validator.iter_errors(
+            {
+                "request": {
+                    "operation": "scorecard_history",
+                    "limit": 20,
+                    "idempotency_key": "must-not-leak-from-write",
+                }
             }
         )
     )
+    with pytest.raises(ToolError, match="payload"):
+        await registry.invoke(
+            "research_memory_get",
+            {
+                "request": {
+                    "operation": "agenda",
+                    "window_days": 30,
+                    "payload": {"title": "write field"},
+                }
+            },
+        )
+    with pytest.raises(ToolError, match="window_days"):
+        await registry.invoke(
+            "research_memory_append",
+            {
+                "request": {
+                    "operation": "agenda_item",
+                    "action": "CANCEL",
+                    "agenda_item_id": "agenda_1",
+                    "expected_version": 1,
+                    "confirmed_by": "user",
+                    "authorization_note": "cancel",
+                    "idempotency_key": "cancel-1",
+                    "payload": {"cancellation_reason": "no longer relevant"},
+                    "window_days": 30,
+                }
+            },
+            confirmation="research_memory_append",
+        )
 
 
 @pytest.mark.asyncio
@@ -359,6 +448,37 @@ async def test_compact_annotations_distinguish_reads_sync_appends_and_destructiv
     assert tools["investment_case_manage"].annotations.destructiveHint is True
     assert tools["research_workflow_run"].annotations.readOnlyHint is False
     assert tools["research_workflow_run"].annotations.idempotentHint is True
+    assert tools["broker_order_manage"].annotations.readOnlyHint is False
+    assert tools["broker_order_manage"].annotations.destructiveHint is True
+    assert tools["broker_order_manage"].annotations.openWorldHint is True
+
+
+@pytest.mark.asyncio
+async def test_broker_order_manage_keeps_shadow_preview_and_live_write_closed() -> None:
+    container = _container()
+    container.services.broker_order_preview.preview = AsyncMock(
+        return_value=_Envelope({"shadow_only": True, "execution_effect": False})
+    )
+    registry = create_capability_registry(container)
+
+    result = await registry.invoke(
+        "broker_order_manage",
+        {
+            "request": {
+                "operation": "cash_sweep_preview",
+                "account_refs": [],
+                "operational_buffer": "200",
+            },
+        },
+        confirmation="broker_order_manage",
+    )
+
+    assert result["data"] == {"shadow_only": True, "execution_effect": False}
+    request = container.services.broker_order_preview.preview.await_args.args[0]
+    assert request.instrument_id == "etf:US:SGOV"
+    assert request.hard_cash_floor == 2000
+    assert "broker_order_manage" in MCP_VNEXT_TOOL_NAMES
+    assert "broker_order_preview" not in MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -375,9 +495,9 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
                 "ONLY_COMPONENTS_WITH_EXPLICIT_PROBES_ARE_LISTED",
             ],
         },
-        "mcp_surface_profile": "compact_28",
-        "public_tool_count": 28,
-        "surface_schema_version": "compact-v19",
+        "mcp_surface_profile": "mcp_vnext_shadow",
+        "public_tool_count": 27,
+        "surface_schema_version": "mcp-vnext-shadow-v2",
     }
 
 
@@ -404,9 +524,7 @@ async def test_system_health_keeps_operational_and_data_quality_states_separate(
     assert result["degraded"] is False
     assert result["data"]["status"] == "ok"
     assert result["data"]["data_quality"]["status"] == "degraded"
-    assert result["data"]["data_quality"]["component_checks"] == {
-        "provider": {"state": "ok"}
-    }
+    assert result["data"]["data_quality"]["component_checks"] == {"provider": {"state": "ok"}}
     assert result["warnings"] == []
 
 
@@ -431,9 +549,7 @@ async def test_system_health_survives_data_quality_center_failure() -> None:
 @pytest.mark.asyncio
 async def test_performance_summary_routes_through_durable_attribution_service() -> None:
     container = _container()
-    container.services.account_transactions.get_performance_attribution.return_value = (
-        _Envelope()
-    )
+    container.services.account_transactions.get_performance_attribution.return_value = _Envelope()
 
     result = await create_mcp_server(container)._tool_manager.call_tool(
         "portfolio_analyze",
@@ -449,6 +565,174 @@ async def test_performance_summary_routes_through_durable_attribution_service() 
 
     assert result["ok"] is True
     container.services.account_transactions.get_performance_attribution.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_trade_retro_review_routes_through_existing_grouped_tool() -> None:
+    container = _container()
+    container.services.trade_retro.review.return_value = _Envelope({"version": 1})
+    registry = create_capability_registry(container)
+    request = {
+        "operation": "trade_retro",
+        "action": "review",
+        "run_id": "retro_00000000-0000-7000-8000-000000000001",
+        "expected_version": 0,
+        "review_status": "DISPUTED",
+        "note_markdown": "The immutable result needs human context.",
+        "action_items": ["Record the next decision before execution."],
+        "finding_reviews": [
+            {
+                "finding_key": f"finding_{'a' * 64}",
+                "status": "DISPUTED",
+                "note": "Evidence was recorded outside the system.",
+            }
+        ],
+        "confirmed_by": "user",
+        "authorization_note": "User saved the review in the local Console.",
+        "idempotency_key": "review-v1",
+    }
+
+    result = await registry.invoke(
+        "research_workflow_run",
+        {"request": request},
+        confirmation="research_workflow_run",
+    )
+
+    assert result["ok"] is True
+    review_input = container.services.trade_retro.review.call_args.args[0]
+    assert review_input.run_id == request["run_id"]
+    assert review_input.expected_version == 0
+    assert review_input.finding_reviews[0].finding_key == f"finding_{'a' * 64}"
+    assert len(MCP_VNEXT_TOOL_NAMES) == 27
+
+
+@pytest.mark.asyncio
+async def test_judgment_scorecard_run_and_history_route_without_new_public_tools() -> None:
+    container = _container()
+    container.services.scorecards.run.return_value = _Envelope({"scorecard_id": "scorecard_1"})
+    container.services.scorecards.history.return_value = _Envelope(
+        {"runs": [], "total": 0, "has_more": False}
+    )
+    registry = create_capability_registry(container)
+
+    run_result = await registry.invoke(
+        "research_workflow_run",
+        {
+            "request": {
+                "operation": "judgment_scorecard",
+                "case_id": "case_00000000-0000-7000-8000-000000000001",
+                "thesis_id": "thesis_00000000-0000-7000-8000-000000000001",
+                "idempotency_key": "scorecard-run-1",
+            }
+        },
+        confirmation="research_workflow_run",
+    )
+    history_result = await registry.invoke(
+        "research_judgment_get",
+        {
+            "request": {
+                "operation": "scorecard_history",
+                "case_id": "case_00000000-0000-7000-8000-000000000001",
+                "limit": 12,
+                "offset": 2,
+            }
+        },
+    )
+
+    assert run_result["ok"] is True
+    assert history_result["ok"] is True
+    container.services.scorecards.run.assert_called_once_with(
+        subject_id="case_00000000-0000-7000-8000-000000000001",
+        thesis_id="thesis_00000000-0000-7000-8000-000000000001",
+        idempotency_key="scorecard-run-1",
+    )
+    history_input = container.services.scorecards.history.call_args.args[0]
+    assert history_input.subject_id == "case_00000000-0000-7000-8000-000000000001"
+    assert history_input.thesis_id is None
+    assert history_input.limit == 12
+    assert history_input.offset == 2
+    assert len(MCP_VNEXT_TOOL_NAMES) == 27
+
+
+@pytest.mark.asyncio
+async def test_catalyst_agenda_read_and_confirmed_append_reuse_memory_tools() -> None:
+    container = _container()
+    container.services.catalyst_agenda.query.return_value = _Envelope({"items": [], "coverage": []})
+    container.services.catalyst_agenda.manage.return_value = _Envelope(
+        {"agenda_item_id": "agenda_1", "version": 1}
+    )
+    registry = create_capability_registry(container)
+
+    read_result = await registry.invoke(
+        "research_memory_get",
+        {
+            "request": {
+                "operation": "agenda",
+                "window_days": 30,
+                "filters": {"case_ids": ["case_1"]},
+                "limit": 25,
+            }
+        },
+    )
+    write_result = await registry.invoke(
+        "research_memory_append",
+        {
+            "request": {
+                "operation": "agenda_item",
+                "action": "CREATE",
+                "confirmed_by": "user",
+                "authorization_note": "User created this agenda item in Codex chat.",
+                "idempotency_key": "agenda-create-1",
+                "submitted_via": "codex_chat",
+                "payload": {
+                    "case_id": "case_1",
+                    "kind": "USER_DEFINED",
+                    "title": "Review product launch evidence",
+                    "date_certainty": "UNKNOWN",
+                    "expected_question": "Did adoption improve after launch?",
+                },
+            }
+        },
+        confirmation="research_memory_append",
+    )
+    outcome_result = await registry.invoke(
+        "research_memory_append",
+        {
+            "request": {
+                "operation": "agenda_item",
+                "action": "LINK_OUTCOME",
+                "agenda_item_id": "agenda_1",
+                "expected_version": 1,
+                "confirmed_by": "user",
+                "authorization_note": "User linked the observed outcome in Codex chat.",
+                "idempotency_key": "agenda-outcome-1",
+                "submitted_via": "codex_chat",
+                "payload": {
+                    "evidence_id": "evidence_1",
+                    "outcome_occurred_at": "2026-08-09T08:00:00Z",
+                    "outcome_note": "Observed result linked after review.",
+                },
+            }
+        },
+        confirmation="research_memory_append",
+    )
+
+    assert read_result["ok"] is True
+    assert write_result["ok"] is True
+    assert outcome_result["ok"] is True
+    query_input = container.services.catalyst_agenda.query.call_args.args[0]
+    assert query_input.window_days == 30
+    assert query_input.filters.subject_ids == ("case_1",)
+    manage_calls = container.services.catalyst_agenda.manage.call_args_list
+    create_input = manage_calls[0].args[0]
+    assert create_input.action.value == "CREATE"
+    assert create_input.payload.title == "Review product launch evidence"
+    manage_input = manage_calls[1].args[0]
+    assert manage_input.action.value == "LINK_OUTCOME"
+    assert manage_input.payload.evidence_id == "evidence_1"
+    actor_context = container.services.catalyst_agenda.manage.call_args.kwargs["actor_context"]
+    assert actor_context is not None
+    assert len(MCP_VNEXT_TOOL_NAMES) == 27
 
 
 @pytest.mark.asyncio

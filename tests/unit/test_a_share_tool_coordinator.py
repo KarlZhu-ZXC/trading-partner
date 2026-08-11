@@ -199,6 +199,9 @@ async def test_get_snapshot_clean_success() -> None:
     assert envelope.sources[0].role == SourceRole.PRIMARY
     assert envelope.data is not None
     assert envelope.data.instrument_id == _INSTRUMENT_ID
+    assert envelope.data.quote.previous_close_basis == (
+        "previous_completed_regular_session_close"
+    )
     master.get.assert_called_once_with(_INSTRUMENT_ID)
     snap.get_snapshot.assert_awaited_once()
 

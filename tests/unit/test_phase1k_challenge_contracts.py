@@ -339,10 +339,10 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
 
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
     started = await manager.call_tool(
-        "challenge_review_manage",
+        "research_judgment_propose",
         {
             "request": {
-                "operation": "start",
+                "operation": "challenge_review",
                 "case_id": "case_1",
                 "trigger": "confidence_increase",
                 "proposed_action": "Raise confidence",
@@ -350,12 +350,15 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
             }
         },
     )
-    await manager.call_tool("challenge_review_get", {"review_id": REVIEW_ID})
     await manager.call_tool(
-        "challenge_review_manage",
+        "research_judgment_get",
+        {"request": {"operation": "challenge_review", "review_id": REVIEW_ID}},
+    )
+    await manager.call_tool(
+        "research_judgment_confirm",
         {
             "request": {
-                "operation": "resolve",
+                "operation": "challenge_review",
                 "review_id": REVIEW_ID,
                 "resolution": "defer",
                 "rationale": "Need more primary evidence",

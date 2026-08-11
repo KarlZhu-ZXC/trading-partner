@@ -17,9 +17,14 @@ from application.services.monitor_service import MonitorService
 from application.services.position_sizing_service import PositionSizingService
 from application.services.risk_engine_service import RiskEngineService
 from conftest import FixedClock, SequentialIdGenerator
-from domain.common.enums import DecisionType, VendorId
-from domain.portfolio.enums import AccountEnvironment, AccountPositionSide
-from domain.portfolio.models import AccountPosition, AccountSnapshot
+from domain.common.enums import DecisionType, ResearchSubjectStatus, VendorId
+from domain.portfolio.enums import (
+    AccountEnvironment,
+    AccountOpenOrderSide,
+    AccountOpenOrderStatus,
+    AccountPositionSide,
+)
+from domain.portfolio.models import AccountOpenOrder, AccountPosition, AccountSnapshot
 from domain.risk.enums import RiskCheckStatus, RiskConfirmer
 from domain.risk.models import RiskPolicy
 from domain.trade_plan.enums import (
@@ -100,6 +105,7 @@ def _account(
     *,
     quantity: str = "0",
     average_cost: Decimal | None = None,
+    open_orders: tuple[AccountOpenOrder, ...] = (),
 ) -> AccountSnapshot:
     positions = ()
     if Decimal(quantity) > 0:
@@ -132,7 +138,7 @@ def _account(
         net_assets=Decimal("100000"),
         margin_used=Decimal("0"),
         positions=positions,
-        open_orders=(),
+        open_orders=open_orders,
         degraded=False,
         warning_codes=(),
     )
@@ -235,6 +241,47 @@ async def test_missing_average_cost_keeps_drawdown_not_evaluated() -> None:
     assert result.execution_effect is False
 
 
+@pytest.mark.asyncio
+async def test_risk_includes_valued_open_buy_orders_as_prospective_exposure() -> None:
+    order = AccountOpenOrder(
+        provider_order_id="order-open-buy",
+        instrument_id="equity:US:NVDA",
+        side=AccountOpenOrderSide.BUY,
+        status=AccountOpenOrderStatus.PARTIAL,
+        quantity=Decimal("10"),
+        filled_quantity=Decimal("2"),
+        limit_price=Decimal("100"),
+        submitted_at=NOW,
+    )
+    account = _account("equity:US:AAPL", "USD", quantity="10", open_orders=(order,))
+
+    class Accounts:
+        def get_snapshots(self, _ids: tuple[str, ...]) -> tuple[AccountSnapshot, ...]:
+            return (account,)
+
+    class Policies:
+        def get_current(self) -> RiskPolicy:
+            return _policy()
+
+    result, _ = await RiskEngineService(  # type: ignore[arg-type]
+        Accounts(), Policies()
+    ).check(RiskCheckInput(), effective_as_of=NOW)
+
+    open_buy = next(item for item in result.checks if item.rule_code == "OPEN_BUY_ORDERS_PRESENT")
+    coverage = next(
+        item for item in result.checks if item.rule_code == "OPEN_BUY_ORDER_VALUATION_COVERAGE"
+    )
+    nvda = next(
+        item
+        for item in result.checks
+        if item.rule_code == "SINGLE_POSITION_CONCENTRATION"
+        and item.scope == "equity:US:NVDA/USD"
+    )
+    assert open_buy.status is RiskCheckStatus.WARN
+    assert coverage.status is RiskCheckStatus.PASS
+    assert nvda.actual == Decimal("88.88888888888888888888888889")
+
+
 def test_monitor_compiles_only_machine_conditions_and_inherits_plan_expiry() -> None:
     manual = TradePlanCondition(
         condition_code="MANUAL_GUIDANCE",
@@ -256,7 +303,7 @@ def test_monitor_compiles_only_machine_conditions_and_inherits_plan_expiry() -> 
     class Subjects:
         def get(self, subject_id: str) -> object:
             assert subject_id == plan.subject_id
-            return object()
+            return SimpleNamespace(status=ResearchSubjectStatus.ACTIVE)
 
     class Uow:
         trade_plans = Plans()
@@ -313,7 +360,7 @@ def test_uco_trade_plan_monitor_can_observe_usoil_reference(
     class Subjects:
         def get(self, subject_id: str) -> object:
             assert subject_id == plan.subject_id
-            return object()
+            return SimpleNamespace(status=ResearchSubjectStatus.ACTIVE)
 
     class Uow:
         trade_plans = Plans()

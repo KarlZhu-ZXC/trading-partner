@@ -34,6 +34,7 @@ def _meta(
     *,
     category: DataCategory = DataCategory.MARKET_QUOTE,
     adjustment: AdjustmentMethod | None = None,
+    session: TradingSession = TradingSession.POST_MARKET,
 ) -> ProviderResultMeta:
     return ProviderResultMeta(
         vendor=VendorId.YFINANCE,
@@ -42,7 +43,7 @@ def _meta(
         as_of=AS_OF,
         fetched_at=FETCHED,
         freshness=Freshness.DELAYED,
-        session=TradingSession.POST_MARKET,
+        session=session,
         latency_ms=12,
         cache_disposition=CacheDisposition.MISS,
         adjustment=adjustment,
@@ -70,7 +71,7 @@ def test_us_quote_codec_roundtrip() -> None:
     quote = USQuote(
         instrument_id=INSTRUMENT,
         quote_at=datetime(2026, 7, 17, 16, 0, tzinfo=NY),
-        session=TradingSession.POST_MARKET,
+        session=TradingSession.OVERNIGHT,
         last=Decimal("122.50"),
         open=Decimal("120.00"),
         high=Decimal("123.00"),
@@ -83,7 +84,7 @@ def test_us_quote_codec_roundtrip() -> None:
         week_52_low=Decimal("90.00"),
         week_52_high=Decimal("140.00"),
     )
-    success = ProviderSuccess(value=quote, meta=_meta())
+    success = ProviderSuccess(value=quote, meta=_meta(session=TradingSession.OVERNIGHT))
     codec = us_quote_codec()
     payload = codec.encode(success)
     decoded = codec.decode(_entry(payload, DataCategory.MARKET_QUOTE))
@@ -91,6 +92,7 @@ def test_us_quote_codec_roundtrip() -> None:
     assert decoded.meta.vendor is VendorId.YFINANCE
     assert decoded.meta.cache_disposition is CacheDisposition.HIT
     assert decoded.meta.category is DataCategory.MARKET_QUOTE
+    assert decoded.meta.session is TradingSession.OVERNIGHT
     assert type(decoded.value.last) is Decimal
     assert "122.50" in payload
 

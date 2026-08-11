@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -69,6 +70,11 @@ class _Client:
                 }
             }
         ]
+
+    def orders(self, account_hash: str, start: datetime, end: datetime) -> object:
+        assert account_hash == _ACCOUNT_HASH
+        assert end - start == timedelta(days=60)
+        return []
 
     def transactions(self, account_hash: str, start: datetime, end: datetime) -> object:
         assert account_hash == _ACCOUNT_HASH
@@ -148,7 +154,7 @@ def test_schwab_runtime_never_starts_browser_oauth(
     assert client is not None
     assert called == [(str(token_path), "client-id", "client-secret")]
 
-    source = Path("src/infrastructure/providers/account/schwab.py").read_text(encoding="utf-8")
+    source = inspect.getsource(SchwabPyReadClient)
     assert "easy_client" not in source
     assert "client_from_login_flow" not in source
 
@@ -193,6 +199,23 @@ async def test_schwab_snapshot_maps_raw_client_failure_to_typed_error(
 
 
 @pytest.mark.asyncio
+async def test_schwab_cash_balance_never_falls_back_to_other_balance_fields(
+    id_generator: object, fixed_clock: object
+) -> None:
+    client = _Client()
+    accounts = client.accounts_with_positions()
+    balances = accounts[0]["securitiesAccount"]["currentBalances"]  # type: ignore[index]
+    balances.pop("cashBalance")
+    balances["totalCash"] = "999999"
+    client.accounts_with_positions = lambda: accounts  # type: ignore[method-assign]
+
+    result = await _adapter(id_generator, fixed_clock, client).get_account_snapshots(as_of=_NOW)
+
+    assert result.value[0].cash is None
+    assert "SCHWAB_CASH_BALANCE_UNAVAILABLE" in result.value[0].warning_codes
+
+
+@pytest.mark.asyncio
 async def test_schwab_unsupported_asset_is_explicitly_degraded_and_no_write_surface(
     id_generator: object, fixed_clock: object
 ) -> None:
@@ -208,14 +231,48 @@ async def test_schwab_unsupported_asset_is_explicitly_degraded_and_no_write_surf
     client.accounts_with_positions = lambda: accounts  # type: ignore[method-assign]
 
     result = await _adapter(id_generator, fixed_clock, client).get_account_snapshots(as_of=_NOW)
-    source = Path("src/infrastructure/providers/account/schwab.py").read_text(encoding="utf-8")
+    source = inspect.getsource(SchwabPyReadClient)
 
     assert "SCHWAB_UNSUPPORTED_ASSET_TYPE" in result.value[0].warning_codes
-    assert "SCHWAB_OPEN_ORDERS_NOT_INGESTED" in result.value[0].warning_codes
+    assert "SCHWAB_OPEN_ORDERS_NOT_INGESTED" not in result.value[0].warning_codes
     assert len(result.value[0].positions) == 2
-    assert "/orders" not in source
     assert '"POST"' not in source and '"DELETE"' not in source
     assert not hasattr(SchwabReadClient, "place_order")
+
+
+@pytest.mark.asyncio
+async def test_schwab_open_orders_are_ingested_without_order_write_surface(
+    id_generator: object, fixed_clock: object
+) -> None:
+    client = _Client()
+    client.orders = lambda *_args: [  # type: ignore[method-assign]
+        {
+            "orderId": 9001,
+            "status": "WORKING",
+            "orderType": "LIMIT",
+            "quantity": "2",
+            "filledQuantity": "0.5",
+            "price": "149.25",
+            "enteredTime": "2026-07-18T11:00:00Z",
+            "orderLegCollection": [
+                {
+                    "instruction": "BUY",
+                    "instrument": {"assetType": "EQUITY", "symbol": "NVDA"},
+                }
+            ],
+        },
+        {"orderId": 9002, "status": "FILLED"},
+    ]
+
+    result = await _adapter(id_generator, fixed_clock, client).get_account_snapshots(as_of=_NOW)
+    order = result.value[0].open_orders[0]
+
+    assert order.provider_order_id == "9001"
+    assert order.instrument_id == "equity:US:NVDA"
+    assert order.quantity == Decimal("2")
+    assert order.filled_quantity == Decimal("0.5")
+    assert order.limit_price == Decimal("149.25")
+    assert "SCHWAB_OPEN_ORDERS_NOT_INGESTED" not in result.meta.warnings
 
 
 @pytest.mark.asyncio

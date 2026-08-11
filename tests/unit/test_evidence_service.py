@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -42,26 +38,6 @@ NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 EARLIER = NOW - timedelta(hours=2)
 A_SHARE = "equity:A_SHARE:600519.SH"
 US = "equity:US:NVDA"
-
-
-def _alembic_config(database_url: str, project_root: Path) -> Config:
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", database_url)
-    return cfg
-
-
-def _set_test_env(monkeypatch: pytest.MonkeyPatch, database_url: str) -> None:
-    for key in list(os.environ):
-        if key in __import__("conftest").APP_SETTINGS_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("APP_NAME", "evidence-service-test")
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("LOG_LEVEL", "INFO")
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("MCP_SERVER_NAME", "evidence-service-test")
-    monkeypatch.setenv("DEFAULT_TIMEZONE", "UTC")
-    monkeypatch.setenv("PROVIDER_TIMEOUT_SECONDS", "5")
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -98,12 +74,8 @@ def _make_case(ids: SequentialIdGenerator, clock: FixedClock, **overrides: Any) 
 
 
 @pytest.fixture
-def harness(tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
-    path = tmp_path / "evidence_svc.db"
-    database_url = f"sqlite:///{path}"
-    _set_test_env(monkeypatch, database_url)
-    command.upgrade(_alembic_config(database_url, project_root), "head")
-    eng = create_engine(database_url)
+def harness(migrated_sqlite_url: str):  # type: ignore[no-untyped-def]
+    eng = create_engine(migrated_sqlite_url)
     _enable_fk(eng)
     clock = FixedClock(NOW)
     ids = SequentialIdGenerator()

@@ -9,7 +9,11 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
-from application.dto.monitoring import MonitorCreateInput
+from application.dto.monitoring import (
+    MonitorArchiveInput,
+    MonitorCreateInput,
+    MonitorRuleInput,
+)
 from application.dto.research import (
     SubjectUpdateCandidatePayload,
     ThesisRevisionCandidatePayload,
@@ -29,6 +33,8 @@ from domain.common.enums import (
     ThesisRole,
     ThesisStatus,
 )
+from domain.common.errors import ResearchStateConflict
+from domain.monitoring.enums import MonitorRuleType
 from domain.trade_plan.enums import (
     TradePlanComparator,
     TradePlanConditionMode,
@@ -36,7 +42,6 @@ from domain.trade_plan.enums import (
     TradePlanFactType,
     TradePlanStatus,
 )
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
@@ -53,10 +58,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def services(tmp_path):  # type: ignore[no-untyped-def]
-    engine = create_engine(f"sqlite:///{tmp_path / 'phase3d.db'}")
+def services(orm_sqlite_url: str):  # type: ignore[no-untyped-def]
+    engine = create_engine(orm_sqlite_url)
     _enable_fk(engine)
-    Base.metadata.create_all(engine)
     clock = FixedClock(NOW)
     ids = SequentialIdGenerator()
     redactor = DefaultSecretRedactor()
@@ -283,9 +287,9 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
     assert plan.status is TradePlanStatus.ACTIVE
     assert plan.execution_effect is False
 
-    monitor = MonitorService(
-        SqlAlchemyMonitorRepository(engine), factory, clock, ids
-    ).create(
+    monitor_repository = SqlAlchemyMonitorRepository(engine)
+    monitor_service = MonitorService(monitor_repository, factory, clock, ids)
+    monitor = monitor_service.create(
         MonitorCreateInput(
             name="NVDA plan controls",
             trade_plan_id=plan.plan_id,
@@ -300,7 +304,7 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
     assert monitor.monitor.valid_until == NOW + timedelta(days=7)
     assert [rule.rule_code for rule in monitor.monitor.rules] == ["PRICE_ENTRY"]
 
-    for version, status in ((1, TradePlanStatus.PAUSED), (2, TradePlanStatus.ARCHIVED)):
+    for version, status in ((1, TradePlanStatus.PAUSED),):
         update = revisions.propose_state_update(
             subject_id=subject_id,
             payload=_plan_payload(
@@ -324,6 +328,57 @@ def test_trade_plan_propose_confirm_version_pause_and_archive(services) -> None:
         assert plan is not None
         assert plan.version == version + 1
         assert plan.status is status
+
+    archive_attempt = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=_plan_payload(
+            thesis_id,
+            status=TradePlanStatus.ARCHIVED,
+            plan_id=plan.plan_id,
+            expected_version=2,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Attempt retirement while a linked Monitor remains live.",
+        idempotency_key="phase3d-plan-archive-blocked",
+    )
+    assert archive_attempt.ok and archive_attempt.data is not None
+    blocked = revisions.confirm_candidate(
+        archive_attempt.data.candidate_id, reviewed_by="external_agent"
+    )
+    assert not blocked.ok
+    assert blocked.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert blocked.errors[0].details["live_monitor_ids"] == [monitor.monitor.monitor_id]
+
+    monitor_service.archive(
+        MonitorArchiveInput(
+            monitor_id=monitor.monitor.monitor_id,
+            expected_version=monitor.monitor.version,
+            confirmed_by="user",
+            idempotency_key="phase3d-monitor-archive",
+        )
+    )
+    archive_retry = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=_plan_payload(
+            thesis_id,
+            status=TradePlanStatus.ARCHIVED,
+            plan_id=plan.plan_id,
+            expected_version=2,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Retire after the linked Monitor is archived.",
+        idempotency_key="phase3d-plan-archive-after-monitor",
+    )
+    assert archive_retry.ok and archive_retry.data is not None
+    archived = revisions.confirm_candidate(
+        archive_retry.data.candidate_id, reviewed_by="external_agent"
+    )
+    assert archived.ok and archived.data is not None
+    assert archived.data.research_state is not None
+    plan = archived.data.research_state.current_trade_plan
+    assert plan is not None and plan.status is TradePlanStatus.ARCHIVED
 
     with factory() as uow:
         versions = uow.trade_plans.list_versions(plan.plan_id)
@@ -362,6 +417,52 @@ def test_live_thesis_confirmation_rejected_until_case_is_active(services) -> Non
     }
     with factory() as uow:
         assert uow.theses.list_by_subject(subject_id) == ()
+
+
+def test_monitor_requires_active_subject_and_blocks_subject_retirement(services) -> None:  # type: ignore[no-untyped-def]
+    subjects, revisions, factory, engine, clock, ids = services
+    subject_id = _create_subject(subjects, "phase3d-monitor-subject")
+    repository = SqlAlchemyMonitorRepository(engine)
+    service = MonitorService(repository, factory, clock, ids)
+    request = MonitorCreateInput(
+        name="NVDA subject lifecycle",
+        subject_id=subject_id,
+        primary_instrument_id="equity:US:NVDA",
+        rules=(
+            MonitorRuleInput(
+                rule_code="NVDA_FLOOR",
+                description="NVDA falls below the reviewed floor.",
+                rule_type=MonitorRuleType.PRICE_BELOW,
+                instrument_id="equity:US:NVDA",
+                price_threshold=Decimal("100"),
+            ),
+        ),
+        confirmed_by="user",
+        idempotency_key="phase3d-draft-monitor",
+    )
+
+    with pytest.raises(ResearchStateConflict):
+        service.create(request)
+
+    _activate_case(revisions, subject_id, "phase3d-monitor-subject-activate")
+    monitor = service.create(request)
+    archive = revisions.propose_state_update(
+        subject_id=subject_id,
+        payload=SubjectUpdateCandidatePayload(
+            action="archive",
+            new_status=ResearchSubjectStatus.ARCHIVED,
+            archived_reason="Lifecycle test",
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Attempt retirement while Monitor is live.",
+        idempotency_key="phase3d-monitor-subject-archive",
+    )
+    assert archive.ok and archive.data is not None
+    blocked = revisions.confirm_candidate(archive.data.candidate_id, reviewed_by="user")
+    assert not blocked.ok
+    assert blocked.errors[0].code == "RESEARCH_STATE_CONFLICT"
+    assert blocked.errors[0].details["live_monitor_ids"] == [monitor.monitor.monitor_id]
 
 
 def test_active_trade_plan_requires_live_thesis(services) -> None:  # type: ignore[no-untyped-def]

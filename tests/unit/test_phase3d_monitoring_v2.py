@@ -15,6 +15,7 @@ from application.dto.monitoring import MonitorEvaluateInput
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_fact_resolver import MonitorFact, MonitorFactResolver
 from conftest import FixedClock, SequentialIdGenerator
+from domain.common.enums import Market
 from domain.monitoring.enums import (
     MonitorCadence,
     MonitorEventType,
@@ -27,6 +28,7 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import MonitorDefinition, MonitorRule, MonitorRuleState
 from domain.risk.enums import RiskOverallStatus
 from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
+from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 
@@ -70,6 +72,98 @@ class _FactResolver:
         if self.unavailable:
             return MonitorFact(None, None, error_codes=("FACT_SOURCE_UNAVAILABLE",))
         return MonitorFact(Decimal("1"), NOW)
+
+
+class _DailyTechnicalFactResolver:
+    def __init__(self, fact_at: datetime) -> None:
+        self.fact_at = fact_at
+
+    async def resolve(self, _rule: MonitorRule, _as_of: datetime) -> MonitorFact:
+        return MonitorFact(
+            Decimal("68.38"),
+            self.fact_at,
+            warning_codes=("TECHNICAL_DATA_NOT_FRESH",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("fact_at", "evaluated_at", "expected_state", "warning_expected"),
+    (
+        (
+            datetime(2026, 8, 7, 20, tzinfo=UTC),
+            datetime(2026, 8, 10, 16, 5, tzinfo=UTC),
+            MonitorRuleStateValue.QUIET,
+            False,
+        ),
+        (
+            datetime(2026, 9, 4, 20, tzinfo=UTC),
+            datetime(2026, 9, 8, 16, 5, tzinfo=UTC),
+            MonitorRuleStateValue.QUIET,
+            False,
+        ),
+        (
+            datetime(2026, 8, 7, 20, tzinfo=UTC),
+            datetime(2026, 8, 10, 21, 5, tzinfo=UTC),
+            MonitorRuleStateValue.NOT_EVALUATED,
+            True,
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_daily_technical_freshness_uses_latest_completed_exchange_session(
+    tmp_path,
+    fact_at: datetime,
+    evaluated_at: datetime,
+    expected_state: MonitorRuleStateValue,
+    warning_expected: bool,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'session-freshness.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    rule = _rule(
+        "GDXU_RSI_OVERHEAT_80",
+        TradePlanFactType.TECHNICAL,
+        "rsi_14",
+        instrument_id="etf:US:GDXU",
+        threshold=Decimal("80"),
+        technical_interval="1d",
+    )
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000099",
+        version=1,
+        name="Session-aware daily technical",
+        subject_id=None,
+        primary_instrument_id="etf:US:GDXU",
+        cadence=MonitorCadence.ON_DEMAND,
+        status=MonitorStatus.ACTIVE,
+        rules=(rule,),
+        confirmed_by="user",
+        idempotency_key=f"session-aware-{evaluated_at.isoformat()}",
+        created_at=fact_at,
+    )
+    repository.create(monitor)
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        FixedClock(evaluated_at),
+        SequentialIdGenerator(),
+        _DailyTechnicalFactResolver(fact_at),  # type: ignore[arg-type]
+        session_calendars={Market.US: XnysMarketSessionCalendar()},
+    )
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(monitor_ids=(monitor.monitor_id,), as_of=evaluated_at)
+    )
+
+    assert run.observations[0].state is expected_state
+    assert run.observations[0].fact_age_seconds is not None
+    assert run.observations[0].fact_age_seconds > rule.max_fact_age_seconds
+    assert (
+        "TECHNICAL_DATA_NOT_FRESH" in run.observations[0].warning_codes
+    ) is warning_expected
+    engine.dispose()
 
 
 @pytest.mark.asyncio

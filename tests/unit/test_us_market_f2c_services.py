@@ -427,6 +427,27 @@ async def test_quote_and_bars_router_delegation_and_validator() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_us_equity_overnight_uses_moomoo_before_yahoo() -> None:
+    overnight = datetime(2026, 8, 11, 1, 30, tzinfo=NY)
+    quote = _quote("equity:US:GDX", last=D("89.22"), previous_close=D("90.49"))
+    router = _RecordingRouter(
+        success_value=quote,
+        meta=_meta(DataCategory.MARKET_QUOTE, as_of=overnight),
+    )
+    service = _data_service(router, FixedClock(overnight))
+
+    await service.get_quote(_us_equity("GDX"), overnight)
+
+    policy = router.calls[0]["tool_policy"]
+    assert policy is not None
+    assert policy.category_chain_overrides[DataCategory.MARKET_QUOTE] == (
+        VendorId.MOOMOO,
+        VendorId.YFINANCE,
+        VendorId.ALPHA_VANTAGE,
+    )
+
+
+@pytest.mark.asyncio
 async def test_futures_route_to_asset_compatible_fallback_chains() -> None:
     instrument = _us_future()
     quote_router = _RecordingRouter(
@@ -541,6 +562,8 @@ async def test_context_all_proxies_success_change_percent() -> None:
     assert ctx.as_of is AS_OF
     assert ctx.spy.latest == D("500")
     assert ctx.spy.change_percent == D("25")
+    assert ctx.spy.quote_at == results["etf:US:SPY"].value.quote_at
+    assert ctx.spy.session is TradingSession.REGULAR
     assert ctx.qqq.change_percent == D("10")
     assert ctx.iwm.change_percent == D("0")
     assert ctx.advancing_count is None and ctx.declining_count is None

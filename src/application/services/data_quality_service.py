@@ -8,6 +8,7 @@ from decimal import Decimal
 from application.dto.data_quality import (
     AccountActivityQualityDTO,
     AccountSnapshotQualityDTO,
+    CatalystAgendaSyncQualityDTO,
     DataQualityCenterDTO,
     DataQualityIssueDTO,
     MonitorQualityDTO,
@@ -17,6 +18,7 @@ from application.dto.provider_route_history import ProviderRouteReceipt
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.account_transaction_repository import AccountTransactionRepository
+from application.ports.catalyst_agenda_sync_repository import CatalystAgendaSyncRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.monitor_repository import MonitorRepository
@@ -61,6 +63,7 @@ class DataQualityService:
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
+        catalyst_agenda_sync: CatalystAgendaSyncRepository | None = None,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._account_transactions = account_transactions
@@ -70,6 +73,7 @@ class DataQualityService:
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
+        self._catalyst_agenda_sync = catalyst_agenda_sync
 
     def check(self) -> ToolEnvelope[DataQualityCenterDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
@@ -110,6 +114,14 @@ class DataQualityService:
             repository_errors = True
             issues.append(self._persistence_issue("provider_routes", exc, now))
 
+        agenda_receipt = None
+        if self._catalyst_agenda_sync is not None:
+            try:
+                agenda_receipt = self._catalyst_agenda_sync.latest()
+            except Exception as exc:  # noqa: BLE001
+                repository_errors = True
+                issues.append(self._persistence_issue("catalyst_agenda", exc, now))
+
         try:
             self._append_research_state_issues(issues, now)
         except Exception as exc:  # noqa: BLE001 — health view must not raise or leak
@@ -146,12 +158,29 @@ class DataQualityService:
             self._monitor_quality(monitor, now, issues) for monitor in monitor_definitions
         )
         route_items = self._provider_route_quality(route_receipts, route_window_start, issues)
+        if agenda_receipt is not None and agenda_receipt.failed_scope_count:
+            issues.append(
+                DataQualityIssueDTO(
+                    code="AGENDA_SYNC_PROVIDER_FAILURE",
+                    severity=HealthState.DEGRADED,
+                    scope="catalyst_agenda",
+                    subject_ref=agenda_receipt.receipt_id,
+                    observed_at=agenda_receipt.completed_at,
+                    detail="The latest explicit Agenda sync contains typed Provider failures.",
+                )
+            )
         route_window_truncated = len(route_receipts) == self._ROUTE_LIMIT
         limitations = list(self._BASE_LIMITATIONS)
+        if agenda_receipt is None:
+            limitations.append("CATALYST_AGENDA_SYNC_RECEIPT_MISSING")
+        else:
+            limitations.extend(agenda_receipt.limitation_codes)
         if not self._provider_routes.is_durable:
             limitations.append("PROVIDER_ROUTE_HISTORY_NOT_DURABLE")
         if route_window_truncated:
             limitations.append("PROVIDER_ROUTE_HISTORY_WINDOW_TRUNCATED")
+
+        issues = [self._with_remediation(item) for item in issues]
 
         if repository_errors or any(item.severity == HealthState.ERROR for item in issues):
             status = HealthState.ERROR
@@ -186,11 +215,64 @@ class DataQualityService:
                 monitors=monitor_items,
                 provider_routes=route_items,
                 provider_route_window_truncated=route_window_truncated,
+                catalyst_agenda_sync=(
+                    CatalystAgendaSyncQualityDTO(
+                        receipt_id=agenda_receipt.receipt_id,
+                        status=agenda_receipt.status,
+                        as_of=agenda_receipt.as_of,
+                        completed_at=agenda_receipt.completed_at,
+                        scope_count=agenda_receipt.scope_count,
+                        candidate_count=agenda_receipt.candidate_count,
+                        appended_count=agenda_receipt.appended_count,
+                        revised_count=agenda_receipt.revised_count,
+                        date_drift_count=agenda_receipt.date_drift_count,
+                        failed_scope_count=agenda_receipt.failed_scope_count,
+                        limitation_codes=agenda_receipt.limitation_codes[:100],
+                    )
+                    if agenda_receipt is not None
+                    else None
+                ),
                 issues=tuple(issues),
                 limitations=tuple(limitations),
             ),
             degraded=status is not HealthState.OK,
             warnings=warnings,
+        )
+
+    @staticmethod
+    def _with_remediation(issue: DataQualityIssueDTO) -> DataQualityIssueDTO:
+        """Attach a deterministic next step without executing an upstream action."""
+
+        code = issue.code
+        if code == "MONITOR_CURRENT_VERSION_NEVER_EVALUATED":
+            action = "EVALUATE_MONITOR"
+        elif code.startswith("MONITOR_"):
+            action = "INSPECT_MONITOR_RUN"
+        elif code in {
+            "ACCOUNT_ACTIVITY_COVERAGE_MISSING",
+            "ACCOUNT_ACTIVITY_COVERAGE_INCOMPLETE",
+        }:
+            action = "SYNC_ACCOUNT_TRANSACTIONS"
+        elif code == "ACCOUNT_SNAPSHOT_DEGRADED":
+            action = "SYNC_ACCOUNTS"
+        elif code.startswith("ACCOUNT_"):
+            action = "INSPECT_ACCOUNT_LIMITATIONS"
+        elif code.startswith("PROVIDER_"):
+            action = "INSPECT_PROVIDER_ROUTE"
+        elif issue.scope == "research_state":
+            action = "REVIEW_RESEARCH_STATE"
+        elif issue.scope == "persistence":
+            action = "CHECK_LOCAL_STORAGE"
+        else:
+            action = None
+        return issue.model_copy(
+            update={
+                "recommended_action_code": action,
+                # No durable quality issue currently proves that an automatic
+                # retry will restore evidence. Keep this false unless a future
+                # scheduler receipt explicitly establishes that contract.
+                "automatic_recovery_expected": False,
+            }
         )
 
     def _append_research_state_issues(

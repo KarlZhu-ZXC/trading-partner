@@ -11,6 +11,11 @@ from application.dto.historical_validation import (
     QuantConnectPrepareInput,
 )
 from application.dto.peer_comparison import PeerComparisonRunInput
+from application.dto.trade_retro import (
+    TradeRetroFindingReviewInput,
+    TradeRetroReviewInput,
+    TradeRetroWorkflowInput,
+)
 from application.dto.workflow import (
     AShareRunMarketReviewInput,
     PortfolioRunReviewInput,
@@ -271,6 +276,101 @@ def build_workflow_adapters(container: ApplicationContainer) -> SimpleNamespace:
         except Exception as exc:  # noqa: BLE001
             return unexpected_failure(container, exc)
 
+    async def trade_retro(
+        action: Literal["prepare", "run", "review", "export"],
+        idempotency_key: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        run_id: str | None = None,
+        use_llm: bool = True,
+        expected_version: int | None = None,
+        review_status: Literal["OPEN", "ACCEPTED", "DISPUTED", "RESOLVED"] | None = None,
+        note_markdown: str = "",
+        action_items: tuple[str, ...] = (),
+        finding_reviews: tuple[TradeRetroFindingReviewInput, ...] = (),
+        confirmed_by: Literal["user", "external_agent"] | None = None,
+        authorization_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare, generate, append a review revision, or safely export a Trade Retro."""
+        try:
+            request = TradeRetroWorkflowInput.model_validate(
+                {
+                    "action": action,
+                    "idempotency_key": idempotency_key,
+                    "start": start,
+                    "end": end,
+                    "run_id": run_id,
+                    "use_llm": use_llm,
+                    "expected_version": expected_version,
+                    "review_status": review_status,
+                    "note_markdown": note_markdown,
+                    "action_items": action_items,
+                    "finding_reviews": finding_reviews,
+                    "confirmed_by": confirmed_by,
+                    "authorization_note": authorization_note,
+                }
+            )
+            if request.action == "prepare":
+                assert request.start is not None and request.end is not None
+                return container.services.trade_retro.prepare(
+                    start=request.start,
+                    end=request.end,
+                    idempotency_key=request.idempotency_key,
+                ).model_dump(mode="json")
+            elif request.action == "run":
+                assert request.start is not None and request.end is not None
+                envelope = await container.services.trade_retro.run(
+                    start=request.start,
+                    end=request.end,
+                    idempotency_key=request.idempotency_key,
+                    use_llm=request.use_llm,
+                )
+                return envelope.model_dump(mode="json")
+            elif request.action == "review":
+                assert request.run_id is not None
+                assert request.expected_version is not None
+                assert request.review_status is not None
+                assert request.confirmed_by is not None
+                assert request.authorization_note is not None
+                return container.services.trade_retro.review(
+                    TradeRetroReviewInput(
+                        run_id=request.run_id,
+                        expected_version=request.expected_version,
+                        status=request.review_status,
+                        note_markdown=request.note_markdown,
+                        action_items=request.action_items,
+                        finding_reviews=request.finding_reviews,
+                        confirmed_by=request.confirmed_by,
+                        authorization_note=request.authorization_note,
+                        idempotency_key=request.idempotency_key,
+                    )
+                ).model_dump(mode="json")
+            else:
+                assert request.run_id is not None
+                return container.services.trade_retro.export(
+                    run_id=request.run_id,
+                    idempotency_key=request.idempotency_key,
+                ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return unexpected_failure(container, exc)
+
+    def judgment_scorecard(
+        case_id: str,
+        thesis_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Persist one deterministic, immutable scorecard for an exact current Thesis."""
+        try:
+            return container.services.scorecards.run(
+                subject_id=case_id,
+                thesis_id=thesis_id,
+                idempotency_key=idempotency_key,
+            ).model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001
+            return unexpected_failure(container, exc)
+
     return SimpleNamespace(
         research_run_deep_dive=research_run_deep_dive,
         research_run_catalyst_review=research_run_catalyst_review,
@@ -280,4 +380,6 @@ def build_workflow_adapters(container: ApplicationContainer) -> SimpleNamespace:
         research_run_peer_comparison=research_run_peer_comparison,
         historical_validation_prepare=historical_validation_prepare,
         historical_validation_import=historical_validation_import,
+        trade_retro=trade_retro,
+        judgment_scorecard=judgment_scorecard,
     )

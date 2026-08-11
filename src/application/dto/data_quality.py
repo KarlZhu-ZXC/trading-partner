@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from application.dto.market import DecimalWire
+from domain.catalyst_agenda.enums import AgendaSyncStatus
 from domain.common.enums import DataCategory, HealthState, Market, VendorId
 from domain.monitoring.enums import MonitorCadence, MonitorRunStatus
 from domain.portfolio.enums import AccountActivityCoverageStatus
@@ -27,10 +28,13 @@ class DataQualityIssueDTO(_DTO):
         "provider_route",
         "research_state",
         "persistence",
+        "catalyst_agenda",
     ]
     subject_ref: str | None = Field(default=None, max_length=128)
     observed_at: datetime | None = None
     detail: str = Field(min_length=1, max_length=500)
+    recommended_action_code: str | None = Field(default=None, max_length=128)
+    automatic_recovery_expected: bool = False
 
 
 class AccountSnapshotQualityDTO(_DTO):
@@ -100,6 +104,20 @@ class ProviderRouteQualityDTO(_DTO):
     warning_codes: tuple[str, ...]
 
 
+class CatalystAgendaSyncQualityDTO(_DTO):
+    receipt_id: str
+    status: AgendaSyncStatus
+    as_of: datetime
+    completed_at: datetime
+    scope_count: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    appended_count: int = Field(ge=0)
+    revised_count: int = Field(ge=0)
+    date_drift_count: int = Field(ge=0)
+    failed_scope_count: int = Field(ge=0)
+    limitation_codes: tuple[str, ...] = Field(max_length=100)
+
+
 class DataQualityCenterDTO(_DTO):
     status: HealthState
     generated_at: datetime
@@ -109,5 +127,6 @@ class DataQualityCenterDTO(_DTO):
     monitors: tuple[MonitorQualityDTO, ...]
     provider_routes: tuple[ProviderRouteQualityDTO, ...]
     provider_route_window_truncated: bool
+    catalyst_agenda_sync: CatalystAgendaSyncQualityDTO | None = None
     issues: tuple[DataQualityIssueDTO, ...]
     limitations: tuple[str, ...]

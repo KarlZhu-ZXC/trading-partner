@@ -1,18 +1,20 @@
 """Composition root — the only module that wires application and infrastructure."""
-
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from application.ports.agent_conversation_repository import AgentConversationRepository
+from application.ports.agent_handoff_repository import AgentHandoffRepository
+from application.ports.agent_pending_action_repository import AgentPendingActionRepository
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.instrument_unit_of_work import InstrumentUnitOfWork
-from application.ports.monitor_judgment_provider import MonitorJudgmentProvider
 from application.ports.notification_sender import NotificationSender
 from application.ports.operational_maintenance import OperationalMaintenancePort
 from application.ports.research_unit_of_work import ResearchUnitOfWork
@@ -34,6 +36,13 @@ from application.services.a_share_snapshot_service import AShareSnapshotService
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.broker_order_service import BrokerOrderService
+from application.services.cash_sweep_shadow_service import CashSweepShadowService
+from application.services.catalyst_agenda_notification_service import (
+    CatalystAgendaNotificationService,
+)
+from application.services.catalyst_agenda_service import CatalystAgendaService
+from application.services.catalyst_agenda_sync_service import CatalystAgendaSyncService
 from application.services.challenge_review_service import ChallengeReviewService
 from application.services.commodity_spot_service import CommoditySpotService
 from application.services.criticality_policy import CriticalityPolicy
@@ -48,6 +57,7 @@ from application.services.instrument_access_service import InstrumentAccessServi
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
+from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
@@ -83,8 +93,10 @@ from application.services.risk_engine_service import RiskEngineService
 from application.services.risk_policy_service import RiskPolicyService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.routed_futures_provider import RoutedFuturesProvider
+from application.services.sgov_shadow_plan_service import SgovShadowPlanService
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
+from application.services.trade_retro_service import TradeRetroService
 from application.services.us_community_heat_service import USCommunityHeatService
 from application.services.us_company_update_service import USCompanyUpdateService
 from application.services.us_context_services import (
@@ -105,6 +117,7 @@ from application.services.us_tool_coordinator import USToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
+from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
 from infrastructure.calendars.a_share_market_session_calendar import (
     AShareMarketSessionCalendarAdapter,
 )
@@ -114,11 +127,19 @@ from infrastructure.composition import (
     CompositionOverrides,
     ProviderCompositionOverrides,
     RuntimeResources,
+    build_agent_model_provider,
+    build_monitor_judgment_fallback_provider,
+    build_monitor_judgment_provider,
     build_persistence_infrastructure,
     build_provider_infrastructure,
+    build_trade_retro_narrative_provider,
     enabled_account_provider_order,
 )
 from infrastructure.config.settings import PROJECT_ROOT, AppSettings
+from infrastructure.persistence.audit_log_writer import SqlAlchemyAuditLogWriter
+from infrastructure.persistence.catalyst_agenda_outcome_reader import (
+    SqlAlchemyCatalystAgendaOutcomeReader,
+)
 from infrastructure.persistence.challenge_review_repository import (
     SqlAlchemyChallengeReviewRepository,
 )
@@ -176,12 +197,9 @@ from infrastructure.providers.instrument_directory import (
     TencentInstrumentDirectoryAdapter,
     YahooInstrumentDirectoryAdapter,
 )
-from infrastructure.providers.llm import (
-    BailianMonitorJudgmentProvider,
-    DeepSeekMonitorJudgmentProvider,
-)
 from infrastructure.providers.notifications.telegram import TelegramNotificationAdapter
 from infrastructure.providers.registry import VendorRegistry
+from infrastructure.providers.us.catalyst_calendar_codecs import catalyst_calendar_codec
 from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
 from infrastructure.providers.us.context_codecs import (
     us_community_heat_codec,
@@ -198,6 +216,7 @@ from infrastructure.providers.us.research_codecs import (
     us_fundamental_snapshot_codec,
     us_insider_activity_codec,
 )
+from infrastructure.system.agent_turn_lock import AgentTurnLockFactory
 from infrastructure.system.clock import SystemClock
 from infrastructure.system.id_generator import Uuid7IdGenerator
 from infrastructure.system.process_file_lock import ProcessFileLock
@@ -213,8 +232,6 @@ BootstrapOverrides = CompositionOverrides
 
 @dataclass(frozen=True, slots=True)
 class ProviderBundle:
-    """Stable provider/router surface for capability composition."""
-
     router: ProviderRouter
     registry: VendorRegistry
 
@@ -227,20 +244,23 @@ class OperationalServices:
     notifications: NotificationService
     monitor_dispatch: MonitorDispatchService
     post_market_sync: PostMarketSyncService
+    sgov_shadow_plan: SgovShadowPlanService
     maintenance: OperationalMaintenancePort
     performance_reconciliation: PerformanceReconciliationService
     schwab_oauth: SchwabOAuthFlowManager | None
+    catalyst_agenda_sync: CatalystAgendaSyncService
+    catalyst_agenda_notifications: CatalystAgendaNotificationService
+    agent_conversations: AgentConversationRepository
+    agent_handoffs: AgentHandoffRepository
+    agent_pending_actions: AgentPendingActionRepository
 
     @property
     def monitor_notifications(self) -> NotificationService:
-        """Compatibility accessor for the former Monitor-only name."""
         return self.notifications
 
 
 @dataclass(slots=True)
 class ApplicationContainer:
-    """Small composition result; consumers enter through explicit capability bundles."""
-
     settings: AppSettings
     context: RuntimeContext
     resources: RuntimeResources
@@ -263,11 +283,7 @@ class ApplicationContainer:
 def build_application(
     settings: AppSettings, *, overrides: BootstrapOverrides | None = None
 ) -> ApplicationContainer:
-    """Explicit factory: construct services from settings. No I/O at import time.
-
-    Does **not** run migrations or seed the instrument master (production seed
-    is migration 0003; tests seed via Alembic or InstrumentSeedLoader).
-    """
+    """Construct services from settings without I/O at import time."""
     overrides = overrides or BootstrapOverrides()
     clock: Clock = overrides.clock or SystemClock()
     id_generator: IdGenerator = Uuid7IdGenerator()
@@ -351,6 +367,8 @@ def build_application(
     dce_official_adapter = provider_infrastructure.dce_official
     commodity_spot_adapter = provider_infrastructure.commodity_spot
     schwab_account_provider = provider_infrastructure.schwab_account
+    schwab_quote_provider = provider_infrastructure.schwab_quote
+    schwab_order_provider = provider_infrastructure.schwab_order
     moomoo_account_provider = provider_infrastructure.moomoo_account
     watchlist_source_provider = provider_infrastructure.watchlist_source
     provider_router = ProviderRouter(
@@ -360,6 +378,22 @@ def build_application(
         id_generator=id_generator,
         secret_redactor=secret_redactor,
         criticality_policy=CriticalityPolicy(),
+    )
+    cash_sweep_shadow_service = CashSweepShadowService(
+        account_snapshot_repository,
+        schwab_quote_provider,
+        clock,
+        id_generator,
+        secret_redactor,
+    )
+    broker_order_service = BrokerOrderService(
+        persistence.broker_orders,
+        schwab_order_provider,
+        schwab_quote_provider,
+        SqlAlchemyAuditLogWriter(engine, clock, id_generator, secret_redactor),
+        clock,
+        id_generator,
+        secret_redactor,
     )
 
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
@@ -395,7 +429,6 @@ def build_application(
     instrument_master_service = InstrumentMasterService(
         instrument_unit_of_work_factory,
     )
-    # Phase 3A: futures definition services must exist before CME/DCE directories.
     futures_definition_repository = SqlAlchemyFuturesDefinitionRepository(engine)
     routed_futures_provider = RoutedFuturesProvider(
         {
@@ -468,7 +501,6 @@ def build_application(
         },
     )
     access_service = InstrumentAccessService(instrument_master_service, instrument_resolve_service)
-    # Phase 1C C5: shared research UoW factory for durable read/write entry points.
     research_archive_service = ResearchArchiveService(
         research_unit_of_work_factory,
         clock,
@@ -499,9 +531,6 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-
-    # Phase 1E E5b: construct each runtime cache codec exactly once, then inject.
-    # chip/sentiment use v2 ids only (no v1 dual injection).
     quote_cache_codec = quote_codec()
     bars_cache_codec = bars_codec()
     order_book_cache_codec = order_book_codec()
@@ -528,7 +557,6 @@ def build_application(
     sentiment_cache_codec = sentiment_codec()
     interactive_qa_cache_codec = interactive_qa_codec()
     option_snapshot_cache_codec = option_snapshot_codec()
-
     a_share_snapshot_service = AShareSnapshotService(
         router=provider_router,
         clock=clock,
@@ -615,8 +643,6 @@ def build_application(
         company_operating_metrics_service=a_share_company_operating_metrics_service,
         report_search_service=research_report_search_service,
     )
-
-    # Phase 1F F3c: construct US codecs exactly once, then inject.
     us_quote_cache_codec = us_quote_codec()
     us_bars_cache_codec = us_bars_codec()
     us_market_data_service = USMarketDataService(
@@ -624,6 +650,7 @@ def build_application(
         clock=clock,
         quote_codec=us_quote_cache_codec,
         bars_codec=us_bars_cache_codec,
+        current_quote_window_seconds=settings.us_current_window_seconds,
     )
     us_market_breadth_service = USMarketBreadthService(
         router=provider_router,
@@ -656,7 +683,6 @@ def build_application(
         context_service=us_market_context_service,
         technical_service=us_technical_service,
     )
-    # Phase 3A: market MCP facade (futures services wired earlier for directories).
     market_tool_coordinator = MarketToolCoordinator(
         instrument_access=access_service,
         clock=clock,
@@ -678,8 +704,6 @@ def build_application(
         chart_renderer=MatplotlibChartRenderer(),
         commodity_spot_service=commodity_spot_service,
     )
-
-    # Phase 1G: one codec instance per research category and thin composition.
     us_fundamental_service = USFundamentalService(
         router=provider_router,
         clock=clock,
@@ -708,8 +732,6 @@ def build_application(
         filing_service=us_filing_service,
         company_update_service=us_company_update_service,
     )
-
-    # Phase 1H: four routed context services and one thin tool coordinator.
     us_macro_service = USMacroService(provider_router, clock, us_macro_context_codec())
     us_sentiment_service = USSentimentService(provider_router, clock, us_sentiment_samples_codec())
     us_prediction_market_service = USPredictionMarketService(
@@ -725,8 +747,6 @@ def build_application(
         sentiment_service=us_sentiment_service,
         prediction_service=us_prediction_market_service,
     )
-
-    # Phase 1I: direct read-only account ports; no order-capable service exists.
     account_service = AccountService(
         provider_infrastructure.account_providers,
         account_snapshot_repository,
@@ -772,6 +792,7 @@ def build_application(
         clock,
         id_generator,
         secret_redactor,
+        persistence.catalyst_agenda_sync,
     )
     us_market_calendar = XnysMarketSessionCalendar()
     monitor_schedule_service = MonitorScheduleService(
@@ -798,39 +819,17 @@ def build_application(
         us_context=us_context_tool_coordinator,
         research_uow_factory=research_unit_of_work_factory,
     )
-    monitor_judgment_provider: MonitorJudgmentProvider | None = None
+    monitor_judgment_provider = build_monitor_judgment_provider(settings)
+    monitor_judgment_fallback_provider = build_monitor_judgment_fallback_provider(settings)
     monitor_judgment_service = None
-    if settings.monitor_judgment_enabled:
-        if settings.llm_provider == "bailian":
-            assert settings.bailian_api_key is not None
-            monitor_judgment_provider = BailianMonitorJudgmentProvider(
-                api_key=settings.bailian_api_key,
-                base_url=settings.bailian_base_url,
-                model=settings.bailian_model,
-                reasoning_effort=settings.llm_reasoning_effort,
-                web_search_enabled=settings.bailian_web_search_enabled,
-                output_language=settings.llm_output_language,
-                timeout_seconds=settings.monitor_judgment_timeout_seconds,
-                max_output_tokens=settings.monitor_judgment_max_output_tokens,
-                proxy_url=settings.provider_proxy_url,
-            )
-        else:
-            assert settings.deepseek_api_key is not None
-            monitor_judgment_provider = DeepSeekMonitorJudgmentProvider(
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url,
-                model=settings.deepseek_model,
-                reasoning_effort=settings.llm_reasoning_effort,
-                timeout_seconds=settings.monitor_judgment_timeout_seconds,
-                max_output_tokens=settings.monitor_judgment_max_output_tokens,
-                proxy_url=settings.provider_proxy_url,
-            )
+    if monitor_judgment_provider is not None:
         monitor_judgment_service = MonitorJudgmentService(
             monitor_repository,
             market_tool_coordinator,
             monitor_judgment_provider,
             clock,
             id_generator,
+            monitor_judgment_fallback_provider,
         )
     monitor_evaluation_service = MonitorEvaluationService(
         monitor_repository,
@@ -841,6 +840,47 @@ def build_application(
         id_generator,
         monitor_fact_resolver,
         monitor_judgment_service,
+        session_calendars=monitor_schedule_service.session_calendars,
+    )
+    trade_retro_narrative_provider = build_trade_retro_narrative_provider(settings)
+    agent_model_provider = build_agent_model_provider(settings)
+    trade_retro_service = TradeRetroService(
+        persistence.trade_retro,
+        account_transaction_repository,
+        research_unit_of_work_factory,
+        ObsidianTradeRetroExporter(settings.retro_obsidian_journal_dir),
+        clock,
+        id_generator,
+        secret_redactor,
+        trade_retro_narrative_provider,
+    )
+    judgment_scorecard_service = JudgmentScorecardService(
+        persistence.scorecards,
+        persistence.catalyst_agenda,
+        research_unit_of_work_factory,
+        monitor_repository,
+        persistence.trade_retro,
+        clock,
+        id_generator,
+        secret_redactor,
+    )
+    catalyst_agenda_service = CatalystAgendaService(
+        persistence.catalyst_agenda,
+        persistence.catalyst_agenda_scope,
+        SqlAlchemyCatalystAgendaOutcomeReader(research_unit_of_work_factory),
+        clock,
+        id_generator,
+        secret_redactor,
+    )
+    catalyst_agenda_sync_service = CatalystAgendaSyncService(
+        router=provider_router,
+        agenda_repository=persistence.catalyst_agenda,
+        sync_repository=persistence.catalyst_agenda_sync,
+        scope_reader=persistence.catalyst_agenda_scope,
+        instrument_uow_factory=instrument_unit_of_work_factory,
+        calendar_codec=catalyst_calendar_codec(),
+        clock=clock,
+        id_generator=id_generator,
     )
     notification_service = NotificationService(
         monitor_repository,
@@ -853,6 +893,12 @@ def build_application(
         max_attempts=settings.notification_max_attempts,
         ttl_hours=settings.notification_ttl_hours,
         batch_size=settings.notification_batch_size,
+    )
+    catalyst_agenda_notification_service = CatalystAgendaNotificationService(
+        catalyst_agenda_service,
+        persistence.catalyst_agenda,
+        notification_service,
+        clock,
     )
     monitor_dispatch_service = MonitorDispatchService(
         monitor_repository,
@@ -883,6 +929,16 @@ def build_application(
             token_path=settings.schwab_token_path,
             enabled="SCHWAB" in settings.holdings_sources,
         ),
+    )
+    sgov_shadow_plan_service = SgovShadowPlanService(
+        calendar=us_market_calendar,
+        portfolio=portfolio_tool_coordinator,
+        preview=cash_sweep_shadow_service,
+        notifications=notification_service,
+        clock=clock,
+        hard_cash_floor=settings.sgov_shadow_hard_cash_floor,
+        operational_buffer=settings.sgov_shadow_operational_buffer,
+        minimum_order_notional=settings.sgov_shadow_minimum_order_notional,
     )
     schwab_oauth_flow_manager = None
     if settings.schwab_client_id and settings.schwab_client_secret:
@@ -966,7 +1022,6 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-
     return ApplicationContainer(
         settings=settings,
         context=RuntimeContext(
@@ -982,6 +1037,12 @@ def build_application(
             cross_asset_transport=provider_infrastructure.owned_cross_asset_transport,
             notification_sender=owned_notification_sender,
             monitor_judgment_provider=monitor_judgment_provider,
+            monitor_judgment_fallback_provider=monitor_judgment_fallback_provider,
+            trade_retro_narrative_provider=trade_retro_narrative_provider,
+            agent_model_provider=agent_model_provider,
+            agent_turn_lock_factory=AgentTurnLockFactory(
+                settings.telegram_agent_lock_path.parent / "agent_turns"
+            ),
         ),
         providers=ProviderBundle(router=provider_router, registry=vendor_registry),
         services=ApplicationServices(
@@ -1011,6 +1072,11 @@ def build_application(
             workflows=research_workflow_orchestrator,
             historical_validation=historical_validation_service,
             watchlist=watchlist_hub_service,
+            trade_retro=trade_retro_service,
+            scorecards=judgment_scorecard_service,
+            catalyst_agenda=catalyst_agenda_service,
+            broker_order_preview=cash_sweep_shadow_service,
+            broker_orders=broker_order_service,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,
@@ -1019,26 +1085,45 @@ def build_application(
             notifications=notification_service,
             monitor_dispatch=monitor_dispatch_service,
             post_market_sync=post_market_sync_service,
+            sgov_shadow_plan=sgov_shadow_plan_service,
             maintenance=maintenance_service,
             performance_reconciliation=performance_reconciliation_service,
             schwab_oauth=schwab_oauth_flow_manager,
+            catalyst_agenda_sync=catalyst_agenda_sync_service,
+            catalyst_agenda_notifications=catalyst_agenda_notification_service,
+            agent_conversations=persistence.agent_conversations,
+            agent_handoffs=persistence.agent_handoffs,
+            agent_pending_actions=persistence.agent_pending_actions,
         ),
     )
 
 
 def load_settings(env_file: Path | None = None) -> AppSettings:
-    """Load default or explicitly located settings at the composition root."""
     return AppSettings.load(env_file=env_file)
 
 
+def build_telegram_agent_client(container: ApplicationContainer) -> Any:
+    from infrastructure.providers.telegram.agent_long_poller import TelegramBotAgentClient
+
+    settings = container.settings
+    if not settings.telegram_bot_token:
+        raise ValueError("Telegram Agent bot token is not configured")
+    return TelegramBotAgentClient(
+        bot_token=settings.telegram_bot_token,
+        timeout_seconds=max(settings.provider_timeout_default_seconds, 35.0),
+        proxy_url=settings.provider_proxy_url,
+    )
+
+
+def build_telegram_agent_lock(path: Path) -> Any:
+    return ProcessFileLock(path)
+
+
 def build_default_application() -> ApplicationContainer:
-    """Load settings and build the container (composition-root helper for main)."""
     return build_application(load_settings())
 
 
 def build_schwab_oauth_flow_manager() -> SchwabOAuthFlowManager:
-    """Build the foreground-only Schwab browser OAuth coordinator."""
-
     settings = load_settings()
     if not settings.schwab_client_id or not settings.schwab_client_secret:
         raise ValueError("Schwab client credentials are not configured")

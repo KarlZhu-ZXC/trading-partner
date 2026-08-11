@@ -22,7 +22,6 @@ from infrastructure.persistence.instrument_seed_loader import InstrumentSeedLoad
 from infrastructure.persistence.instrument_unit_of_work import (
     SqlAlchemyInstrumentUnitOfWork,
 )
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.seeds import (
     default_instruments_seed_path,
     read_instruments_seed_text,
@@ -58,7 +57,7 @@ RUNTIME_SEED_ALIAS_COUNT = 8
 PHASE1D_MINIMUM_SEED_INSTRUMENT_COUNT = 8
 PHASE1D_MINIMUM_SEED_ALIAS_COUNT = 6
 PHASE1F_SEED_TS = "2026-07-18T00:00:00+00:00"
-_HEADS = frozenset({"0036_monitor_provider_diagnostics"})
+_HEADS = frozenset({"0046_agent_channel_handoffs"})
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -70,11 +69,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> Engine:
-    path = tmp_path / "instrument_uow.db"
-    eng = create_engine(f"sqlite:///{path}")
+def engine(orm_sqlite_url: str) -> Engine:
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     yield eng
     eng.dispose()
 
@@ -373,7 +370,7 @@ def test_downgrade_to_0002_and_reupgrade_reseeds(
 
     Uses absolute revision ``0002_phase1b_research_state`` (not relative ``-1``)
     so intermediate steps stay stable; current migration head is
-    0014_phase3_commodity_futures.
+    0046_agent_channel_handoffs.
     """
     db_path = tmp_path / "reseed.db"
     database_url = f"sqlite:///{db_path}"
@@ -399,12 +396,15 @@ def test_downgrade_to_0002_and_reupgrade_reseeds(
         assert conn.execute(text("SELECT COUNT(*) FROM instruments")).scalar() == (
             RUNTIME_SEED_INSTRUMENT_COUNT + 10
         )
-        assert conn.execute(
-            text("SELECT COUNT(*) FROM instruments WHERE asset_type = 'future'")
-        ).scalar() == 6
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM instruments WHERE asset_type = 'future'")
+            ).scalar()
+            == 6
+        )
         assert (
             conn.execute(text("SELECT COUNT(*) FROM instrument_aliases")).scalar()
-                == RUNTIME_SEED_ALIAS_COUNT + 16
+            == RUNTIME_SEED_ALIAS_COUNT + 16
         )
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).one()
         assert rev[0] in _HEADS
