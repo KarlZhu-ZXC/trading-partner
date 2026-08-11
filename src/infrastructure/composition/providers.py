@@ -43,7 +43,11 @@ from infrastructure.providers.a_share.trading_calendar import (
 )
 from infrastructure.providers.account.manual_csv import ManualCsvAccountAdapter
 from infrastructure.providers.account.moomoo import MoomooAccountAdapter
-from infrastructure.providers.account.schwab import SchwabAccountAdapter
+from infrastructure.providers.account.schwab import (
+    SchwabAccountAdapter,
+    SchwabBrokerQuoteAdapter,
+    SchwabOrderExecutionAdapter,
+)
 from infrastructure.providers.common.circuit_breaker import CircuitBreaker
 from infrastructure.providers.common.httpx_transport import HttpxTransport
 from infrastructure.providers.common.null_category_provider import NullCategoryProvider
@@ -66,6 +70,10 @@ from infrastructure.providers.us.alpha_vantage_research import AlphaVantageResea
 from infrastructure.providers.us.eastmoney_futures import EastmoneyMetalFuturesAdapter
 from infrastructure.providers.us.fred import FredMacroAdapter
 from infrastructure.providers.us.moomoo_community import MoomooCommunityHeatAdapter
+from infrastructure.providers.us.moomoo_overnight import (
+    MoomooOpenDMarketAdapter,
+    MoomooOvernightQuoteAdapter,
+)
 from infrastructure.providers.us.moomoo_sentiment import MoomooSentimentAdapter
 from infrastructure.providers.us.polymarket import PolymarketPredictionAdapter
 from infrastructure.providers.us.reddit import RedditSentimentAdapter
@@ -106,6 +114,8 @@ class ProviderInfrastructure:
     dukascopy: DukascopySpotAdapter
     commodity_spot: CommoditySpotProvider
     schwab_account: SchwabAccountAdapter
+    schwab_quote: SchwabBrokerQuoteAdapter
+    schwab_order: SchwabOrderExecutionAdapter
     moomoo_account: MoomooAccountAdapter
     manual_account: ManualCsvAccountAdapter
     account_providers: dict[VendorId, AccountProvider]
@@ -283,8 +293,10 @@ def build_provider_infrastructure(
             enabled=settings.yfinance_enabled,
             timeout_seconds=market_timeout,
             breadth_timeout_seconds=settings.provider_timeout_us_breadth_seconds,
+            current_window_seconds=settings.us_current_window_seconds,
             max_fresh_seconds=settings.us_max_fresh_seconds,
             max_delayed_seconds=settings.us_max_delayed_seconds,
+            proxy_url=settings.provider_proxy_url,
         ),
     )
     registry.register(
@@ -441,12 +453,24 @@ def build_provider_infrastructure(
     )
     registry.register(
         VendorId.MOOMOO,
-        MoomooCommunityHeatAdapter(
-            enabled=settings.moomoo_community_heat_enabled,
-            host=settings.moomoo_host,
-            port=settings.moomoo_port,
-            clock=clock,
-            opend_rate_limiter=moomoo_limiter,
+        MoomooOpenDMarketAdapter(
+            community=MoomooCommunityHeatAdapter(
+                enabled=settings.moomoo_community_heat_enabled,
+                host=settings.moomoo_host,
+                port=settings.moomoo_port,
+                clock=clock,
+                opend_rate_limiter=moomoo_limiter,
+            ),
+            overnight=MoomooOvernightQuoteAdapter(
+                enabled=settings.moomoo_overnight_quote_enabled,
+                host=settings.moomoo_host,
+                port=settings.moomoo_port,
+                clock=clock,
+                current_window_seconds=settings.us_current_window_seconds,
+                max_fresh_seconds=settings.us_max_fresh_seconds,
+                max_delayed_seconds=settings.us_max_delayed_seconds,
+                opend_rate_limiter=moomoo_limiter,
+            ),
         ),
     )
     moomoo_account = MoomooAccountAdapter(
@@ -468,6 +492,24 @@ def build_provider_infrastructure(
     )
     schwab_account = SchwabAccountAdapter(
         id_generator,
+        enabled="SCHWAB" in settings.holdings_sources,
+        client_id=settings.schwab_client_id,
+        client_secret=settings.schwab_client_secret,
+        redirect_uri=settings.schwab_redirect_uri,
+        token_path=settings.schwab_token_path,
+        account_hashes=tuple(
+            item.strip() for item in settings.schwab_account_hashes.split(",") if item.strip()
+        ),
+        clock=clock,
+    )
+    schwab_quote = SchwabBrokerQuoteAdapter(
+        enabled="SCHWAB" in settings.holdings_sources,
+        client_id=settings.schwab_client_id,
+        client_secret=settings.schwab_client_secret,
+        redirect_uri=settings.schwab_redirect_uri,
+        token_path=settings.schwab_token_path,
+    )
+    schwab_order = SchwabOrderExecutionAdapter(
         enabled="SCHWAB" in settings.holdings_sources,
         client_id=settings.schwab_client_id,
         client_secret=settings.schwab_client_secret,
@@ -534,6 +576,8 @@ def build_provider_infrastructure(
         dukascopy=dukascopy,
         commodity_spot=commodity_spot,
         schwab_account=schwab_account,
+        schwab_quote=schwab_quote,
+        schwab_order=schwab_order,
         moomoo_account=moomoo_account,
         manual_account=manual_account,
         account_providers={

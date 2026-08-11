@@ -44,6 +44,9 @@ def test_phase2_watchlist_defaults() -> None:
     assert settings.watchlist_default_group == "Favorites"
     assert settings.manual_watchlist_csv_path is None
     assert settings.post_market_sync_delay_minutes == 10
+    assert settings.sgov_shadow_hard_cash_floor == Decimal("2000")
+    assert settings.sgov_shadow_operational_buffer == Decimal("200")
+    assert settings.sgov_shadow_minimum_order_notional == Decimal("1000")
     assert (
         settings.post_market_sync_lock_path
         == (settings_module.PROJECT_ROOT / "data/locks/post_market_sync.lock").resolve()
@@ -51,6 +54,9 @@ def test_phase2_watchlist_defaults() -> None:
     assert settings.post_market_sync_lock_path.is_relative_to(
         (settings_module.PROJECT_ROOT / "data").resolve()
     )
+    assert settings.telegram_agent_lock_path == (
+        settings_module.PROJECT_ROOT / "data/locks/telegram_agent.lock"
+    ).resolve()
 
 
 def test_phase2_watchlist_settings_normalize_and_resolve_path() -> None:
@@ -98,6 +104,22 @@ def test_post_market_sync_lock_path_rejects_outside_data_and_blank() -> None:
         _base_settings(post_market_sync_lock_path="   ")
     with pytest.raises(ValidationError, match="post_market_sync_lock_path"):
         _base_settings(post_market_sync_lock_path="data/../README.md")
+
+
+def test_telegram_agent_lock_path_rejects_outside_data_and_blank() -> None:
+    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
+        _base_settings(telegram_agent_lock_path="/tmp/telegram-agent.lock")
+    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
+        _base_settings(telegram_agent_lock_path="   ")
+    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
+        _base_settings(telegram_agent_lock_path="data/../README.md")
+
+
+def test_telegram_agent_user_id_is_optional_numeric_allowlist() -> None:
+    assert _base_settings(telegram_agent_user_id=" 42 ").telegram_agent_user_id == "42"
+    assert _base_settings(telegram_agent_user_id=None).telegram_agent_user_id is None
+    with pytest.raises(ValidationError, match="telegram_agent_user_id"):
+        _base_settings(telegram_agent_user_id="group-member")
 
 
 def test_telegram_notifications_are_optional_but_complete_when_enabled() -> None:
@@ -169,6 +191,87 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert deepseek.deepseek_model == "deepseek-v4-flash"
 
 
+def test_monitor_judgment_fallback_is_explicit_and_reuses_bailian_endpoint() -> None:
+    disabled = _base_settings(
+        monitor_judgment_enabled=True,
+        bailian_api_key="test-bailian-secret",
+        monitor_judgment_fallback_provider="",
+        monitor_judgment_fallback_model="   ",
+    )
+    assert disabled.resolved_monitor_judgment_fallback_config is None
+
+    settings = _base_settings(
+        monitor_judgment_enabled=True,
+        bailian_api_key="test-bailian-secret",
+        monitor_judgment_fallback_provider="bailian",
+        monitor_judgment_fallback_model="deepseek-v4-flash-0731",
+        monitor_judgment_reasoning_effort="high",
+        monitor_judgment_fallback_reasoning_effort="max",
+    )
+    fallback = settings.resolved_monitor_judgment_fallback_config
+    assert fallback is not None
+    assert fallback.api_style == "responses"
+    assert fallback.base_url == settings.bailian_base_url
+    assert fallback.model == "deepseek-v4-flash-0731"
+    assert fallback.reasoning_effort == "max"
+    assert fallback.native_web_search == "disabled"
+
+
+def test_monitor_judgment_fallback_requires_a_complete_distinct_pair() -> None:
+    with pytest.raises(ValidationError, match="must be configured together"):
+        _base_settings(monitor_judgment_fallback_provider="bailian")
+    with pytest.raises(ValidationError, match="must differ from the primary"):
+        _base_settings(
+            monitor_judgment_enabled=True,
+            bailian_api_key="test-bailian-secret",
+            monitor_judgment_fallback_provider="bailian",
+            monitor_judgment_fallback_model="qwen3.8-max",
+        )
+
+
+def test_agent_generic_llm_config_wins_without_legacy_field_mixing() -> None:
+    settings = _base_settings(
+        agent_enabled=True,
+        llm_api_style="responses",
+        llm_base_url="https://generic.example/v1",
+        llm_api_key="generic-secret",
+        llm_model="generic-model",
+        llm_reasoning_mode="effort",
+        llm_reasoning_effort="high",
+        llm_native_web_search="responses_web_search",
+        llm_native_web_extractor="responses_web_extractor",
+        bailian_api_key="legacy-secret",
+    )
+    resolved = settings.resolved_llm_config
+    assert resolved is not None
+    assert resolved.api_style == "responses"
+    assert resolved.api_key == "generic-secret"
+    assert resolved.model == "generic-model"
+    assert resolved.native_web_search == "responses_web_search"
+    assert resolved.native_web_extractor == "responses_web_extractor"
+    assert settings.resolved_llm_config_redacted()["api_key"] == "***REDACTED***"  # type: ignore[index]
+    assert "generic-secret" not in repr(settings)
+
+    shared = _base_settings(
+        monitor_judgment_enabled=True,
+        llm_api_style="responses",
+        llm_base_url="https://shared.example/v1",
+        llm_api_key="shared-secret",
+        llm_model="shared-model",
+    )
+    assert shared.resolved_llm_config is not None
+    assert shared.resolved_llm_config.model == "shared-model"
+
+
+def test_agent_partial_generic_config_does_not_borrow_legacy_values() -> None:
+    with pytest.raises(ValidationError, match="Generic LLM configuration is incomplete"):
+        _base_settings(
+            agent_enabled=True,
+            llm_base_url="https://generic.example/v1",
+            bailian_api_key="legacy-secret",
+        )
+
+
 def test_env_example_contains_required_keys() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / ".env.example").read_text(encoding="utf-8")
@@ -214,6 +317,10 @@ def test_env_example_contains_required_keys() -> None:
         "DEEPSEEK_MODEL=deepseek-v4-flash",
         "LLM_REASONING_EFFORT=max",
         "LLM_OUTPUT_LANGUAGE=zh-CN",
+        "MONITOR_JUDGMENT_FALLBACK_PROVIDER=",
+        "MONITOR_JUDGMENT_FALLBACK_MODEL=",
+        "MONITOR_JUDGMENT_REASONING_EFFORT=",
+        "MONITOR_JUDGMENT_FALLBACK_REASONING_EFFORT=",
     ):
         assert line in text, f"missing .env.example key line: {line}"
 

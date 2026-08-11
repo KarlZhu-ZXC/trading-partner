@@ -29,7 +29,7 @@ from domain.common.errors import (
 )
 from domain.instruments.models import Instrument
 from domain.us_research.enums import USFilingForm, USInsiderAcquiredDisposed
-from infrastructure.providers.us.sec_edgar import SECEdgarAdapter
+from infrastructure.providers.us.sec_edgar import SECEdgarAdapter, _parse_form4_transactions
 
 UTC = ZoneInfo("UTC")
 AS_OF = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
@@ -50,6 +50,21 @@ def _instrument(symbol: str = "NVDA") -> Instrument:
         timezone="America/New_York",
         asset_type=AssetType.EQUITY,
     )
+
+
+def test_form4_rejects_mixed_case_doctype_and_xml_entities() -> None:
+    malicious = b"""<?xml version="1.0"?>
+    <!DoCtYpE ownershipDocument [<!ENTITY owner "Injected Owner">]>
+    <ownershipDocument><reportingOwner><reportingOwnerId>
+    <rptOwnerName>&owner;</rptOwnerName>
+    </reportingOwnerId></reportingOwner></ownershipDocument>"""
+
+    assert _parse_form4_transactions(
+        malicious,
+        instrument_id="equity:US:NVDA",
+        filed_date=date(2026, 6, 1),
+        accepted_at=None,
+    ) is None
 
 
 def _tickers_body() -> bytes:

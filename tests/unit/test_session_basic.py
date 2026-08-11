@@ -77,13 +77,16 @@ def test_us_regular_end_post_start() -> None:
 
 
 def test_us_post_end_exclusive() -> None:
-    assert _us(datetime(2026, 7, 16, 20, 0, tzinfo=NY)) is TradingSession.CLOSED
+    assert _us(datetime(2026, 7, 16, 20, 0, tzinfo=NY)) is TradingSession.OVERNIGHT
     assert _us(datetime(2026, 7, 16, 19, 59, 59, tzinfo=NY)) is TradingSession.POST_MARKET
 
 
-def test_us_overnight_closed() -> None:
-    assert _us(datetime(2026, 7, 16, 3, 59, tzinfo=NY)) is TradingSession.CLOSED
-    assert _us(datetime(2026, 7, 16, 21, 0, tzinfo=NY)) is TradingSession.CLOSED
+def test_us_overnight_cross_midnight_and_weekend_boundaries() -> None:
+    assert _us(datetime(2026, 7, 16, 3, 59, tzinfo=NY)) is TradingSession.OVERNIGHT
+    assert _us(datetime(2026, 7, 16, 21, 0, tzinfo=NY)) is TradingSession.OVERNIGHT
+    assert _us(datetime(2026, 7, 17, 3, 59, 59, tzinfo=NY)) is TradingSession.OVERNIGHT
+    assert _us(datetime(2026, 7, 17, 20, 0, tzinfo=NY)) is TradingSession.CLOSED
+    assert _us(datetime(2026, 7, 19, 20, 0, tzinfo=NY)) is TradingSession.OVERNIGHT
 
 
 def test_kr_regular_session_boundaries() -> None:

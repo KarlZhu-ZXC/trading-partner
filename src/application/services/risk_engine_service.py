@@ -14,6 +14,7 @@ from application.services.risk_policy_service import RiskPolicyService
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
 from domain.common.values import parse_instrument_id
+from domain.portfolio.enums import AccountOpenOrderSide, AccountOpenOrderStatus
 from domain.portfolio.models import AccountSnapshot
 from domain.risk.enums import (
     RiskCheckStatus,
@@ -132,6 +133,9 @@ class RiskEngineService:
         by_instrument: defaultdict[tuple[str, str], Decimal] = defaultdict(Decimal)
         accounts_by_instrument: defaultdict[str, set[str]] = defaultdict(set)
         position_currencies: set[str] = set()
+        open_buy_orders = 0
+        open_sell_orders = 0
+        valued_open_buy_orders = 0
         for account in snapshots:
             for position in account.positions:
                 accounts_by_instrument[position.instrument_id].add(account.account_ref)
@@ -143,6 +147,91 @@ class RiskEngineService:
                 currency = position.currency.upper()
                 by_currency[currency] += value
                 by_instrument[(position.instrument_id, currency)] += value
+            for order in account.open_orders:
+                remaining = order.quantity - order.filled_quantity
+                if remaining <= 0:
+                    continue
+                if order.status is AccountOpenOrderStatus.UNKNOWN:
+                    add_quality("OPEN_ORDER_STATUS_UNKNOWN")
+                if order.side is AccountOpenOrderSide.SELL:
+                    open_sell_orders += 1
+                    continue
+                open_buy_orders += 1
+                order_currency = _instrument_native_currency(order.instrument_id)
+                if order_currency is None or order_currency != account.base_currency.upper():
+                    add_quality("OPEN_ORDER_CURRENCY_UNAVAILABLE")
+                    continue
+                if order.limit_price is None:
+                    add_quality("OPEN_ORDER_PRICE_UNAVAILABLE")
+                    continue
+                value = remaining * order.limit_price
+                valued_open_buy_orders += 1
+                position_currencies.add(order_currency)
+                by_currency[order_currency] += value
+                by_instrument[(order.instrument_id, order_currency)] += value
+
+        checks.extend(
+            (
+                RiskCheck(
+                    rule_code="OPEN_BUY_ORDERS_PRESENT",
+                    status=(
+                        RiskCheckStatus.WARN if open_buy_orders else RiskCheckStatus.PASS
+                    ),
+                    severity=(
+                        RiskSeverity.MEDIUM if open_buy_orders else RiskSeverity.INFO
+                    ),
+                    actual=open_buy_orders,
+                    limit=0,
+                    unit="active_orders",
+                    scope="portfolio",
+                    message=(
+                        "Active BUY orders were included in prospective exposure where valuated."
+                        if open_buy_orders
+                        else "No active BUY orders were reported."
+                    ),
+                ),
+                RiskCheck(
+                    rule_code="OPEN_SELL_ORDERS_PRESENT",
+                    status=(
+                        RiskCheckStatus.WARN if open_sell_orders else RiskCheckStatus.PASS
+                    ),
+                    severity=(
+                        RiskSeverity.MEDIUM if open_sell_orders else RiskSeverity.INFO
+                    ),
+                    actual=open_sell_orders,
+                    limit=0,
+                    unit="active_orders",
+                    scope="portfolio",
+                    message=(
+                        "Active SELL orders may reduce the durable position snapshot."
+                        if open_sell_orders
+                        else "No active SELL orders were reported."
+                    ),
+                ),
+                RiskCheck(
+                    rule_code="OPEN_BUY_ORDER_VALUATION_COVERAGE",
+                    status=(
+                        RiskCheckStatus.NOT_EVALUATED
+                        if valued_open_buy_orders != open_buy_orders
+                        else RiskCheckStatus.PASS
+                    ),
+                    severity=(
+                        RiskSeverity.HIGH
+                        if valued_open_buy_orders != open_buy_orders
+                        else RiskSeverity.INFO
+                    ),
+                    actual=valued_open_buy_orders,
+                    limit=open_buy_orders,
+                    unit="valued_active_buy_orders",
+                    scope="portfolio",
+                    message=(
+                        "Some active BUY orders lacked a safe native-currency limit valuation."
+                        if valued_open_buy_orders != open_buy_orders
+                        else "Every active BUY order was safely valued for prospective exposure."
+                    ),
+                ),
+            )
+        )
 
         if hypothetical is not None:
             value = hypothetical.quantity * hypothetical.assumed_price
@@ -668,3 +757,12 @@ class RiskEngineService:
         ):
             return RiskOverallStatus.WARN
         return RiskOverallStatus.PASS
+
+
+def _instrument_native_currency(instrument_id: str) -> str | None:
+    _asset, market, _symbol = parse_instrument_id(instrument_id)
+    return {
+        "A_SHARE": "CNY",
+        "US": "USD",
+        "KR": "KRW",
+    }.get(market.value)

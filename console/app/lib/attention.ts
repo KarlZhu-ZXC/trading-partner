@@ -99,6 +99,19 @@ function qualityIssueHref(issue: Dict): string {
   return "/capabilities";
 }
 
+function recommendedActionLabel(value: unknown): string | null {
+  return ({
+    EVALUATE_MONITOR: "run the current Monitor version",
+    INSPECT_MONITOR_RUN: "inspect the latest Monitor observations and typed errors",
+    SYNC_ACCOUNT_TRANSACTIONS: "explicitly sync account transactions",
+    SYNC_ACCOUNTS: "explicitly refresh the durable account snapshot",
+    INSPECT_ACCOUNT_LIMITATIONS: "review the broker coverage limitations",
+    INSPECT_PROVIDER_ROUTE: "inspect the latest secret-safe Provider route receipt",
+    REVIEW_RESEARCH_STATE: "review the Research Subject lifecycle",
+    CHECK_LOCAL_STORAGE: "check local database and backup health",
+  } as Record<string, string>)[String(value ?? "")] ?? null;
+}
+
 function qualityNotice(
   issue: Dict,
   monitorItems: Dict[],
@@ -248,6 +261,17 @@ export function buildConsoleNotices({
     if (!monitor || monitor.status !== "ACTIVE") continue;
     const runId = stringValue(((item.latest_run ?? {}) as Dict).run_id);
     if (runId) activeLatestRunByMonitor.set(monitor.id, runId);
+    const judgment = (item.latest_judgment ?? {}) as Dict;
+    if (String(judgment.status ?? "").toUpperCase() === "FAILED") {
+      const codes = stringList(judgment.error_codes);
+      automaticItems.push({
+        key: `judgment-${monitor.id}-${String(judgment.judgment_id ?? "latest")}`,
+        severity: "WAITING",
+        title: `${monitor.symbol} · composite judgment unavailable`,
+        detail: `Deterministic rules remain valid; the next material evaluation will retry${codes.length ? ` · ${codes.slice(0, 2).join(" / ")}` : ""}`,
+        href: `/monitors#${monitorAnchorId(monitor.id)}`,
+      });
+    }
   }
 
   for (const run of runs) {
@@ -295,7 +319,11 @@ export function buildConsoleNotices({
     ...automaticItems.filter((item) => item.href.startsWith("/monitors#")).map((item) => item.href),
   ]);
   const qualityNotices = qualityIssues
-    .map((issue) => qualityNotice(issue, monitorItems, accountProviderByRef, activityByRef, routeByRef))
+    .map((issue) => {
+      const notice = qualityNotice(issue, monitorItems, accountProviderByRef, activityByRef, routeByRef);
+      const next = recommendedActionLabel(issue.recommended_action_code);
+      return next ? { ...notice, detail: `${notice.detail} · Next: ${next}` } : notice;
+    })
     .filter((item) => !(item.href.startsWith("/monitors#") && seenMonitorRun.has(item.href)));
 
   for (const item of qualityNotices) {

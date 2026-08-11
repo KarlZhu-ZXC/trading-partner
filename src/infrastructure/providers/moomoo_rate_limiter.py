@@ -15,6 +15,8 @@ from typing import Protocol, TextIO
 
 
 class MoomooOpenDOperation(StrEnum):
+    MARKET_SNAPSHOT = "market_snapshot"
+    MARKET_STATE = "market_state"
     WATCHLIST_GROUPS = "watchlist_groups"
     WATCHLIST_MEMBERS = "watchlist_members"
     WATCHLIST_MODIFY = "watchlist_modify"
@@ -48,6 +50,10 @@ class SlidingWindowPolicy:
 
 
 DEFAULT_MOOMOO_POLICIES: Mapping[MoomooOpenDOperation, SlidingWindowPolicy] = {
+    # Official OpenD snapshot limit is 60 requests per 30 seconds. Keep one
+    # request of headroom and share it with concurrent MCP/monitor processes.
+    MoomooOpenDOperation.MARKET_SNAPSHOT: SlidingWindowPolicy(59, 30.0),
+    MoomooOpenDOperation.MARKET_STATE: SlidingWindowPolicy(59, 30.0),
     MoomooOpenDOperation.WATCHLIST_GROUPS: SlidingWindowPolicy(10, 30.0),
     # Admission is recorded immediately before the SDK call, while OpenD starts
     # its server-side window only after the request arrives. Full Watchlist

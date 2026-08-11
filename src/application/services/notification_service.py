@@ -142,6 +142,89 @@ class NotificationService:
                 ) from exc
             raise exc
 
+    async def enqueue_system_text(
+        self,
+        *,
+        source_id: str,
+        title: str,
+        body: str,
+        idempotency_key: str,
+        expires_at: datetime,
+    ) -> NotificationOutboxEntry:
+        """Persist one deterministic internal SYSTEM notification.
+
+        SYSTEM producers are intentionally separate from explicitly authorized
+        MANUAL writes: they carry a stable producer identity but never impersonate
+        a user or retain an authorization note.
+        """
+
+        source = _bounded_text(source_id, "source_id", 200)
+        clean_title = _bounded_text(title, "title", 200)
+        if not isinstance(body, str) or not body.strip() or len(body) > TELEGRAM_MAX_TEXT_LENGTH:
+            raise DataContractError("body must be non-blank and at most 4096 characters")
+        key = _bounded_text(idempotency_key, "idempotency_key", 200)
+        now = self._clock.now()
+        if expires_at <= now:
+            raise DataContractError("expires_at must follow enqueue time")
+        if rendered_plain_text_length(clean_title, body) > TELEGRAM_MAX_TEXT_LENGTH:
+            raise DataContractError("escaped Telegram title and body exceed 4096 characters")
+
+        existing = self._get_by_idempotency_key(key)
+        if existing is not None:
+            if not _same_system_notification(
+                existing,
+                source_id=source,
+                title=clean_title,
+                body=body,
+                idempotency_key=key,
+                expires_at=expires_at,
+            ):
+                raise IdempotencyConflict(
+                    "idempotency_key already belongs to a different notification"
+                )
+            return existing
+
+        message = NotificationMessage(
+            notification_id=_notification_id(key),
+            source_type=NotificationSourceType.SYSTEM,
+            source_id=source,
+            channel=NotificationChannel.TELEGRAM,
+            title=clean_title,
+            body=body,
+            created_at=now,
+            idempotency_key=key,
+            expires_at=expires_at,
+        )
+        try:
+            return self._enqueue(message)
+        except Exception as exc:  # pragma: no cover - race fallback is DB-specific
+            replay = self._get_by_idempotency_key(key)
+            if replay is not None:
+                if _same_system_notification(
+                    replay,
+                    source_id=source,
+                    title=clean_title,
+                    body=body,
+                    idempotency_key=key,
+                    expires_at=expires_at,
+                ):
+                    return replay
+                raise IdempotencyConflict(
+                    "idempotency_key already belongs to a different notification"
+                ) from exc
+            raise
+
+    def system_entry_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> NotificationOutboxEntry | None:
+        """Return an existing SYSTEM producer entry without weakening idempotency."""
+
+        key = _bounded_text(idempotency_key, "idempotency_key", 200)
+        entry = self._get_by_idempotency_key(key)
+        if entry is None or entry.source_type is not NotificationSourceType.SYSTEM:
+            return None
+        return entry
+
     async def flush_pending(self) -> NotificationFlushReceipt:
         now = self._clock.now()
         if not self._enabled or self._sender is None:
@@ -365,6 +448,27 @@ def _notification_id(key: str) -> str:
     # interpolated into the ID.
     del key
     return f"notification_{uuid7()}"
+
+
+def _same_system_notification(
+    entry: NotificationOutboxEntry,
+    *,
+    source_id: str,
+    title: str,
+    body: str,
+    idempotency_key: str,
+    expires_at: datetime,
+) -> bool:
+    return (
+        entry.source_type is NotificationSourceType.SYSTEM
+        and entry.source_id == source_id
+        and entry.title == title
+        and entry.body == body
+        and entry.idempotency_key == idempotency_key
+        and entry.expires_at == expires_at
+        and entry.confirmed_by is None
+        and entry.authorization_note is None
+    )
 
 
 def _retry_delay_seconds(attempt_no: int) -> int:

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import (
     CheckConstraint,
     UniqueConstraint,
@@ -82,40 +79,6 @@ _TS = "2026-07-17T12:00:00+00:00"
 _TS_LATER = "2026-07-17T13:00:00+00:00"
 _CASE_ID = "case_schema_00000000-0000-7000-8000-000000000001"
 _EVIDENCE_ID = "evidence_schema_00000000-0000-7000-8000-000000000001"
-
-
-def _alembic_config(database_url: str, project_root: Path) -> Config:
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", database_url)
-    return cfg
-
-
-def _set_test_env(monkeypatch: pytest.MonkeyPatch, database_url: str) -> None:
-    for key in list(os.environ):
-        if key in __import__("conftest").APP_SETTINGS_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("APP_NAME", "research-memory-schema-test")
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("LOG_LEVEL", "INFO")
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("MCP_SERVER_NAME", "research-memory-schema-test")
-    monkeypatch.setenv("DEFAULT_TIMEZONE", "UTC")
-    monkeypatch.setenv("PROVIDER_TIMEOUT_SECONDS", "5")
-
-
-def _migrated_engine(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    name: str = "schema.db",
-) -> Any:
-    db_path = tmp_path / name
-    database_url = f"sqlite:///{db_path}"
-    _set_test_env(monkeypatch, database_url)
-    cfg = _alembic_config(database_url, project_root)
-    command.upgrade(cfg, "head")
-    return create_engine(database_url)
 
 
 def _table_ddl(conn: Any, table: str) -> str:
@@ -218,11 +181,9 @@ def test_no_search_orm_rows_exist() -> None:
 
 
 def test_business_tables_columns_pk_nullability_via_pragma(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch)
+    engine = create_engine(migrated_sqlite_url)
     expected: dict[str, dict[str, int]] = {
         # col -> notnull (1/0); pk handled separately
         "research_evidence": {
@@ -383,11 +344,9 @@ def test_business_tables_columns_pk_nullability_via_pragma(
 
 
 def test_search_tables_columns_and_fts_triggers(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch, "search.db")
+    engine = create_engine(migrated_sqlite_url)
     with engine.connect() as conn:
         for table in _SEARCH_TABLES:
             row = conn.execute(
@@ -435,11 +394,9 @@ def test_search_tables_columns_and_fts_triggers(
 
 
 def test_foreign_keys_unique_checks_indexes_via_pragma_and_master(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch, "fk.db")
+    engine = create_engine(migrated_sqlite_url)
     required_fks: dict[str, set[tuple[str, str, str]]] = {
         # (from_col, to_table, to_col)
         "research_evidence": {("supersedes_evidence_id", "research_evidence", "evidence_id")},
@@ -551,12 +508,10 @@ def test_foreign_keys_unique_checks_indexes_via_pragma_and_master(
 
 
 def test_orm_metadata_parity_for_seven_business_tables(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
     """ORM column sets / named constraints must match migrated SQLite schema."""
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch, "parity.db")
+    engine = create_engine(migrated_sqlite_url)
 
     with engine.connect() as conn:
         for table_name, row_cls in _BUSINESS_TABLES.items():
@@ -584,11 +539,9 @@ def test_orm_metadata_parity_for_seven_business_tables(
 
 
 def test_enum_time_hash_idempotency_constraints_reject_bad_rows(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch, "checks.db")
+    engine = create_engine(migrated_sqlite_url)
     with engine.begin() as conn:
         _seed_case(conn)
         _insert_evidence(conn)
@@ -786,11 +739,9 @@ def test_enum_time_hash_idempotency_constraints_reject_bad_rows(
 
 
 def test_fts_triggers_insert_update_delete(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    engine = _migrated_engine(tmp_path, project_root, monkeypatch, "fts.db")
+    engine = create_engine(migrated_sqlite_url)
     with engine.begin() as conn:
         conn.execute(text("PRAGMA foreign_keys=ON"))
         conn.execute(
@@ -855,8 +806,7 @@ def test_fts_triggers_insert_update_delete(
 
 def test_schema_not_created_via_metadata_create_all(
     tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
     """Migration is authoritative; create_all is not used as proof of schema."""
     # Ensure tests above use alembic upgrade; this guard asserts 0004 file exists
@@ -873,7 +823,7 @@ def test_schema_not_created_via_metadata_create_all(
     # Migration path does create FTS
     engine.dispose()
 
-    engine2 = _migrated_engine(tmp_path, project_root, monkeypatch, "via_alembic.db")
+    engine2 = create_engine(migrated_sqlite_url)
     tables2 = set(inspect(engine2).get_table_names())
     assert "research_search_fts" in tables2
     engine2.dispose()

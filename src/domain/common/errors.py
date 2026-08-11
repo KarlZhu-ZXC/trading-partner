@@ -140,6 +140,33 @@ class ConfirmerMismatch(TradingPartnerError):
     default_retryable = False
 
 
+class BrokerOrderNotFound(TradingPartnerError):
+    default_code = "BROKER_ORDER_NOT_FOUND"
+    default_retryable = False
+
+
+class BrokerOrderStateConflict(TradingPartnerError):
+    default_code = "BROKER_ORDER_STATE_CONFLICT"
+    default_retryable = False
+
+
+class BrokerOrderPreviewExpired(TradingPartnerError):
+    default_code = "BROKER_ORDER_PREVIEW_EXPIRED"
+    default_retryable = False
+
+
+class BrokerOrderRejected(TradingPartnerError):
+    default_code = "BROKER_ORDER_REJECTED"
+    default_retryable = False
+
+
+class BrokerOrderSubmissionUncertain(TradingPartnerError):
+    """A write may have reached Schwab; callers must inspect, never retry blindly."""
+
+    default_code = "BROKER_ORDER_SUBMISSION_UNCERTAIN"
+    default_retryable = False
+
+
 class MonitorNotFound(TradingPartnerError):
     default_code = "MONITOR_NOT_FOUND"
     default_retryable = False
@@ -183,6 +210,31 @@ class WorkflowRunNotFound(TradingPartnerError):
 class WorkflowRunInProgress(TradingPartnerError):
     default_code = "WORKFLOW_RUN_IN_PROGRESS"
     default_retryable = True
+
+
+class TradeRetroRunNotFound(TradingPartnerError):
+    default_code = "TRADE_RETRO_RUN_NOT_FOUND"
+    default_retryable = False
+
+
+class TradeRetroReviewVersionConflict(TradingPartnerError):
+    default_code = "TRADE_RETRO_REVIEW_VERSION_CONFLICT"
+    default_retryable = False
+
+
+class JudgmentScorecardNotFound(TradingPartnerError):
+    default_code = "JUDGMENT_SCORECARD_NOT_FOUND"
+    default_retryable = False
+
+
+class CatalystAgendaNotFound(TradingPartnerError):
+    default_code = "CATALYST_AGENDA_NOT_FOUND"
+    default_retryable = False
+
+
+class CatalystAgendaVersionConflict(TradingPartnerError):
+    default_code = "CATALYST_AGENDA_VERSION_CONFLICT"
+    default_retryable = False
 
 
 # --- Phase 1B research-state errors (default_retryable=False; no silent retry) ---

@@ -1,9 +1,10 @@
-"""Compact 28-tool MCP surface over explicit capability adapters."""
+"""MCP vNext Shadow surface over explicit capability adapters."""
 
 from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -13,15 +14,17 @@ from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Protocol, cast, get_type_hints
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from bootstrap import ApplicationContainer
-from interfaces.mcp.tool_inventory import COMPACT_28_TOOL_NAMES
+from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
 from interfaces.mcp.tools.a_share import build_a_share_adapters
 from interfaces.mcp.tools.challenge import build_challenge_adapters
+from interfaces.mcp.tools.execution import build_execution_adapters
 from interfaces.mcp.tools.instrument import build_instrument_adapters
 from interfaces.mcp.tools.market_technical import build_market_technical_adapters
 from interfaces.mcp.tools.monitoring import build_monitoring_adapters
@@ -182,6 +185,100 @@ class RegisteredCapability:
     policy: CapabilityPolicy
 
 
+@dataclass(frozen=True, slots=True)
+class CompactOperationDescriptor:
+    """Transport-neutral metadata for one exact compact operation.
+
+    ``tools/list`` deliberately exposes a flattened schema for a few large
+    grouped capabilities.  Agent callers need the closed operation variant,
+    however, so the registry keeps that exact schema separately from the
+    public MCP representation.  ``operation`` is ``None`` for a direct
+    capability (for example ``system_health``); callers may use the capability
+    name as a convenient direct-operation alias.
+    """
+
+    capability: str
+    operation: str | None
+    description: str
+    schema: dict[str, Any]
+    policy: CapabilityPolicy
+    direct: bool = False
+
+    @property
+    def name(self) -> str:
+        """Compatibility alias used by transport-neutral clients."""
+
+        return self.capability
+
+    @property
+    def capability_name(self) -> str:
+        return self.capability
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return deepcopy(self.schema)
+
+    @property
+    def request_schema(self) -> dict[str, Any]:
+        return self.input_schema
+
+    @property
+    def exact_schema(self) -> dict[str, Any]:
+        return self.input_schema
+
+    @property
+    def arguments_schema(self) -> dict[str, Any]:
+        """Schema for ``tp_read.arguments`` (operation discriminator removed)."""
+
+        schema = self.input_schema
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and "operation" in properties:
+            properties.pop("operation")
+        required = schema.get("required")
+        if isinstance(required, list):
+            schema["required"] = [item for item in required if item != "operation"]
+            if not schema["required"]:
+                schema.pop("required", None)
+        return schema
+
+    @property
+    def effect(self) -> CapabilityEffect:
+        return self.policy.effect
+
+    @property
+    def confirmation_required(self) -> bool:
+        return self.policy.confirmation_required
+
+    @property
+    def auto_allowed(self) -> bool:
+        """Whether Agent-A may execute this read without a pending action."""
+
+        return _agent_operation_allowed(self)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a deterministic, JSON-ready descriptor projection."""
+
+        return {
+            "capability": self.capability,
+            "operation": self.operation,
+            "description": self.description,
+            "schema": deepcopy(self.schema),
+            "exact_schema": deepcopy(self.schema),
+            "arguments_schema": self.arguments_schema,
+            "effect": self.policy.effect.value,
+            "confirmation_required": self.confirmation_required,
+            "auto_allowed": self.auto_allowed,
+            "direct": self.direct,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisteredOperation:
+    descriptor: CompactOperationDescriptor
+    invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+    validate: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+
+
 class CapabilityRegistrar(Protocol):
     def add_capability(
         self,
@@ -190,6 +287,14 @@ class CapabilityRegistrar(Protocol):
         name: str | None,
         description: str | None,
         policy: CapabilityPolicy,
+        register_direct: bool = True,
+    ) -> None: ...
+
+    def register_operation(
+        self,
+        descriptor: CompactOperationDescriptor,
+        invoke: Callable[[dict[str, Any]], Awaitable[Any]],
+        validate: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None: ...
 
 
@@ -198,6 +303,7 @@ class CompactCapabilityRegistry:
 
     def __init__(self) -> None:
         self._capabilities: dict[str, RegisteredCapability] = {}
+        self._operations: dict[tuple[str, str | None], _RegisteredOperation] = {}
 
     def add_capability(
         self,
@@ -206,6 +312,7 @@ class CompactCapabilityRegistry:
         name: str | None = None,
         description: str | None = None,
         policy: CapabilityPolicy,
+        register_direct: bool = True,
     ) -> None:
         tool = FastMCPTool.from_function(
             fn,
@@ -216,6 +323,178 @@ class CompactCapabilityRegistry:
         if tool.name in self._capabilities:
             raise RuntimeError(f"compact capability already exists: {tool.name}")
         self._capabilities[tool.name] = RegisteredCapability(tool=tool, policy=policy)
+        if register_direct:
+            self._register_operation(
+                CompactOperationDescriptor(
+                    capability=tool.name,
+                    operation=None,
+                    description=tool.description or description or "",
+                    schema=_compact_exact_schema(tool.parameters),
+                    policy=policy,
+                    direct=True,
+                ),
+                self._direct_invoker(tool),
+                self._direct_validator(tool),
+            )
+
+    @staticmethod
+    def _direct_invoker(tool: FastMCPTool) -> Callable[[dict[str, Any]], Awaitable[Any]]:
+        async def invoke(arguments: dict[str, Any]) -> Any:
+            # FastMCP's Tool.run performs the same Pydantic argument validation
+            # used by the MCP and Console adapters.  Keeping this path intact
+            # prevents the Agent transport from growing a second DTO contract.
+            return await tool.run(arguments)
+
+        return invoke
+
+    @staticmethod
+    def _direct_validator(tool: FastMCPTool) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        def validate(arguments: dict[str, Any]) -> dict[str, Any]:
+            value = tool.fn_metadata.arg_model.model_validate(dict(arguments))
+            return value.model_dump(mode="python")
+
+        return validate
+
+    def _register_operation(
+        self,
+        descriptor: CompactOperationDescriptor,
+        invoke: Callable[[dict[str, Any]], Awaitable[Any]],
+        validate: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
+        key = (descriptor.capability, descriptor.operation)
+        if key in self._operations:
+            raise RuntimeError(f"compact operation already exists: {key[0]}:{key[1]}")
+        self._operations[key] = _RegisteredOperation(
+            descriptor=descriptor,
+            invoke=invoke,
+            validate=validate,
+        )
+
+    def register_operation(
+        self,
+        descriptor: CompactOperationDescriptor,
+        invoke: Callable[[dict[str, Any]], Awaitable[Any]],
+        validate: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
+        """Register one exact operation for transport-neutral callers.
+
+        This method is intentionally separate from :meth:`list_tools`; these
+        descriptors never become MCP tools and therefore cannot change the
+        public 27-tool inventory.
+        """
+
+        self._register_operation(descriptor, invoke, validate)
+
+    def validate_operation(
+        self,
+        capability: str,
+        operation: str | None,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate one exact operation without invoking its side effects."""
+
+        normalized_operation = operation
+        if normalized_operation in {"", capability}:
+            normalized_operation = None
+        registered = self._operations.get((capability, normalized_operation))
+        if registered is None:
+            raise CapabilityNotFoundError(
+                capability if normalized_operation is None else f"{capability}:{operation}"
+            )
+        if registered.validate is None:
+            # This fallback is intentionally strict: an operation without a
+            # registered validator cannot become a pending write by accident.
+            raise ToolError(f"No validation contract for {capability}:{operation or ''}")
+        return registered.validate(dict(arguments))
+
+    def operation_descriptors(self) -> tuple[CompactOperationDescriptor, ...]:
+        return tuple(item.descriptor for item in self._operations.values())
+
+    @property
+    def descriptors(self) -> tuple[CompactOperationDescriptor, ...]:
+        return self.operation_descriptors()
+
+    def find_operation(
+        self,
+        capability: str,
+        operation: str | None = None,
+    ) -> CompactOperationDescriptor:
+        """Find an exact operation without invoking a handler."""
+
+        normalized_operation = operation
+        if normalized_operation in {"", capability}:
+            normalized_operation = None
+        registered = self._operations.get((capability, normalized_operation))
+        if registered is None:
+            raise CapabilityNotFoundError(
+                capability if normalized_operation is None else f"{capability}:{operation}"
+            )
+        return registered.descriptor
+
+    async def invoke_validated(
+        self,
+        capability: str,
+        operation: str | None,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+        enforce_confirmation: bool = True,
+    ) -> Any:
+        """Invoke a registered direct/closed operation after exact validation.
+
+        ``invoke`` remains the public MCP/Console-compatible entry point and
+        retains its confirmation requirement.  The Agent gateway calls this
+        method with ``enforce_confirmation=False`` only after independently
+        applying the Agent-A read policy.  No synthetic confirmation is ever
+        passed to a handler.
+        """
+
+        normalized_operation = operation
+        if normalized_operation in {"", capability}:
+            normalized_operation = None
+        registered = self._operations.get((capability, normalized_operation))
+        if registered is None:
+            raise CapabilityNotFoundError(
+                capability if normalized_operation is None else f"{capability}:{operation}"
+            )
+        if (
+            enforce_confirmation
+            and registered.descriptor.policy.confirmation
+            is ConfirmationPolicy.MATCH_CAPABILITY_NAME
+            and confirmation != capability
+        ):
+            raise CapabilityConfirmationRequiredError(capability)
+        try:
+            return await registered.invoke(dict(arguments))
+        except (CapabilityNotFoundError, CapabilityConfirmationRequiredError, ToolError):
+            raise
+        except Exception as error:
+            # FastMCP's public ``Tool.run`` uses the same typed boundary. Keep
+            # internal Agent invocation behavior aligned without changing the
+            # existing MCP/Console ``invoke`` path.
+            raise ToolError(f"Error executing tool {capability}: {error}") from error
+
+    async def invoke_operation(
+        self,
+        capability: str,
+        operation: str | None,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+        enforce_confirmation: bool = True,
+    ) -> Any:
+        """Alias for callers that name the internal path explicitly."""
+
+        return await self.invoke_validated(
+            capability,
+            operation,
+            arguments,
+            confirmation=confirmation,
+            enforce_confirmation=enforce_confirmation,
+        )
+
+    # Internal naming aliases used by non-MCP transports.
+    validated_invoke = invoke_validated
 
     @property
     def policies(self) -> dict[str, CapabilityPolicy]:
@@ -228,7 +507,11 @@ class CompactCapabilityRegistry:
                 title=item.tool.title,
                 description=item.tool.description,
                 inputSchema=_minimize_public_schema(deepcopy(item.tool.parameters)),
-                outputSchema=item.tool.output_schema,
+                outputSchema=(
+                    _minimize_public_schema(deepcopy(item.tool.output_schema))
+                    if isinstance(item.tool.output_schema, dict)
+                    else item.tool.output_schema
+                ),
                 annotations=item.policy.annotations,
                 icons=item.tool.icons,
                 _meta=item.tool.meta,
@@ -352,6 +635,35 @@ def _variant_model(*, compact_tool_name: str, spec: VariantSpec) -> type[BaseMod
     )
 
 
+async def _invoke_variant(
+    spec: VariantSpec,
+    exact_model: type[BaseModel],
+    arguments: dict[str, Any],
+) -> Any:
+    """Validate and dispatch one closed operation variant.
+
+    Grouped MCP tools validate the flattened request before reaching their
+    dispatch closure.  Agent callers invoke this helper directly so they get
+    the very same closed DTO and adapter translation without constructing an
+    MCP request or inventing a confirmation token.
+    """
+
+    payload = dict(arguments)
+    if "operation" not in payload:
+        payload["operation"] = spec.operation
+    exact_request = exact_model.model_validate(payload)
+    translated = exact_request.model_dump(mode="python")
+    translated.pop("operation", None)
+    if spec.adapter_operation_field is not None:
+        translated["operation"] = translated.pop(spec.adapter_operation_field)
+    elif spec.adapter_operation is not None:
+        translated["operation"] = spec.adapter_operation
+    translated.update(spec.overrides)
+    result = spec.adapter(**translated)
+    resolved = await result if inspect.isawaitable(result) else result
+    return _legacy_subject_transport(resolved)
+
+
 def _register_dispatch_tool(
     registry: CapabilityRegistrar,
     *,
@@ -364,20 +676,13 @@ def _register_dispatch_tool(
     request_union = reduce(or_, models)
     request_type = Annotated[request_union, Field(discriminator="operation")]  # type: ignore[valid-type]
     by_operation = {spec.operation: spec for spec in variants}
+    models_by_operation = dict(zip((spec.operation for spec in variants), models, strict=True))
 
     async def dispatch(request: Any) -> Any:
         operation = request.operation
         spec = by_operation[operation]
-        arguments = request.model_dump(mode="python")
-        arguments.pop("operation", None)
-        if spec.adapter_operation_field is not None:
-            arguments["operation"] = arguments.pop(spec.adapter_operation_field)
-        elif spec.adapter_operation is not None:
-            arguments["operation"] = spec.adapter_operation
-        arguments.update(spec.overrides)
-        result = spec.adapter(**arguments)
-        resolved = await result if inspect.isawaitable(result) else result
-        return _legacy_subject_transport(resolved)
+        model = models_by_operation[operation]
+        return await _invoke_variant(spec, model, request.model_dump(mode="python"))
 
     dispatch.__name__ = name
     dispatch.__doc__ = description
@@ -387,7 +692,166 @@ def _register_dispatch_tool(
         name=name,
         description=description,
         policy=policy,
+        register_direct=False,
     )
+    for spec, model in zip(variants, models, strict=True):
+
+        async def invoke_variant(
+            arguments: dict[str, Any],
+            *,
+            _spec: VariantSpec = spec,
+            _model: type[BaseModel] = model,
+        ) -> Any:
+            return await _invoke_variant(_spec, _model, arguments)
+
+        def validate_variant(
+            arguments: dict[str, Any],
+            *,
+            _spec: VariantSpec = spec,
+            _model: type[BaseModel] = model,
+        ) -> dict[str, Any]:
+            payload = dict(arguments)
+            payload.setdefault("operation", _spec.operation)
+            exact_request = _model.model_validate(payload)
+            translated = exact_request.model_dump(mode="python")
+            translated.pop("operation", None)
+            if _spec.adapter_operation_field is not None:
+                translated["operation"] = translated.pop(_spec.adapter_operation_field)
+            elif _spec.adapter_operation is not None:
+                translated["operation"] = _spec.adapter_operation
+            translated.update(_spec.overrides)
+            return translated
+
+        registry.register_operation(
+            CompactOperationDescriptor(
+                capability=name,
+                operation=spec.operation,
+                description=f"{description} Operation: {spec.operation}.",
+                schema=_compact_exact_schema(model.model_json_schema()),
+                policy=policy,
+            ),
+            invoke_variant,
+            validate_variant,
+        )
+
+
+def _register_flat_dispatch_tool(
+    registry: CapabilityRegistrar,
+    *,
+    name: str,
+    description: str,
+    variants: tuple[VariantSpec, ...],
+    policy: CapabilityPolicy,
+) -> None:
+    """Publish one small operation schema, then enforce exact variants at runtime.
+
+    This is reserved for large grouped tools whose repeated discriminated branches
+    dominate tools/list. Required and operation-owned fields are still validated
+    against the same closed variant models before an adapter is invoked.
+    """
+
+    operation_type = Literal.__getitem__(tuple(spec.operation for spec in variants))
+    definitions: dict[str, Any] = {"operation": (operation_type, ...)}
+    candidates: dict[str, list[Any]] = {}
+    for spec in variants:
+        source_fields = _adapter_fields(spec.adapter)
+        for field_name in spec.fields:
+            source_field = source_fields.get(field_name)
+            if source_field is None:
+                raise RuntimeError(
+                    f"compact adapter field is missing: {spec.adapter.__name__}.{field_name}"
+                )
+            candidates.setdefault(field_name, []).append(source_field)
+        for field_name, definition in spec.extra_fields.items():
+            candidates.setdefault(field_name, []).append(definition)
+
+    for field_name, fields in sorted(candidates.items()):
+        if all(hasattr(item, "annotation") for item in fields):
+            schemas = {
+                json.dumps(
+                    cast(Any, item).asdict(),
+                    default=str,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                for item in fields
+            }
+            if len(schemas) == 1:
+                copied = deepcopy(fields[0])
+                copied.default = None
+                copied.title = None
+                copied.description = None
+                copied.examples = None
+                definitions[field_name] = (copied.annotation, copied)
+                continue
+        definitions[field_name] = (Any, None)
+
+    request_model = create_model(
+        "".join(part.capitalize() for part in f"{name}_request".split("_")),
+        __config__=ConfigDict(extra="forbid"),
+        **definitions,
+    )
+    by_operation = {spec.operation: spec for spec in variants}
+
+    async def dispatch(request: Any) -> Any:
+        spec = by_operation[request.operation]
+        exact_model = _variant_model(compact_tool_name=name, spec=spec)
+        return await _invoke_variant(
+            spec,
+            exact_model,
+            request.model_dump(mode="python", exclude_unset=True),
+        )
+
+    dispatch.__name__ = name
+    dispatch.__doc__ = description
+    dispatch.__annotations__ = {"request": request_model, "return": Any}
+    registry.add_capability(
+        dispatch,
+        name=name,
+        description=description,
+        policy=policy,
+        register_direct=False,
+    )
+    for spec in variants:
+        model = _variant_model(compact_tool_name=name, spec=spec)
+
+        async def invoke_variant(
+            arguments: dict[str, Any],
+            *,
+            _spec: VariantSpec = spec,
+            _model: type[BaseModel] = model,
+        ) -> Any:
+            return await _invoke_variant(_spec, _model, arguments)
+
+        def validate_variant(
+            arguments: dict[str, Any],
+            *,
+            _spec: VariantSpec = spec,
+        ) -> dict[str, Any]:
+            _model = _variant_model(compact_tool_name=name, spec=_spec)
+            payload = dict(arguments)
+            payload.setdefault("operation", _spec.operation)
+            exact_request = _model.model_validate(payload)
+            translated = exact_request.model_dump(mode="python")
+            translated.pop("operation", None)
+            if _spec.adapter_operation_field is not None:
+                translated["operation"] = translated.pop(_spec.adapter_operation_field)
+            elif _spec.adapter_operation is not None:
+                translated["operation"] = _spec.adapter_operation
+            translated.update(_spec.overrides)
+            return translated
+
+        registry.register_operation(
+            CompactOperationDescriptor(
+                capability=name,
+                operation=spec.operation,
+                description=f"{description} Operation: {spec.operation}.",
+                schema=_compact_exact_schema(model.model_json_schema()),
+                policy=policy,
+            ),
+            invoke_variant,
+            validate_variant,
+        )
 
 
 def _copy_handler(
@@ -412,7 +876,7 @@ def _copy_handler(
 
 
 def _legacy_subject_transport(value: Any) -> Any:
-    """Keep the compact-v19 legacy ``case_*`` vocabulary at the MCP boundary.
+    """Keep legacy ``case_*`` vocabulary at the MCP compatibility boundary.
 
     Research Subject is the canonical product/domain term. Existing MCP clients
     nevertheless discover and send ``case_id``, ``case_type``, and
@@ -427,8 +891,7 @@ def _legacy_subject_transport(value: Any) -> Any:
             "linked_subject_ids": "linked_case_ids",
         }
         return {
-            aliases.get(key, key): _legacy_subject_transport(item)
-            for key, item in value.items()
+            aliases.get(key, key): _legacy_subject_transport(item) for key, item in value.items()
         }
     if isinstance(value, list):
         return [_legacy_subject_transport(item) for item in value]
@@ -439,6 +902,33 @@ def _legacy_subject_transport(value: Any) -> Any:
 
 def _all_fields(adapter: Any, *, exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(name for name in _adapter_fields(adapter) if name not in exclude)
+
+
+def _compact_exact_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return one closed operation schema without exposing a public tool union."""
+
+    # The operation descriptor is intentionally transport-neutral.  It still
+    # uses the same schema minimizer as ``tools/list`` so callers cannot infer a
+    # second, more permissive DTO from generated Pydantic metadata.
+    return _minimize_public_schema(deepcopy(schema))
+
+
+def _agent_operation_allowed(descriptor: CompactOperationDescriptor) -> bool:
+    """Agent-A's default operation-level read policy.
+
+    ``technical_render_chart`` is a local artifact operation whose public MCP
+    policy remains confirmation-gated for compatibility.  Agent-A may invoke
+    it through the explicit internal dispatch because it has no execution
+    effect; this exception is deliberately capability-name scoped.
+    """
+
+    if descriptor.capability == "technical_render_chart":
+        return descriptor.operation is None
+    return descriptor.policy.effect in {
+        CapabilityEffect.READ_DURABLE,
+        CapabilityEffect.READ_PROVIDER,
+        CapabilityEffect.CACHE_DISCOVERY,
+    }
 
 
 def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -458,9 +948,7 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 cleaned[key] = clean(item, property_map=key == "properties")
             # ``const`` and ``enum`` already constrain both value and JSON type.
             # Pydantic emits a redundant string type beside them.
-            if cleaned.get("type") == "string" and (
-                "const" in cleaned or "enum" in cleaned
-            ):
+            if cleaned.get("type") == "string" and ("const" in cleaned or "enum" in cleaned):
                 cleaned.pop("type")
             # JSON Schema permits nullable scalar types as a type array. Preserve
             # every non-null constraint (format, pattern, bounds) while avoiding
@@ -476,6 +964,16 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 ):
                     cleaned = dict(non_null[0])
                     cleaned["type"] = [cleaned["type"], "null"]
+                elif (
+                    len(non_null) == 1
+                    and isinstance(non_null[0], dict)
+                    and set(non_null[0]) == {"enum"}
+                    and isinstance(non_null[0]["enum"], list)
+                ):
+                    # Pydantic renders Optional[Enum] as two branches. A single
+                    # enum containing JSON null is validation-equivalent and
+                    # materially smaller across grouped operation schemas.
+                    cleaned = {"enum": [*non_null[0]["enum"], None]}
             return cleaned
         if isinstance(value, list):
             return [clean(item) for item in value]
@@ -506,6 +1004,7 @@ def _minimize_public_schema(schema: dict[str, Any]) -> dict[str, Any]:
     rewrite_refs(minimized)
     _share_repeated_property_schemas(minimized)
     _inline_request_variants(minimized)
+    minimized = _inline_profitable_definitions(minimized)
     return minimized
 
 
@@ -519,6 +1018,90 @@ def _schema_alias(index: int) -> str:
         index, remainder = divmod(index, len(alphabet))
         parts.append(alphabet[remainder])
     return "".join(reversed(parts))
+
+
+def _schema_wire_size(schema: dict[str, Any]) -> int:
+    return len(json.dumps(schema, separators=(",", ":")))
+
+
+def _compact_nullable_unions(value: Any) -> Any:
+    """Re-run nullable compaction after a referenced definition is inlined."""
+
+    if isinstance(value, list):
+        return [_compact_nullable_unions(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    compacted = {key: _compact_nullable_unions(item) for key, item in value.items()}
+    any_of = compacted.get("anyOf")
+    if not isinstance(any_of, list) or len(any_of) != 2 or set(compacted) != {"anyOf"}:
+        return compacted
+    non_null = [item for item in any_of if item != {"type": "null"}]
+    if len(non_null) != 1 or not isinstance(non_null[0], dict):
+        return compacted
+    branch = non_null[0]
+    if isinstance(branch.get("type"), str):
+        return {**branch, "type": [branch["type"], "null"]}
+    if set(branch) == {"enum"} and isinstance(branch["enum"], list):
+        return {"enum": [*branch["enum"], None]}
+    return compacted
+
+
+def _count_exact_refs(value: Any, reference: str) -> int:
+    if isinstance(value, list):
+        return sum(_count_exact_refs(item, reference) for item in value)
+    if not isinstance(value, dict):
+        return 0
+    if value == {"$ref": reference}:
+        return 1
+    return sum(_count_exact_refs(item, reference) for item in value.values())
+
+
+def _replace_exact_refs(value: Any, reference: str, replacement: dict[str, Any]) -> Any:
+    if isinstance(value, list):
+        return [_replace_exact_refs(item, reference, replacement) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if value == {"$ref": reference}:
+        return deepcopy(replacement)
+    return {
+        key: _replace_exact_refs(item, reference, replacement)
+        for key, item in value.items()
+    }
+
+
+def _inline_profitable_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    """Inline local definitions only when the complete schema becomes smaller."""
+
+    optimized = cast(dict[str, Any], _compact_nullable_unions(schema))
+    while isinstance(optimized.get("$defs"), dict):
+        current_size = _schema_wire_size(optimized)
+        best: tuple[int, dict[str, Any]] | None = None
+        definitions = cast(dict[str, Any], optimized["$defs"])
+        for name, definition in definitions.items():
+            if not isinstance(definition, dict):
+                continue
+            reference = f"#/$defs/{name}"
+            if _count_exact_refs(definition, reference):
+                continue
+            if not _count_exact_refs(optimized, reference):
+                continue
+            candidate = deepcopy(optimized)
+            candidate_definitions = cast(dict[str, Any], candidate["$defs"])
+            replacement = cast(dict[str, Any], candidate_definitions.pop(name))
+            candidate = cast(
+                dict[str, Any],
+                _replace_exact_refs(candidate, reference, replacement),
+            )
+            if not candidate_definitions:
+                candidate.pop("$defs", None)
+            candidate = cast(dict[str, Any], _compact_nullable_unions(candidate))
+            saving = current_size - _schema_wire_size(candidate)
+            if saving > 0 and (best is None or saving > best[0]):
+                best = (saving, candidate)
+        if best is None:
+            break
+        optimized = best[1]
+    return optimized
 
 
 def _close_discriminated_request_union(schema: dict[str, Any]) -> None:
@@ -574,17 +1157,13 @@ def _hoist_common_request_properties(schema: dict[str, Any]) -> None:
         if not isinstance(variant, dict) or not isinstance(variant.get("$ref"), str):
             return
         definition = definitions.get(variant["$ref"].rsplit("/", 1)[-1])
-        if not isinstance(definition, dict) or not isinstance(
-            definition.get("properties"), dict
-        ):
+        if not isinstance(definition, dict) or not isinstance(definition.get("properties"), dict):
             return
         variant_definitions.append(definition)
 
     common_names = set(cast(dict[str, Any], variant_definitions[0]["properties"]))
     for definition in variant_definitions[1:]:
-        common_names.intersection_update(
-            cast(dict[str, Any], definition["properties"])
-        )
+        common_names.intersection_update(cast(dict[str, Any], definition["properties"]))
     common_names.discard("operation")
 
     shared: dict[str, Any] = {}
@@ -594,8 +1173,7 @@ def _hoist_common_request_properties(schema: dict[str, Any]) -> None:
             for definition in variant_definitions
         ]
         encoded = {
-            json.dumps(item, sort_keys=True, separators=(",", ":"))
-            for item in field_schemas
+            json.dumps(item, sort_keys=True, separators=(",", ":")) for item in field_schemas
         }
         if len(encoded) == 1:
             shared[field_name] = field_schemas[0]
@@ -701,6 +1279,8 @@ class CompactFastMCP(FastMCP):
         tools = await super().list_tools()
         for tool in tools:
             tool.inputSchema = _minimize_public_schema(tool.inputSchema)
+            if isinstance(tool.outputSchema, dict):
+                tool.outputSchema = _minimize_public_schema(tool.outputSchema)
         return tools
 
 
@@ -709,13 +1289,13 @@ def create_compact_capability_registry(
     *,
     chart_persister: Any,
 ) -> CompactCapabilityRegistry:
-    """Build the sole compact-28 handler/schema/policy registry."""
+    """Build the sole MCP vNext handler/schema/policy registry."""
     adapters = SimpleNamespace(
         system=build_system_adapters(
             container,
-            surface_profile="compact_28",
-            public_tool_count=28,
-            surface_schema_version="compact-v19",
+            surface_profile="mcp_vnext_shadow",
+            public_tool_count=27,
+            surface_schema_version="mcp-vnext-shadow-v2",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -726,6 +1306,7 @@ def create_compact_capability_registry(
         us_context=build_us_context_adapters(container),
         portfolio=build_portfolio_adapters(container),
         challenge=build_challenge_adapters(container),
+        execution=build_execution_adapters(container),
         workflows=build_workflow_adapters(container),
         watchlist=build_watchlist_adapters(container),
         risk=build_risk_adapters(container),
@@ -765,7 +1346,7 @@ def create_compact_capability_registry(
         ),
         policy=READ_DURABLE,
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="investment_case_manage",
         description=(
@@ -797,7 +1378,10 @@ def create_compact_capability_registry(
     _register_dispatch_tool(
         registry,
         name="research_judgment_get",
-        description="Read current research state or the append-only history of one Thesis.",
+        description=(
+            "Read current research state, one Thesis history, or immutable deterministic "
+            "Judgment Scorecard history."
+        ),
         variants=(
             _spec(
                 "state",
@@ -809,10 +1393,20 @@ def create_compact_capability_registry(
                 adapters.research.thesis_history_get,
                 _all_fields(adapters.research.thesis_history_get),
             ),
+            _spec(
+                "scorecard_history",
+                adapters.research.judgment_scorecard_history,
+                _all_fields(adapters.research.judgment_scorecard_history),
+            ),
+            _spec(
+                "challenge_review",
+                adapters.challenge.challenge_review_get,
+                _all_fields(adapters.challenge.challenge_review_get),
+            ),
         ),
         policy=READ_DURABLE,
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="research_judgment_propose",
         description=(
@@ -830,22 +1424,41 @@ def create_compact_capability_registry(
                 adapters.research.thesis_revision_propose,
                 _all_fields(adapters.research.thesis_revision_propose),
             ),
+            _spec(
+                "challenge_review",
+                adapters.challenge.challenge_review_start,
+                _all_fields(adapters.challenge.challenge_review_start),
+            ),
         ),
         policy=APPEND,
     )
-    _copy_handler(
+    _register_dispatch_tool(
         registry,
-        adapter=adapters.research.thesis_revision_confirm,
-        target_name="research_judgment_confirm",
+        name="research_judgment_confirm",
+        description=(
+            "Apply an explicit candidate decision or resolve a non-executing Challenge Review."
+        ),
+        variants=(
+            _spec(
+                "candidate",
+                adapters.research.thesis_revision_confirm,
+                _all_fields(adapters.research.thesis_revision_confirm),
+            ),
+            _spec(
+                "challenge_review",
+                adapters.challenge.challenge_review_resolve,
+                _all_fields(adapters.challenge.challenge_review_resolve),
+            ),
+        ),
         policy=APPEND,
     )
 
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="research_memory_get",
         description=(
-            "Search durable research memory, read one report, or restore a Research Subject "
-            "(标的) timeline."
+            "Search durable research memory, read one report, restore a Research Subject "
+            "(标的) timeline, or read its user-confirmed Catalyst Agenda."
         ),
         variants=(
             _spec(
@@ -863,13 +1476,21 @@ def create_compact_capability_registry(
                 adapters.research_memory.research_timeline_get,
                 _all_fields(adapters.research_memory.research_timeline_get),
             ),
+            _spec(
+                "agenda",
+                adapters.research_memory.catalyst_agenda_get,
+                _all_fields(adapters.research_memory.catalyst_agenda_get),
+            ),
         ),
         policy=READ_DURABLE,
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="research_memory_append",
-        description="Append a confirmed Journal or Decision intent record; never create an order.",
+        description=(
+            "Append a confirmed Journal, Decision intent, or Catalyst Agenda version, "
+            "including an explicit durable outcome link; never create an order."
+        ),
         variants=(
             _spec(
                 "journal",
@@ -880,6 +1501,11 @@ def create_compact_capability_registry(
                 "decision",
                 adapters.research_memory.decision_record_append,
                 _all_fields(adapters.research_memory.decision_record_append),
+            ),
+            _spec(
+                "agenda_item",
+                adapters.research_memory.catalyst_agenda_manage,
+                _all_fields(adapters.research_memory.catalyst_agenda_manage),
             ),
         ),
         policy=APPEND,
@@ -913,10 +1539,46 @@ def create_compact_capability_registry(
         policy=READ_DURABLE,
     )
     _register_external_sync(registry, adapters.portfolio, adapters.watchlist)
+    _register_dispatch_tool(
+        registry,
+        name="broker_order_manage",
+        description=(
+            "Preview an SGOV cash sweep or manage one exact Schwab US equity/ETF order. "
+            "Live submit/cancel requires a short-lived durable preview and explicit user "
+            "authorization; uncertain writes are never retried automatically."
+        ),
+        variants=(
+            _spec(
+                "cash_sweep_preview",
+                adapters.execution.cash_sweep_preview,
+                _all_fields(adapters.execution.cash_sweep_preview),
+            ),
+            _spec(
+                "preview",
+                adapters.execution.order_preview,
+                _all_fields(adapters.execution.order_preview),
+            ),
+            _spec(
+                "submit",
+                adapters.execution.order_submit,
+                _all_fields(adapters.execution.order_submit),
+            ),
+            _spec(
+                "status",
+                adapters.execution.order_status,
+                _all_fields(adapters.execution.order_status),
+            ),
+            _spec(
+                "cancel",
+                adapters.execution.order_cancel,
+                _all_fields(adapters.execution.order_cancel),
+            ),
+        ),
+        policy=MANAGE_OPEN_WORLD,
+    )
     _register_portfolio_challenge_workflows(
         registry,
         adapters.portfolio,
-        adapters.challenge,
         adapters.workflows,
     )
     _register_watchlist_risk_monitoring(
@@ -925,8 +1587,8 @@ def create_compact_capability_registry(
         adapters.risk,
         adapters.monitoring,
     )
-    if set(registry.policies) != set(COMPACT_28_TOOL_NAMES):
-        raise RuntimeError("compact capability registry must contain exactly compact_28")
+    if set(registry.policies) != set(MCP_VNEXT_TOOL_NAMES):
+        raise RuntimeError("MCP capability registry does not match vNext inventory")
     return registry
 
 
@@ -1024,7 +1686,7 @@ def _register_a_share(registry: CapabilityRegistrar, adapters: SimpleNamespace) 
             _all_fields(adapters.research_search_reports),
         ),
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name=facts,
         description=(
@@ -1041,12 +1703,14 @@ def _register_market_and_us(
     us_research: SimpleNamespace,
     us_context: SimpleNamespace,
 ) -> None:
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="market_data_get",
         description=(
             "Read cross-market quote(s)/composite, bars, US market context, "
-            "futures curve, or basis."
+            "futures curve, or basis. Quote previous_close follows the returned "
+            "quote session; previous_close_basis distinguishes a completed regular "
+            "session from a completed futures daily bar and never means calendar yesterday."
         ),
         variants=(
             _spec(
@@ -1099,12 +1763,10 @@ def _register_market_and_us(
         adapter=market.technical_render_chart,
         policy=LOCAL_ARTIFACT,
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="us_company_get",
-        description=(
-            "Read US equity company facts or dated US equity/ETF live news."
-        ),
+        description=("Read US equity company facts or dated US equity/ETF live news."),
         variants=(
             _spec(
                 "fundamentals_snapshot",
@@ -1215,15 +1877,15 @@ def _register_external_sync(
 def _register_portfolio_challenge_workflows(
     registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
-    challenge: SimpleNamespace,
     workflows: SimpleNamespace,
 ) -> None:
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="portfolio_analyze",
         description=(
             "Analyze durable portfolio exposure, activity coverage, native-currency "
-            "performance attribution, or one calculation-only hypothetical addition."
+            "performance attribution, Trade Retro Run/review history, or one calculation-only "
+            "hypothetical addition."
         ),
         variants=(
             _spec(
@@ -1246,34 +1908,21 @@ def _register_portfolio_challenge_workflows(
                 portfolio.portfolio_simulate_addition,
                 _all_fields(portfolio.portfolio_simulate_addition),
             ),
+            _spec(
+                "retro_history",
+                portfolio.portfolio_get_retro_history,
+                _all_fields(portfolio.portfolio_get_retro_history),
+            ),
         ),
         policy=READ_DURABLE,
     )
-    _copy_handler(registry, adapter=challenge.challenge_review_get, policy=READ_DURABLE)
-    _register_dispatch_tool(
-        registry,
-        name="challenge_review_manage",
-        description="Start or explicitly resolve a non-executing Challenge Review.",
-        variants=(
-            _spec(
-                "start",
-                challenge.challenge_review_start,
-                _all_fields(challenge.challenge_review_start),
-            ),
-            _spec(
-                "resolve",
-                challenge.challenge_review_resolve,
-                _all_fields(challenge.challenge_review_resolve),
-            ),
-        ),
-        policy=APPEND,
-    )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="research_workflow_run",
         description=(
             "Run one closed research, market, portfolio, peer-comparison, or manual "
-            "historical-validation workflow; synthesis remains external."
+            "historical-validation workflow, one durable Trade Retro, or one deterministic "
+            "Judgment Scorecard."
         ),
         variants=(
             _spec(
@@ -1333,6 +1982,16 @@ def _register_portfolio_challenge_workflows(
                 "historical_validation_import",
                 workflows.historical_validation_import,
                 _all_fields(workflows.historical_validation_import),
+            ),
+            _spec(
+                "trade_retro",
+                workflows.trade_retro,
+                _all_fields(workflows.trade_retro),
+            ),
+            _spec(
+                "judgment_scorecard",
+                workflows.judgment_scorecard,
+                _all_fields(workflows.judgment_scorecard),
             ),
         ),
         policy=APPEND_OPEN_WORLD,
@@ -1435,7 +2094,7 @@ def _register_watchlist_risk_monitoring(
         ),
         policy=READ_DURABLE,
     )
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
         name="monitor_manage",
         description=(

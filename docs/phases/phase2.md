@@ -699,7 +699,7 @@ URLs, proxy values, headers, bodies, and exception text are never persisted.
 
 Current acceptance evidence (2026-07-29):
 
-- the public surface remains exactly 28 tools; `monitor_read` has four closed
+- the current public surface is 27 tools; `monitor_read` has four closed
   operations and the current surface schema is `compact-v19`;
 - migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`,
   `0028_provider_route_history`, `0030_generic_notification_outbox`, and
@@ -756,7 +756,7 @@ outside Phase 2D.
 
 Completion evidence on 2026-07-20:
 
-- default runtime inventory exposes exactly 28 tools;
+- default runtime inventory exposes exactly 27 tools;
 - Ruff and mypy pass across the repository source tree;
 - compact acceptance covers standard indicators, disclosed structure output,
   PNG rendering, MCP registration, bootstrap wiring, and public inventory;

@@ -1,6 +1,6 @@
 """Single source of truth for the sole public MCP inventory."""
 
-COMPACT_28_TOOL_NAMES = frozenset(
+MCP_VNEXT_TOOL_NAMES = frozenset(
     {
         "system_health",
         "instrument_resolve",
@@ -20,8 +20,7 @@ COMPACT_28_TOOL_NAMES = frozenset(
         "account_get",
         "external_state_sync",
         "portfolio_analyze",
-        "challenge_review_get",
-        "challenge_review_manage",
+        "broker_order_manage",
         "research_workflow_run",
         "watchlist_get",
         "watchlist_manage",
@@ -33,7 +32,7 @@ COMPACT_28_TOOL_NAMES = frozenset(
     }
 )
 
-PUBLIC_TOOL_NAMES = COMPACT_28_TOOL_NAMES
+PUBLIC_TOOL_NAMES = MCP_VNEXT_TOOL_NAMES
 
 FORBIDDEN_PUBLIC_TOOL_NAMES = frozenset(
     {
@@ -81,6 +80,6 @@ RETIRED_PUBLIC_TOOL_NAMES = frozenset(
     }
 )
 
-assert len(COMPACT_28_TOOL_NAMES) == 28
-assert COMPACT_28_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
-assert COMPACT_28_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
+assert len(MCP_VNEXT_TOOL_NAMES) == 27
+assert MCP_VNEXT_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
+assert MCP_VNEXT_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)

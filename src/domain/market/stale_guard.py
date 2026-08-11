@@ -18,6 +18,7 @@ _ACTIVE_SESSIONS = frozenset(
         TradingSession.REGULAR,
         TradingSession.PRE_MARKET,
         TradingSession.POST_MARKET,
+        TradingSession.OVERNIGHT,
     }
 )
 

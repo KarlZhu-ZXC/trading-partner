@@ -6,6 +6,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
+from pydantic import computed_field
+
 from application.dto.a_share_common import _FrozenForbid
 from application.dto.a_share_inputs import A_SHARE_DEFAULT_FINANCIAL_METRICS
 from application.dto.a_share_provenance import AShareComponentProvenanceDTO
@@ -56,6 +58,12 @@ class AShareQuoteDTO(_FrozenForbid):
     float_market_cap_cny: DecimalWire | None
     limit_up_price: DecimalWire | None
     limit_down_price: DecimalWire | None
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def previous_close_basis(self) -> Literal["previous_completed_regular_session_close"]:
+        """Disclose that ``previous_close`` is the prior completed regular session."""
+        return "previous_completed_regular_session_close"
 
     @classmethod
     def from_domain(cls, quote: AShareQuote) -> AShareQuoteDTO:
@@ -317,4 +325,3 @@ class InteractiveQAItemDTO(_FrozenForbid):
     @classmethod
     def from_domain(cls, item: InteractiveQAItem) -> InteractiveQAItemDTO:
         return cls.model_validate(item, from_attributes=True)
-

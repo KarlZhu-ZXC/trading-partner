@@ -9,9 +9,16 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Self
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from application.dto.market import DecimalWire, MarketBarDTO, TechnicalIndicatorsDTO
 from domain.common.enums import AdjustmentMethod, AssetType, Market, TradingSession
@@ -360,6 +367,38 @@ class USQuoteDTO(_FrozenForbid):
     week_52_low: DecimalWire | None
     week_52_high: DecimalWire | None
 
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def display_price(self) -> DecimalWire:
+        """Cross-asset display price; exchange quotes are last-price based."""
+        return self.last
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def price_basis(self) -> Literal["last"]:
+        """Disclose that ``display_price`` is a traded/quoted last, not a midpoint."""
+        return "last"
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def previous_close_basis(
+        self,
+    ) -> Literal[
+        "previous_completed_regular_session_close",
+        "previous_completed_daily_bar_close",
+    ]:
+        """Disclose which completed period the ``previous_close`` baseline names.
+
+        Exchange-traded futures expose the prior completed daily bar close.  US/KR
+        equity, ETF, and index quotes expose the prior completed regular-session
+        close.  Keeping this basis alongside the legacy numeric field prevents a
+        host model from treating every baseline as a literal calendar-day close.
+        """
+        asset_type, _market, _symbol = parse_instrument_id(self.instrument_id)
+        if asset_type is AssetType.FUTURE:
+            return "previous_completed_daily_bar_close"
+        return "previous_completed_regular_session_close"
+
     @classmethod
     def from_domain(cls, quote: USQuote) -> USQuoteDTO:
         return cls.model_validate(quote, from_attributes=True)
@@ -389,6 +428,16 @@ class USMarketProxyDTO(_FrozenForbid):
     instrument_id: str
     latest: DecimalWire | None
     change_percent: DecimalWire | None
+    quote_at: datetime | None
+    session: TradingSession | None
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def change_percent_basis(
+        self,
+    ) -> Literal["previous_completed_regular_session_close"]:
+        """Disclose the baseline used by the proxy percentage calculation."""
+        return "previous_completed_regular_session_close"
 
     @classmethod
     def from_domain(cls, proxy: USMarketProxy) -> USMarketProxyDTO:

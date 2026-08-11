@@ -188,7 +188,12 @@ class OpenQuestionService:
             )
             with self._uow_factory() as uow:
                 uow.subjects.get(subject_id)
-                uow.questions.get(question_id)
+                question = uow.questions.get(question_id)
+                if question.subject_id != subject_id:
+                    raise InputValidationError(
+                        "question_id does not belong to subject_id",
+                        details={"question_id": question_id, "subject_id": subject_id},
+                    )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,
@@ -255,7 +260,12 @@ class OpenQuestionService:
             )
             with self._uow_factory() as uow:
                 uow.subjects.get(subject_id)
-                uow.questions.get(question_id)
+                question = uow.questions.get(question_id)
+                if question.subject_id != subject_id:
+                    raise InputValidationError(
+                        "question_id does not belong to subject_id",
+                        details={"question_id": question_id, "subject_id": subject_id},
+                    )
                 candidate, is_dup, warn = propose_candidate(
                     uow=uow,
                     clock=self._clock,

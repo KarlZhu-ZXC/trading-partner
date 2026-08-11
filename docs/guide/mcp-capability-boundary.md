@@ -1,6 +1,6 @@
 # Trading Partner MCP 能力与使用边界
 
-> 适用版本：Phase 1–3D（28 个 compact public MCP tools）
+> 适用版本：Phase 1–3D + MCP vNext Shadow（27 个 public MCP tools）
 > 状态：可供 Codex 以本地 stdio MCP 方式使用
 
 ## 1. 它是什么
@@ -23,7 +23,7 @@ Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex
 
 | 层级 | 含义 | 当前状态 |
 |---|---|---|
-| 服务可用 | MCP 能启动、28 个 compact 工具已注册、SQLite 可迁移 | 已验收 |
+| 服务可用 | MCP 能启动、27 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
 | 数据可用 | 对应网络 Provider 已启用、凭据和网络正常 | 按 Provider 分别检查 |
 | 账户可用 | Schwab OAuth、Moomoo OpenD 或严格格式的手工持仓 CSV | 实时券商默认未启用 |
 
@@ -60,9 +60,10 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 
 ## 3. 公开能力总览
 
-公开工具面固定为 28 个；旧 52 工具兼容 profile 已删除。
-所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内；
-每个 operation 是 closed union variant，不能混用其他 variant 的字段。
+公开工具面为 27 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
+所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内。
+为降低 Host 上下文，较大的 group 发布扁平 operation schema；服务端在 dispatch 前仍使用
+精确 closed variant 再验证 required/owned fields，因此跨 operation 字段不会进入应用服务。
 
 每个进程只构建一份 compact Capability Registry。`interfaces/mcp/tools/` 中的 capability
 模块提供普通 operation adapters，Registry 同时持有 callable、由同一 callable 生成的
@@ -71,6 +72,15 @@ FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成�
 两套 handler、两套请求模型或通过工具名查找的旧兼容注册表。MCP `tools/list` 会删除不参与
 验证的 schema 标题/默认值和冗余 discriminator mapping、共享重复属性定义，并保证 closed
 union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
+
+Shared Agent Runtime 的 `tp_capability_search`、`tp_read` 和 `tp_prepare_action` 是模型请求内的
+私有函数，不注册为 MCP 工具，公开数量仍严格为 27。Agent-A 只允许 durable/provider reads、
+instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
+schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
+Agent-D 仅对单独维护的 research-write operation allowlist 创建 Pending Action；用户在原
+Console/Telegram channel 以 exact hash、principal、version、expiry 和 single-use token
+确认后，才通过同一 Registry 再校验并 dispatch。该路径不改变 MCP inventory 或授权语义，
+也不开放 sync/evaluate、账户、风险策略或订单写入。
 
 MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和 open-world 特征，
 不作为 HTTP 授权规则。Console 需要的显式确认由 Registry 的 confirmation policy 单独决定；
@@ -160,9 +170,28 @@ Assumption、Invalidation、Open Question 等子对象同样不仅要“存在�
 | `research_memory_get` (`timeline`) | 读取一个研究档案的统一时间线 |
 | `research_memory_append` (`journal`) | 在用户明确要求记录后追加日志 |
 | `research_memory_append` (`decision`) | 记录研究或仓位意图；不会产生订单、成交或持仓 |
+| `research_memory_get` (`agenda`) | durable-only 查询 Catalyst Agenda、scope、coverage、历史版本和过期未闭环提示；不访问 Provider |
+| `research_memory_append` (`agenda_item`) | 经明确确认创建、修订、取消事项，或把已发生事项链接到同研究范围的 Event/Report/Evidence |
+| `research_judgment_get` (`scorecard_history`) | 读取不可变 Judgment Scorecard S0/S1 历史；不重算旧运行 |
+| `research_workflow_run` (`judgment_scorecard`) | 对一个明确 Thesis 的最新 revision 生成确定性维度卡；不产生总分、判断写入或订单 |
 
 搜索必须至少有一个有效过滤条件。日志和 Decision append 需要唯一幂等键，并且确认者只能
 是 `user` 或明确授权的 `external_agent`。
+
+Catalyst Agenda 把“未来已知事项”与“已经发生的事实”分开保存。普通读取只投影当前
+durable Portfolio、Watchlist、Research Subject 与显式范围；无结果不等于无催化剂。
+用户事项保持 append-only、expected-version 和幂等门。显式
+`uv run trading-partner-catalyst-sync sync` 才会访问免费 Yahoo/yfinance 日历与调用方选择的
+FRED release IDs；日期漂移、部分失败和覆盖范围写入不可变 receipt，并进入 Data Quality
+Center。Yahoo 日历是 current-only 聚合日期；FRED release date 是官方日期但不保证精确发布
+时刻。A 股预约披露与韩国日历尚未形成稳定免费契约，不抓网页猜日期。
+
+事项发生后，`LINK_OUTCOME` 只接受在 as-of 时可见且归属一致的 ResearchEvent、Report 或
+Evidence；schema-v2 结果版本保存发生时间和人工 outcome note。Judgment Scorecard S1 锁定
+exact Thesis revision，并在既有八个纪律维度后增加
+`CATALYST_OUTCOME_CALIBRATION`。无相关事项、无已发生结果、缺少 exact-revision assessment
+或逾期未闭环都保持 `NOT_EVALUATED`/`PARTIAL`，绝不自动解释为判断正确。Console 可管理
+Agenda、链接结果、预览/入队 Telegram 摘要，并生成/浏览 Scorecard 历史；这些能力复用现有 grouped tools。
 
 Instrument Master 是持久化注册表与缓存，不是可查询标的白名单。美股首次发现按
 Yahoo Finance → Alpha Vantage 回退，A 股代码由腾讯行情验证，韩股由 Yahoo 搜索验证；例如首次解析 `KO` 后会写入
@@ -311,6 +340,8 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 | `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
 | `portfolio_analyze` (`performance_summary`) | 按账户与原币种重建 FIFO 或展示券商成本口径，分列已实现/未实现损益、股息、利息、费用和外部现金流，并可下钻到活动 ID 与期末快照 |
 | `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
+| `portfolio_analyze` (`retro_history`) | 只读不可变 Trade Retro Run 与追加式人工复核版本；不访问券商、Provider 或 LLM |
+| `broker_order_manage` | `cash_sweep_preview` 计算 SGOV Shadow；`preview` 创建 30–300 秒单次实盘意图；`submit` 在当前对话逐笔确认后提交；`status` 读取/刷新状态；`cancel` 明确确认后撤单。无通用券商请求或改单操作 |
 
 历史补齐也可走确定性 CLI；单日用 `--date`，长区间用 inclusive
 `--start-date/--end-date`。Schwab 会在 Provider 内部拆成最多 60 天的窗口，CLI 不会启动
@@ -322,11 +353,38 @@ uv run trading-partner-account-transactions \
 ```
 
 券商账户和交易标识会变成稳定哈希。系统不隐含假设 FX 汇率，不把不同币种直接相加，也不
-把持仓市值称为账户 NAV。Schwab 首个版本不读取 open orders，并返回明确 warning；MCP 不
-读取或保存交易解锁凭据。
+把持仓市值称为账户 NAV。Schwab 刷新读取余额、持仓与可规范化的 active 单腿 open
+orders；复杂订单或订单读取失败保留 typed warning。MCP 不读取或保存交易解锁凭据。
+自动现金管理只把 `currentBalances.cashBalance` 当作可用现金事实，不以 `buyingPower`、
+`liquidationValue`、`totalCash` 或推断值代替。`broker_order_manage/cash_sweep_preview` 默认逐账户保留
+`$2,000` hard floor 与 `$200` operating buffer，再扣除 active BUY 剩余限价名义金额；
+SELL 不占用现金。它按 SGOV broker ask 计算整数股，并返回 LIMIT/DAY/NORMAL 假设 payload。
+周末/陈旧报价、价差过宽、融资非零或未知、cashBalance 缺失、open-order 读取失败都会显式
+阻断 Shadow 可执行性；所有 Shadow 结果均为
+`shadow_only=true`、`execution_effect=false`。
+
+真实 Schwab 下单使用同一 grouped capability 的独立操作，不会消费 Shadow 结果。
+`preview` 必须精确绑定一个稳定 `account_ref`、美股/ETF Instrument、方向、整数股数、
+订单类型、时段、期限和全部价格字段，并立即重读 `cashBalance`、融资余额、持仓与 active
+BUY 预留。意图只存活 30–300 秒。`submit` 只接受 `confirmed_by=user`、
+`submitted_via=codex_chat`、新的 idempotency key 和本次对话中的明确授权说明；成功必须以
+Schwab 返回 order ID 为准。网络中断、5xx 或缺少 order ID 都持久化为非自动重试的
+`BROKER_ORDER_SUBMISSION_UNCERTAIN/UNKNOWN`，不能以相同或新 key 盲目再发。
+
+v1 允许 LIMIT、STOP_LIMIT 买卖，以及用于已有多头保护/退出的 MARKET、STOP、
+TRAILING_STOP、TRAILING_STOP_LIMIT 卖单。无界 BUY MARKET/STOP/TRAILING 被现金安全门禁
+禁止；任何 SELL 都不能超过实时多头数量。`AM`、`PM`、`SEAMLESS` 只接受 LIMIT；
+`SEAMLESS` 到 20:00 ET，不含 Schwab 8pm–4am 夜盘。当前没有改单、期权/复杂订单、卖空、
+无人值守执行或 Console 下单入口。
 `performance_summary` 也不会隐式刷新券商或执行 FX 汇总；起始 lot 历史、公司行动变换、
 手续费、期末持仓勾稽或带时间估值任一未被持久化事实证明时，结果保持 `INCOMPLETE`，而不
 补造一个精确收益。
+
+项目内置的 `trading-partner-sgov-plan` operational CLI 会显式刷新 Schwab 后复用同一计算：
+普通 XNYS 交易日 15:45 ET 生成全部 Schwab 账户的 Shadow 购买计划，提前收盘日改为收盘前
+15 分钟，休市日和非到期唤醒不访问 Provider。`trading-partner-sgov-plan-scheduler install`
+安装每小时 `:45` 唤醒的 launchd；New York 时区和 DST 由应用到期判断处理。每个交易日只有
+一个持久化 Outbox 身份和一条可选 Telegram 通知。该定时流程本身仍没有下单能力。
 
 普通的持仓、暴露、Portfolio Review 和 Risk 问题优先读取数据库中的最新持久化快照；快照
 过期只会显示时间与 warning，不会自动触发券商刷新。只有用户明确要求“刷新/同步/从券商重新
@@ -339,8 +397,10 @@ uv run trading-partner-account-transactions \
 - `ACCOUNT_AS_OF_FETCH_TIME`：Provider 没有权威账户时点，`account_as_of` 只能使用读取时刻；
 - `PRICE_TIME_UNAVAILABLE`：Provider 给了持仓市值，但没有可验证的逐仓价格时间，不能把读取
   时间伪装成报价时间；
-- `SCHWAB_OPEN_ORDERS_NOT_INGESTED`：`open_orders=()` 表示本版本未读取，不表示账户没有
-  未成交订单；分析可用现金、购买力和杠杆时必须保留这项不确定性；
+- `SCHWAB_OPEN_ORDERS_UNAVAILABLE`：本次订单读取失败，`open_orders=()` 不能解释为没有
+  未成交订单；Shadow Preview 必须阻断；
+- `SCHWAB_COMPLEX_OPEN_ORDER_NOT_INGESTED` / `SCHWAB_UNSUPPORTED_OPEN_ORDER_*`：存在
+  当前规范模型不能安全预留资金的订单；不能据此完成自动扫现金；
 - Schwab 历史成交优先读取明确的 BUY/SELL instruction；若真实交易历史 payload 省略该
   字段，则使用证券 `amount` 的正负号恢复方向，并返回
   `SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN`。任何无法标准化的 item 都必须通过
@@ -370,9 +430,9 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 
 | 工具 | 能力与边界 |
 |---|---|
-| `challenge_review_manage` (`start`) | 普通讨论可 bypass；重大判断可持久化严格十维质询 |
-| `challenge_review_get` | 恢复问题、finding 和状态 |
-| `challenge_review_manage` (`resolve`) | 记录 accept/revise/reject/defer 及理由 |
+| `research_judgment_propose` (`challenge_review`) | 普通讨论可 bypass；重大判断可持久化严格十维质询 |
+| `research_judgment_get` (`challenge_review`) | 恢复问题、finding 和状态 |
+| `research_judgment_confirm` (`challenge_review`) | 记录 accept/revise/reject/defer 及理由 |
 
 重大质询 start 和 resolution 都要求幂等键；相同键和相同 payload 精确重放，键相同而
 payload 不同返回 `IDEMPOTENCY_CONFLICT`。质询 resolution 只记录用户态度，不会直接修改
@@ -390,6 +450,7 @@ Thesis、候选或仓位，也不会执行交易。
 | `research_workflow_run` (`peer_comparison`) | 对调用方指定的 1–5 家同市场同行收集并对齐财报、估值及可选 A 股经营事实 |
 | `research_workflow_run` (`historical_validation_prepare`) | 验证但不执行 LEAN Python，生成 QuantConnect Free 手工回测包、manifest 和 SHA-256 |
 | `research_workflow_run` (`historical_validation_import`) | 导入网页下载的 QuantConnect Results JSON，提取有来源的指标并保留可复现性缺口 |
+| `research_workflow_run` (`trade_retro`) | `prepare` 事前快照、`run` 成交纪律审计、`review` 追加人工复核版本、`export` 安全写入 Obsidian owned block；无订单效果 |
 
 六个工作流都要求请求级 `idempotency_key`。系统在访问 Provider 前持久化 `STARTED`，运行时
 标记 `RUNNING`，终态为 `SUCCEEDED` / `PARTIAL` / `FAILED`；标准化事实产物经过大小限制和
@@ -400,7 +461,7 @@ SHA-256 校验后与 receipt 一起保存。相同终态请求直接重放而不
 
 美股股票配方包含公司基本面、财报和公司事件。美股 ETF 配方改用 composite 行情/技术面、
 精确 ticker 新闻、ETF 社区情绪和宏观上下文，不调用股票专属的财报、SEC 或公司事件接口。
-Workflow receipt 与 Context 的 live-fact 提示只返回当前 28 工具的公共名称及 operation，
+Workflow receipt 与 Context 的 live-fact 提示只返回当前 27 工具的公共名称及 operation，
 不会再暴露已退役的内部 handler 名称。
 
 同行比较默认使用最近三个可见年报期间；不会自动发现同行、跨市场换汇、构造 TTM、评分、
@@ -417,6 +478,26 @@ point-in-time 数据集。导入器以正式 `statistics` 为绩效口径、保�
 并检查实际运行日期是否与 manifest 一致；可用的 QuantConnect Benchmark 曲线只作为明确
 标注的导出曲线对比，不冒充官方总回报指数。完整操作见
 [QuantConnect Free manual validation guide](quantconnect-free-bridge.md)。
+
+Trade Retro 同样不属于 Provider fact workflow。`prepare` 必须在复盘周期开始前执行，
+把当时 ACTIVE 研究标的的当前 Trade Plan 与已确认 Decision Record 固化为不可变快照；
+在周期开始后补写的快照不会被 `run` 当作事前证据。`run` 只读取持久化成交与覆盖回执，
+确定性识别覆盖不完整、无事前计划、同一标的事前计划歧义、计划未 ACTIVE、缺少失效
+条件、成交方向缺少匹配的事前 Decision、周期内双向交易及同日卖出后回补。找不到完整
+覆盖不能解释为“没有交易”。
+
+可选百炼叙述层只接收上述有界事实，必须输出中文，不得推断成交、产生新买卖点位、修改
+Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保留确定性报告并附 warning。
+`review` 不编辑原始 Run 或 Finding，而是追加一个完整的人工作业版本。它要求
+`confirmed_by`、`authorization_note`、幂等键及 `expected_version`；陈旧页面会收到
+`TRADE_RETRO_REVIEW_VERSION_CONFLICT`。复核可记录整体状态、修正说明、行动项，以及
+逐 Finding 的 `ACCEPTED` / `DISPUTED` / `RESOLVED` 结论；争议 Finding 必须说明原因。
+`export` 只替换 `RETRO_OBSIDIAN_JOURNAL_DIR` 下周记中的
+`trading-partner:retro` marker block，保留手写内容并拒绝符号链接或越界路径。CLI 入口是
+`uv run trading-partner-retro`，Console 的 Trade Retro 页面使用同一 application service，
+可展开原始 summary、Finding 和交易引用，编辑最新人工复核并查看全部复核版本。
+现有周六 Automation 应只调用 `trading-partner-retro weekly --export-obsidian`；固定周一至
+周六 UTC 窗口、幂等键、审计、导出与下一周快照均由项目 CLI 负责。
 
 ### 3.12 Watchlist Hub
 
@@ -613,15 +694,30 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   股价使用当天已完成的常规收盘，盘前使用上一完整常规时段。若 Yahoo 最新日线临时缺少
   `Close`，盘前/盘后可从带时间戳的 `regularMarketPrice` 恢复该完整时段收盘，并附带
   `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`。
-- 对接近当前时刻且 Yahoo 常规报价字段已经过时的请求，项目只在非闭市时补查带
-  `includePrePost` 的 1 分钟线，并按时间戳选更新观察值。盘前/盘后价格明确附带
+- 报价同时返回 `previous_close_basis`。股票、ETF、指数使用
+  `previous_completed_regular_session_close`，且严格跟随实际返回的 `quote_at + session`；
+  降级成旧常规盘报价时不得按请求时段偷偷重锚。中文只能称“前收（前一已完成常规交易时段收盘）”，
+  不能称“昨收”或“上一根 K 线收盘”。期货使用 `previous_completed_daily_bar_close`，
+  不能称为常规盘前收或结算价。
+- 对接近当前时刻且 Yahoo 常规报价字段已经过时的请求，项目补查带
+  `includePrePost` 的 1 分钟线，并按时间戳选更新观察值；即使盘后窗口刚刚结束，也会
+  保留时间更晚的真实盘后成交，而不是退回较早的常规收盘。盘前/盘后价格明确附带
   `EXTENDED_HOURS_PRICE`；期货或常规时段元数据修复附带 `INTRADAY_QUOTE_RECOVERY`。补查
   得到盘前/盘后最新价时，只能证明该价格和时间；`open/high/low/volume` 返回空值并附带
   `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE`，不会再混入日盘区间。补查失败则附带
   `INTRADAY_QUOTE_UNAVAILABLE` 并保留最近带时间戳的已知值。若当前盘前没有当日成交而
   只剩上一交易日盘后观察，该值按自己的盘后 session 分类，`previous_close` 仍取同日已完成
   常规收盘，不能额外向前错退一个交易日。历史 `as_of` 不走这条
-  current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。
+  current-only 路径，Yahoo 也不等于完整的美股隔夜行情源。交易所报价同时返回
+  `display_price`（与 `last` 一致）和 `price_basis=last`，并把常规时段的
+  `previous_close` 作为独立参考值；不得用前收冒充最新价。
+- 美股股票/ETF 在美东周日至周四 20:00–04:00 的夜盘窗口，接近当前时刻的请求优先读取
+  本地 Moomoo OpenD 专用 `overnight_*` 快照字段。只有 exact instrument 的有效
+  `overnight_price` 才能返回为 `session=overnight`；`previous_close` 仍是常规收盘，
+  不能混入普通 `last_price`、盘前/盘后字段或黄金代理。OpenD 仅给一个快照
+  `update_time`，没有独立夜盘成交时间，因此必须披露时间戳口径、流动性和 venue 未披露
+  warning。OpenD、权限、时间戳或夜盘值不可用时，Yahoo 只能作为 latest-known 回退并附带
+  `OVERNIGHT_QUOTE_UNAVAILABLE`，不得称为夜盘价。
 - Provider Router 使用统一、跨进程的有界 admission scheduler。它按
   `vendor + data_category` 原子预占当前或未来固定时间窗，并异步等到预占时刻；默认最多等待
   `PROVIDER_RATE_LIMIT_MAX_WAIT_SECONDS`。因此批量技术请求会先排队，不会因为同一秒的本地
@@ -818,10 +914,12 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 
 - 历史数据平台、本地/自动回测和策略执行引擎；仅提供 QuantConnect Free 的手工
   LEAN package prepare 与用户下载结果 import，远程代码和数据版本保持未验证；
-- 下单、改单、撤单、成交、交易解锁或执行审批；
+- 自动/无人值守下单、改单、期权或复杂订单、卖空、Schwab API 夜盘、交易解锁；
+  仅提供上述逐笔确认的单腿美股/ETF preview-submit-status-cancel 边界；
 - 自动仓位调整和自动 Thesis 确认；
 - 自动 Evidence ingestion；
-- 后台自主运行的第二个 LLM、TradingAgents 或 LangGraph；
+- 通用或自主的第二个 LLM、TradingAgents 或 LangGraph；运行时模型仅限启用的复合
+  Monitor 判断和显式 Trade Retro 叙述，并且都没有状态修改或订单端口；
 - 对任何投资结果、数据完整性或 Provider 永久在线作保证。
 
 它提供的是可追溯的研究事实、长期状态和质询机制，不构成投资建议或收益承诺。

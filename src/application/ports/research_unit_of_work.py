@@ -19,6 +19,7 @@ from application.ports.invalidation_condition_repository import (
     InvalidationConditionRepository,
 )
 from application.ports.journal_repository import JournalRepository
+from application.ports.monitor_lifecycle_reader import MonitorLifecycleReader
 from application.ports.open_question_repository import OpenQuestionRepository
 from application.ports.research_event_repository import ResearchEventRepository
 from application.ports.research_report_repository import ResearchReportRepository
@@ -91,6 +92,9 @@ class ResearchUnitOfWork(Protocol):
 
     @property
     def trade_plans(self) -> TradePlanRepository: ...
+
+    @property
+    def monitor_lifecycle(self) -> MonitorLifecycleReader: ...
 
     @property
     def audit(self) -> AuditLogWriter:

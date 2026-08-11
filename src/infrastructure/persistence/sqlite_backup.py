@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +28,9 @@ class SQLiteBackupService:
         self._require_new_target(source, target)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with self._read_only(source) as source_db, sqlite3.connect(target) as target_db:
+            with closing(self._read_only(source)) as source_db, closing(
+                sqlite3.connect(target)
+            ) as target_db:
                 source_db.backup(target_db)
                 target_db.commit()
             return self._receipt(target)
@@ -45,7 +48,9 @@ class SQLiteBackupService:
         self._require_new_target(source, target)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with self._read_only(source) as source_db, sqlite3.connect(target) as target_db:
+            with closing(self._read_only(source)) as source_db, closing(
+                sqlite3.connect(target)
+            ) as target_db:
                 source_db.backup(target_db)
                 target_db.commit()
             restored = self._receipt(target)
@@ -84,7 +89,7 @@ class SQLiteBackupService:
 
     @staticmethod
     def _receipt(path: Path) -> SQLiteBackupReceipt:
-        with SQLiteBackupService._read_only(path) as database:
+        with closing(SQLiteBackupService._read_only(path)) as database:
             integrity = database.execute("PRAGMA integrity_check").fetchone()
             if integrity != ("ok",):
                 raise DataContractError("SQLite integrity_check failed")

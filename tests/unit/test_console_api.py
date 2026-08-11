@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -86,6 +87,74 @@ class _OAuthContainer:
         return None
 
 
+class _AgendaClock:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
+
+
+class _AgendaSyncService:
+    def __init__(self, sync_result: Any) -> None:
+        self.sync_result = sync_result
+        self.synced_inputs: list[Any] = []
+
+    async def sync(self, request: Any) -> Any:
+        self.synced_inputs.append(request)
+        return self.sync_result
+
+
+class _AgendaSummaryService:
+    def __init__(self, *, preview: Any, receipt: Any) -> None:
+        self.preview = preview
+        self.receipt = receipt
+        self.preview_windows: list[int] = []
+        self.enqueue_windows: list[int] = []
+
+    def preview_daily(self, *, window_days: int) -> Any:
+        self.preview_windows.append(window_days)
+        return self.preview
+
+    async def enqueue_daily(self, *, window_days: int) -> Any:
+        self.enqueue_windows.append(window_days)
+        return self.receipt
+
+
+class _AgendaContainer:
+    def __init__(
+        self,
+        *,
+        sync_service: _AgendaSyncService | None = None,
+        summary_service: _AgendaSummaryService | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        self.services = SimpleNamespace()
+        self.operations = SimpleNamespace(
+            catalyst_agenda_sync=sync_service,
+            catalyst_agenda_notifications=summary_service,
+        )
+        self.context = SimpleNamespace(
+            clock=_AgendaClock(now or datetime.now(UTC)),
+            secret_redactor=SimpleNamespace(redact_text=lambda value: value),
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def _console_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    response = await client.get(
+        "/api/session",
+        headers={"Origin": "http://127.0.0.1:3000"},
+    )
+    assert response.status_code == 200
+    return {
+        "Origin": "http://127.0.0.1:3000",
+        "X-Trading-Partner-Console-Token": response.json()["token"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -131,13 +200,15 @@ async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -
     transport = httpx.ASGITransport(app=console_api.app)
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
+        console_headers = await _console_headers(client)
         catalog = await client.get("/api/capabilities")
         health = await client.get("/api/health")
         read = await client.post(
             "/api/tools/invoke",
             json={"tool_name": "system_health", "arguments": {}},
+            headers=console_headers,
         )
         resolved = await client.post(
             "/api/tools/invoke",
@@ -145,6 +216,7 @@ async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -
                 "tool_name": "instrument_resolve",
                 "arguments": {"market": "US", "query": "TTWO"},
             },
+            headers=console_headers,
         )
         rejected = await client.post(
             "/api/tools/invoke",
@@ -152,6 +224,7 @@ async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -
                 "tool_name": "external_state_sync",
                 "arguments": {"request": {"operation": "accounts"}},
             },
+            headers=console_headers,
         )
         accepted = await client.post(
             "/api/tools/invoke",
@@ -160,6 +233,7 @@ async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -
                 "arguments": {"request": {"operation": "accounts"}},
                 "confirmation": "external_state_sync",
             },
+            headers=console_headers,
         )
 
     assert catalog.status_code == 200
@@ -179,6 +253,59 @@ async def test_tool_workbench_invokes_reads_and_gates_writes(monkeypatch: Any) -
         ("instrument_resolve", {"market": "US", "query": "TTWO"}),
         ("external_state_sync", {"request": {"operation": "accounts"}}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_console_rejects_untrusted_host_origin_and_missing_session_token(
+    monkeypatch: Any,
+) -> None:
+    calls: list[str] = []
+
+    async def system_health() -> dict[str, Any]:
+        calls.append("health")
+        return {"ok": True}
+
+    registry = CompactCapabilityRegistry()
+    registry.add_capability(
+        system_health,
+        name="system_health",
+        description="health",
+        policy=READ_DURABLE,
+    )
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: registry,
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        bad_host = await client.get("http://evil.test/api/health")
+        bad_origin = await client.get(
+            "/api/session",
+            headers={"Origin": "http://127.0.0.1:4444"},
+        )
+        missing_token = await client.post(
+            "/api/tools/invoke",
+            json={"tool_name": "system_health", "arguments": {}},
+            headers={"Origin": "http://127.0.0.1:3000"},
+        )
+        headers = await _console_headers(client)
+        accepted = await client.post(
+            "/api/tools/invoke",
+            json={"tool_name": "system_health", "arguments": {}},
+            headers=headers,
+        )
+
+    assert bad_host.status_code == 400
+    assert bad_origin.status_code == 403
+    assert missing_token.status_code == 403
+    assert accepted.status_code == 200
+    assert calls == ["health"]
 
 
 @pytest.mark.asyncio
@@ -229,7 +356,7 @@ async def test_watchlist_console_uses_moomoo_all_group_for_instrument_count(
     transport = httpx.ASGITransport(app=console_api.app)
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
         response = await client.get("/api/watchlist")
 
@@ -272,7 +399,7 @@ async def test_accounts_console_uses_grouped_durable_positions_contract(
     transport = httpx.ASGITransport(app=console_api.app)
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
         response = await client.get("/api/accounts")
 
@@ -325,7 +452,7 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
 
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
         response = await client.get(
             "/api/portfolio?transaction_limit=17&coverage_limit=23"
@@ -408,7 +535,7 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
 
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
         response = await client.get("/api/research")
 
@@ -437,6 +564,392 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
 
 
 @pytest.mark.asyncio
+async def test_scorecard_console_reads_subjects_and_history_through_compact_capabilities(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        assert confirmation is None
+        compact_request = arguments["request"]
+        calls.append((tool_name, compact_request))
+        if tool_name == "investment_case_read":
+            return {
+                "ok": True,
+                "data": {
+                    "items": [
+                        {
+                            "case_id": "case_001",
+                            "case_type": "company",
+                            "title": "TTWO",
+                        }
+                    ]
+                },
+            }
+        if compact_request["operation"] == "state":
+            return {
+                "ok": True,
+                "data": {"theses": [{"thesis_id": "thesis_001", "title": "Base"}]},
+            }
+        return {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "scorecard_id": "scorecard_001",
+                        "case_id": "case_001",
+                        "thesis_id": "thesis_001",
+                    }
+                ],
+                "total": 1,
+            },
+        }
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get(
+            "/api/scorecards?subject_id=case_001&thesis_id=thesis_001&limit=12&offset=3"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["subjects"][0]["subject"]["subject_id"] == "case_001"
+    assert payload["scorecards"]["data"]["items"][0]["subject_id"] == "case_001"
+    assert calls == [
+        (
+            "investment_case_read",
+            {"operation": "query", "include_archived": True, "limit": 200, "offset": 0},
+        ),
+        (
+            "research_judgment_get",
+            {
+                "operation": "state",
+                "case_id": "case_001",
+                "include_archived_theses": True,
+                "include_watchlist": False,
+            },
+        ),
+        (
+            "research_judgment_get",
+            {
+                "operation": "scorecard_history",
+                "limit": 12,
+                "offset": 3,
+                "case_id": "case_001",
+                "thesis_id": "thesis_001",
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retro_console_uses_the_canonical_completed_week_window(
+    monkeypatch: Any,
+) -> None:
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        assert tool_name == "portfolio_analyze"
+        assert arguments == {"request": {"operation": "retro_history", "limit": 50}}
+        assert confirmation is None
+        return {"ok": True, "data": {"runs": []}}
+
+    container = _AgendaContainer(now=datetime(2026, 8, 9, 8, tzinfo=UTC))
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get("/api/retro")
+
+    assert response.status_code == 200
+    assert response.json()["console_windows"] == {
+        "previous": {
+            "start": "2026-08-03T00:00:00Z",
+            "end": "2026-08-08T00:00:00Z",
+        },
+        "next": {
+            "start": "2026-08-10T00:00:00Z",
+            "end": "2026-08-15T00:00:00Z",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_agenda_console_reads_durable_items_and_subject_choices_without_sync(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        assert confirmation is None
+        calls.append((tool_name, arguments["request"]))
+        if tool_name == "research_memory_get":
+            if arguments["request"]["operation"] == "timeline":
+                return {
+                    "ok": True,
+                    "data": {
+                        "items": [
+                            {
+                                "entity_type": "event",
+                                "entity_id": "event_001",
+                                "subject_id": "case_001",
+                            }
+                        ]
+                    },
+                }
+            return {
+                "ok": True,
+                "data": {
+                    "items": [{"agenda_item_id": "agenda_001", "subject_id": "case_001"}],
+                    "coverage": [],
+                },
+            }
+        return {
+            "ok": True,
+            "data": {"items": [{"case_id": "case_001", "title": "TTWO"}]},
+        }
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get(
+            "/api/agenda?window_days=14&subject_id=case_001&scope=SUBJECT&kind=EARNINGS"
+            "&status=UPCOMING&limit=25"
+        )
+        candidates_response = await client.get(
+            "/api/agenda/outcome-candidates?subject_id=case_001&limit=25"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["agenda"]["data"]["items"][0]["subject_id"] == "case_001"
+    assert payload["subjects"]["data"]["items"][0]["subject_id"] == "case_001"
+    assert candidates_response.status_code == 200
+    assert candidates_response.json()["candidates"]["data"]["items"][0]["entity_id"] == "event_001"
+    assert calls == [
+        (
+            "research_memory_get",
+            {
+                "operation": "agenda",
+                "window_days": 14,
+                "include_history": False,
+                "limit": 25,
+                "offset": 0,
+                "filters": {
+                    "case_ids": ["case_001"],
+                    "scopes": ["SUBJECT"],
+                    "kinds": ["EARNINGS"],
+                    "statuses": ["UPCOMING"],
+                },
+            },
+        ),
+        (
+            "investment_case_read",
+            {"operation": "query", "include_archived": False, "limit": 200, "offset": 0},
+        ),
+        (
+            "research_memory_get",
+            {
+                "operation": "timeline",
+                "case_id": "case_001",
+                "entity_types": ["event", "report", "evidence"],
+                "limit": 25,
+            },
+        ),
+    ]
+    assert all(name != "external_state_sync" for name, _request in calls)
+
+
+@pytest.mark.asyncio
+async def test_agenda_console_sync_dispatches_to_catalyst_agenda_sync_service(
+    monkeypatch: Any,
+) -> None:
+    now = datetime(2026, 8, 9, 10, 0, 0, tzinfo=UTC)
+    query_result = {"ok": True, "data": {"sync": "ignored"}}
+    sync_service = _AgendaSyncService(query_result)
+    container = _AgendaContainer(
+        sync_service=sync_service,
+        now=now,
+    )
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        response = await client.post(
+            "/api/agenda/sync",
+            json={
+                "window_days": 14,
+                "instrument_ids": ["equity:US:NVDA", "equity:US:MSFT"],
+                "fred_release_ids": [501],
+                "as_of": "2026-08-09T00:00:00Z",
+                "idempotency_key": "agenda-sync-001",
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"data": query_result}
+    synced_input = sync_service.synced_inputs[0]
+    assert synced_input.window_days == 14
+    assert synced_input.instrument_ids == ("equity:US:NVDA", "equity:US:MSFT")
+    assert synced_input.fred_release_ids == (501,)
+    assert synced_input.as_of == datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
+    assert synced_input.idempotency_key == "agenda-sync-001"
+
+
+@pytest.mark.asyncio
+async def test_agenda_summary_preview_returns_deterministic_grouping_and_counts(
+    monkeypatch: Any,
+) -> None:
+    now = datetime(2026, 8, 9, 10, 0, 0, tzinfo=UTC)
+    preview = {
+        "source_id": "catalyst-agenda:daily:2026-08-09:w7",
+        "title": "催化事项 · 未来 7 天",
+        "body": "限制：CATALYST_DATA_PARTIAL",
+        "generated_at": now,
+        "expires_at": datetime(2026, 8, 10, tzinfo=UTC),
+        "window_days": 7,
+        "upcoming_count": 1,
+        "overdue_count": 1,
+        "coverage_gap_count": 1,
+        "limitation_codes": ("CATALYST_DATA_PARTIAL",),
+    }
+    summary_service = _AgendaSummaryService(
+        preview=preview,
+        receipt={"preview": preview, "notification_id": "notification_001"},
+    )
+    container = _AgendaContainer(summary_service=summary_service, now=now)
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        response = await client.get(
+            "/api/agenda/summary-preview?window_days=7",
+            headers=headers,
+        )
+
+    payload = response.json()["data"]
+    assert response.status_code == 200
+    assert payload["title"] == "催化事项 · 未来 7 天"
+    assert payload["source_id"] == "catalyst-agenda:daily:2026-08-09:w7"
+    assert payload["expires_at"] == "2026-08-10T00:00:00+00:00"
+    assert payload["upcoming_count"] == 1
+    assert payload["overdue_count"] == 1
+    assert payload["coverage_gap_count"] == 1
+    assert "限制：CATALYST_DATA_PARTIAL" in payload["body"]
+    assert summary_service.preview_windows == [7]
+
+
+@pytest.mark.asyncio
+async def test_agenda_summary_send_enqueues_system_notification(
+    monkeypatch: Any,
+) -> None:
+    now = datetime(2026, 8, 9, 10, 0, 0, tzinfo=UTC)
+    receipt = {
+        "preview": {
+            "source_id": "catalyst-agenda:daily:2026-08-09:w3",
+            "title": "催化事项 · 未来 3 天",
+        },
+        "notification_id": "notification_001",
+        "status": "PENDING",
+    }
+    summary_service = _AgendaSummaryService(
+        preview=receipt["preview"],
+        receipt=receipt,
+    )
+    container = _AgendaContainer(summary_service=summary_service, now=now)
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        response = await client.post(
+            "/api/agenda/summary-send",
+            json={"window_days": 3},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["notification_id"] == "notification_001"
+    assert payload["status"] == "PENDING"
+    assert payload["preview"]["source_id"] == "catalyst-agenda:daily:2026-08-09:w3"
+    assert summary_service.enqueue_windows == [3]
+
+
+@pytest.mark.asyncio
 async def test_console_starts_one_safe_schwab_oauth_flow(monkeypatch: Any) -> None:
     manager = _OAuthManager()
     monkeypatch.setattr(
@@ -453,8 +966,9 @@ async def test_console_starts_one_safe_schwab_oauth_flow(monkeypatch: Any) -> No
 
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
+        console_headers = await _console_headers(client)
         before = await client.get("/api/schwab/oauth")
         started = await client.post(
             "/api/actions/run",
@@ -462,6 +976,7 @@ async def test_console_starts_one_safe_schwab_oauth_flow(monkeypatch: Any) -> No
                 "action": "schwab_oauth_renew",
                 "confirmation": "schwab_oauth_renew",
             },
+            headers=console_headers,
         )
         await asyncio.sleep(0.05)
         after = await client.get("/api/schwab/oauth")
@@ -503,14 +1018,16 @@ async def test_console_requires_confirmation_after_failed_schwab_flow(
 
     async with (
         console_api._lifespan(console_api.app),
-        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
+        console_headers = await _console_headers(client)
         rejected = await client.post(
             "/api/actions/run",
             json={
                 "action": "schwab_oauth_renew",
                 "confirmation": "schwab_oauth_renew",
             },
+            headers=console_headers,
         )
         confirmed = await client.post(
             "/api/actions/run",
@@ -518,6 +1035,7 @@ async def test_console_requires_confirmation_after_failed_schwab_flow(
                 "action": "schwab_oauth_renew_confirmed",
                 "confirmation": "schwab_oauth_renew_confirmed",
             },
+            headers=console_headers,
         )
         await asyncio.sleep(0.05)
 

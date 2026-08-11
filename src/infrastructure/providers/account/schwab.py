@@ -1,7 +1,7 @@
-"""Charles Schwab read-only account and transaction adapter.
+"""Charles Schwab account facts plus an isolated live-order adapter.
 
-Only the authenticated schwab-py session is used. This module deliberately has
-no order, replace, cancel, or generic request surface.
+Only the authenticated schwab-py session is used. The account adapter remains
+GET-only; live writes use a separate closed adapter with no generic request escape.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Protocol, cast
@@ -29,6 +29,8 @@ from domain.common.enums import (
     VendorId,
 )
 from domain.common.errors import (
+    BrokerOrderRejected,
+    BrokerOrderSubmissionUncertain,
     DataContractError,
     ProviderAuthenticationError,
     ProviderNotConfigured,
@@ -38,15 +40,24 @@ from domain.common.errors import (
 )
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
-from domain.common.values import build_instrument_id
+from domain.common.values import build_instrument_id, parse_instrument_id
+from domain.execution.models import (
+    BrokerExecutionAccountState,
+    BrokerOrderStatusObservation,
+    BrokerOrderSubmission,
+    BrokerQuoteObservation,
+)
 from domain.portfolio.enums import (
     AccountEnvironment,
+    AccountOpenOrderSide,
+    AccountOpenOrderStatus,
     AccountPositionSide,
     AccountTransactionKind,
     AccountTransactionSide,
 )
 from domain.portfolio.models import (
     AccountActivityBatch,
+    AccountOpenOrder,
     AccountPosition,
     AccountSnapshot,
     AccountTransaction,
@@ -56,13 +67,43 @@ from infrastructure.system.clock import SystemClock
 
 _BASE_URL = "https://api.schwabapi.com"
 
+_ACTIVE_ORDER_STATUSES = frozenset(
+    {
+        "ACCEPTED",
+        "AWAITING_CONDITION",
+        "AWAITING_MANUAL_REVIEW",
+        "AWAITING_PARENT_ORDER",
+        "AWAITING_STOP_CONDITION",
+        "AWAITING_UR_OUT",
+        "NEW",
+        "PENDING_ACTIVATION",
+        "PENDING_CANCEL",
+        "PENDING_REPLACE",
+        "QUEUED",
+        "WORKING",
+    }
+)
+
 
 class SchwabReadClient(Protocol):
     """Smallest authenticated Schwab surface allowed inside Trading Partner."""
 
     def account_numbers(self) -> object: ...
     def accounts_with_positions(self) -> object: ...
+    def orders(self, account_hash: str, start: datetime, end: datetime) -> object: ...
+    def quote(self, symbol: str) -> object: ...
     def transactions(self, account_hash: str, start: datetime, end: datetime) -> object: ...
+
+
+class SchwabOrderClient(Protocol):
+    """Exact authenticated calls required by the live-order adapter."""
+
+    def account_numbers(self) -> object: ...
+    def accounts_with_positions(self) -> object: ...
+    def orders(self, account_hash: str, start: datetime, end: datetime) -> object: ...
+    def place_order(self, account_hash: str, payload: Mapping[str, object]) -> str: ...
+    def get_order(self, account_hash: str, broker_order_id: str) -> object: ...
+    def cancel_order(self, account_hash: str, broker_order_id: str) -> None: ...
 
 
 class SchwabPyReadClient:
@@ -103,6 +144,22 @@ class SchwabPyReadClient:
     def accounts_with_positions(self) -> object:
         return self._get("/trader/v1/accounts", params={"fields": "positions"})
 
+    def orders(self, account_hash: str, start: datetime, end: datetime) -> object:
+        return self._get(
+            f"/trader/v1/accounts/{account_hash}/orders",
+            params={
+                "fromEnteredTime": start.isoformat(),
+                "toEnteredTime": end.isoformat(),
+                "maxResults": "3000",
+            },
+        )
+
+    def quote(self, symbol: str) -> object:
+        return self._get(
+            "/marketdata/v1/quotes",
+            params={"symbols": symbol, "fields": "quote,reference"},
+        )
+
     def transactions(self, account_hash: str, start: datetime, end: datetime) -> object:
         return self._get(
             f"/trader/v1/accounts/{account_hash}/transactions",
@@ -129,7 +186,388 @@ class SchwabPyReadClient:
             raise DataContractError("Schwab response is not valid JSON") from None
 
 
+class SchwabPyOrderClient:
+    """schwab-py authenticated session with only named order endpoints."""
+
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        redirect_uri: str,
+        token_path: Path,
+    ) -> None:
+        del redirect_uri
+        logging.getLogger("schwab.auth").disabled = True
+        if not token_path.is_file():
+            raise ProviderAuthenticationError(
+                "Schwab OAuth token is missing; run the dedicated project OAuth setup"
+            )
+        try:
+            from schwab.auth import client_from_token_file
+        except ImportError:
+            raise ProviderNotConfigured("schwab-py is unavailable") from None
+        try:
+            self._client = client_from_token_file(str(token_path), client_id, client_secret)
+        except Exception:
+            raise ProviderAuthenticationError("Schwab OAuth client initialization failed") from None
+
+    def account_numbers(self) -> object:
+        return self._read("/trader/v1/accounts/accountNumbers")
+
+    def accounts_with_positions(self) -> object:
+        return self._read("/trader/v1/accounts", params={"fields": "positions"})
+
+    def orders(self, account_hash: str, start: datetime, end: datetime) -> object:
+        return self._read(
+            f"/trader/v1/accounts/{account_hash}/orders",
+            params={
+                "fromEnteredTime": start.isoformat(),
+                "toEnteredTime": end.isoformat(),
+                "maxResults": "3000",
+            },
+        )
+
+    def place_order(self, account_hash: str, payload: Mapping[str, object]) -> str:
+        response = self._write(
+            "POST", f"/trader/v1/accounts/{account_hash}/orders", json_body=payload
+        )
+        headers = getattr(response, "headers", {})
+        location = headers.get("Location") or headers.get("location")
+        order_id = location.rstrip("/").rsplit("/", 1)[-1] if isinstance(location, str) else ""
+        if not order_id:
+            raise BrokerOrderSubmissionUncertain(
+                "Schwab accepted an order response without a usable order identifier"
+            )
+        return order_id
+
+    def get_order(self, account_hash: str, broker_order_id: str) -> object:
+        return self._read(f"/trader/v1/accounts/{account_hash}/orders/{broker_order_id}")
+
+    def cancel_order(self, account_hash: str, broker_order_id: str) -> None:
+        self._write("DELETE", f"/trader/v1/accounts/{account_hash}/orders/{broker_order_id}")
+
+    def _read(self, path: str, *, params: Mapping[str, str] | None = None) -> object:
+        try:
+            response = self._client.session.request(
+                "GET", f"{_BASE_URL}{path}", params=dict(params or {}) or None
+            )
+        except Exception:
+            raise ProviderUnavailableError("Schwab read request failed") from None
+        status = int(getattr(response, "status_code", 0))
+        if status in {401, 403}:
+            raise ProviderAuthenticationError("Schwab authentication or authorization failed")
+        if status == 429:
+            raise ProviderRateLimitError("Schwab rate limit exceeded")
+        if status < 200 or status >= 300:
+            raise ProviderUnavailableError("Schwab read request returned an HTTP failure")
+        try:
+            return response.json()
+        except Exception:
+            raise DataContractError("Schwab response is not valid JSON") from None
+
+    def _write(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, object] | None = None,
+    ) -> object:
+        try:
+            response = self._client.session.request(
+                method,
+                f"{_BASE_URL}{path}",
+                json=dict(json_body) if json_body is not None else None,
+            )
+        except Exception:
+            raise BrokerOrderSubmissionUncertain(
+                "Schwab order write response was not received"
+            ) from None
+        status = int(getattr(response, "status_code", 0))
+        if 200 <= status < 300:
+            return response
+        if status in {401, 403}:
+            raise ProviderAuthenticationError(
+                "Schwab authentication or trading authorization failed"
+            )
+        if status == 429:
+            raise BrokerOrderRejected(
+                "Schwab rejected the order write due to rate limiting",
+                details={"http_status": status},
+                code="SCHWAB_ORDER_RATE_LIMITED",
+            )
+        if 400 <= status < 500:
+            raise BrokerOrderRejected(
+                "Schwab rejected the order request",
+                details={"http_status": status},
+                code="SCHWAB_ORDER_REJECTED",
+            )
+        raise BrokerOrderSubmissionUncertain(
+            "Schwab order write returned an uncertain server response",
+            details={"http_status": status},
+        )
+
+
 ReadClientFactory = Callable[[], SchwabReadClient]
+OrderClientFactory = Callable[[], SchwabOrderClient]
+
+
+class SchwabBrokerQuoteAdapter:
+    """Read one Schwab bid/ask snapshot for an auditable order preview."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        client_id: str | None,
+        client_secret: str | None,
+        redirect_uri: str,
+        token_path: Path,
+        client_factory: ReadClientFactory | None = None,
+    ) -> None:
+        self._enabled = enabled
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._redirect_uri = redirect_uri
+        self._token_path = token_path
+        self._client_factory = client_factory
+
+    def is_configured(self) -> bool:
+        return bool(
+            self._enabled
+            and self._client_id
+            and self._client_secret
+            and (self._client_factory is not None or self._token_path.is_file())
+        )
+
+    def _client(self) -> SchwabReadClient:
+        if self._client_factory is not None:
+            return self._client_factory()
+        if not self.is_configured():
+            raise ProviderNotConfigured("Schwab broker quote is not configured")
+        assert self._client_id is not None and self._client_secret is not None
+        return SchwabPyReadClient(
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            redirect_uri=self._redirect_uri,
+            token_path=self._token_path,
+        )
+
+    async def get_quote(self, *, instrument_id: str, as_of: datetime) -> BrokerQuoteObservation:
+        require_aware_datetime(as_of, field_name="as_of")
+        asset_type, market, symbol = parse_instrument_id(instrument_id)
+        if market is not Market.US or asset_type not in {AssetType.EQUITY, AssetType.ETF}:
+            raise DataContractError("Schwab broker quote requires a US equity or ETF")
+        try:
+            payload = await asyncio.to_thread(self._client().quote, symbol)
+            root = _mapping(payload, "quote response")
+            row = _mapping(root.get(symbol) or root.get(symbol.upper()), "quote instrument")
+            quote = _mapping(row.get("quote"), "quote")
+            quote_millis = quote.get("quoteTime") or quote.get("tradeTime")
+            if not isinstance(quote_millis, int | float):
+                raise DataContractError("Schwab quote timestamp is missing")
+            quote_at = datetime.fromtimestamp(float(quote_millis) / 1000, tz=UTC)
+            if quote_at > as_of:
+                raise DataContractError("Schwab quote timestamp exceeds as_of")
+            return BrokerQuoteObservation(
+                instrument_id=instrument_id,
+                symbol=symbol,
+                quote_at=quote_at,
+                bid=_decimal(quote.get("bidPrice")),
+                ask=_decimal(quote.get("askPrice")),
+                last=_decimal(quote.get("lastPrice")),
+                source=VendorId.SCHWAB.value,
+            )
+        except TradingPartnerError:
+            raise
+        except Exception:
+            raise ProviderUnavailableError(
+                "Schwab broker quote read failed",
+                details={"vendor": VendorId.SCHWAB.value, "operation": "broker_quote"},
+                code="SCHWAB_BROKER_QUOTE_UNAVAILABLE",
+            ) from None
+
+
+class SchwabOrderExecutionAdapter:
+    """Closed live-order adapter for configured REAL Schwab accounts."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        client_id: str | None,
+        client_secret: str | None,
+        redirect_uri: str,
+        token_path: Path,
+        account_hashes: Sequence[str],
+        clock: Clock | None = None,
+        client_factory: OrderClientFactory | None = None,
+    ) -> None:
+        self._enabled = enabled
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._redirect_uri = redirect_uri
+        self._token_path = token_path
+        self._account_hashes = frozenset(item.strip() for item in account_hashes if item.strip())
+        self._clock = clock or SystemClock()
+        self._client_factory = client_factory
+
+    def is_configured(self) -> bool:
+        return bool(
+            self._enabled
+            and self._client_id
+            and self._client_secret
+            and self._account_hashes
+            and (self._client_factory is not None or self._token_path.is_file())
+        )
+
+    def _client(self) -> SchwabOrderClient:
+        if self._client_factory is not None:
+            return self._client_factory()
+        if not self.is_configured():
+            raise ProviderNotConfigured("Schwab live order execution is not configured")
+        assert self._client_id is not None and self._client_secret is not None
+        return SchwabPyOrderClient(
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            redirect_uri=self._redirect_uri,
+            token_path=self._token_path,
+        )
+
+    async def get_account_state(
+        self, *, account_ref: str, observed_at: datetime
+    ) -> BrokerExecutionAccountState:
+        require_aware_datetime(observed_at, field_name="observed_at")
+        return await asyncio.to_thread(self._read_account_state, account_ref, observed_at)
+
+    async def place_order(
+        self, *, account_ref: str, order_payload: Mapping[str, object]
+    ) -> BrokerOrderSubmission:
+        client = self._client()
+        _, account_hash = self._resolve_account(client, account_ref)
+        broker_order_id = await asyncio.to_thread(client.place_order, account_hash, order_payload)
+        return BrokerOrderSubmission(
+            broker_order_id=broker_order_id,
+            submitted_at=self._clock.now(),
+            http_status=201,
+        )
+
+    async def get_order(
+        self, *, account_ref: str, broker_order_id: str, observed_at: datetime
+    ) -> BrokerOrderStatusObservation:
+        require_aware_datetime(observed_at, field_name="observed_at")
+        client = self._client()
+        _, account_hash = self._resolve_account(client, account_ref)
+        payload = await asyncio.to_thread(client.get_order, account_hash, broker_order_id)
+        row = _mapping(payload, "order")
+        quantity = _decimal(row.get("quantity")) or Decimal(0)
+        filled = _decimal(row.get("filledQuantity")) or Decimal(0)
+        return BrokerOrderStatusObservation(
+            broker_order_id=broker_order_id,
+            observed_at=observed_at,
+            status=(_text(row.get("status")) or "UNKNOWN").upper(),
+            filled_quantity=filled,
+            remaining_quantity=max(Decimal(0), quantity - filled),
+            average_fill_price=self._average_fill_price(row),
+        )
+
+    async def cancel_order(self, *, account_ref: str, broker_order_id: str) -> None:
+        client = self._client()
+        _, account_hash = self._resolve_account(client, account_ref)
+        await asyncio.to_thread(client.cancel_order, account_hash, broker_order_id)
+
+    def _read_account_state(
+        self, account_ref: str, observed_at: datetime
+    ) -> BrokerExecutionAccountState:
+        client = self._client()
+        account_number, account_hash = self._resolve_account(client, account_ref)
+        account_row: Mapping[str, object] | None = None
+        for raw in _sequence(client.accounts_with_positions(), "accounts"):
+            candidate = _mapping(
+                _mapping(raw, "account").get("securitiesAccount"),
+                "securitiesAccount",
+            )
+            if _text(candidate.get("accountNumber")) == account_number:
+                account_row = candidate
+                break
+        if account_row is None:
+            raise DataContractError("Schwab execution account was not returned")
+        balances = _mapping(account_row.get("currentBalances") or {}, "current balances")
+        positions: dict[str, Decimal] = {}
+        for raw in _sequence(account_row.get("positions") or [], "positions"):
+            position = _mapping(raw, "position")
+            instrument = _mapping(position.get("instrument"), "position instrument")
+            symbol = _text(instrument.get("symbol"))
+            if symbol is None:
+                continue
+            long_quantity = _decimal(position.get("longQuantity")) or Decimal(0)
+            short_quantity = _decimal(position.get("shortQuantity")) or Decimal(0)
+            positions[symbol.upper()] = long_quantity - short_quantity
+
+        reserve = Decimal(0)
+        reserve_complete = True
+        rows = _sequence(
+            client.orders(account_hash, observed_at - timedelta(days=60), observed_at),
+            "orders",
+        )
+        for raw in rows:
+            order = _mapping(raw, "order")
+            if (_text(order.get("status")) or "").upper() not in _ACTIVE_ORDER_STATUSES:
+                continue
+            legs = _sequence(order.get("orderLegCollection") or [], "order legs")
+            if not any(
+                (_text(_mapping(leg, "order leg").get("instruction")) or "").upper()
+                in {"BUY", "BUY_TO_COVER"}
+                for leg in legs
+            ):
+                continue
+            limit_price = _decimal(order.get("price"))
+            quantity = _decimal(order.get("quantity")) or Decimal(0)
+            filled = _decimal(order.get("filledQuantity")) or Decimal(0)
+            if limit_price is None:
+                reserve_complete = False
+                continue
+            reserve += max(Decimal(0), quantity - filled) * limit_price
+        return BrokerExecutionAccountState(
+            account_ref=account_ref,
+            observed_at=observed_at,
+            cash_balance=_decimal(balances.get("cashBalance")),
+            margin_balance=_decimal(balances.get("marginBalance")),
+            open_buy_order_reserve=reserve if reserve_complete else None,
+            positions=positions,
+        )
+
+    def _resolve_account(self, client: SchwabOrderClient, account_ref: str) -> tuple[str, str]:
+        for raw in _sequence(client.account_numbers(), "account numbers"):
+            row = _mapping(raw, "account number")
+            number = _text(row.get("accountNumber"))
+            account_hash = _text(row.get("hashValue"))
+            if (
+                number is not None
+                and account_hash is not None
+                and account_hash in self._account_hashes
+                and _stable_ref("account", account_hash, prefix="schwab_") == account_ref
+            ):
+                return number, account_hash
+        raise DataContractError("Schwab account_ref is not configured for live orders")
+
+    @staticmethod
+    def _average_fill_price(order: Mapping[str, object]) -> Decimal | None:
+        total_quantity = Decimal(0)
+        total_notional = Decimal(0)
+        for raw_activity in _sequence(
+            order.get("orderActivityCollection") or [], "order activities"
+        ):
+            activity = _mapping(raw_activity, "order activity")
+            for raw_leg in _sequence(activity.get("executionLegs") or [], "execution legs"):
+                leg = _mapping(raw_leg, "execution leg")
+                quantity = _decimal(leg.get("quantity"))
+                price = _decimal(leg.get("price"))
+                if quantity is None or price is None:
+                    continue
+                total_quantity += quantity
+                total_notional += quantity * price
+        return total_notional / total_quantity if total_quantity > 0 else None
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:
@@ -321,7 +759,6 @@ class SchwabAccountAdapter:
         base_warnings: set[str] = {
             "ACCOUNT_AS_OF_FETCH_TIME",
             "PRICE_TIME_UNAVAILABLE",
-            "SCHWAB_OPEN_ORDERS_NOT_INGESTED",
         }
         all_warnings = set(base_warnings)
         for raw in rows:
@@ -334,6 +771,7 @@ class SchwabAccountAdapter:
                 continue
             warnings = set(base_warnings)
             positions: list[AccountPosition] = []
+            instrument_ids_by_symbol: dict[str, str] = {}
             for raw_position in _sequence(account.get("positions") or [], "positions"):
                 position = _mapping(raw_position, "position")
                 instrument = _mapping(position.get("instrument"), "position instrument")
@@ -342,6 +780,9 @@ class SchwabAccountAdapter:
                     warnings.add("SCHWAB_UNSUPPORTED_ASSET_TYPE")
                     all_warnings.add("SCHWAB_UNSUPPORTED_ASSET_TYPE")
                     continue
+                symbol = _text(instrument.get("symbol"))
+                if symbol is not None:
+                    instrument_ids_by_symbol[symbol.upper()] = instrument_id
                 long_quantity = _decimal(position.get("longQuantity")) or Decimal(0)
                 short_quantity = _decimal(position.get("shortQuantity")) or Decimal(0)
                 if long_quantity > 0:
@@ -349,7 +790,27 @@ class SchwabAccountAdapter:
                 if short_quantity > 0:
                     positions.append(self._position(position, instrument_id, short_quantity, True))
             balances = _mapping(account.get("currentBalances") or {}, "current balances")
+            cash_balance = _decimal(balances.get("cashBalance"))
+            if cash_balance is None:
+                warnings.add("SCHWAB_CASH_BALANCE_UNAVAILABLE")
+                all_warnings.add("SCHWAB_CASH_BALANCE_UNAVAILABLE")
             account_hash = hashes[number]
+            open_orders: tuple[AccountOpenOrder, ...]
+            try:
+                order_rows = _sequence(
+                    client.orders(account_hash, fetched_at - timedelta(days=60), fetched_at),
+                    "orders",
+                )
+                open_orders = self._open_orders(
+                    order_rows,
+                    instrument_ids_by_symbol=instrument_ids_by_symbol,
+                    warnings=warnings,
+                )
+            except TradingPartnerError:
+                warnings.add("SCHWAB_OPEN_ORDERS_UNAVAILABLE")
+                all_warnings.add("SCHWAB_OPEN_ORDERS_UNAVAILABLE")
+                open_orders = ()
+            all_warnings.update(warnings)
             warning_codes = tuple(sorted(warnings))
             snapshots.append(
                 AccountSnapshot(
@@ -360,14 +821,14 @@ class SchwabAccountAdapter:
                     base_currency="USD",
                     account_as_of=fetched_at,
                     fetched_at=fetched_at,
-                    cash=_decimal(balances.get("cashBalance") or balances.get("totalCash")),
+                    cash=cash_balance,
                     buying_power=_decimal(balances.get("buyingPower")),
                     net_assets=_decimal(balances.get("liquidationValue")),
                     margin_used=abs(value)
                     if (value := _decimal(balances.get("marginBalance"))) is not None
                     else None,
                     positions=tuple(positions),
-                    open_orders=(),
+                    open_orders=open_orders,
                     degraded=True,
                     warning_codes=warning_codes,
                 )
@@ -375,6 +836,79 @@ class SchwabAccountAdapter:
         return ProviderSuccess(
             tuple(snapshots), self._meta(fetched_at, tuple(sorted(all_warnings)))
         )
+
+    @staticmethod
+    def _open_orders(
+        rows: Sequence[object],
+        *,
+        instrument_ids_by_symbol: Mapping[str, str],
+        warnings: set[str],
+    ) -> tuple[AccountOpenOrder, ...]:
+        values: list[AccountOpenOrder] = []
+        for raw in rows:
+            row = _mapping(raw, "order")
+            upstream_status = (_text(row.get("status")) or "").upper()
+            if upstream_status not in _ACTIVE_ORDER_STATUSES:
+                continue
+            raw_order_id = row.get("orderId")
+            provider_order_id = (
+                str(raw_order_id)
+                if isinstance(raw_order_id, int | str) and str(raw_order_id).strip()
+                else None
+            )
+            if provider_order_id is None:
+                warnings.add("SCHWAB_OPEN_ORDER_ID_UNAVAILABLE")
+                continue
+            legs = _sequence(row.get("orderLegCollection") or [], "order legs")
+            if len(legs) != 1:
+                warnings.add("SCHWAB_COMPLEX_OPEN_ORDER_NOT_INGESTED")
+                continue
+            leg = _mapping(legs[0], "order leg")
+            instrument = _mapping(leg.get("instrument"), "order instrument")
+            symbol = _text(instrument.get("symbol"))
+            instrument_id = (
+                instrument_ids_by_symbol.get(symbol.upper()) if symbol is not None else None
+            ) or _instrument_id(instrument)
+            if instrument_id is None:
+                warnings.add("SCHWAB_UNSUPPORTED_OPEN_ORDER_ASSET_TYPE")
+                continue
+            instruction = (_text(leg.get("instruction")) or "").upper()
+            if instruction.startswith("BUY"):
+                side = AccountOpenOrderSide.BUY
+            elif instruction.startswith("SELL"):
+                side = AccountOpenOrderSide.SELL
+            else:
+                warnings.add("SCHWAB_UNSUPPORTED_OPEN_ORDER_INSTRUCTION")
+                continue
+            quantity = _decimal(row.get("quantity") or leg.get("quantity"))
+            filled_quantity = _decimal(row.get("filledQuantity")) or Decimal(0)
+            if quantity is None or quantity <= 0 or filled_quantity > quantity:
+                warnings.add("SCHWAB_INVALID_OPEN_ORDER_QUANTITY")
+                continue
+            submitted_at = None
+            entered_time = row.get("enteredTime")
+            if entered_time is not None:
+                try:
+                    submitted_at = _aware_datetime(entered_time, "order enteredTime")
+                except DataContractError:
+                    warnings.add("SCHWAB_OPEN_ORDER_TIME_UNAVAILABLE")
+            values.append(
+                AccountOpenOrder(
+                    provider_order_id=provider_order_id,
+                    instrument_id=instrument_id,
+                    side=side,
+                    status=(
+                        AccountOpenOrderStatus.PARTIAL
+                        if filled_quantity > 0
+                        else AccountOpenOrderStatus.PENDING
+                    ),
+                    quantity=quantity,
+                    filled_quantity=filled_quantity,
+                    limit_price=_decimal(row.get("price")),
+                    submitted_at=submitted_at,
+                )
+            )
+        return tuple(values)
 
     @staticmethod
     def _position(

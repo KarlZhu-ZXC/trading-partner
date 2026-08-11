@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from application.services.post_market_sync_service import PostMarketSyncService
+from application.services.sgov_shadow_plan_service import SgovShadowPlanService
 from application.services.watchlist_hub_service import WatchlistHubService
 from bootstrap import (
     ApplicationContainer,
@@ -167,6 +168,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert container.services.monitoring is not None
         assert isinstance(container.services.watchlist, WatchlistHubService)
         assert isinstance(container.operations.post_market_sync, PostMarketSyncService)
+        assert isinstance(container.operations.sgov_shadow_plan, SgovShadowPlanService)
         assert isinstance(
             container.operations.post_market_sync._calendar,  # type: ignore[attr-defined]
             XnysMarketSessionCalendar,
@@ -189,7 +191,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert VendorId.BROKER not in registered
         # Fresh unmigrated SQLite → schema not ready (in-memory state path).
         assert provider_state_schema_ready(container.resources.database.engine) is False
-        assert len(PUBLIC_TOOL_NAMES) == 28
+        assert len(PUBLIC_TOOL_NAMES) == 27
     finally:
         container.close()
 
@@ -498,28 +500,8 @@ def test_e5b_overrides_clock_identity(test_settings: AppSettings) -> None:
         container.close()
 
 
-def test_import_bootstrap_has_no_side_effects(tmp_path: Path) -> None:
+def test_editable_imports_resolve_from_src_without_bootstrap_side_effects(tmp_path: Path) -> None:
     database_path = tmp_path / "must-not-exist.db"
-    env = {
-        **os.environ,
-        "DATABASE_URL": f"sqlite:///{database_path}",
-    }
-    # Drop pytest/pythonpath overrides so this mirrors plain `uv run python`.
-    env.pop("PYTHONPATH", None)
-    result = subprocess.run(
-        [sys.executable, "-c", "import bootstrap"],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert not database_path.exists()
-
-
-def test_editable_imports_resolve_from_project_src() -> None:
-    """Subprocess (no PYTHONPATH) must load all five top-level packages from src/."""
     expected = {
         "bootstrap": str((PROJECT_ROOT / "src" / "bootstrap.py").resolve()),
         **{
@@ -540,7 +522,6 @@ mods = {{
 expected = {expected!r}
 for name, mod in mods.items():
     got = str(Path(mod.__file__).resolve())
-    print(f"{{name}}={{got}}")
     assert got == expected[name], (name, got, expected[name])
 fields = getattr(bootstrap.ApplicationContainer, "__dataclass_fields__", {{}})
 assert set(fields) == {{"settings", "context", "resources", "providers", "services", "operations"}}
@@ -548,10 +529,15 @@ assert hasattr(bootstrap, "build_application")
 assert hasattr(bootstrap, "BootstrapOverrides")
 print("OK")
 """
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env = {
+        **os.environ,
+        "DATABASE_URL": f"sqlite:///{database_path}",
+    }
+    # Drop pytest/pythonpath overrides so this mirrors plain `uv run python`.
+    env.pop("PYTHONPATH", None)
     result = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=str(PROJECT_ROOT),
+        cwd=tmp_path,
         env=env,
         capture_output=True,
         text=True,
@@ -559,6 +545,7 @@ print("OK")
     )
     assert result.returncode == 0, f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
     assert "OK" in result.stdout
+    assert not database_path.exists()
 
 
 def test_package_scripts_register_post_market_and_watchlist_cli() -> None:
@@ -572,6 +559,10 @@ def test_package_scripts_register_post_market_and_watchlist_cli() -> None:
     }
     assert scripts["trading-partner-mcp"] == "interfaces.mcp.server:main"
     assert scripts["trading-partner-post-market-sync"] == "interfaces.cli.post_market_sync:main"
+    assert scripts["trading-partner-sgov-plan"] == "interfaces.cli.sgov_shadow_plan:main"
+    assert scripts["trading-partner-sgov-plan-scheduler"] == (
+        "interfaces.cli.sgov_shadow_scheduler:main"
+    )
     assert scripts["trading-partner-account-transactions"] == (
         "interfaces.cli.account_transactions:main"
     )
@@ -580,6 +571,8 @@ def test_package_scripts_register_post_market_and_watchlist_cli() -> None:
     # Resolve load targets without invoking side-effecting main() bodies.
     for name in (
         "trading-partner-post-market-sync",
+        "trading-partner-sgov-plan",
+        "trading-partner-sgov-plan-scheduler",
         "trading-partner-account-transactions",
         "trading-partner-watchlist-sync",
         "trading-partner-futures-sync",

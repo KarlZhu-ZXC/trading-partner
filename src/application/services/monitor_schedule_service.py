@@ -8,6 +8,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from application.ports.market_session_calendar import MarketSessionCalendar
+from domain.common.enums import Market
 from domain.cross_asset.weekend_gold_hours import ig_weekend_gold_window
 from domain.monitoring.enums import MonitorCadence, MonitorRuleType, MonitorRunStatus
 from domain.monitoring.models import MonitorDefinition, MonitorRun
@@ -47,6 +48,20 @@ class MonitorScheduleService:
         self._post_market_delay = timedelta(minutes=post_market_delay_minutes)
         self._weekend_rwa_proxy_enabled = bool(weekend_rwa_proxy_enabled)
         self._ig_weekend_gold_enabled = bool(ig_weekend_gold_enabled)
+
+    @property
+    def session_calendars(self) -> dict[Market, MarketSessionCalendar]:
+        """Calendars shared by scheduling and daily-fact freshness policy."""
+
+        return {
+            market: calendar
+            for market, calendar in (
+                (Market.US, self._us_calendar),
+                (Market.A_SHARE, self._a_share_calendar),
+                (Market.KR, self._kr_calendar),
+            )
+            if calendar is not None
+        }
 
     def status(
         self,

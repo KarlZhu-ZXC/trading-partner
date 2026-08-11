@@ -20,6 +20,7 @@ from infrastructure.persistence.repositories import (
     SqlAlchemyEvidenceRepository,
     SqlAlchemyInvalidationConditionRepository,
     SqlAlchemyJournalRepository,
+    SqlAlchemyMonitorLifecycleReader,
     SqlAlchemyOpenQuestionRepository,
     SqlAlchemyResearchEventRepository,
     SqlAlchemyResearchReportRepository,
@@ -67,6 +68,7 @@ class SqlAlchemyResearchUnitOfWork:
         self._search_index: SqlAlchemyResearchSearchIndex | None = None
         self._audit: SqlAlchemySessionAuditLogWriter | None = None
         self._trade_plans: SqlAlchemyTradePlanRepository | None = None
+        self._monitor_lifecycle: SqlAlchemyMonitorLifecycleReader | None = None
         register_append_only_listeners()
 
     def __enter__(self) -> SqlAlchemyResearchUnitOfWork:
@@ -102,6 +104,7 @@ class SqlAlchemyResearchUnitOfWork:
             self._secret_redactor,
         )
         self._trade_plans = SqlAlchemyTradePlanRepository(session)
+        self._monitor_lifecycle = SqlAlchemyMonitorLifecycleReader(session)
         return self
 
     def __exit__(
@@ -135,6 +138,7 @@ class SqlAlchemyResearchUnitOfWork:
             self._search_index = None
             self._audit = None
             self._trade_plans = None
+            self._monitor_lifecycle = None
 
     def _require_session(self) -> Session:
         if self._session is None:
@@ -242,6 +246,12 @@ class SqlAlchemyResearchUnitOfWork:
         self._require_session()
         assert self._trade_plans is not None
         return self._trade_plans
+
+    @property
+    def monitor_lifecycle(self) -> SqlAlchemyMonitorLifecycleReader:
+        self._require_session()
+        assert self._monitor_lifecycle is not None
+        return self._monitor_lifecycle
 
     @property
     def audit(self) -> SqlAlchemySessionAuditLogWriter:

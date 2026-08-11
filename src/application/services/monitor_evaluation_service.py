@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -15,6 +16,7 @@ from application.dto.risk import RiskCheckInput
 from application.dto.us_market import MarketGetSnapshotInput, USQuoteDTO
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
+from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
 from application.ports.monitor_repository import MonitorRepository
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.market_tool_coordinator import MarketToolCoordinator
@@ -22,7 +24,7 @@ from application.services.monitor_fact_resolver import MonitorFactResolver
 from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from domain.common.diagnostics import ProviderFailureDiagnostic
-from domain.common.enums import Market
+from domain.common.enums import AssetType, Market
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 from domain.common.values import parse_instrument_id
@@ -140,6 +142,16 @@ _POST_MARKET_CADENCES = frozenset(
 )
 
 
+def _latest_completed_session(
+    calendar: MarketSessionCalendar,
+    moment: datetime,
+) -> MarketSession | None:
+    session = calendar.session_on_or_before(moment)
+    if session is not None and session.close_at > moment:
+        return calendar.previous_session(session.session_date)
+    return session
+
+
 class MonitorEvaluationService:
     def __init__(
         self,
@@ -151,6 +163,7 @@ class MonitorEvaluationService:
         id_generator: IdGenerator,
         fact_resolver: MonitorFactResolver | None = None,
         judgment_service: MonitorJudgmentService | None = None,
+        session_calendars: Mapping[Market, MarketSessionCalendar] | None = None,
     ) -> None:
         self._repository = repository
         self._a_share = a_share
@@ -160,6 +173,7 @@ class MonitorEvaluationService:
         self._ids = id_generator
         self._fact_resolver = fact_resolver
         self._judgment_service = judgment_service
+        self._session_calendars = dict(session_calendars or {})
 
     async def evaluate(self, request: MonitorEvaluateInput) -> MonitorRun:
         started_at = self._clock.now()
@@ -181,9 +195,11 @@ class MonitorEvaluationService:
         rules_evaluated = 0
         previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] = {}
         monitor_sources_by_monitor: dict[str, tuple[str, ...]] = {}
+        judgment_degradation_by_monitor: dict[str, NotificationMessage] = {}
 
         for monitor in monitors:
             monitor_events: list[MonitorEvent] = []
+            judgment_notification: NotificationMessage | None = None
             monitor_observations: list[MonitorRunObservation] = []
             monitor_sources: list[str] = []
             previous = {
@@ -243,13 +259,14 @@ class MonitorEvaluationService:
                                 resolved.closed_session_last_known,
                             )
                         generic_cache[cache_key] = fact
-                warnings.extend(fact.warning_codes)
-                errors.extend(fact.error_codes)
-                monitor_sources.extend(fact.source_names)
                 # A live Provider request can finish after the run's request
                 # timestamp. Judge freshness at the actual evaluation moment;
                 # explicit historical ``as_of`` requests remain strict cutoffs.
                 evaluated_at = as_of if request.as_of is not None else self._clock.now()
+                fact = self._apply_session_aware_freshness(rule, fact, evaluated_at)
+                warnings.extend(fact.warning_codes)
+                errors.extend(fact.error_codes)
+                monitor_sources.extend(fact.source_names)
                 state = self._evaluate_rule(
                     monitor,
                     rule,
@@ -293,11 +310,15 @@ class MonitorEvaluationService:
                         events.append(judgment_result.event)
                         monitor_events.append(judgment_result.event)
                     if judgment_result.notification is not None:
-                        notifications.append(judgment_result.notification)
+                        judgment_notification = judgment_result.notification
+                        if judgment_result.judgment.status == "FAILED":
+                            judgment_degradation_by_monitor[monitor.monitor_id] = (
+                                judgment_result.notification
+                            )
             # Post-market runs persist each transition event for the durable
             # event history, but their Telegram delivery is consolidated into
-            # one run-linked digest below. Other cadences retain one
-            # event-linked notification per transition event.
+            # one run-linked digest below. Other cadences batch all transitions
+            # for the Monitor into one event-linked notification.
             deterministic_events = tuple(
                 item for item in monitor_events if item.rule_code != "COMPOSITE_JUDGMENT"
             )
@@ -305,20 +326,53 @@ class MonitorEvaluationService:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
                 )
-                notifications.extend(
-                    _notification_messages(
-                        monitor,
-                        deterministic_events,
-                        tuple(monitor_observations),
-                        previous,
-                        tuple(dict.fromkeys(monitor_sources)),
-                        self._ids,
-                    )
+                deterministic_notifications = _notification_messages(
+                    monitor,
+                    deterministic_events,
+                    tuple(monitor_observations),
+                    previous,
+                    tuple(dict.fromkeys(monitor_sources)),
+                    self._ids,
                 )
+                if judgment_notification is not None:
+                    notifications.append(
+                        _append_judgment_notification(
+                            deterministic_notifications[0], judgment_notification
+                        )
+                    )
+                else:
+                    notifications.extend(deterministic_notifications)
             else:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
                 )
+                if judgment_notification is not None:
+                    is_degradation = (
+                        judgment_degradation_by_monitor.get(monitor.monitor_id)
+                        is judgment_notification
+                    )
+                    if is_degradation and request.cadence in _POST_MARKET_CADENCES:
+                        # Post-market delivery is consolidated into the one
+                        # run-linked digest below; do not enqueue a second card.
+                        pass
+                    elif is_degradation:
+                        snapshot = _notification_messages(
+                            monitor,
+                            (),
+                            tuple(monitor_observations),
+                            previous,
+                            tuple(dict.fromkeys(monitor_sources)),
+                            self._ids,
+                            source_id=judgment_notification.source_id,
+                            created_at=judgment_notification.created_at,
+                            event_label_override="复合判断不可用",
+                            emoji_override="⚠️",
+                        )[0]
+                        notifications.append(
+                            _append_judgment_notification(snapshot, judgment_notification)
+                        )
+                    else:
+                        notifications.append(judgment_notification)
 
         warning_codes = tuple(dict.fromkeys(warnings))
         error_codes = tuple(dict.fromkeys(errors))
@@ -366,6 +420,7 @@ class MonitorEvaluationService:
                     events=tuple(item for item in events if item.rule_code != "COMPOSITE_JUDGMENT"),
                     previous_states_by_monitor=previous_states_by_monitor,
                     monitor_sources_by_monitor=monitor_sources_by_monitor,
+                    judgment_notifications_by_monitor=judgment_degradation_by_monitor,
                 )
             )
         return self._repository.record_evaluation(
@@ -473,6 +528,56 @@ class MonitorEvaluationService:
                 diagnostics=_diagnostics_from_envelope(market_envelope),
             )
         return _Fact(None, None, (), ("MONITOR_UNSUPPORTED_MARKET",))
+
+    def _apply_session_aware_freshness(
+        self,
+        rule: MonitorRule,
+        fact: _Fact,
+        evaluated_at: datetime,
+    ) -> _Fact:
+        """Treat the latest completed daily session as current across closures."""
+
+        if not self._is_current_daily_technical_fact(rule, fact, evaluated_at):
+            return fact
+        return _Fact(
+            value=fact.value,
+            as_of=fact.as_of,
+            warning_codes=tuple(
+                code for code in fact.warning_codes if code != "TECHNICAL_DATA_NOT_FRESH"
+            ),
+            error_codes=fact.error_codes,
+            closed_session_last_known=True,
+            source_names=fact.source_names,
+            diagnostics=fact.diagnostics,
+        )
+
+    def _is_current_daily_technical_fact(
+        self,
+        rule: MonitorRule,
+        fact: _Fact,
+        evaluated_at: datetime,
+    ) -> bool:
+        if (
+            rule.fact_type is not TradePlanFactType.TECHNICAL
+            or (rule.technical_interval or "1d") != "1d"
+            or rule.instrument_id is None
+            or fact.as_of is None
+            or fact.as_of > evaluated_at
+        ):
+            return False
+        asset_type, market, _symbol = parse_instrument_id(rule.instrument_id)
+        if asset_type not in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}:
+            return False
+        calendar = self._session_calendars.get(market)
+        if calendar is None:
+            return False
+        expected = _latest_completed_session(calendar, evaluated_at)
+        observed = calendar.session_on_or_before(fact.as_of)
+        return (
+            expected is not None
+            and observed is not None
+            and observed.session_date >= expected.session_date
+        )
 
     async def _risk_fact(self, as_of: datetime) -> _Fact:
         envelope = await self._risk.check(RiskCheckInput(as_of=as_of))
@@ -705,18 +810,29 @@ def _notification_messages(
     previous_states: dict[str, MonitorRuleState],
     data_sources: tuple[str, ...],
     id_generator: IdGenerator,
+    *,
+    source_id: str | None = None,
+    created_at: datetime | None = None,
+    event_label_override: str | None = None,
+    emoji_override: str | None = None,
 ) -> tuple[NotificationMessage, ...]:
     event_types = {event.event_type for event in events}
-    emoji = (
+    emoji = emoji_override or (
         "🚨"
         if MonitorEventType.TRIGGERED in event_types
         else "⚠️"
         if MonitorEventType.NOT_EVALUATED in event_types
         else "✅"
     )
-    context = _notification_price_context(monitor, observations, previous_states)
     rules_by_code = {item.rule_code: item for item in monitor.rules}
+    context = _notification_price_context(monitor, observations, previous_states)
+    warning_codes = tuple(
+        dict.fromkeys(code for observation in observations for code in observation.warning_codes)
+    )
     lines = [monitor.name, f"标的：{context.symbol}", f"当前价格：{context.price}"]
+    proxy_basis = _weekend_proxy_price_basis(warning_codes)
+    if proxy_basis is not None:
+        lines.append(f"价格口径：{proxy_basis}")
     if not context.current_available and context.previous_price is not None:
         lines.append("价格口径：上一有效价格（当前不可用）")
     lines.append(f"价格时间：{context.price_time}")
@@ -735,9 +851,6 @@ def _notification_messages(
     for observation in observations:
         rule = rules_by_code[observation.rule_code]
         lines.append(_format_notification_rule_card(rule, observation))
-    warning_codes = tuple(
-        dict.fromkeys(code for observation in observations for code in observation.warning_codes)
-    )
     error_codes = tuple(
         dict.fromkeys(code for observation in observations for code in observation.error_codes)
     )
@@ -747,7 +860,9 @@ def _notification_messages(
     if error_codes:
         lines.append(f"数据原因：{', '.join(error_codes)}")
     elif not_evaluated:
-        causes = tuple(dict.fromkeys(item.message for item in not_evaluated))
+        causes = tuple(
+            dict.fromkeys(_notification_unavailable_cause(item) for item in not_evaluated)
+        )
         lines.append(f"数据原因：{'; '.join(_notification_text(item, 160) for item in causes)}")
     provenance_line, remaining_warning_codes = _notification_warning_lines(warning_codes)
     if provenance_line:
@@ -770,21 +885,83 @@ def _notification_messages(
         )
     if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
-    event_label = _notification_event_label(events, rules_by_code)
-    title = _notification_title(emoji, context.symbol, event_label)
+    event_label = event_label_override or _notification_event_label(events, rules_by_code)
+    title = _notification_title(
+        emoji,
+        _notification_event_symbol(events, rules_by_code, context.symbol),
+        event_label,
+    )
     body = "\n".join(lines)
-    return tuple(
+    first_event = events[0] if events else None
+    notification_source_id = source_id or (first_event.event_id if first_event else None)
+    notification_created_at = created_at or (first_event.created_at if first_event else None)
+    if notification_source_id is None or notification_created_at is None:
+        raise DataContractError("monitor notification requires an event or explicit source context")
+    return (
         NotificationMessage(
             notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
             source_type=NotificationSourceType.MONITOR_EVENT,
-            source_id=event.event_id,
+            source_id=notification_source_id,
             channel=NotificationChannel.TELEGRAM,
             title=title,
             body=body,
-            created_at=event.created_at,
-        )
-        for event in events
+            created_at=notification_created_at,
+        ),
     )
+
+
+def _append_judgment_notification(
+    base: NotificationMessage,
+    judgment: NotificationMessage,
+) -> NotificationMessage:
+    prefix = f"{base.body}\n\nJUDGMENT\n"
+    available = max(0, 4096 - len(prefix))
+    judgment_body = judgment.body
+    if len(judgment_body) > available:
+        judgment_body = judgment_body[: max(0, available - 1)].rstrip() + "…"
+    return NotificationMessage(
+        notification_id=base.notification_id,
+        source_type=base.source_type,
+        source_id=base.source_id,
+        channel=base.channel,
+        title=base.title,
+        body=prefix + judgment_body,
+        created_at=base.created_at,
+    )
+
+
+def _notification_event_symbol(
+    events: tuple[MonitorEvent, ...],
+    rules_by_code: dict[str, MonitorRule],
+    default: str,
+) -> str:
+    symbols = tuple(
+        dict.fromkeys(
+            rule.instrument_id.rsplit(":", 1)[-1]
+            for event in events
+            if (rule := rules_by_code.get(event.rule_code)) is not None
+            and rule.instrument_id is not None
+        )
+    )
+    return symbols[0] if len(symbols) == 1 else default
+
+
+def _weekend_proxy_price_basis(warning_codes: tuple[str, ...]) -> str | None:
+    if "PAXG_USDC_WEEKEND_PROXY" in warning_codes:
+        return "Binance PAXG/USDC 周末代理（非 XAUUSD）"
+    if "IG_WEEKEND_GOLD_CFD_FALLBACK" in warning_codes:
+        return "IG Weekend Gold CFD 周末代理（非 XAUUSD/LBMA）"
+    if "CL_USDC_WEEKEND_PROXY" in warning_codes:
+        return "Hyperliquid XYZ CL/USDC 周末代理（非 WTI/NYMEX CL）"
+    return None
+
+
+def _notification_unavailable_cause(observation: MonitorRunObservation) -> str:
+    if "TECHNICAL_DATA_NOT_FRESH" in observation.warning_codes:
+        return "技术指标数据超过规则允许的新鲜度"
+    if observation.message == "Required fact exceeded the rule freshness limit.":
+        return "所需事实超过规则允许的新鲜度"
+    return observation.message
 
 
 def _signed_decimal(value: Decimal, *, decimal_places: int | None = None) -> str:
@@ -951,6 +1128,19 @@ def _notification_price_context(
     candidates = tuple(
         item for item in observations if is_price_rule(item) and item.instrument_id == instrument_id
     )
+    if not candidates:
+        fallback_instrument_id = next(
+            (item.instrument_id for item in observations if is_price_rule(item)),
+            None,
+        )
+        if fallback_instrument_id is not None:
+            instrument_id = fallback_instrument_id
+            symbol = fallback_instrument_id.rsplit(":", 1)[-1]
+            candidates = tuple(
+                item
+                for item in observations
+                if is_price_rule(item) and item.instrument_id == fallback_instrument_id
+            )
     current = next((item for item in candidates if item.observed_value is not None), None)
     previous: MonitorRuleState | None = None
     if previous_states:
@@ -1023,6 +1213,7 @@ def _post_market_summary_message(
     events: tuple[MonitorEvent, ...] = (),
     previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] | None = None,
     monitor_sources_by_monitor: dict[str, tuple[str, ...]] | None = None,
+    judgment_notifications_by_monitor: dict[str, NotificationMessage] | None = None,
 ) -> NotificationMessage:
     if run.cadence is MonitorCadence.A_SHARE_POST_MARKET:
         market_label = "A股"
@@ -1092,6 +1283,12 @@ def _post_market_summary_message(
             )
             for observation in observations
         )
+        judgment_notification = (judgment_notifications_by_monitor or {}).get(
+            monitor.monitor_id
+        )
+        if judgment_notification is not None:
+            lines.append("JUDGMENT")
+            lines.extend(judgment_notification.body.splitlines())
         lines.append("END_MONITOR")
         if context.instrument_id is not None and context.instrument_id.startswith("future:"):
             lines.append("期货价格并非现货；连续合约存在换月风险。")

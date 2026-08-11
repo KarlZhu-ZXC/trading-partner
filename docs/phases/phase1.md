@@ -50,7 +50,7 @@ closeout without changing the tool count or introducing order methods.
 ## 3. Public MCP boundary
 
 The authoritative Phase 1 runtime inventory is exposed through the consolidated
-public façade documented in `AGENTS.md`; the default Phase 1–3D surface is 28 tools.
+public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 27 tools.
 
 ```text
 system_health                 instrument_resolve
@@ -62,15 +62,16 @@ market_data_get               technical_get_snapshot
 technical_render_chart        us_company_get
 us_context_get                account_get
 external_state_sync           portfolio_analyze
-challenge_review_get          challenge_review_manage
+broker_order_manage
 research_workflow_run         watchlist_get
 watchlist_manage              portfolio_risk_get
 risk_policy_update            monitor_read
 monitor_manage                monitor_evaluate
 ```
 
-Grouped tools take a required `request` object with a closed `operation` union.
-`compact_28` is the sole runtime surface. The legacy 52 public names and their
+Grouped tools take a required `request` object. Large groups publish a smaller
+flattened schema and revalidate the exact closed operation model before dispatch.
+`mcp_vnext_shadow` is the sole runtime surface. The legacy 52 public names and their
 compatibility profile have been removed and are not valid MCP calls.
 
 `market_data_get(request={"operation":"us_market",...})` 在原有 SPY/QQQ/IWM 代理基础上，使用 yfinance Screener 的聚合
@@ -167,15 +168,26 @@ the Research Subject.
 ### US
 
 - Yahoo/yfinance is the primary current market/fundamental source where applicable.
-- For a near-current request during a Yahoo regular, pre-market, or post-market
-  session, a stale regular quote is compared with the latest available one-minute
-  `includePrePost` bar. The newer timestamp wins and carries
+- For a near-current request, a stale regular quote is compared with the latest
+  available one-minute `includePrePost` bar. This also applies just after the
+  post-market window has closed, so a real timestamped post-market print is not
+  discarded in favor of the older regular close. The newer timestamp wins and carries
   `EXTENDED_HOURS_PRICE` or `INTRADAY_QUOTE_RECOVERY`; a failed recovery remains
   explicit as `INTRADAY_QUOTE_UNAVAILABLE`. A prior-day post-market latest-known
   value keeps its own session and same-day completed regular close as the baseline;
   it must not move `previous_close` back an extra session. Historical `as_of` requests never use
   this current-only recovery path, and Yahoo does not provide a complete overnight
-  equity market.
+  equity market. Exchange quote responses expose the same last-based value as both
+  `last` and the cross-asset `display_price`, with `price_basis=last`; the separate
+  `previous_close` remains the completed regular-session reference.
+- During the US Sunday-Thursday 20:00-04:00 ET overnight window, near-current
+  equity/ETF quotes first read Moomoo OpenD's dedicated `overnight_*` snapshot
+  fields. A valid exact-instrument observation returns `session=overnight` and
+  keeps the regular `prev_close_price` as `previous_close`. OpenD exposes one
+  snapshot update time rather than an exact overnight-trade timestamp, so the
+  response discloses that basis plus venue and liquidity warnings. Missing OpenD,
+  permission, timestamp, or overnight value falls back to Yahoo latest-known with
+  `OVERNIGHT_QUOTE_UNAVAILABLE`; Yahoo is never described as overnight coverage.
 - Yahoo quote `previous_close` is derived from the latest completed daily bar before
   `quote_at`; for a post-market equity quote, that day's regular close is the
   previous close. If Yahoo temporarily leaves that daily close null, a pre/post-market
@@ -183,6 +195,11 @@ the Research Subject.
   and emits `PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY`. The range-dependent
   `chartPreviousClose` and observation-relative `regularMarketPreviousClose` metadata
   fields are never used as the user-facing previous-session close.
+- Quote DTOs preserve `previous_close_basis`: equity/ETF/index values follow the
+  actual returned `quote_at + session` and use
+  `previous_completed_regular_session_close`; futures use
+  `previous_completed_daily_bar_close`. Hosts must not call either value calendar
+  "yesterday close" or an arbitrary previous candle close.
 - Alpha Vantage is a configured fallback, not a broker quote substitute. Its optional
   comma-separated key pool is ordered and sticky, and advances only on explicit
   provider rate-limit responses; it is not a round-robin throughput mechanism.

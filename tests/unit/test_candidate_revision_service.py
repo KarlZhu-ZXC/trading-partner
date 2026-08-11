@@ -12,8 +12,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from application.dto.research import (
+    AssumptionCandidatePayload,
     AssumptionPayload,
+    InvalidationCandidatePayload,
     InvalidationPayload,
+    OpenQuestionCandidatePayload,
     SubjectUpdateCandidatePayload,
     ThesisRevisionCandidatePayload,
     WatchlistCandidatePayload,
@@ -34,7 +37,6 @@ from domain.common.enums import (
     ThesisStatus,
     WatchlistItemStatus,
 )
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
 
@@ -62,11 +64,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def harness(tmp_path):  # type: ignore[no-untyped-def]
-    path = tmp_path / "cand.db"
-    eng = create_engine(f"sqlite:///{path}")
+def harness(orm_sqlite_url: str):  # type: ignore[no-untyped-def]
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     clock = FixedClock(NOW)
     ids = SequentialIdGenerator()
     redactor = DefaultSecretRedactor()
@@ -158,6 +158,31 @@ def _revision_payload() -> ThesisRevisionCandidatePayload:
         ),
         thesis_role=ThesisRole.PRIMARY,
     )
+
+
+def _create_thesis(
+    subjects: ResearchSubjectService,
+    thesis: ThesisRevisionService,
+    *,
+    subject_key: str,
+) -> tuple[str, str]:
+    subject_id = _create_subject(subjects, thesis, key=subject_key)
+    proposed = thesis.propose_revision(
+        subject_id=subject_id,
+        thesis_id=None,
+        payload=_revision_payload(),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Create scoped revision fixture",
+        idempotency_key=f"{subject_key}-thesis",
+    )
+    assert proposed.ok and proposed.data is not None
+    confirmed = thesis.confirm_candidate(proposed.data.candidate_id, reviewed_by="user")
+    assert confirmed.ok and confirmed.data is not None and confirmed.data.research_state is not None
+    created = next(
+        item for item in confirmed.data.research_state.theses if item.subject_id == subject_id
+    )
+    return subject_id, created.thesis_id
 
 
 def test_propose_idempotent_same_payload_warning(harness) -> None:  # type: ignore[no-untyped-def]
@@ -283,6 +308,343 @@ def test_confirm_writes_revision_assumptions_invalidations(harness) -> None:  # 
         revs = uow.revisions.list_by_thesis(theses[0].thesis_id)
         assert len(revs) == 1
         assert theses[0].current_revision_no == revs[0].revision_no
+
+
+def test_assumption_and_invalidation_candidates_validate_thesis_revision_scope(
+    harness,
+) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, *_ = harness
+    first_subject, first_thesis = _create_thesis(subjects, thesis, subject_key="scope-first")
+    second_subject, second_thesis = _create_thesis(subjects, thesis, subject_key="scope-second")
+
+    foreign_assumption = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=AssumptionCandidatePayload(
+            thesis_id=first_thesis,
+            revision_no=1,
+            statement="Foreign thesis assumption",
+            basis="scope test",
+            falsifiability="scope mismatch",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Reject cross-subject assumption",
+        idempotency_key="scope-assumption-foreign",
+    )
+    assert not foreign_assumption.ok
+    assert foreign_assumption.errors[0].code == "INPUT_VALIDATION_ERROR"
+    assert foreign_assumption.errors[0].retryable is False
+
+    missing_revision = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=AssumptionCandidatePayload(
+            thesis_id=second_thesis,
+            revision_no=99,
+            statement="Missing revision assumption",
+            basis="scope test",
+            falsifiability="revision does not exist",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Reject dangling revision",
+        idempotency_key="scope-assumption-missing-revision",
+    )
+    assert not missing_revision.ok
+    assert missing_revision.errors[0].code == "INPUT_VALIDATION_ERROR"
+    assert missing_revision.errors[0].retryable is False
+
+    with factory() as uow:
+        foreign_invalidation = uow.invalidations.list_by_revision(first_thesis, 1)[0]
+
+    foreign_relaxation = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=InvalidationCandidatePayload(
+            thesis_id=second_thesis,
+            revision_no=1,
+            description="Foreign relaxation",
+            observable="foreign condition",
+            severity=InvalidationSeverity.SOFT,
+            relaxes_invalidation_id=foreign_invalidation.invalidation_id,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Reject cross-subject invalidation relaxation",
+        idempotency_key="scope-invalidation-foreign",
+    )
+    assert not foreign_relaxation.ok
+    assert foreign_relaxation.errors[0].code == "INPUT_VALIDATION_ERROR"
+    assert foreign_relaxation.errors[0].retryable is False
+
+    valid = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=AssumptionCandidatePayload(
+            thesis_id=second_thesis,
+            revision_no=1,
+            statement="Valid scoped assumption",
+            basis="same subject and thesis",
+            falsifiability="observable evidence",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Accept valid scoped assumption",
+        idempotency_key="scope-assumption-valid",
+    )
+    assert valid.ok and valid.data is not None
+    assert thesis.confirm_candidate(valid.data.candidate_id, reviewed_by="user").ok
+
+
+def test_invalidation_relaxation_can_target_prior_revision_of_same_thesis(
+    harness,
+) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, *_ = harness
+    subject_id, thesis_id = _create_thesis(subjects, thesis, subject_key="scope-revision-relax")
+    revision_two = thesis.propose_revision(
+        subject_id=subject_id,
+        thesis_id=thesis_id,
+        payload=_revision_payload().model_copy(
+            update={"title": "Second revision", "assumptions": (), "invalidations": ()}
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Advance revision before relaxing prior condition",
+        idempotency_key="scope-revision-two",
+    )
+    assert revision_two.ok and revision_two.data is not None
+    assert thesis.confirm_candidate(revision_two.data.candidate_id, reviewed_by="user").ok
+
+    with factory() as uow:
+        prior = uow.invalidations.list_by_revision(thesis_id, 1)[0]
+
+    relaxed = thesis.propose_invalidation(
+        subject_id=subject_id,
+        thesis_id=thesis_id,
+        revision_no=2,
+        payload=InvalidationCandidatePayload(
+            thesis_id=thesis_id,
+            revision_no=2,
+            description="Relaxed prior condition",
+            observable="Gross margin stabilizes",
+            severity=InvalidationSeverity.SOFT,
+            relaxes_invalidation_id=prior.invalidation_id,
+        ),
+        confirmation_mode=ConfirmationMode.STRICT_REVIEW,
+        proposed_by="codex",
+        proposed_by_rationale="Retire prior hard condition under updated revision",
+        idempotency_key="scope-revision-relax-valid",
+    )
+    assert relaxed.ok and relaxed.data is not None
+    confirmed = thesis.confirm_candidate(relaxed.data.candidate_id, reviewed_by="user")
+    assert confirmed.ok
+
+
+def test_open_question_candidate_scope_is_checked_at_proposal_and_confirmation(
+    harness,
+) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, _, _, eng = harness
+    first_subject = _create_subject(subjects, thesis, key="oq-scope-first")
+    second_subject = _create_subject(subjects, thesis, key="oq-scope-second")
+
+    first_create = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=OpenQuestionCandidatePayload(
+            action="create",
+            text="Question owned by first subject",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Create first scoped question",
+        idempotency_key="oq-scope-first-create",
+    )
+    assert first_create.ok and first_create.data is not None
+    assert thesis.confirm_candidate(first_create.data.candidate_id, reviewed_by="user").ok
+    second_create = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=OpenQuestionCandidatePayload(
+            action="create",
+            text="Question owned by second subject",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Create second scoped question",
+        idempotency_key="oq-scope-second-create",
+    )
+    assert second_create.ok and second_create.data is not None
+    assert thesis.confirm_candidate(second_create.data.candidate_id, reviewed_by="user").ok
+
+    with factory() as uow:
+        first_question = uow.questions.list_by_subject(first_subject)[0]
+        second_question = uow.questions.list_by_subject(second_subject)[0]
+
+    cross_subject = thesis.propose_state_update(
+        subject_id=second_subject,
+        payload=OpenQuestionCandidatePayload(
+            action="answer",
+            question_id=first_question.question_id,
+            answer_summary="Wrong owner",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Reject cross-subject answer",
+        idempotency_key="oq-scope-cross-answer",
+    )
+    assert not cross_subject.ok
+    assert cross_subject.errors[0].code == "INPUT_VALIDATION_ERROR"
+    assert cross_subject.errors[0].retryable is False
+
+    valid = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=OpenQuestionCandidatePayload(
+            action="answer",
+            question_id=first_question.question_id,
+            answer_summary="Valid answer before tamper",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Create valid answer candidate",
+        idempotency_key="oq-scope-valid-answer",
+    )
+    assert valid.ok and valid.data is not None
+    tampered_payload = OpenQuestionCandidatePayload(
+        action="answer",
+        question_id=second_question.question_id,
+        answer_summary="Tampered foreign question",
+    ).model_dump_json()
+    with Session(eng) as session:
+        session.execute(
+            text(
+                "UPDATE candidate_thesis_revisions SET payload_json = :payload "
+                "WHERE candidate_id = :candidate_id"
+            ),
+            {"payload": tampered_payload, "candidate_id": valid.data.candidate_id},
+        )
+        session.commit()
+
+    confirmed = thesis.confirm_candidate(valid.data.candidate_id, reviewed_by="user")
+    assert not confirmed.ok
+    assert confirmed.errors[0].code == "DATA_CONTRACT_ERROR"
+    assert confirmed.errors[0].retryable is False
+    with factory() as uow:
+        assert uow.questions.get(first_question.question_id).status.value == "open"
+        assert uow.candidates.get(valid.data.candidate_id).status is CandidateStatus.PROPOSED
+
+
+def test_confirmation_revalidates_tampered_assumption_scope_atomically(harness) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, _, _, eng = harness
+    first_subject, first_thesis = _create_thesis(
+        subjects, thesis, subject_key="confirm-scope-first"
+    )
+    second_subject, second_thesis = _create_thesis(
+        subjects, thesis, subject_key="confirm-scope-second"
+    )
+    del second_subject
+
+    proposed = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=AssumptionCandidatePayload(
+            thesis_id=first_thesis,
+            revision_no=1,
+            statement="Tamper me",
+            basis="candidate scope test",
+            falsifiability="foreign payload must fail",
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Create then tamper candidate payload",
+        idempotency_key="confirm-scope-tampered-assumption",
+    )
+    assert proposed.ok and proposed.data is not None
+    tampered_payload = AssumptionCandidatePayload(
+        thesis_id=second_thesis,
+        revision_no=1,
+        statement="Tampered foreign thesis",
+        basis="candidate scope test",
+        falsifiability="must reject",
+    ).model_dump_json()
+    with Session(eng) as session:
+        session.execute(
+            text(
+                "UPDATE candidate_thesis_revisions SET payload_json = :payload "
+                "WHERE candidate_id = :candidate_id"
+            ),
+            {"payload": tampered_payload, "candidate_id": proposed.data.candidate_id},
+        )
+        session.commit()
+
+    confirmed = thesis.confirm_candidate(proposed.data.candidate_id, reviewed_by="user")
+    assert not confirmed.ok
+    assert confirmed.errors[0].code == "DATA_CONTRACT_ERROR"
+    assert confirmed.errors[0].retryable is False
+    with factory() as uow:
+        assert uow.assumptions.list_by_revision(first_thesis, 1)
+        assert uow.candidates.get(proposed.data.candidate_id).status is CandidateStatus.PROPOSED
+
+
+def test_subject_link_candidates_validate_at_proposal_and_confirmation(harness) -> None:  # type: ignore[no-untyped-def]
+    subjects, thesis, factory, _, _, eng = harness
+    first_subject = _create_subject(subjects, thesis, key="subject-link-first")
+    second_subject = _create_subject(subjects, thesis, key="subject-link-second")
+
+    self_link = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            linked_subject_ids=(first_subject,),
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Reject a self edge",
+        idempotency_key="subject-link-self",
+    )
+    assert not self_link.ok
+    assert self_link.errors[0].code == "INPUT_VALIDATION_ERROR"
+
+    missing_link = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            linked_subject_ids=("subject_missing",),
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Reject a dangling edge",
+        idempotency_key="subject-link-missing",
+    )
+    assert not missing_link.ok
+    assert missing_link.errors[0].code == "INPUT_VALIDATION_ERROR"
+
+    valid = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=SubjectUpdateCandidatePayload(
+            action="update",
+            linked_subject_ids=(second_subject,),
+        ),
+        proposed_by="codex",
+        proposed_by_rationale="Link two existing Research Subjects",
+        idempotency_key="subject-link-valid",
+    )
+    assert valid.ok and valid.data is not None
+    confirmed = thesis.confirm_candidate(valid.data.candidate_id, reviewed_by="user")
+    assert confirmed.ok
+    with factory() as uow:
+        assert uow.subjects.get(first_subject).linked_subject_ids == (second_subject,)
+
+    tampered = thesis.propose_state_update(
+        subject_id=first_subject,
+        payload=SubjectUpdateCandidatePayload(action="update", linked_subject_ids=()),
+        proposed_by="codex",
+        proposed_by_rationale="Create a candidate for confirmation-time revalidation",
+        idempotency_key="subject-link-tampered",
+    )
+    assert tampered.ok and tampered.data is not None
+    tampered_payload = SubjectUpdateCandidatePayload(
+        action="update",
+        linked_subject_ids=(first_subject,),
+    ).model_dump_json()
+    with Session(eng) as session:
+        session.execute(
+            text(
+                "UPDATE candidate_thesis_revisions SET payload_json = :payload "
+                "WHERE candidate_id = :candidate_id"
+            ),
+            {"payload": tampered_payload, "candidate_id": tampered.data.candidate_id},
+        )
+        session.commit()
+
+    rejected = thesis.confirm_candidate(tampered.data.candidate_id, reviewed_by="user")
+    assert not rejected.ok
+    assert rejected.errors[0].code == "DATA_CONTRACT_ERROR"
+    with factory() as uow:
+        assert uow.subjects.get(first_subject).linked_subject_ids == (second_subject,)
+        assert uow.candidates.get(tampered.data.candidate_id).status is CandidateStatus.PROPOSED
 
 
 def test_subject_supports_parallel_sub_theses_but_one_live_primary(harness) -> None:  # type: ignore[no-untyped-def]

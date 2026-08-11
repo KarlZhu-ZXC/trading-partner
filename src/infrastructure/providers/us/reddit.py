@@ -7,13 +7,16 @@ import contextlib
 import hashlib
 import html
 import re
-import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from typing import Final
+from xml.etree.ElementTree import Element, ParseError
+
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.dto.reddit_state import RedditSampleCacheEntry
@@ -205,8 +208,8 @@ class RedditSentimentAdapter:
         if response.status_code < 200 or response.status_code >= 300:
             raise ProviderUnavailableError("Reddit RSS HTTP failure")
         try:
-            root = ET.fromstring(response.body)
-        except ET.ParseError:
+            root = safe_xml_fromstring(response.body)
+        except (ParseError, DefusedXmlException):
             raise DataContractError("Reddit RSS is not valid XML") from None
         samples: list[USSentimentSample] = []
         for entry in root.findall(f"{_ATOM}entry"):
@@ -506,7 +509,7 @@ class RedditSentimentAdapter:
                         self._inflight.pop(key, None)
 
     @staticmethod
-    def _entry(entry: ET.Element, instrument_id: str) -> USSentimentSample | None:
+    def _entry(entry: Element, instrument_id: str) -> USSentimentSample | None:
         title = entry.findtext(f"{_ATOM}title") or ""
         content = entry.findtext(f"{_ATOM}content") or ""
         published = entry.findtext(f"{_ATOM}published")

@@ -147,6 +147,8 @@ class USMarketContextService:
                 instrument_id=instrument_id,
                 latest=quote.last,
                 change_percent=change,
+                quote_at=quote.quote_at,
+                session=quote.session,
             ),
             warnings,
             meta,

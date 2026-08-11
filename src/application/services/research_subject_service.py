@@ -21,6 +21,7 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from application.services.research_link_invariants import validate_linked_subject_ids
 from application.services.research_state_invariants import ensure_subject_can_leave_tracking
 from application.services.subject_metadata_policy import validate_subject_metadata
 from domain.common.enums import (
@@ -114,6 +115,11 @@ class ResearchSubjectService:
 
                 now = self._clock.now()
                 subject_id = self._id_generator.new(EntityIdPrefix.SUBJECT)
+                linked = validate_linked_subject_ids(
+                    uow,
+                    owner_subject_id=subject_id,
+                    linked_subject_ids=linked,
+                )
                 subject = ResearchSubject(
                     subject_id=subject_id,
                     subject_type=subject_type,
@@ -382,6 +388,15 @@ class ResearchSubjectService:
 
             with self._uow_factory() as uow:
                 subject = uow.subjects.get(subject_id)
+                validated_linked_subject_ids = (
+                    validate_linked_subject_ids(
+                        uow,
+                        owner_subject_id=subject_id,
+                        linked_subject_ids=linked_subject_ids,
+                    )
+                    if linked_subject_ids is not None
+                    else subject.linked_subject_ids
+                )
                 title_n = title.strip() if title is not None else None
                 summary_n = summary.strip() if summary is not None else None
                 metadata = validate_subject_metadata(
@@ -399,7 +414,7 @@ class ResearchSubjectService:
                         else None
                     ),
                     linked_subject_ids=(
-                        tuple(x.strip() for x in linked_subject_ids if x.strip())
+                        validated_linked_subject_ids
                         if linked_subject_ids is not None
                         else None
                     ),
@@ -443,9 +458,7 @@ class ResearchSubjectService:
                     archived_at=subject.archived_at,
                     archived_reason=subject.archived_reason,
                     linked_subject_ids=(
-                        tuple(x.strip() for x in linked_subject_ids if x.strip())
-                        if linked_subject_ids is not None
-                        else subject.linked_subject_ids
+                        validated_linked_subject_ids
                     ),
                     evidence_ids=subject.evidence_ids,
                     report_ids=subject.report_ids,

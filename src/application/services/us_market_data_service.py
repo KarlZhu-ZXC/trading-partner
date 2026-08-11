@@ -31,6 +31,7 @@ from domain.common.enums import (
 from domain.common.errors import DataContractError
 from domain.common.time import ensure_utc, require_aware_datetime
 from domain.instruments.models import Instrument
+from domain.market.session import is_us_overnight_session
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USQuote
 
@@ -86,6 +87,18 @@ _CME_SPECIFIC_BARS_POLICY = ToolDataPolicy(
         DataCategory.MARKET_OHLCV: (VendorId.YFINANCE,)
     },
 )
+_US_OVERNIGHT_QUOTE_POLICY = ToolDataPolicy(
+    tool_name="market_get_snapshot",
+    required_categories=(DataCategory.MARKET_QUOTE,),
+    optional_categories=(),
+    category_chain_overrides={
+        DataCategory.MARKET_QUOTE: (
+            VendorId.MOOMOO,
+            VendorId.YFINANCE,
+            VendorId.ALPHA_VANTAGE,
+        )
+    },
+)
 
 
 def _as_of_utc_z(as_of: datetime) -> str:
@@ -135,6 +148,7 @@ class USMarketDataService:
         clock: Clock,
         quote_codec: ProviderCacheCodec[USQuote],
         bars_codec: ProviderCacheCodec[USBarSeries],
+        current_quote_window_seconds: int = 300,
     ) -> None:
         if router is None or clock is None:
             raise DataContractError(
@@ -154,6 +168,13 @@ class USMarketDataService:
         self._clock = clock
         self._quote_codec = quote_codec
         self._bars_codec = bars_codec
+        if (
+            not isinstance(current_quote_window_seconds, int)
+            or isinstance(current_quote_window_seconds, bool)
+            or current_quote_window_seconds < 0
+        ):
+            raise DataContractError("current_quote_window_seconds must be nonnegative")
+        self._current_quote_window_seconds = current_quote_window_seconds
 
     def _require_exchange_tradable(self, instrument: Instrument) -> None:
         if not isinstance(instrument, Instrument):
@@ -191,8 +212,18 @@ class USMarketDataService:
             )
 
     def _quote_bars_policy(
-        self, instrument: Instrument, *, bars: bool
+        self, instrument: Instrument, *, bars: bool, as_of: datetime
     ) -> ToolDataPolicy | None:
+        now = self._clock.now()
+        current = 0 <= (now - as_of).total_seconds() <= self._current_quote_window_seconds
+        if (
+            not bars
+            and current
+            and instrument.market is Market.US
+            and instrument.asset_type in {AssetType.EQUITY, AssetType.ETF}
+            and is_us_overnight_session(as_of)
+        ):
+            return _US_OVERNIGHT_QUOTE_POLICY
         if instrument.asset_type is not AssetType.FUTURE:
             return None
         if instrument.market is Market.CME:
@@ -369,7 +400,7 @@ class USMarketDataService:
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=self._quote_bars_policy(instrument, bars=False),
+            tool_policy=self._quote_bars_policy(instrument, bars=False, as_of=as_of),
             bypass_cache=False,
             cache_codec=self._quote_codec,
             result_validator=_validator,
@@ -460,7 +491,7 @@ class USMarketDataService:
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=self._quote_bars_policy(instrument, bars=True),
+            tool_policy=self._quote_bars_policy(instrument, bars=True, as_of=as_of),
             bypass_cache=False,
             cache_codec=self._bars_codec,
             result_validator=_validator,

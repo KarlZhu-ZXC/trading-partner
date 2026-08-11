@@ -23,7 +23,6 @@ from domain.common.enums import (
     ResearchSubjectType,
     ThesisRole,
 )
-from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
 from infrastructure.system.redactor import DefaultSecretRedactor
 
@@ -39,11 +38,9 @@ def _enable_fk(engine: Engine) -> None:
 
 
 @pytest.fixture
-def services(tmp_path):  # type: ignore[no-untyped-def]
-    path = tmp_path / "lifecycle.db"
-    eng = create_engine(f"sqlite:///{path}")
+def services(orm_sqlite_url: str):  # type: ignore[no-untyped-def]
+    eng = create_engine(orm_sqlite_url)
     _enable_fk(eng)
-    Base.metadata.create_all(eng)
     clock = FixedClock(NOW)
     ids = SequentialIdGenerator()
     redactor = DefaultSecretRedactor()

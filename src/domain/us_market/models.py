@@ -383,6 +383,8 @@ class USMarketProxy:
     instrument_id: str
     latest: Decimal | None
     change_percent: Decimal | None
+    quote_at: datetime | None = None
+    session: TradingSession | None = None
 
     def __post_init__(self) -> None:
         instrument_id = _require_us_instrument_id(
@@ -397,6 +399,14 @@ class USMarketProxy:
             )
         _require_optional_nonnegative_decimal(self.latest, field="latest")
         _require_optional_decimal(self.change_percent, field="change_percent")
+        if (self.quote_at is None) != (self.session is None):
+            raise DataContractError(
+                "quote_at and session must be supplied together",
+                details={"field": "quote_at/session", "rule": "paired"},
+            )
+        if self.quote_at is not None:
+            require_aware_datetime(self.quote_at, field_name="quote_at")
+            _require_enum(self.session, TradingSession, field="session")
 
 
 @dataclass(frozen=True, slots=True)

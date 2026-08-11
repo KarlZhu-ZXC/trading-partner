@@ -104,3 +104,59 @@ class PostMarketSyncRunRow(Base):
     warning_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     error_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class BrokerOrderIntentRow(Base):
+    """Short-lived order preview plus its durable execution receipt."""
+
+    __tablename__ = "broker_order_intents"
+    __table_args__ = (
+        UniqueConstraint("preview_idempotency_key", name="uq_broker_order_preview_idempotency"),
+        UniqueConstraint("submit_idempotency_key", name="uq_broker_order_submit_idempotency"),
+        CheckConstraint("quantity > 0", name="ck_broker_order_quantity"),
+        CheckConstraint(
+            "status IN ('PREVIEWED','SUBMITTING','SUBMITTED','REJECTED','UNKNOWN',"
+            "'CANCEL_REQUESTED','CANCELLED')",
+            name="ck_broker_order_status",
+        ),
+        Index("ix_broker_order_account_created", "account_ref", "created_at"),
+    )
+
+    order_intent_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    instrument_id: Mapped[str] = mapped_column(Text, nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_type: Mapped[str] = mapped_column(Text, nullable=False)
+    session: Mapped[str] = mapped_column(Text, nullable=False)
+    duration: Mapped[str] = mapped_column(Text, nullable=False)
+    limit_price: Mapped[str | None] = mapped_column(Text)
+    stop_price: Mapped[str | None] = mapped_column(Text)
+    trail_offset: Mapped[str | None] = mapped_column(Text)
+    trail_type: Mapped[str | None] = mapped_column(Text)
+    limit_offset: Mapped[str | None] = mapped_column(Text)
+    payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    order_payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    preview_idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    account_observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    cash_balance: Mapped[str | None] = mapped_column(Text)
+    margin_balance: Mapped[str | None] = mapped_column(Text)
+    open_buy_order_reserve: Mapped[str | None] = mapped_column(Text)
+    position_quantity: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_at: Mapped[str | None] = mapped_column(Text)
+    quote_source: Mapped[str | None] = mapped_column(Text)
+    quote_price: Mapped[str | None] = mapped_column(Text)
+    estimated_notional: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    submit_idempotency_key: Mapped[str | None] = mapped_column(Text)
+    confirmed_by: Mapped[str | None] = mapped_column(Text)
+    submitted_via: Mapped[str | None] = mapped_column(Text)
+    authorization_note: Mapped[str | None] = mapped_column(Text)
+    broker_order_id: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[str | None] = mapped_column(Text)
+    provider_status: Mapped[str | None] = mapped_column(Text)
+    rejection_code: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

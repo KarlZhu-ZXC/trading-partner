@@ -13,7 +13,7 @@ import pytest
 from application.ports.http_transport import HttpRequest, HttpResponse
 from conftest import FixedClock
 from domain.common.enums import AssetType, Freshness, Market
-from domain.common.errors import NoMarketData, ProviderRateLimitError
+from domain.common.errors import DataContractError, NoMarketData, ProviderRateLimitError
 from domain.instruments.models import Instrument
 from domain.us_context.enums import (
     USSentimentDirection,
@@ -133,6 +133,28 @@ async def test_reddit_rss_inference_keeps_engagement_unknown_and_versioned() -> 
     assert sample.classifier_version == "reddit_lexicon_v1"
     assert sample.likes is None and sample.comments is None
     assert len(transport.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_reddit_rss_rejects_xml_entities() -> None:
+    rss = b"""<?xml version="1.0"?>
+    <!DOCTYPE feed [<!ENTITY injected "NVDA bullish">]>
+    <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>&injected;</title>
+      <published>2026-07-18T10:00:00Z</published>
+    </entry></feed>"""
+    adapter = RedditSentimentAdapter(
+        PayloadTransport(rss, "application/atom+xml"),
+        user_agent="TradingPartner/1.0",
+        subreddits=("stocks",),
+        clock=FixedClock(NOW),
+        min_interval_seconds=0,
+    )
+
+    with pytest.raises(DataContractError, match="not valid XML"):
+        await adapter.get_sentiment_samples(
+            _instrument(), start=None, end=None, limit=20, as_of=NOW
+        )
 
 
 @pytest.mark.asyncio

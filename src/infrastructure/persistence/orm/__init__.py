@@ -1,6 +1,20 @@
 """Register and export the complete SQLAlchemy ORM metadata graph."""
 
 from infrastructure.persistence.metadata import Base
+from infrastructure.persistence.orm.agent import (
+    AgentChannelBindingRow,
+    AgentChannelCursorRow,
+    AgentChannelHandoffRow,
+    AgentConversationRow,
+    AgentMessageRow,
+    AgentPendingActionRow,
+    AgentToolReceiptRow,
+)
+from infrastructure.persistence.orm.catalyst_agenda import (
+    CatalystAgendaIdentityRow,
+    CatalystAgendaSyncReceiptRow,
+    CatalystAgendaVersionRow,
+)
 from infrastructure.persistence.orm.challenge_workflow import (
     ChallengeFindingRow,
     ChallengeQuestionRow,
@@ -20,6 +34,7 @@ from infrastructure.persistence.orm.futures import (
     FuturesProductRow,
     FuturesProductVersionRow,
 )
+from infrastructure.persistence.orm.judgment_scorecard import JudgmentScorecardRunRow
 from infrastructure.persistence.orm.monitoring import (
     MonitorEventResolutionRow,
     MonitorEventRow,
@@ -32,6 +47,7 @@ from infrastructure.persistence.orm.monitoring import (
     NotificationOutboxRow,
 )
 from infrastructure.persistence.orm.operations import (
+    BrokerOrderIntentRow,
     IndustryMetricObservationRow,
     PostMarketSyncRunRow,
 )
@@ -81,6 +97,12 @@ from infrastructure.persistence.orm.system import (
     SchemaVersionRow,
     SystemAuditLogRow,
 )
+from infrastructure.persistence.orm.trade_retro import (
+    TradeRetroExportReceiptRow,
+    TradeRetroPlanSnapshotRow,
+    TradeRetroReviewRevisionRow,
+    TradeRetroRunRow,
+)
 from infrastructure.persistence.orm.transactions import (
     AccountActivityCoverageReceiptRow,
     AccountTransactionRow,
@@ -88,6 +110,14 @@ from infrastructure.persistence.orm.transactions import (
 
 __all__ = [
     "Base",
+    "AgentConversationRow",
+    "AgentChannelBindingRow",
+    "AgentMessageRow",
+    "AgentToolReceiptRow",
+    "AgentPendingActionRow",
+    "AgentChannelCursorRow",
+    "AgentChannelHandoffRow",
+    "BrokerOrderIntentRow",
     "JsonStringTuple",
     "SchemaVersionRow",
     "SystemAuditLogRow",
@@ -152,4 +182,13 @@ __all__ = [
     "ContinuousContractMappingRow",
     "IndustryMetricObservationRow",
     "PostMarketSyncRunRow",
+    "TradeRetroPlanSnapshotRow",
+    "TradeRetroReviewRevisionRow",
+    "TradeRetroRunRow",
+    "TradeRetroExportReceiptRow",
+    "JudgmentScorecardRunRow",
+    "CatalystAgendaIdentityRow",
+    "CatalystAgendaSyncReceiptRow",
+    "CatalystAgendaVersionRow",
+    "CatalystAgendaSyncReceiptRow",
 ]

@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from application import __version__
+from application.dto.catalyst_agenda_sync import (
+    CatalystAgendaSyncInput,
+)
 from application.dto.monitoring import MonitorArchiveInput
+from application.services.trade_retro_schedule import trade_retro_weekly_windows
 from bootstrap import ApplicationContainer, build_default_application
+from interfaces.console.agent_api import build_agent_runtime_state
+from interfaces.console.agent_api import router as agent_router
 from interfaces.console.catalog import capability_catalog
 from interfaces.mcp.server import create_capability_registry
-from interfaces.mcp.tool_inventory import COMPACT_28_TOOL_NAMES
+from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
 from interfaces.mcp.tools.compact import (
     CapabilityConfirmationRequiredError,
     CapabilityNotFoundError,
@@ -28,11 +37,21 @@ from interfaces.mcp.tools.compact import (
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.console_session_token = secrets.token_urlsafe(32)
     container = build_default_application()
     registry = create_capability_registry(container)
     app.state.container = container
     app.state.capability_registry = registry
     app.state.capabilities = capability_catalog(registry.list_tools(), registry.policies)
+    agent_state = build_agent_runtime_state(container, registry)
+    app.state.agent_runtime_state = agent_state
+    # Keep the three collaborators discoverable for channel adapters and
+    # diagnostics without exposing any model credentials or endpoint details.
+    app.state.agent_runtime = agent_state.runtime
+    app.state.agent_gateway = agent_state.capability_gateway
+    app.state.agent_context = agent_state.context_service
+    app.state.agent_action_gateway = agent_state.action_gateway
+    app.state.agent_handoff_service = agent_state.handoff_service
     app.state.schwab_oauth_task = None
     try:
         yield
@@ -46,14 +65,52 @@ app = FastAPI(
     version=__version__,
     lifespan=_lifespan,
 )
+
+_CONSOLE_HOSTS = frozenset({"127.0.0.1", "localhost"})
+_CONSOLE_ORIGINS = frozenset(
+    {
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+    }
+)
+_CONSOLE_TOKEN_HEADER = "X-Trading-Partner-Console-Token"
+
+
+@app.middleware("http")
+async def _enforce_console_boundary(request: Request, call_next: Any) -> Any:
+    """Keep browser writes inside the current loopback Console session."""
+    hostname = request.url.hostname
+    if hostname not in _CONSOLE_HOSTS:
+        return JSONResponse(status_code=400, content={"detail": "Invalid console host"})
+
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in _CONSOLE_ORIGINS:
+        return JSONResponse(status_code=403, content={"detail": "Console origin is not allowed"})
+
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        expected = getattr(request.app.state, "console_session_token", None)
+        supplied = request.headers.get(_CONSOLE_TOKEN_HEADER)
+        if (
+            not isinstance(expected, str)
+            or not isinstance(supplied, str)
+            or not secrets.compare_digest(supplied, expected)
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Console session token is missing or expired"},
+            )
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[],
-    allow_origin_regex=r"^http://(?:127\.0\.0\.1|localhost):[0-9]{1,5}$",
+    allow_origins=sorted(_CONSOLE_ORIGINS),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Accept", "Content-Type"],
+    allow_headers=["Accept", "Content-Type", _CONSOLE_TOKEN_HEADER],
 )
+
+app.include_router(agent_router)
 
 
 def _container(request: Request) -> ApplicationContainer:
@@ -97,6 +154,18 @@ class ConsoleActionRequest(_RequestModel):
     action: ConsoleAction
     confirmation: str = Field(min_length=1, max_length=100)
     retention_days: int = Field(default=30, ge=1, le=3650)
+
+
+class AgendaSyncRequest(_RequestModel):
+    window_days: int = Field(default=30, ge=1, le=180)
+    instrument_ids: tuple[str, ...] = ()
+    fred_release_ids: tuple[int, ...] = ()
+    as_of: datetime | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class AgendaSummaryRequest(_RequestModel):
+    window_days: int = Field(default=7, ge=1, le=30)
 
 
 def _sanitized_error(request: Request, error: Exception) -> str:
@@ -172,7 +241,10 @@ async def _invoke_capability(
             confirmation=confirmation,
         )
     except CapabilityNotFoundError:
-        raise HTTPException(status_code=404, detail="MCP tool is not in compact_28") from None
+        raise HTTPException(
+            status_code=404,
+            detail="MCP tool is not in the vNext surface",
+        ) from None
     except CapabilityConfirmationRequiredError:
         raise HTTPException(
             status_code=409,
@@ -194,6 +266,12 @@ async def health(request: Request) -> dict[str, Any]:
 def capabilities(request: Request) -> dict[str, Any]:
     items: list[dict[str, Any]] = request.app.state.capabilities
     return {"count": len(items), "items": items}
+
+
+@app.get("/api/session")
+def console_session(request: Request) -> dict[str, str]:
+    """Issue the opaque token used by this process's loopback Console UI."""
+    return {"token": cast(str, request.app.state.console_session_token)}
 
 
 @app.post("/api/tools/invoke")
@@ -374,6 +452,30 @@ async def portfolio(
         "coverage": coverage_result,
         "risk_policy": risk_policy_result,
         "risk_check": risk_check_result,
+    }
+
+
+@app.get("/api/retro")
+async def trade_retro(request: Request) -> dict[str, Any]:
+    """Return immutable Trade Retro runs and review revisions without Provider I/O."""
+
+    result = cast(
+        dict[str, Any],
+        await _invoke_capability(
+            request,
+            "portfolio_analyze",
+            {"request": {"operation": "retro_history", "limit": 50}},
+        ),
+    )
+    review_start, review_end, prepare_start, prepare_end = trade_retro_weekly_windows(
+        _container(request).context.clock.now()
+    )
+    return {
+        **result,
+        "console_windows": {
+            "previous": {"start": review_start, "end": review_end},
+            "next": {"start": prepare_start, "end": prepare_end},
+        },
     }
 
 
@@ -602,6 +704,249 @@ async def research(request: Request) -> dict[str, Any]:
     }
 
 
+async def _console_subject_choices(
+    request: Request,
+    *,
+    include_archived: bool,
+    selected_subject_id: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Page lightweight Subject choices and load state only for the selected row."""
+
+    page_size = 200
+    offset = 0
+    subjects: list[dict[str, Any]] = []
+    while True:
+        page = await _durable_console_call(
+            request,
+            "investment_case_read",
+            {
+                "request": {
+                    "operation": "query",
+                    "include_archived": include_archived,
+                    "limit": page_size,
+                    "offset": offset,
+                }
+            },
+        )
+        data = page.get("data") if isinstance(page, dict) else None
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            break
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            aggregate: dict[str, Any] = {
+                "subject": _canonical_subject_transport(item),
+                "state": None,
+            }
+            case_id = item.get("case_id")
+            if selected_subject_id is not None and case_id == selected_subject_id:
+                aggregate["state"] = _canonical_subject_transport(
+                    await _durable_console_call(
+                        request,
+                        "research_judgment_get",
+                        {
+                            "request": {
+                                "operation": "state",
+                                "case_id": selected_subject_id,
+                                "include_archived_theses": True,
+                                "include_watchlist": False,
+                            }
+                        },
+                    )
+                )
+            subjects.append(aggregate)
+        if len(items) < page_size:
+            break
+        offset += len(items)
+    return subjects, {"total": len(subjects), "page_size": page_size}
+
+
+@app.get("/api/scorecards")
+async def scorecards(
+    request: Request,
+    subject_id: str | None = Query(default=None, min_length=1, max_length=100),
+    thesis_id: str | None = Query(default=None, min_length=1, max_length=100),
+    limit: int = Query(default=50, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Return Research Subjects plus immutable Judgment Scorecard history.
+
+    Both reads stay behind the compact capability registry and remain durable-only.
+    A failed history read is retained beside the independently readable Research
+    Subjects so the Console can diagnose the exact boundary instead of hiding the
+    whole page.
+    """
+
+    subjects, subject_list = await _console_subject_choices(
+        request,
+        include_archived=True,
+        selected_subject_id=subject_id,
+    )
+    history_request: dict[str, Any] = {
+        "operation": "scorecard_history",
+        "limit": limit,
+        "offset": offset,
+    }
+    if subject_id is not None:
+        history_request["case_id"] = subject_id
+    if thesis_id is not None:
+        history_request["thesis_id"] = thesis_id
+    history = await _durable_console_call(
+        request,
+        "research_judgment_get",
+        {"request": history_request},
+    )
+    return {
+        "subjects": subjects,
+        "subject_list": subject_list,
+        "scorecards": _canonical_subject_transport(history),
+    }
+
+
+@app.get("/api/agenda")
+async def catalyst_agenda(
+    request: Request,
+    as_of: datetime | None = None,
+    window_days: int = Query(default=30, ge=1, le=180),
+    agenda_item_id: str | None = Query(default=None, min_length=1, max_length=128),
+    include_history: bool = False,
+    subject_id: str | None = Query(default=None, min_length=1, max_length=128),
+    instrument_id: str | None = Query(default=None, min_length=1, max_length=128),
+    scope: str | None = Query(default=None, min_length=1, max_length=32),
+    kind: str | None = Query(default=None, min_length=1, max_length=32),
+    status: str | None = Query(default=None, min_length=1, max_length=32),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Return durable Catalyst Agenda items and lightweight Subject choices."""
+
+    filters = {
+        key: [value]
+        for key, value in (
+            ("case_ids", subject_id),
+            ("instrument_ids", instrument_id),
+            ("scopes", scope),
+            ("kinds", kind),
+            ("statuses", status),
+        )
+        if value is not None
+    }
+    agenda_request: dict[str, Any] = {
+        "operation": "agenda",
+        "window_days": window_days,
+        "include_history": include_history,
+        "limit": limit,
+        "offset": offset,
+    }
+    if as_of is not None:
+        agenda_request["as_of"] = as_of
+    if agenda_item_id is not None:
+        agenda_request["agenda_item_id"] = agenda_item_id
+    if filters:
+        agenda_request["filters"] = filters
+
+    agenda = await _durable_console_call(
+        request,
+        "research_memory_get",
+        {"request": agenda_request},
+    )
+    subject_aggregates, subject_list = await _console_subject_choices(
+        request,
+        include_archived=False,
+    )
+    subject_items = [item["subject"] for item in subject_aggregates]
+    subjects = {
+        "ok": True,
+        "data": {
+            "items": subject_items,
+            "total": subject_list["total"],
+            "has_more": False,
+        },
+        "warnings": [],
+        "errors": [],
+        "degraded": False,
+    }
+    return {
+        "agenda": _canonical_subject_transport(agenda),
+        "subjects": _canonical_subject_transport(subjects),
+    }
+
+
+@app.post("/api/agenda/sync")
+async def catalyst_agenda_sync(request: Request, payload: AgendaSyncRequest) -> dict[str, Any]:
+    input_value = CatalystAgendaSyncInput(
+        instrument_ids=payload.instrument_ids,
+        fred_release_ids=payload.fred_release_ids,
+        window_days=payload.window_days,
+        as_of=payload.as_of,
+        idempotency_key=payload.idempotency_key,
+    )
+    sync_result = await _container(request).operations.catalyst_agenda_sync.sync(input_value)
+    return {"data": jsonable_encoder(sync_result)}
+
+
+@app.get("/api/agenda/outcome-candidates")
+async def catalyst_agenda_outcome_candidates(
+    request: Request,
+    subject_id: str | None = Query(default=None, min_length=1, max_length=128),
+    instrument_id: str | None = Query(default=None, min_length=1, max_length=256),
+    as_of: datetime | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    """Read bounded durable outcome candidates; never refresh a Provider."""
+
+    if subject_id is not None:
+        candidate_request: dict[str, Any] = {
+            "operation": "timeline",
+            "case_id": subject_id,
+            "entity_types": ["event", "report", "evidence"],
+            "limit": limit,
+        }
+    else:
+        candidate_request = {
+            "operation": "search",
+            "entity_types": ["event", "report", "evidence"],
+            "include_superseded": False,
+            "limit": limit,
+            "offset": 0,
+        }
+        if instrument_id is not None:
+            candidate_request["instrument_id"] = instrument_id
+    if as_of is not None:
+        candidate_request["as_of"] = as_of
+    candidates = await _durable_console_call(
+        request,
+        "research_memory_get",
+        {"request": candidate_request},
+    )
+    return {"candidates": _canonical_subject_transport(candidates)}
+
+
+@app.get("/api/agenda/summary-preview")
+async def catalyst_agenda_summary_preview(
+    request: Request,
+    window_days: int = Query(default=7, ge=1, le=30),
+) -> dict[str, Any]:
+    preview = _container(request).operations.catalyst_agenda_notifications.preview_daily(
+        window_days=window_days
+    )
+    return {"data": jsonable_encoder(preview)}
+
+
+@app.post("/api/agenda/summary-send")
+async def catalyst_agenda_summary_send(
+    request: Request,
+    payload: AgendaSummaryRequest,
+) -> dict[str, Any]:
+    receipt = await _container(
+        request
+    ).operations.catalyst_agenda_notifications.enqueue_daily(
+        window_days=payload.window_days
+    )
+    return {"data": jsonable_encoder(receipt)}
+
+
 @app.get("/api/operations")
 async def operations(request: Request) -> dict[str, Any]:
     services = _container(request).operations
@@ -728,6 +1073,21 @@ async def overview(request: Request) -> dict[str, Any]:
             mode="json"
         ),
         "maintenance": container.operations.maintenance.status().model_dump(mode="json"),
-        "capability_count": len(COMPACT_28_TOOL_NAMES),
+        "capability_count": len(MCP_VNEXT_TOOL_NAMES),
         "research_attention": _canonical_subject_transport(research_attention),
+        "agenda_summary": _canonical_subject_transport(
+            await _durable_console_call(
+                request,
+                "research_memory_get",
+                {
+                    "request": {
+                        "operation": "agenda",
+                        "window_days": 7,
+                        "include_history": False,
+                        "limit": 100,
+                        "offset": 0,
+                    }
+                },
+            )
+        ),
     }

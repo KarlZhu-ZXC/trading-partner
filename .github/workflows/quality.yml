@@ -100,8 +100,8 @@ jobs:
             trading-partner-console.cdx.json
           if-no-files-found: error
 
-      - name: Full pytest
-        run: uv run pytest
+      - name: Full pytest with coverage floor
+        run: uv run pytest --cov --cov-report=term
 
       - name: Isolated wheel smoke
         run: uv run python scripts/smoke_isolated_wheel.py

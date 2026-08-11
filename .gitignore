@@ -37,6 +37,7 @@ data/artifacts/
 data/automation/
 data/backups/
 data/research/hog_cycle/
+data/research/lidaxiao_bilibili/
 !data/.gitkeep
 
 # IDE / OS

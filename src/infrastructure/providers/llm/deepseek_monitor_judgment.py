@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from application.ports.monitor_judgment_provider import (
     MonitorJudgmentRequest,
@@ -35,12 +36,52 @@ class _StructuredResponse(BaseModel):
     next_trigger: str = Field(min_length=1, max_length=500)
     invalidation: str = Field(min_length=1, max_length=500)
 
+    @field_validator("market_state", "summary", "next_trigger", "invalidation")
+    @classmethod
+    def _require_chinese_explanation(cls, value: str) -> str:
+        if re.search(r"[\u3400-\u9fff]", value) is None:
+            raise ValueError("Monitor explanation fields must contain Chinese")
+        normalized = re.sub(r"\s+", "", value).lower()
+        if any(
+            ambiguous in normalized
+            for ambiguous in (
+                "昨收",
+                "昨日收盘",
+                "昨天收盘",
+                "上一收盘",
+                "上次收盘",
+                "上一根k线",
+                "前一根k线",
+                "上根k线",
+                "yesterdayclose",
+                "yesterday'sclose",
+                "previousclose",
+                "priorclose",
+                "previouscandleclose",
+            )
+        ):
+            raise ValueError("Monitor explanation used an ambiguous previous-close term")
+        return value
+
 
 _SYSTEM_PROMPT = """You are the bounded judgment layer of a read-only investment monitor.
 Use only the supplied deterministic feature snapshot and confirmed state. Never claim a fill,
-change confirmed state, invent a price, or recommend a quantity beyond supplied limits. If
-cross-asset sessions are not aligned, do not assert strict divergence. Explanatory fields must
-use Simplified Chinese; enum values and feature IDs retain their specified form. Return one JSON
+change confirmed state, invent a price, or recommend a quantity beyond supplied limits.
+Judge cross-asset alignment per fact window: quote_sessions_aligned covers fresh time-aligned
+quotes, while hourly_returns_aligned and daily_returns_aligned cover their respective comparable
+return windows. Do not assert strict divergence from a window that is not aligned. Treat
+latest_price/price_time/price_session as quote facts. previous_regular_session_close means only
+the most recent completed regular trading-session close before the quote's session; it is neither
+the literal prior calendar day's close nor the close of an arbitrary previous candle. In Chinese,
+name it only "前收（前一已完成常规交易时段收盘）" and never "昨收", "昨日收盘", or "昨天收盘".
+A return_from_previous_regular_session_close_pct is a price-only change from that baseline and may
+support preliminary pre-market, post-market, or overnight
+follow-through when fresh quotes are aligned. Never require the regular US open solely because a
+quote is from an extended session. Hourly and daily return fields have separate as-of timestamps
+and must not be described as the latest quote. A point quote is not a complete candle, volume, or
+regular-session confirmation. Explanatory fields must use Simplified Chinese.
+Do not call every instrument stale when any supplied quote is newer. Enum values and feature IDs
+retain their specified form. Return one JSON
 object with exactly: urgency (WATCH|ACTION|URGENT), phase, market_state, divergence
 (BULLISH|BEARISH|NONE), conclusion
 (WATCH|HOLD|REDUCE|WAIT|PREPARE_TO_BUY|BUY_SMALL|BUY|BUY_AGGRESSIVELY|PAUSE_BUYING|INVALIDATE),

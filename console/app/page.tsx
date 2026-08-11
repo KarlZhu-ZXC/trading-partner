@@ -19,8 +19,31 @@ import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
 
+function toNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function agendaSummary(payload: unknown) {
+  const source = envelopeData<Dict>(payload);
+  const coverage = envelopeData<Dict>(source?.coverage) ?? envelopeData<Dict>(source?.agenda) ?? envelopeData<Dict>(source?.summary) ?? source;
+  const summary = envelopeData<Dict>(coverage) ?? coverage ?? null;
+  const coverageGaps = Array.isArray((summary as Dict | null)?.coverage_gaps)
+    ? ((summary as Dict).coverage_gaps as unknown[])
+    : [];
+  return {
+    upcoming7d: toNumber(summary?.future_7d ?? summary?.upcoming_7d ?? summary?.upcoming_7_day),
+    upcoming: toNumber(summary?.upcoming_count ?? summary?.upcoming),
+    overdue: toNumber(summary?.overdue_count ?? summary?.overdue),
+    coverageGap: ("coverage_gap_count" in (summary ?? {}) || "coverage_gap" in (summary ?? {}))
+      ? toNumber(summary?.coverage_gap_count ?? summary?.coverage_gap)
+      : toNumber(coverageGaps.length),
+  };
+}
+
 export default function OverviewPage() {
   const result = useApi<Dict>("/api/overview");
+  const agenda = useApi<Dict>("/api/agenda");
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
   const monitorItems = listOf<Dict>(monitorData, "items");
@@ -65,10 +88,20 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
+  const agendaCounts = agendaSummary(agenda.data);
 
   return (
     <ConsoleShell active="overview" eyebrow="System overview" title="Investment Research Console">
       <DataBoundary loading={result.loading} error={result.error}>
+        <Card className="span-12" kicker="CATALYST AGENDA" title="Catalyst Agenda pulse" action={<Link href="/agenda">Open /agenda</Link>}>
+          <div className="agenda-summary-grid">
+            <div><span>Upcoming 7 days</span><strong>{String(agendaCounts.upcoming7d)}</strong></div>
+            <div><span>Upcoming</span><strong>{String(agendaCounts.upcoming)}</strong></div>
+            <div><span>Overdue</span><strong>{String(agendaCounts.overdue)}</strong></div>
+            <div><span>Coverage gap</span><strong>{String(agendaCounts.coverageGap)}</strong></div>
+          </div>
+        </Card>
+
         <div className="summary-strip">
           <div>
             <span>System</span>
@@ -90,7 +123,7 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card className="span-12" kicker="ATTENTION QUEUE" title="Needs Attention" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
+          <Card className="span-12" kicker="TODAY" title="Decision Inbox" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
             {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No manual action required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">

@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
+    "defusedxml>=0.7.1,<1",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "uuid6>=2024.7.10",
@@ -29,7 +30,7 @@ dependencies = [
 path = "src/application/__init__.py"
 
 [project.optional-dependencies]
-accounts-moomoo = ["moomoo-api>=10.8,<11"]
+accounts-moomoo = ["moomoo-api>=10.9,<11"]
 accounts-schwab = ["schwab-py>=1.5,<2"]
 chart = ["matplotlib>=3.10,<4"]
 company-pdf = ["pypdf>=5.0,<7"]
@@ -38,7 +39,7 @@ console = [
     "uvicorn>=0.32,<1",
 ]
 all = [
-    "moomoo-api>=10.8,<11",
+    "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
     "pypdf>=5.0,<7",
@@ -51,6 +52,8 @@ trading-partner-mcp = "interfaces.mcp.server:main"
 trading-partner-init = "interfaces.cli.initialize:main"
 trading-partner-watchlist-sync = "interfaces.cli.watchlist_sync:main"
 trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
+trading-partner-sgov-plan = "interfaces.cli.sgov_shadow_plan:main"
+trading-partner-sgov-plan-scheduler = "interfaces.cli.sgov_shadow_scheduler:main"
 trading-partner-schwab-auth = "interfaces.cli.schwab_oauth:main"
 trading-partner-account-transactions = "interfaces.cli.account_transactions:main"
 trading-partner-performance-reconciliation = "interfaces.cli.performance_reconciliation:main"
@@ -61,7 +64,10 @@ trading-partner-notifications = "interfaces.cli.notifications:main"
 trading-partner-industry-sync = "interfaces.cli.industry_sync:main"
 trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
 trading-partner-maintenance = "interfaces.cli.maintenance:main"
+trading-partner-retro = "interfaces.cli.trade_retro:main"
+trading-partner-catalyst-sync = "interfaces.cli.catalyst_sync:main"
 trading-partner-console = "interfaces.console.server:main"
+trading-partner-agent = "interfaces.cli.agent:main"
 
 # Editable installs: put src/ on sys.path so bootstrap.py and the four packages
 # resolve to live workspace sources. Do not use force-include for bootstrap —
@@ -100,7 +106,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-PyYAML>=6.0",
-    "moomoo-api>=10.8,<11",
+    "types-defusedxml>=0.7.0",
+    "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
     "pypdf>=5.0,<7",
@@ -116,6 +123,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src"]
 filterwarnings = [
+    "error",
     # schwab-py 1.x imports the compatibility namespace from websockets 14+.
     # Keep the dependency current while suppressing this upstream-only warning.
     "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets\\.legacy",
@@ -155,3 +163,7 @@ ignore_missing_imports = true
 [tool.coverage.run]
 source = ["bootstrap", "application", "domain", "infrastructure", "interfaces"]
 branch = true
+
+[tool.coverage.report]
+fail_under = 78
+show_missing = true

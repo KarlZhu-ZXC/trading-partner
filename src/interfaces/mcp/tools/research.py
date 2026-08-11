@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
+from application.dto.judgment_scorecard import JudgmentScorecardHistoryInput
 from application.dto.research_context import ResearchContextBuildInput
 from bootstrap import ApplicationContainer
 from domain.common.actor import ActorContext
@@ -371,6 +372,28 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def judgment_scorecard_history(
+        case_id: str | None = None,
+        thesis_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read immutable Judgment Scorecard S0 runs without contacting Providers."""
+        try:
+            request = JudgmentScorecardHistoryInput.model_validate(
+                {
+                    "subject_id": case_id,
+                    "thesis_id": thesis_id,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            return container.services.scorecards.history(request).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     def research_context_build(
         case_id: str | None = None,
         instrument_id: str | None = None,
@@ -403,5 +426,6 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         thesis_revision_propose=thesis_revision_propose,
         thesis_revision_confirm=thesis_revision_confirm,
         thesis_history_get=thesis_history_get,
+        judgment_scorecard_history=judgment_scorecard_history,
         research_context_build=research_context_build,
     )

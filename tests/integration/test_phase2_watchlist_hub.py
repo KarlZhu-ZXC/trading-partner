@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -147,16 +143,9 @@ def _service(
 
 @pytest.mark.asyncio
 async def test_watchlist_hub_refresh_restart_mutate_and_stale_fallback(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    database_url = f"sqlite:///{tmp_path / 'watchlist-hub.db'}"
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    database_url = migrated_sqlite_url
 
     provider = _FakeWatchlistProvider()
     service, engine = _service(database_url, provider)
@@ -288,16 +277,9 @@ async def test_watchlist_hub_refresh_restart_mutate_and_stale_fallback(
 
 @pytest.mark.asyncio
 async def test_watchlist_reads_are_durable_first_by_default(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    database_url = f"sqlite:///{tmp_path / 'watchlist-durable-first.db'}"
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    database_url = migrated_sqlite_url
     provider = _FakeWatchlistProvider()
     service, engine = _service(database_url, provider)
 
@@ -315,16 +297,9 @@ async def test_watchlist_reads_are_durable_first_by_default(
 
 @pytest.mark.asyncio
 async def test_watchlist_hub_full_sync_is_read_only_and_preserves_removed_history(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    database_url = f"sqlite:///{tmp_path / 'watchlist-full-sync.db'}"
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    database_url = migrated_sqlite_url
 
     provider = _FakeWatchlistProvider()
     provider.groups = (
@@ -426,16 +401,9 @@ class _FailingCommitUow:
 
 @pytest.mark.asyncio
 async def test_watchlist_hub_records_partial_when_source_write_outlives_db_commit(
-    tmp_path: Path,
-    project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    migrated_sqlite_url: str,
 ) -> None:
-    database_url = f"sqlite:///{tmp_path / 'watchlist-partial.db'}"
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    database_url = migrated_sqlite_url
 
     provider = _FakeWatchlistProvider()
     normal_service, engine = _service(database_url, provider)

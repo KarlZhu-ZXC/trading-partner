@@ -361,6 +361,24 @@ function ResearchSubjectDetail({
   const openQuestions = listOf<Dict>(state, "open_questions");
   const instrumentCandidates = listOf<Dict>(state, "watchlist_items").filter((candidate) => SELECTION_STATUSES.has(text(candidate.status, "")));
   const pendingCandidates = listOf<Dict>(state, "pending_candidates");
+  const liveTheses = theses.filter((thesis) => ["active", "strengthened", "weakened"].includes(text(thesis.status, "").toLowerCase()));
+  const continuitySignals = [
+    ...(String(researchSubject.status).toLowerCase() === "active" && liveTheses.length === 0
+      ? [{ key: "live-thesis", severity: "ACTION", title: "No live Thesis", detail: "Tracking is active, but no current falsifiable judgment is live." }]
+      : []),
+    ...(liveTheses.length > 0 && assumptions.length === 0
+      ? [{ key: "assumptions", severity: "GAP", title: "Assumptions are not explicit", detail: "Record the premises that must remain true for the live Thesis." }]
+      : []),
+    ...(liveTheses.length > 0 && invalidations.length === 0
+      ? [{ key: "invalidations", severity: "GAP", title: "Invalidation is not explicit", detail: "Add a falsifiable condition that would retire or weaken the judgment." }]
+      : []),
+    ...(openQuestions.length > 0
+      ? [{ key: "questions", severity: "OPEN", title: `${openQuestions.length} open question${openQuestions.length === 1 ? "" : "s"}`, detail: "Resolve these with new evidence before increasing conviction." }]
+      : []),
+    ...(pendingCandidates.length > 0
+      ? [{ key: "candidates", severity: "REVIEW", title: `${pendingCandidates.length} candidate${pendingCandidates.length === 1 ? "" : "s"} awaiting review`, detail: "Confirm, reject, or withdraw each exact proposal." }]
+      : []),
+  ];
   const [subjectEditor, setSubjectEditor] = useState(false);
   const [subjectDraft, setSubjectDraft] = useState(() => subjectDraftFrom(researchSubject));
   const [thesisEditor, setThesisEditor] = useState(false);
@@ -429,6 +447,7 @@ function ResearchSubjectDetail({
       const candidateId = candidate?.candidate_id;
       if (typeof candidateId !== "string" || !candidateId) throw new Error("Restore candidate did not return candidate_id.");
       await onWrite("research_judgment_confirm", {
+        operation: "candidate",
         candidate_id: candidateId,
         action: "confirm",
         reviewed_by: "user",
@@ -510,7 +529,7 @@ function ResearchSubjectDetail({
   }
 
   async function decideCandidate(candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) {
-    const request: Dict = { candidate_id: text(candidate.candidate_id), action, reviewed_by: "user", submitted_via: "direct" };
+    const request: Dict = { operation: "candidate", candidate_id: text(candidate.candidate_id), action, reviewed_by: "user", submitted_via: "direct" };
     if (action === "reject") request.rejection_reason = reason;
     else request.review_note = action === "withdraw" ? "User withdrew the candidate from the local Research workspace" : "Confirmed from the local Research workspace";
     try {
@@ -585,6 +604,10 @@ function ResearchSubjectDetail({
         {failure && <div className="research-state-error" role="status"><strong>Partial read failed</strong><span>{failure}</span><small>Research Subject metadata remains editable; fix state loading before editing Thesis.</small></div>}
       </Card>
       {subjectEditor && <SubjectEditor draft={subjectDraft} editing busy={busy} onChange={setSubjectDraft} onCancel={() => setSubjectEditor(false)} onSave={() => { void saveSubject(); }} />}
+      <Card className="research-continuity-check" kicker="CONTINUITY CHECK" title="Next Evidence & Review" action={<Badge value={continuitySignals.length ? `${continuitySignals.length} OPEN` : "READY"} />}>
+        <p className="card-note">Deterministic completeness prompts from durable research state. They do not fetch market facts, change conviction, or confirm a candidate.</p>
+        {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core judgment controls are present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
+      </Card>
       <Card className="research-selection-card" kicker="INSTRUMENT SELECTION" title="Candidate Instruments & Final Selection" action={<Badge value={`${instrumentCandidates.length} CANDIDATES`} />}>
         <p className="card-note">A theme Research Subject may omit a primary Instrument. Candidate-pool changes require proposal and confirmation; only `SELECTED` Instruments should seed a later Trade Plan, and selection does not rewrite Research Subject identity.</p>
         <div className="research-selection-create"><Field label="Instrument ID"><input value={candidateInstrumentId} onChange={(event) => setCandidateInstrumentId(event.target.value)} placeholder="etf:A_SHARE:159992" /></Field><Field label="Display name"><input value={candidateDisplayName} onChange={(event) => setCandidateDisplayName(event.target.value)} placeholder="Innovative drug ETF" /></Field><Field label="Reason for adding to candidate pool"><input value={candidateThesisHint} onChange={(event) => setCandidateThesisHint(event.target.value)} placeholder="Compare index coverage, liquidity, or fees" /></Field><ActionButton onClick={() => { void proposeInstrumentCandidate(); }} busy={busy}>Propose candidate</ActionButton></div>

@@ -20,6 +20,9 @@ from html.parser import HTMLParser
 from typing import Final
 from xml.etree import ElementTree as ET
 
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
+
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpRequest, HttpResponse, HttpTransport
@@ -444,8 +447,8 @@ def _parse_form4_transactions(
         except Exception:
             return None
     try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
+        root = safe_xml_fromstring(text)
+    except (ET.ParseError, DefusedXmlException):
         return None
     rule_flag: bool | None = True if _RULE_10B5_RE.search(text) else None
 

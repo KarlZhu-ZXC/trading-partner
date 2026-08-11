@@ -8,8 +8,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from application.dto.catalyst_agenda import AgendaMutationInput, AgendaQueryInput
 from application.dto.research_memory import ResearchSearchQuery
 from bootstrap import ApplicationContainer
+from domain.common.actor import ActorContext
 from interfaces.mcp.schemas import (
     DecisionRecordAppendInput,
     JournalAppendInput,
@@ -131,6 +133,39 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def catalyst_agenda_get(
+        agenda_item_id: str | None = None,
+        include_history: bool = False,
+        as_of: datetime | None = None,
+        window_days: int = 30,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read the durable Catalyst Agenda without refreshing Providers or accounts."""
+        try:
+            normalized_filters = dict(filters or {})
+            if "case_ids" in normalized_filters:
+                if "subject_ids" in normalized_filters:
+                    raise ValueError("filters cannot contain both case_ids and subject_ids")
+                normalized_filters["subject_ids"] = normalized_filters.pop("case_ids")
+            request = AgendaQueryInput.model_validate(
+                {
+                    "agenda_item_id": agenda_item_id,
+                    "include_history": include_history,
+                    "as_of": as_of,
+                    "window_days": window_days,
+                    "filters": normalized_filters,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            return container.services.catalyst_agenda.query(request).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     def journal_append(
         entry_type: str,
         title: str,
@@ -241,10 +276,59 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def catalyst_agenda_manage(
+        action: str,
+        confirmed_by: str,
+        authorization_note: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+        agenda_item_id: str | None = None,
+        expected_version: int | None = None,
+        submitted_via: str = "direct",
+    ) -> dict[str, Any]:
+        """Create/revise/cancel an Agenda item or link its durable outcome facts."""
+        try:
+            normalized_payload = dict(payload)
+            if "case_id" in normalized_payload:
+                if "subject_id" in normalized_payload:
+                    raise ValueError("payload cannot contain both case_id and subject_id")
+                normalized_payload["subject_id"] = normalized_payload.pop("case_id")
+            request = AgendaMutationInput.model_validate(
+                {
+                    "action": action,
+                    "agenda_item_id": agenda_item_id,
+                    "expected_version": expected_version,
+                    "confirmed_by": confirmed_by,
+                    "authorization_note": authorization_note,
+                    "idempotency_key": idempotency_key,
+                    "payload": normalized_payload,
+                }
+            )
+            if submitted_via not in {"direct", "codex_chat"}:
+                raise ValueError("submitted_via must be direct or codex_chat")
+            actor_context = (
+                ActorContext.codex_chat_authorized(
+                    request_id=f"mcp:agenda:{request.action.value}:{request.idempotency_key}",
+                    authorization_note=request.authorization_note,
+                )
+                if submitted_via == "codex_chat"
+                else None
+            )
+            return container.services.catalyst_agenda.manage(
+                request,
+                actor_context=actor_context,
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     return SimpleNamespace(
         research_search=research_search,
         research_report_get=research_report_get,
         research_timeline_get=research_timeline_get,
+        catalyst_agenda_get=catalyst_agenda_get,
         journal_append=journal_append,
         decision_record_append=decision_record_append,
+        catalyst_agenda_manage=catalyst_agenda_manage,
     )

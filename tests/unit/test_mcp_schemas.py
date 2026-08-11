@@ -76,7 +76,7 @@ def test_schema_rejects_naive_as_of_string() -> None:
 
 
 def test_public_tool_surface_excludes_forbidden_and_retired_names() -> None:
-    assert len(PUBLIC_TOOL_NAMES) == 28
+    assert len(PUBLIC_TOOL_NAMES) == 27
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
 

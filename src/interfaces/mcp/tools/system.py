@@ -14,7 +14,7 @@ def build_system_adapters(
     *,
     surface_profile: str,
     public_tool_count: int,
-    surface_schema_version: str = "compact-v19",
+    surface_schema_version: str = "mcp-vnext-shadow-v2",
 ) -> SimpleNamespace:
     """Build the compact system adapter."""
 

@@ -517,8 +517,8 @@ async def test_premarket_without_current_print_keeps_prior_postmarket_basis() ->
 
 
 @pytest.mark.asyncio
-async def test_premarket_older_intraday_fact_keeps_latest_close_as_baseline() -> None:
-    """An older prior-day minute is unavailable, and 前收 stays on latest close."""
+async def test_premarket_regular_fallback_keeps_its_own_session_baseline() -> None:
+    """A regular-session fallback keeps that quote's prior regular close."""
     as_of = datetime(2026, 8, 6, 9, 15, tzinfo=NY)
     daily = _chart_payload(
         days=[date(2026, 8, 4), date(2026, 8, 5)],
@@ -551,8 +551,9 @@ async def test_premarket_older_intraday_fact_keeps_latest_close_as_baseline() ->
     assert len(transport.requests) == 2
     assert result.value.last == Decimal("234.91")
     assert result.value.quote_at == datetime(2026, 8, 5, 16, 0, tzinfo=NY)
-    assert result.value.previous_close == Decimal("234.91")
-    assert result.value.previous_close != Decimal("240.22")
+    assert result.value.session is TradingSession.REGULAR
+    assert result.value.previous_close == Decimal("240.22")
+    assert result.value.previous_close != Decimal("234.91")
     assert "INTRADAY_QUOTE_UNAVAILABLE" in result.meta.warnings
 
 
@@ -596,6 +597,125 @@ async def test_quote_uses_same_day_regular_close_as_postmarket_previous_close() 
     assert result.value.high is None
     assert result.value.low is None
     assert result.value.volume is None
+
+
+@pytest.mark.asyncio
+async def test_quote_checks_early_postmarket_before_regular_quote_is_stale() -> None:
+    """A real 16:04 print must beat the 16:00 close during early post-market."""
+    as_of = datetime(2026, 7, 23, 16, 5, tzinfo=NY)
+    daily = _chart_payload(
+        days=[date(2026, 7, 22), date(2026, 7, 23)],
+        opens=[236.24, 232.0],
+        highs=[236.5, 233.18],
+        lows=[232.57, 229.11],
+        closes=[233.58, 230.25],
+        volumes=[1_273_800, 1_100_000],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    intraday = _intraday_body(
+        timestamps=[datetime(2026, 7, 23, 16, 4, tzinfo=NY)],
+        closes=[231.1],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    transport = SequenceTransport([json.dumps(daily).encode("utf-8"), intraday])
+    adapter = YahooFinanceAdapter(
+        transport,
+        clock=FixedClock(as_of),
+        max_fresh_seconds=60,
+        max_delayed_seconds=900,
+    )
+
+    result = await adapter.get_quote(_instrument(), as_of)
+
+    assert len(transport.requests) == 2
+    assert result.value.last == Decimal("231.1")
+    assert result.value.quote_at == datetime(2026, 7, 23, 16, 4, tzinfo=NY)
+    assert result.value.session is TradingSession.POST_MARKET
+    assert result.value.previous_close == Decimal("230.25")
+    assert "EXTENDED_HOURS_PRICE" in result.meta.warnings
+
+
+@pytest.mark.asyncio
+async def test_quote_keeps_latest_postmarket_print_after_window_closes() -> None:
+    """A closed request still returns a newer real post-market latest-known price."""
+    as_of = datetime(2026, 7, 23, 21, 5, tzinfo=NY)
+    daily = _chart_payload(
+        days=[date(2026, 7, 22), date(2026, 7, 23)],
+        opens=[236.24, 232.0],
+        highs=[236.5, 233.18],
+        lows=[232.57, 229.11],
+        closes=[233.58, 230.25],
+        volumes=[1_273_800, 1_100_000],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    intraday = _intraday_body(
+        timestamps=[datetime(2026, 7, 23, 19, 58, tzinfo=NY)],
+        closes=[232.4],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    transport = SequenceTransport([json.dumps(daily).encode("utf-8"), intraday])
+    adapter = YahooFinanceAdapter(
+        transport,
+        clock=FixedClock(as_of),
+        max_fresh_seconds=60,
+        max_delayed_seconds=900,
+    )
+
+    result = await adapter.get_quote(_instrument(), as_of)
+
+    assert len(transport.requests) == 2
+    assert result.value.last == Decimal("232.4")
+    assert result.value.quote_at == datetime(2026, 7, 23, 19, 58, tzinfo=NY)
+    assert result.value.session is TradingSession.POST_MARKET
+    assert result.value.previous_close == Decimal("230.25")
+    assert "EXTENDED_HOURS_PRICE" in result.meta.warnings
+    assert "OVERNIGHT_QUOTE_UNAVAILABLE" in result.meta.warnings
+
+
+@pytest.mark.asyncio
+async def test_overnight_regular_fallback_does_not_relabel_its_baseline() -> None:
+    """Without an overnight/post print, the regular quote keeps regular semantics."""
+    as_of = datetime(2026, 7, 23, 21, 5, tzinfo=NY)
+    daily = _chart_payload(
+        days=[date(2026, 7, 22), date(2026, 7, 23)],
+        opens=[236.24, 232.0],
+        highs=[236.5, 233.18],
+        lows=[232.57, 229.11],
+        closes=[233.58, 230.25],
+        volumes=[1_273_800, 1_100_000],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    intraday = _intraday_body(
+        timestamps=[datetime(2026, 7, 23, 16, 0, tzinfo=NY)],
+        closes=[230.25],
+        regular_market_time=datetime(2026, 7, 23, 16, 0, tzinfo=NY),
+        regular_market_price=230.25,
+        trading_period_at=as_of,
+    )
+    transport = SequenceTransport([json.dumps(daily).encode("utf-8"), intraday])
+    adapter = YahooFinanceAdapter(
+        transport,
+        clock=FixedClock(as_of),
+        max_fresh_seconds=60,
+        max_delayed_seconds=900,
+    )
+
+    result = await adapter.get_quote(_instrument(), as_of)
+
+    assert result.value.session is TradingSession.REGULAR
+    assert result.value.last == Decimal("230.25")
+    assert result.value.previous_close == Decimal("233.58")
+    assert "OVERNIGHT_QUOTE_UNAVAILABLE" in result.meta.warnings
 
 
 @pytest.mark.asyncio
@@ -650,6 +770,7 @@ async def test_future_quote_recovers_from_newer_intraday_bar() -> None:
     assert result.value.last == Decimal("4061.2")
     assert result.value.quote_at == datetime(2026, 7, 24, 21, 50, tzinfo=NY)
     assert result.value.session.value == "regular"
+    assert result.value.previous_close == Decimal("4055.7")
     assert "INTRADAY_QUOTE_RECOVERY" in result.meta.warnings
 
 

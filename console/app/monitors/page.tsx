@@ -112,6 +112,107 @@ function isPriceRule(rule: Dict): boolean {
     || String(rule.fact_type ?? "") === "PRICE";
 }
 
+function judgmentQuantityLabel(judgment: Dict): string {
+  const minimum = Number(judgment.quantity_min ?? 0);
+  const maximum = Number(judgment.quantity_max ?? 0);
+  if (minimum === 0 && maximum === 0) return "0 shares · Wait";
+  if (minimum === maximum) return `${minimum} shares`;
+  return `${minimum}–${maximum} shares`;
+}
+
+function judgmentFeatureLabel(featureId: string): string {
+  const latestPrice = featureId.match(/:([^:.]+)\.latest_price$/);
+  if (latestPrice) return `${latestPrice[1]} · Latest price`;
+  const quoteReturn = featureId.match(
+    /:([^:.]+)\.(?:quote_return_pct|return_from_previous_regular_session_close_pct)$/,
+  );
+  if (quoteReturn) return `${quoteReturn[1]} · Extended-session change`;
+  const relativeStrength = featureId.match(
+    /^relative_strength\.([^.]+)\.(quote_return|return_from_previous_regular_session_close|return_1h|return_4h|return_1d)_spread_pct$/,
+  );
+  if (relativeStrength) {
+    const windowLabel: Record<string, string> = {
+      quote_return: "Extended-session",
+      return_from_previous_regular_session_close: "Extended-session",
+      return_1h: "1H",
+      return_4h: "4H",
+      return_1d: "1D",
+    };
+    return `${relativeStrength[1].replaceAll("_", "/")} · ${windowLabel[relativeStrength[2]]} relative spread`;
+  }
+  if (featureId === "quote_sessions_aligned") return "Latest quotes · Time aligned";
+  if (featureId === "hourly_returns_aligned") return "Hourly returns · Window aligned";
+  if (featureId === "daily_returns_aligned") return "Daily returns · Window aligned";
+  return featureId.replaceAll("_", " ").replaceAll(".", " · ");
+}
+
+function CompositeJudgmentCard({ judgment }: { judgment: Dict }) {
+  const sources = listOf<string>(judgment, "web_source_urls");
+  const evidence = listOf<string>(judgment, "evidence_feature_ids");
+  const warnings = listOf<string>(judgment, "warning_codes");
+  const errors = listOf<string>(judgment, "error_codes");
+  const urgency = String(judgment.urgency ?? judgment.status ?? "WATCH");
+  const conclusion = String(judgment.conclusion ?? judgment.status ?? "—");
+
+  return (
+    <section className={`monitor-judgment-card ${urgency.toLowerCase()}`}>
+      <header className="monitor-judgment-header">
+        <div>
+          <span className="monitor-judgment-kicker">Composite judgment</span>
+          <strong>{conclusion}</strong>
+        </div>
+        <div className="monitor-judgment-header-meta">
+          <Badge value={urgency} />
+          <time>{formatDate(judgment.created_at)}</time>
+        </div>
+      </header>
+
+      <div className="monitor-judgment-current">
+        <span>Current read</span>
+        <p>{String(judgment.market_state ?? judgment.summary ?? "No current judgment summary.")}</p>
+      </div>
+
+      <dl className="monitor-judgment-metrics">
+        <div><dt>Phase</dt><dd>{String(judgment.phase ?? "—")}</dd></div>
+        <div><dt>Divergence</dt><dd>{String(judgment.divergence ?? "—")}</dd></div>
+        <div><dt>Suggested change</dt><dd>{judgmentQuantityLabel(judgment)}</dd></div>
+      </dl>
+
+      <div className="monitor-judgment-callouts">
+        <section className="next">
+          <span>Next trigger</span>
+          <p>{String(judgment.next_trigger ?? "No next trigger supplied.")}</p>
+        </section>
+        <section className="invalid">
+          <span>Invalidation</span>
+          <p>{String(judgment.invalidation ?? "No invalidation supplied.")}</p>
+        </section>
+      </div>
+
+      {(evidence.length > 0 || sources.length > 0 || warnings.length > 0 || errors.length > 0) && (
+        <details className="monitor-judgment-evidence">
+          <summary>Evidence & diagnostics · {evidence.length + sources.length + warnings.length + errors.length}</summary>
+          {evidence.length > 0 && <div className="monitor-judgment-features">
+            <span>Deterministic features</span>
+            <ul>{evidence.map((feature) => <li key={feature} title={feature}>{judgmentFeatureLabel(feature)}</li>)}</ul>
+          </div>}
+          {sources.length > 0 && <div className="monitor-judgment-sources">
+            <span>Web sources</span>
+            {sources.map((url) => <a href={url} key={url} rel="noreferrer" target="_blank">{url}</a>)}
+          </div>}
+          {warnings.length > 0 && <small className="warn">Warnings · {warnings.join(" · ")}</small>}
+          {errors.length > 0 && <small className="bad">Errors · {errors.join(" · ")}</small>}
+        </details>
+      )}
+
+      <footer>
+        <span>{String(judgment.provider ?? "—")} / {String(judgment.model ?? "—")}</span>
+        <span>No position or phase is changed automatically.</span>
+      </footer>
+    </section>
+  );
+}
+
 function latestFactTime(observations: Dict[]): unknown {
   return observations.reduce<unknown>((latest, observation) => {
     const candidate = observation.fact_as_of;
@@ -409,7 +510,6 @@ export default function MonitorsPage() {
             const statesByCode = new Map(states.map((state) => [String(state.rule_code), state]));
             const latest = (item.latest_run ?? {}) as Dict;
             const latestJudgment = (item.latest_judgment ?? {}) as Dict;
-            const judgmentWebSources = listOf<string>(latestJudgment, "web_source_urls");
             const priceObservation = monitorPriceObservation(monitor, rules, latest, states);
             const isEditing = editingMonitor !== null
               && editingMonitor !== undefined
@@ -465,13 +565,7 @@ export default function MonitorsPage() {
                     <span>Events <strong>{String(latest.events_created ?? 0)}</strong></span>
                   </div>
                 </div>
-                {latestJudgment.judgment_id && <section className={`monitor-judgment-card ${String(latestJudgment.urgency ?? "watch").toLowerCase()}`}>
-                  <header><strong>Composite LLM Judgment · {String(latestJudgment.conclusion ?? latestJudgment.status ?? "—")}</strong><Badge value={String(latestJudgment.urgency ?? latestJudgment.status ?? "—")} /></header>
-                  <p>{String(latestJudgment.market_state ?? latestJudgment.summary ?? "")}</p>
-                  <div><span>Phase {String(latestJudgment.phase ?? "—")}</span><span>Divergence {String(latestJudgment.divergence ?? "—")}</span><span>Quantity {String(latestJudgment.quantity_min ?? 0)}–{String(latestJudgment.quantity_max ?? 0)}</span><span>{String(latestJudgment.provider ?? "—")} / {String(latestJudgment.model ?? "—")}</span></div>
-                  <small>Next trigger: {String(latestJudgment.next_trigger ?? "—")} · Invalidation: {String(latestJudgment.invalidation ?? "—")}</small>
-                  {Boolean(latestJudgment.web_search_used) && <details><summary>Web Search Sources · {judgmentWebSources.length}</summary><div>{judgmentWebSources.map((url) => <a href={url} key={url} rel="noreferrer" target="_blank">{url}</a>)}</div></details>}
-                </section>}
+                {latestJudgment.judgment_id && <CompositeJudgmentCard judgment={latestJudgment} />}
                 <div className="rule-grid">
                   {rules.map((rule) => {
                     const state = statesByCode.get(String(rule.rule_code)) ?? { rule_code: rule.rule_code, state: "NOT_EVALUATED" };

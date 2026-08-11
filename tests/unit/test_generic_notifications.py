@@ -133,6 +133,49 @@ async def test_manual_enqueue_rejects_reused_key_with_different_payload(fixed_cl
 
 
 @pytest.mark.asyncio
+async def test_system_enqueue_is_idempotent_and_carries_no_user_authorization(fixed_clock) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    service = NotificationService(
+        SqlAlchemyMonitorRepository(engine),
+        None,
+        fixed_clock,
+        enabled=False,
+        configured=False,
+    )
+    expires_at = fixed_clock.now() + timedelta(hours=6)
+
+    first = await service.enqueue_system_text(
+        source_id="catalyst-agenda:daily:2026-08-09:w7",
+        title="未来 7 天催化事项",
+        body="TSLA · 财报发布日期待核验",
+        idempotency_key="catalyst-agenda:daily:2026-08-09:w7",
+        expires_at=expires_at,
+    )
+    replay = await service.enqueue_system_text(
+        source_id="catalyst-agenda:daily:2026-08-09:w7",
+        title="未来 7 天催化事项",
+        body="TSLA · 财报发布日期待核验",
+        idempotency_key="catalyst-agenda:daily:2026-08-09:w7",
+        expires_at=expires_at,
+    )
+
+    assert replay.notification_id == first.notification_id
+    assert first.source_type is NotificationSourceType.SYSTEM
+    assert first.confirmed_by is None
+    assert first.authorization_note is None
+    with pytest.raises(IdempotencyConflict):
+        await service.enqueue_system_text(
+            source_id="catalyst-agenda:daily:2026-08-09:w7",
+            title="未来 7 天催化事项",
+            body="different",
+            idempotency_key="catalyst-agenda:daily:2026-08-09:w7",
+            expires_at=expires_at,
+        )
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_manual_enqueue_expiry_replay_is_explicit_only(fixed_clock) -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

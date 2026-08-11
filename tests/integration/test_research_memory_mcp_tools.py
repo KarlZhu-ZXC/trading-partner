@@ -7,15 +7,10 @@ then exercises all six public tools against migrated temp SQLite.
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
-import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
@@ -52,26 +47,6 @@ NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 EARLIER = NOW - timedelta(hours=2)
 A_SHARE = "equity:A_SHARE:600519.SH"
 US = "equity:US:NVDA"
-
-
-def _alembic_config(database_url: str, project_root: Path) -> Config:
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", database_url)
-    return cfg
-
-
-def _set_env(monkeypatch: pytest.MonkeyPatch, database_url: str, name: str) -> None:
-    for key in list(os.environ):
-        if key in __import__("conftest").APP_SETTINGS_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("APP_NAME", name)
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("LOG_LEVEL", "INFO")
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("MCP_SERVER_NAME", name)
-    monkeypatch.setenv("DEFAULT_TIMEZONE", "UTC")
-    monkeypatch.setenv("PROVIDER_TIMEOUT_SECONDS", "5")
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -281,19 +256,14 @@ def _seed_research_memory(
 
 
 def test_c5_container_wires_six_services_and_health_component(
-    tmp_path: Path, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    migrated_sqlite_url: str,
 ) -> None:
-    db_path = tmp_path / "c5_container.db"
-    database_url = f"sqlite:///{db_path}"
-    _set_env(monkeypatch, database_url, "c5-container")
-    command.upgrade(_alembic_config(database_url, project_root), "head")
-
     settings = AppSettings(
         _env_file=None,  # type: ignore[call-arg]
         app_name="c5-container",
         app_env=AppEnvironment.TEST,
         log_level=LogLevel.INFO,
-        database_url=database_url,
+        database_url=migrated_sqlite_url,
         mcp_server_name="c5-container",
         default_timezone="UTC",
         provider_timeout_seconds=5.0,

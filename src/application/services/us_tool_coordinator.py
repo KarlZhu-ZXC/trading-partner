@@ -95,6 +95,14 @@ _CLOSED_SESSION_LAST_KNOWN_WARNING = WarningInfo(
     message="The market is closed; this is the latest known session value.",
     details={},
 )
+_MARKET_CLOSED_LATEST_KNOWN = WarningInfo(
+    code="MARKET_CLOSED_LATEST_KNOWN",
+    message=(
+        "The market is currently closed; display_price is the newest verified "
+        "timestamped observation, which may be an earlier extended-hours trade."
+    ),
+    details={},
+)
 _UNKNOWN_FRESHNESS_WARNING = WarningInfo(
     code="UNKNOWN_US_FRESHNESS",
     message="One or more US components have unknown freshness.",
@@ -196,6 +204,37 @@ _INTRADAY_QUOTE_UNAVAILABLE = WarningInfo(
     ),
     details={},
 )
+_MOOMOO_OVERNIGHT_PRICE = WarningInfo(
+    code="MOOMOO_OVERNIGHT_PRICE",
+    message="The latest price came from Moomoo OpenD's dedicated US overnight field.",
+    details={},
+)
+_MOOMOO_OVERNIGHT_OBSERVED_AT_SNAPSHOT_TIME = WarningInfo(
+    code="MOOMOO_OVERNIGHT_OBSERVED_AT_SNAPSHOT_TIME",
+    message=(
+        "OpenD supplies one snapshot update time rather than a separate overnight-trade "
+        "timestamp; quote_at is that source snapshot time."
+    ),
+    details={},
+)
+_MOOMOO_OVERNIGHT_LIQUIDITY_RISK = WarningInfo(
+    code="MOOMOO_OVERNIGHT_LIQUIDITY_RISK",
+    message="US overnight liquidity and spreads may differ materially from regular hours.",
+    details={},
+)
+_MOOMOO_OVERNIGHT_VENUE_UNDISCLOSED = WarningInfo(
+    code="MOOMOO_OVERNIGHT_VENUE_UNDISCLOSED",
+    message="The OpenD snapshot does not disclose the execution venue for this observation.",
+    details={},
+)
+_OVERNIGHT_QUOTE_UNAVAILABLE = WarningInfo(
+    code="OVERNIGHT_QUOTE_UNAVAILABLE",
+    message=(
+        "No verified overnight observation was available; the returned price is the "
+        "latest timestamped regular/pre/post-market value."
+    ),
+    details={},
+)
 _GENERIC_CODE_MESSAGE = "US market data warning."
 
 _KNOWN_WARNINGS = {
@@ -205,6 +244,7 @@ _KNOWN_WARNINGS = {
         _DELAYED_WARNING,
         _STALE_WARNING,
         _CLOSED_SESSION_LAST_KNOWN_WARNING,
+        _MARKET_CLOSED_LATEST_KNOWN,
         _UNKNOWN_FRESHNESS_WARNING,
         _CONTEXT_UNAVAILABLE,
         _TECHNICAL_UNAVAILABLE,
@@ -219,6 +259,11 @@ _KNOWN_WARNINGS = {
         _EXTENDED_HOURS_PRICE,
         _INTRADAY_QUOTE_RECOVERY,
         _INTRADAY_QUOTE_UNAVAILABLE,
+        _MOOMOO_OVERNIGHT_PRICE,
+        _MOOMOO_OVERNIGHT_OBSERVED_AT_SNAPSHOT_TIME,
+        _MOOMOO_OVERNIGHT_LIQUIDITY_RISK,
+        _MOOMOO_OVERNIGHT_VENUE_UNDISCLOSED,
+        _OVERNIGHT_QUOTE_UNAVAILABLE,
         _YAHOO_KR_DELAYED_QUOTE,
     )
 }

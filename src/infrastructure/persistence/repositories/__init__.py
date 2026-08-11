@@ -10,6 +10,9 @@ from infrastructure.persistence.repositories.candidate_thesis_revision import (
     SqlAlchemyCandidateThesisRevisionRepository,
     register_candidate_payload_listeners,
 )
+from infrastructure.persistence.repositories.catalyst_agenda import (
+    SqlAlchemyCatalystAgendaRepository,
+)
 from infrastructure.persistence.repositories.decision_record import (
     SqlAlchemyDecisionRecordRepository,
 )
@@ -24,6 +27,9 @@ from infrastructure.persistence.repositories.invalidation_condition import (
 )
 from infrastructure.persistence.repositories.journal import (
     SqlAlchemyJournalRepository,
+)
+from infrastructure.persistence.repositories.monitor_lifecycle import (
+    SqlAlchemyMonitorLifecycleReader,
 )
 from infrastructure.persistence.repositories.open_question import (
     SqlAlchemyOpenQuestionRepository,
@@ -67,6 +73,7 @@ register_candidate_payload_listeners()
 __all__ = [
     "SqlAlchemyAssumptionRepository",
     "SqlAlchemyCandidateThesisRevisionRepository",
+    "SqlAlchemyCatalystAgendaRepository",
     "SqlAlchemySubjectEvidenceLinkRepository",
     "SqlAlchemyDecisionRecordRepository",
     "SqlAlchemyEvidenceAssessmentRepository",
@@ -74,6 +81,7 @@ __all__ = [
     "SqlAlchemyInvalidationConditionRepository",
     "SqlAlchemyResearchSubjectRepository",
     "SqlAlchemyJournalRepository",
+    "SqlAlchemyMonitorLifecycleReader",
     "SqlAlchemyOpenQuestionRepository",
     "SqlAlchemyResearchEventRepository",
     "SqlAlchemyResearchReportRepository",

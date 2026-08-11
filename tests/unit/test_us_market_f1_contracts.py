@@ -103,8 +103,20 @@ def test_output_dto_decimal_json_and_valid_inputs() -> None:
     quote_json = quote_dto.model_dump(mode="json")
     series_json = series_dto.model_dump(mode="json")
     assert quote_json["last"] == "120.50"
+    assert quote_json["display_price"] == "120.50"
+    assert quote_json["price_basis"] == "last"
+    assert quote_json["previous_close"] == "119.00"
+    assert quote_json["previous_close_basis"] == "previous_completed_regular_session_close"
     assert quote_json["volume"] == "1000000"
     assert isinstance(quote_json["last"], str)
+
+    future_dto = USQuoteDTO.from_domain(
+        _valid_quote(instrument_id="future:US:GC=F")
+    )
+    assert future_dto.previous_close_basis == "previous_completed_daily_bar_close"
+    assert future_dto.model_dump(mode="json")["previous_close_basis"] == (
+        "previous_completed_daily_bar_close"
+    )
     assert series_json["bars"][0]["close"] == "120.50"
     assert series_json["interval"] == "1d"
 

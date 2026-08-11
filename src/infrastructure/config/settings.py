@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, DotEnvSettingsSource, NoDecode, Sett
 
 from domain.common.enums import AppEnvironment, DataCategory, LogLevel
 from domain.common.errors import ConfigurationError
+from infrastructure.config.llm import LLMEndpointConfig, resolve_llm_endpoint_config
 
 # settings.py → config → infrastructure → src → PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -43,8 +44,10 @@ _SECRET_FIELD_NAMES = frozenset(
         "dukascopy_api_key",
         "telegram_bot_token",
         "telegram_chat_id",
+        "llm_api_key",
         "bailian_api_key",
         "deepseek_api_key",
+        "retro_obsidian_journal_dir",
     }
 )
 
@@ -190,6 +193,7 @@ class AppSettings(BaseSettings):
     us_current_window_seconds: int = Field(default=300, ge=0)
     us_max_fresh_seconds: int = Field(default=30, ge=0)
     us_max_delayed_seconds: int = Field(default=900, ge=0)
+    moomoo_overnight_quote_enabled: bool = True
 
     # Phase 3A Dukascopy Jetta data (OTC metals / rolling CFDs). The current
     # dukascopy-node strategy is keyless; the old Trading Tools key is optional.
@@ -255,6 +259,13 @@ class AppSettings(BaseSettings):
     manual_watchlist_csv_path: Path | None = None
     post_market_sync_delay_minutes: int = Field(default=10, ge=0, le=120)
     post_market_sync_lock_path: Path = Path("data/locks/post_market_sync.lock")
+    telegram_agent_lock_path: Path = Path("data/locks/telegram_agent.lock")
+
+    # Scheduled Schwab SGOV Shadow plan. Installing the dedicated launchd job is
+    # the enablement gate; these values only define its calculation policy.
+    sgov_shadow_hard_cash_floor: Decimal = Field(default=Decimal("2000"), ge=0)
+    sgov_shadow_operational_buffer: Decimal = Field(default=Decimal("200"), ge=0)
+    sgov_shadow_minimum_order_notional: Decimal = Field(default=Decimal("1000"), gt=0)
 
     # Deterministic outbound delivery. Telegram never receives commands and
     # cannot mutate research, portfolio, or trading state. Legacy Monitor-prefixed
@@ -270,6 +281,7 @@ class AppSettings(BaseSettings):
     )
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    telegram_agent_user_id: str | None = None
     telegram_message_thread_id: int | None = Field(default=None, ge=1)
     notification_max_attempts: int = Field(
         default=5,
@@ -295,20 +307,33 @@ class AppSettings(BaseSettings):
     )
     # Optional server-side structured judgment for composite Monitors. These are
     # shared LLM defaults; the Monitor is currently the only runtime consumer.
+    # Shared Agent runtime feature flags.  Agent code consumes only the generic
+    # LLM_* fields below; legacy provider fields remain readable for one
+    # compatibility cycle and are normalized at ``resolved_llm_config``.
+    agent_enabled: bool = False
+    telegram_agent_enabled: bool = False
+    llm_api_style: Literal["chat_completions", "responses"] = "chat_completions"
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+    llm_reasoning_mode: Literal["none", "effort", "thinking"] = "none"
+    llm_native_web_search: Literal["disabled", "responses_web_search"] = "disabled"
+    llm_native_web_extractor: Literal[
+        "disabled", "responses_web_extractor"
+    ] = "disabled"
+    llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    llm_max_output_tokens: int = Field(default=8000, gt=0, le=100_000)
+
     monitor_judgment_enabled: bool = False
     llm_provider: Literal["bailian", "deepseek"] = "bailian"
     bailian_api_key: str | None = None
     bailian_base_url: str = Field(
         default="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-        validation_alias=AliasChoices(
-            "bailian_base_url", "BAILIAN_BASE_URL", "llm_base_url", "LLM_BASE_URL"
-        ),
+        validation_alias=AliasChoices("bailian_base_url", "BAILIAN_BASE_URL"),
     )
     bailian_model: str = Field(
         default="qwen3.8-max",
-        validation_alias=AliasChoices(
-            "bailian_model", "BAILIAN_MODEL", "llm_model", "LLM_MODEL"
-        ),
+        validation_alias=AliasChoices("bailian_model", "BAILIAN_MODEL"),
     )
     bailian_web_search_enabled: bool = Field(
         default=True,
@@ -317,6 +342,13 @@ class AppSettings(BaseSettings):
             "BAILIAN_WEB_SEARCH_ENABLED",
             "llm_web_search_enabled",
             "LLM_WEB_SEARCH_ENABLED",
+        ),
+    )
+    bailian_web_extractor_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "bailian_web_extractor_enabled",
+            "BAILIAN_WEB_EXTRACTOR_ENABLED",
         ),
     )
     deepseek_api_key: str | None = None
@@ -338,10 +370,21 @@ class AppSettings(BaseSettings):
             "MONITOR_JUDGMENT_MODEL",
         ),
     )
-    llm_reasoning_effort: Literal["high", "xhigh", "max"] = "max"
+    # ``max`` preserves the legacy Monitor default.  An explicitly blank
+    # generic value normalizes to ``None`` so ``LLM_REASONING_MODE=none`` can
+    # remain a complete provider-neutral configuration.
+    llm_reasoning_effort: str | None = "max"
     llm_output_language: Literal["zh-CN"] = "zh-CN"
     monitor_judgment_timeout_seconds: float = Field(default=120.0, gt=0, le=300)
     monitor_judgment_max_output_tokens: int = Field(default=8000, ge=512, le=8000)
+    monitor_judgment_reasoning_effort: str | None = None
+    monitor_judgment_fallback_provider: Literal["bailian", "deepseek"] | None = None
+    monitor_judgment_fallback_model: str | None = None
+    monitor_judgment_fallback_reasoning_effort: str | None = None
+    # Trade Retro always persists deterministic findings. This switch controls
+    # only the optional Chinese narrative layer.
+    trade_retro_llm_enabled: bool = True
+    retro_obsidian_journal_dir: Path | None = None
     notification_batch_size: int = Field(
         default=20,
         ge=1,
@@ -404,6 +447,7 @@ class AppSettings(BaseSettings):
         "telegram_bot_token",
         "telegram_chat_id",
         "telegram_message_thread_id",
+        "llm_api_key",
         "bailian_api_key",
         "deepseek_api_key",
         mode="before",
@@ -414,6 +458,42 @@ class AppSettings(BaseSettings):
             return None
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("llm_base_url", "llm_model", mode="before")
+    @classmethod
+    def _empty_generic_llm_value_to_none(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("llm_reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_llm_reasoning_effort(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator(
+        "monitor_judgment_reasoning_effort",
+        "monitor_judgment_fallback_provider",
+        "monitor_judgment_fallback_model",
+        "monitor_judgment_fallback_reasoning_effort",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_monitor_judgment_fallback(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return (stripped.lower() or None)
         return value
 
     @field_validator("alpha_vantage_api_keys", mode="before")
@@ -449,6 +529,7 @@ class AppSettings(BaseSettings):
     @field_validator(
         "manual_holdings_csv_path",
         "manual_watchlist_csv_path",
+        "retro_obsidian_journal_dir",
         mode="before",
     )
     @classmethod
@@ -506,6 +587,28 @@ class AppSettings(BaseSettings):
         if value is None:
             raise ValueError("post_market_sync_lock_path must not be blank")
         return value
+
+    @field_validator("telegram_agent_lock_path", mode="before")
+    @classmethod
+    def _normalize_telegram_agent_lock_path(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("telegram_agent_lock_path must not be blank")
+            return Path(value)
+        if value is None:
+            raise ValueError("telegram_agent_lock_path must not be blank")
+        return value
+
+    @field_validator("telegram_agent_user_id", mode="before")
+    @classmethod
+    def _normalize_telegram_agent_user_id(cls, value: object) -> object:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if re.fullmatch(r"[0-9]+", normalized) is None:
+            raise ValueError("telegram_agent_user_id must be numeric")
+        return normalized
 
     @field_validator("moomoo_host")
     @classmethod
@@ -603,23 +706,217 @@ class AppSettings(BaseSettings):
     @model_validator(mode="after")
     def _validate_monitor_judgment_configuration(self) -> Self:
         if self.monitor_judgment_enabled:
-            if self.llm_provider == "bailian" and self.bailian_api_key is None:
-                raise ValueError(
-                    "BAILIAN_API_KEY is required when Bailian Monitor judgment is enabled"
+            config = self.resolved_llm_config
+            if config is None:
+                legacy_key = (
+                    "BAILIAN_API_KEY" if self.llm_provider == "bailian" else "DEEPSEEK_API_KEY"
                 )
-            if self.llm_provider == "deepseek" and self.deepseek_api_key is None:
                 raise ValueError(
-                    "DEEPSEEK_API_KEY is required when DeepSeek Monitor judgment is enabled"
+                    f"{legacy_key} or a complete generic LLM endpoint is required "
+                    "when Monitor judgment is enabled"
                 )
             if (
-                self.llm_provider == "deepseek"
+                not self._generic_llm_explicit
+                and self.llm_provider == "deepseek"
                 and self.llm_reasoning_effort == "xhigh"
             ):
                 raise ValueError("DeepSeek Monitor judgment supports high or max effort")
+            try:
+                fallback = self.resolved_monitor_judgment_fallback_config
+            except ConfigurationError as exc:
+                raise ValueError(exc.message) from exc
+            if fallback is not None and (
+                fallback.base_url == config.base_url and fallback.model == config.model
+            ):
+                raise ValueError(
+                    "Monitor judgment fallback provider/model must differ from the primary"
+                )
         if not self.bailian_base_url.startswith("https://"):
             raise ValueError("Bailian base URL must use https")
         if not self.deepseek_base_url.startswith("https://"):
             raise ValueError("DeepSeek base URL must use https")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_monitor_judgment_fallback_pair(self) -> Self:
+        provider_set = self.monitor_judgment_fallback_provider is not None
+        model_set = self.monitor_judgment_fallback_model is not None
+        if provider_set != model_set:
+            raise ValueError(
+                "MONITOR_JUDGMENT_FALLBACK_PROVIDER and "
+                "MONITOR_JUDGMENT_FALLBACK_MODEL must be configured together"
+            )
+        return self
+
+    @property
+    def _generic_llm_explicit(self) -> bool:
+        """Whether any new generic endpoint field was explicitly supplied."""
+
+        # Empty placeholders in the tracked .env.example must not disable the
+        # one-cycle legacy fallback.  A non-default capability/limit is still
+        # explicit even when the endpoint fields are incomplete, and therefore
+        # fails closed instead of borrowing a legacy key.
+        if any(
+            value is not None for value in (self.llm_base_url, self.llm_api_key, self.llm_model)
+        ):
+            return True
+        return any(
+            (field in self.model_fields_set and value != default)
+            for field, value, default in (
+                ("llm_api_style", self.llm_api_style, "chat_completions"),
+                ("llm_reasoning_mode", self.llm_reasoning_mode, "none"),
+                ("llm_native_web_search", self.llm_native_web_search, "disabled"),
+                ("llm_native_web_extractor", self.llm_native_web_extractor, "disabled"),
+                ("llm_timeout_seconds", self.llm_timeout_seconds, 120.0),
+                ("llm_max_output_tokens", self.llm_max_output_tokens, 8000),
+            )
+        )
+
+    @property
+    def resolved_llm_config(self) -> LLMEndpointConfig | None:
+        """Return the one endpoint shape shared by Agent, Monitor and Retro.
+
+        With no new generic fields and no legacy key configured, an endpoint is
+        simply unavailable (the normal default for a disabled Agent).  A
+        partially supplied generic endpoint raises a typed configuration error
+        rather than borrowing fields from Bailian/DeepSeek.
+        """
+
+        if (
+            not self._generic_llm_explicit
+            and self.bailian_api_key is None
+            and self.deepseek_api_key is None
+        ):
+            return None
+        return resolve_llm_endpoint_config(
+            generic_explicit=self._generic_llm_explicit,
+            api_style=self.llm_api_style,
+            base_url=self.llm_base_url,
+            api_key=self.llm_api_key,
+            model=self.llm_model,
+            reasoning_mode=self.llm_reasoning_mode,
+            reasoning_effort=self.llm_reasoning_effort,
+            native_web_search=self.llm_native_web_search,
+            native_web_extractor=self.llm_native_web_extractor,
+            timeout_seconds=self.llm_timeout_seconds,
+            max_output_tokens=self.llm_max_output_tokens,
+            legacy_provider=self.llm_provider,
+            bailian_api_key=self.bailian_api_key,
+            bailian_base_url=self.bailian_base_url,
+            bailian_model=self.bailian_model,
+            bailian_web_search_enabled=self.bailian_web_search_enabled,
+            bailian_web_extractor_enabled=self.bailian_web_extractor_enabled,
+            deepseek_api_key=self.deepseek_api_key,
+            deepseek_base_url=self.deepseek_base_url,
+            deepseek_model=self.deepseek_model,
+        )
+
+    @property
+    def resolved_monitor_judgment_fallback_config(self) -> LLMEndpointConfig | None:
+        """Resolve the optional Monitor-only fallback endpoint.
+
+        Provider credentials and endpoint stay in configuration. Durable
+        judgments record only which provider/model actually produced that run.
+        """
+
+        provider = self.monitor_judgment_fallback_provider
+        model = self.monitor_judgment_fallback_model
+        if provider is None or model is None:
+            return None
+
+        primary = self.resolved_llm_config
+        if provider == "bailian":
+            if primary is not None and primary.api_style == "responses":
+                base_url = primary.base_url
+                api_key = primary.api_key
+                timeout_seconds = primary.timeout_seconds
+                max_output_tokens = primary.max_output_tokens
+            else:
+                if self.bailian_api_key is None:
+                    raise ConfigurationError(
+                        "BAILIAN_API_KEY is required for the Monitor judgment fallback"
+                    )
+                base_url = self.bailian_base_url
+                api_key = self.bailian_api_key
+                timeout_seconds = self.monitor_judgment_timeout_seconds
+                max_output_tokens = self.monitor_judgment_max_output_tokens
+            return LLMEndpointConfig(
+                api_style="responses",
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                reasoning_mode="effort",
+                reasoning_effort=(
+                    self.monitor_judgment_fallback_reasoning_effort
+                    or self.monitor_judgment_reasoning_effort
+                    or self.llm_reasoning_effort
+                ),
+                native_web_search="disabled",
+                timeout_seconds=timeout_seconds,
+                max_output_tokens=max_output_tokens,
+            )
+
+        if primary is not None and primary.api_style == "chat_completions":
+            base_url = primary.base_url
+            api_key = primary.api_key
+            timeout_seconds = primary.timeout_seconds
+            max_output_tokens = primary.max_output_tokens
+        else:
+            if self.deepseek_api_key is None:
+                raise ConfigurationError(
+                    "DEEPSEEK_API_KEY is required for the Monitor judgment fallback"
+                )
+            base_url = self.deepseek_base_url
+            api_key = self.deepseek_api_key
+            timeout_seconds = self.monitor_judgment_timeout_seconds
+            max_output_tokens = self.monitor_judgment_max_output_tokens
+        return LLMEndpointConfig(
+            api_style="chat_completions",
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            reasoning_mode="thinking",
+            reasoning_effort=(
+                self.monitor_judgment_fallback_reasoning_effort
+                or self.monitor_judgment_reasoning_effort
+                or self.llm_reasoning_effort
+            ),
+            native_web_search="disabled",
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+        )
+
+    @property
+    def resolved_llm_endpoint_config(self) -> LLMEndpointConfig | None:
+        """Long-form alias for callers that prefer the endpoint terminology."""
+
+        return self.resolved_llm_config
+
+    @property
+    def llm_endpoint_config(self) -> LLMEndpointConfig | None:
+        """Compatibility alias used by composition callers."""
+
+        return self.resolved_llm_config
+
+    @property
+    def resolved_config(self) -> LLMEndpointConfig | None:
+        """Short alias retained for early Agent integration callers."""
+
+        return self.resolved_llm_config
+
+    def resolved_llm_config_redacted(self) -> dict[str, object] | None:
+        config = self.resolved_llm_config
+        return None if config is None else config.redacted_dict()
+
+    @model_validator(mode="after")
+    def _validate_agent_llm_configuration(self) -> Self:
+        if self.agent_enabled or self.telegram_agent_enabled:
+            try:
+                _ = self.resolved_llm_config
+            except ConfigurationError as exc:
+                # A partially supplied generic endpoint must never borrow the
+                # missing values from a legacy provider configuration.
+                raise ValueError(exc.message) from exc
         return self
 
     @field_validator("iwencai_base_url", mode="before")
@@ -695,6 +992,11 @@ class AppSettings(BaseSettings):
             manual_watchlist_path = (PROJECT_ROOT / manual_watchlist_path).resolve()
         object.__setattr__(self, "manual_watchlist_csv_path", manual_watchlist_path)
 
+        retro_root = self.retro_obsidian_journal_dir
+        if retro_root is not None and not retro_root.is_absolute():
+            retro_root = (PROJECT_ROOT / retro_root).resolve()
+        object.__setattr__(self, "retro_obsidian_journal_dir", retro_root)
+
         lock_path = self.post_market_sync_lock_path
         if not lock_path.is_absolute():
             lock_path = (PROJECT_ROOT / lock_path).resolve()
@@ -702,6 +1004,13 @@ class AppSettings(BaseSettings):
         if not lock_path.is_relative_to(data_root):
             raise ValueError("post_market_sync_lock_path must be under project data")
         object.__setattr__(self, "post_market_sync_lock_path", lock_path)
+
+        telegram_agent_lock_path = self.telegram_agent_lock_path
+        if not telegram_agent_lock_path.is_absolute():
+            telegram_agent_lock_path = (PROJECT_ROOT / telegram_agent_lock_path).resolve()
+        if not telegram_agent_lock_path.is_relative_to(data_root):
+            raise ValueError("telegram_agent_lock_path must be under project data")
+        object.__setattr__(self, "telegram_agent_lock_path", telegram_agent_lock_path)
         return self
 
     @model_validator(mode="after")
@@ -814,7 +1123,12 @@ class AppSettings(BaseSettings):
         for key, value in raw.items():
             if key in _SECRET_FIELD_NAMES and value not in (None, "", (), []):
                 result[key] = _REDACTED
-            elif key == "database_url" and isinstance(value, str):
+            elif key in {
+                "database_url",
+                "llm_base_url",
+                "bailian_base_url",
+                "deepseek_base_url",
+            } and isinstance(value, str):
                 result[key] = _REDACTED if _CREDENTIAL_URL_RE.search(value) else value
             elif isinstance(value, Path):
                 # Non-secret paths (e.g. vendor_chain_path) appear unredacted.

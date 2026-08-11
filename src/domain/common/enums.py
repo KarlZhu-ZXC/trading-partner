@@ -49,6 +49,7 @@ class SourceRole(StrEnum):
 
 
 class TradingSession(StrEnum):
+    OVERNIGHT = "overnight"
     PRE_MARKET = "pre_market"
     REGULAR = "regular"
     POST_MARKET = "post_market"

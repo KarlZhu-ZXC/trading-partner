@@ -54,7 +54,7 @@ Codex compares the new evidence with PRIMARY, SUB, COMPETITOR, and BEAR Theses
     ↓
 Deterministic or composite Monitors persist every observation and notify only on change
     ↓
-You explicitly confirm any durable judgment or plan revision; no order is ever placed
+You explicitly confirm durable judgments and every live broker order; automation never trades
 ```
 
 | Built for | What it changes |
@@ -83,7 +83,8 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Core capabilities
 
 - **Research memory:** Research Subjects, multiple Thesis threads, journals,
-  decisions, evidence, Challenge Reviews, and versioned Trade Plans.
+  decisions, evidence, Catalyst Agenda, Judgment Scorecards, Challenge Reviews,
+  and versioned Trade Plans.
 - **Portfolio context:** Schwab, Moomoo OpenD, or strict CSV holdings; durable
   transactions, Watchlists, performance attribution, exposure, and Risk Engine v2.
 - **Market facts:** A-share, US, Korea Exchange, macro, company filings, sentiment,
@@ -92,8 +93,9 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   immutable run diagnostics, and transition-aware Telegram delivery.
 - **Technical analysis:** shared daily/weekly indicators, market structure,
   support/resistance, candlestick patterns, and auditable charts.
-- **Safe workflows:** deep dives, catalyst and market reviews, peer comparisons, and
-  a manual QuantConnect Free code/result bridge—with no order surface.
+- **Safe workflows:** deep dives, catalyst and market reviews, peer comparisons,
+  deterministic Trade Retro, a manual QuantConnect Free code/result bridge, and a
+  Schwab SGOV cash-sweep Shadow Preview plus confirmation-gated US stock/ETF orders.
 
 <details>
 <summary><strong>Expand the complete implemented capability list</strong></summary>
@@ -111,6 +113,19 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
   Moomoo OpenD, with machine-readable history/snapshot coverage before P/L claims;
   strict manual CSV remains available for holdings
   sources; durable reads never contact a broker, while refresh is explicit and read-only.
+- Refresh Schwab `cashBalance`, margin balance, positions, and supported active
+  one-leg open orders, then preview an SGOV cash sweep from the broker ask. The
+  preview subtracts a $2,000 hard cash floor, $200 operating buffer, and open
+  BUY-order reserve,
+  emits the exact proposed Schwab LIMIT/DAY/NORMAL payload, and always returns
+  `execution_effect=false`; the scheduled plan never submits an order.
+- Preview and, only after an explicit current-chat confirmation, submit or cancel one
+  exact Schwab US stock/ETF order. Live intents expire within 30–300 seconds, use
+  `cashBalance` rather than buying power, block margin and overselling, persist an
+  audit receipt, and never retry an uncertain write response.
+- Generate the same calculation for all refreshed Schwab accounts at 15:45 ET on
+  normal XNYS sessions (15 minutes before official early closes), persist one
+  idempotent daily Outbox receipt, and optionally send the plan through Telegram.
 - Persist Moomoo or CSV Watchlists with group and membership history; Moomoo's
   aggregate `All` group is the default durable read scope.
 - Analyze portfolio exposure, simulate additions, and run deterministic Risk Engine v2
@@ -118,6 +133,19 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Calculate durable native-currency FIFO or broker-basis performance summaries with
   realized/unrealized P/L, dividends, interest, fees, cash flows, event drill-down,
   and explicit `INCOMPLETE` status when history or valuation evidence is insufficient.
+- Capture Trade Plans and confirmed Decision Records before a review period, then
+  compare them with durable broker transactions in an immutable Trade Retro. Missing
+  coverage or pre-trade evidence stays explicit; optional Chinese narration cannot
+  mutate research state or orders. Human review is editable through append-only,
+  version-checked revisions for dispositions, correction notes, and action items;
+  Obsidian export touches only an owned block.
+- Maintain an append-only Catalyst Agenda for user-confirmed or free-provider
+  earnings, dividend, split, and selected FRED macro dates. Date changes retain
+  history; completed items link to durable Event/Report/Evidence facts instead of
+  being inferred from news.
+- Generate immutable Judgment Scorecards for one exact Thesis revision. The cards
+  expose evidence balance, recency, invalidation/plan/Monitor/Retro discipline, and
+  Catalyst outcome calibration without producing a single opaque score.
 - Propose and explicitly confirm versioned Trade Plans, calculate non-executing A-share/US
   position-sizing ranges, and compile machine-evaluable plan conditions into durable monitors.
 - Open a theme Research Subject before an execution product is known, maintain a
@@ -150,22 +178,32 @@ basis, and typed warnings. Missing or stale data is disclosed instead of fabrica
 - Prepare hashed LEAN strategy packages for user-operated QuantConnect Free web
   backtests and import downloaded result JSON with explicit reproducibility gaps.
 - Browse system health, a durable-only Data Quality Center, every Research Subject
-  and Thesis, all 28 MCP capabilities, Monitor runs/events, accounts, and
-  operational state in a local web console with no embedded chat model. Its Attention Queue links
+  and Thesis, Trade Retro Run/review history, all 27 MCP capabilities, Monitor runs/events, accounts, and
+  operational state in a local web console with an opt-in Shared Agent Chat. Its Attention Queue links
   pending research candidates, failed Monitor runs, data-quality gaps, and
   notification failures to the relevant workspace. An explicit Monitor run may
   invoke the configured server-side LLM only when that Monitor has an enabled
-  composite judgment policy.
+  composite judgment policy; Trade Retro may optionally use the same bounded model
+  layer only to narrate already-computed deterministic findings.
 
 </details>
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
-Trading Partner is a research service, not a broker or autonomous trading agent.
+Trading Partner is a research-first service, not an autonomous trading agent.
 
-It does **not** expose order placement, fills, live execution, a local/remote
-automated backtest runner, or autonomous thesis confirmation. Its QuantConnect Free
+It exposes a deliberately narrow Schwab order boundary for explicitly confirmed,
+single-leg US stock/ETF orders. Preview, submit, status, and cancel share one grouped
+`broker_order_manage` tool; there is no generic broker request, autonomous execution,
+order replacement, options/complex-order builder, or unattended cash sweep. Its QuantConnect Free
 bridge only prepares code and imports a result after the user operates the web UI.
+Every live submit consumes a short-lived durable preview and exact user authorization;
+an unknown Provider response is recorded as `UNKNOWN` and never submitted again automatically.
+The v1 contract supports `LIMIT` and `STOP_LIMIT` BUY/SELL orders plus protective
+`MARKET`, `STOP`, `TRAILING_STOP`, and `TRAILING_STOP_LIMIT` SELL orders. `AM`, `PM`,
+and `SEAMLESS` accept LIMIT orders only; `SEAMLESS` ends at 20:00 ET and does not
+represent Schwab's separate overnight session. Unbounded BUY market/stop/trailing
+orders are blocked by the no-margin cash guard.
 Technical outputs are derived facts—not forecasts, strategies, or trade signals.
 Ordinary portfolio questions read durable snapshots; broker refreshes happen only
 when explicitly requested.
@@ -182,7 +220,7 @@ per-user runtime:
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.5.1"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.6.0"
 trading-partner-init
 ```
 
@@ -224,10 +262,15 @@ The local Console renders both on its overview page.
 
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Local Console
 
-The optional Console is a loopback-only control room with no embedded chat model,
-running over the same
-application services and compact-28 capability registry used by MCP. Start the API
-and frontend in separate terminals:
+The optional Console is a loopback-only control room with an opt-in Shared Agent rail
+that remains available beside the active Research, Monitor, Portfolio, or operations page,
+running over the same application services and the 27-capability MCP vNext registry used
+by MCP. Start the API and frontend in separate terminals:
+
+Shared Agent Runtime is a disabled-by-default core attached to the local Console and to the
+authorized Telegram Agent poller. Its private `tp_*` model functions do not increase the
+27-tool public MCP surface. Telegram Agent actions, when proposed, remain behind explicit
+opaque-token Confirm/Reject callbacks; no model turn can execute them directly.
 
 ```bash
 # Terminal 1
@@ -242,6 +285,11 @@ npm run dev
 
 Open `http://localhost:3000`. The Console provides:
 
+The browser frontend automatically obtains and refreshes the process-local Console
+session token, so normal use adds no login or token-copy step. The allowed frontend
+origins are limited to port 3000 on `localhost` and `127.0.0.1`; direct scripts must
+fetch `GET /api/session` and send `X-Trading-Partner-Console-Token` on write requests.
+
 - an Attention Queue for pending candidates, failed Monitor runs, data-quality
   gaps, and notification dead letters;
 - Research Subject lifecycle controls, Thesis revisions, versioned Trade Plans,
@@ -249,6 +297,14 @@ Open `http://localhost:3000`. The Console provides:
   Journal/Decision append, Challenge Review, and research workflows;
 - durable Holdings, Activity, Performance, and Risk views without an implicit
   broker refresh;
+- immutable Trade Retro runs with explicit controls to capture next week's pre-trade
+  plan snapshot, audit the previous completed week, inspect every Finding and
+  transaction reference, append versioned human review edits, and export the run plus
+  latest review into one owned block in the configured Obsidian journal;
+- a Catalyst Agenda page for durable scope/coverage, confirmed edits, free Yahoo/FRED
+  sync, selectable Event/Report/Evidence outcome linking, append-only outcome
+  corrections, and optional Telegram summaries, plus a Judgment Scorecard
+  page for generating and comparing immutable Thesis-revision calibration runs;
 - Monitor definition editing with price, daily/weekly technical-indicator and other
   deterministic fact rules, optional trigger/recovery hysteresis, plus per-Monitor
   Run, event, warning, error, rule-observation, and structured Provider-diagnostic
@@ -266,11 +322,12 @@ Open `http://localhost:3000`. The Console provides:
   routing/admission, scheduler installation/load/last-exit state, and next-due
   Monitor timing; and
 - a Market & Technical Lens for instrument resolution, quotes, technical snapshots,
-  and chart rendering, alongside the generic 28-tool capability workbench.
+  and chart rendering, alongside the generic 27-tool capability workbench.
 
 Page loads are durable-only and do not contact Providers. Writes and external
 actions require an explicit click and retain the underlying confirmation,
-expected-version, actor, and idempotency gates. The Console has no order surface.
+expected-version, actor, and idempotency gates. The Console has no live order control;
+live Schwab orders are available only through the confirmation-gated MCP operation.
 See the [local Console and maintenance guide](docs/operations/local-console-and-maintenance.md)
 for the detailed boundary.
 
@@ -282,6 +339,29 @@ uv run trading-partner-watchlist-sync
 
 # Due-checked US post-market account and Watchlist refresh
 uv run trading-partner-post-market-sync
+
+# Refresh Schwab and print an immediate SGOV Shadow purchase-plan table
+uv run trading-partner-sgov-plan preview
+
+# Install the token-free 15:45 ET daily Shadow-plan scheduler
+uv run trading-partner-sgov-plan-scheduler install
+uv run trading-partner-sgov-plan-scheduler status
+
+# Before a week starts, freeze the Trade Plans and Decision Records to audit
+uv run trading-partner-retro prepare \
+  --start 2026-08-10 --end 2026-08-17 \
+  --idempotency-key retro-plan-2026-w33
+
+# After that period, audit durable transactions and optionally export to Obsidian
+uv run trading-partner-retro run \
+  --start 2026-08-10 --end 2026-08-17 \
+  --idempotency-key retro-run-2026-w33 --export-obsidian
+
+# Durable-only history; this never refreshes a broker
+uv run trading-partner-retro history
+
+# Scheduler-friendly: review Monday→Saturday, export, then snapshot next week
+uv run trading-partner-retro weekly --export-obsidian
 
 # Diagnose Schwab token age without opening a browser
 uv run trading-partner-schwab-auth status
@@ -317,6 +397,13 @@ uv run trading-partner-monitor-notifications flush
 # Explicitly refresh free futures definitions and persist EOD statistics
 uv run trading-partner-futures-sync --product CME:GC --trade-date 2026-07-24
 
+# Explicitly refresh current Yahoo dates and selected FRED release calendars
+uv run trading-partner-catalyst-sync sync \
+  --fred-release-id 10 --fred-release-id 46 --window-days 30 --notify --flush
+
+# Read the latest durable Catalyst Agenda sync receipt without Provider access
+uv run trading-partner-catalyst-sync status
+
 # Start the loopback-only console API (frontend: cd console && npm run dev)
 uv sync --extra console
 uv run trading-partner-console
@@ -343,12 +430,33 @@ bot one message, then set `NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`, and
 Monitor alerts plus explicitly authorized manual text; repeat Monitor observations
 remain in run history without notifying again. The hourly local dispatcher retries
 pending messages without opening a Codex task or consuming Codex tokens. Only a
-Monitor with an explicitly enabled composite judgment policy may call the configured
-server-side LLM, and unchanged qualitative feature states skip that call. Search
-usage and bounded source URLs are persisted, while price/account facts remain owned
-by deterministic Providers.
+Monitor with an explicitly enabled composite judgment policy or an explicitly run
+Trade Retro narrative may call the configured server-side LLM. Monitor calls skip
+unchanged qualitative feature states; Trade Retro calls receive only already-
+persisted deterministic facts. Search usage and bounded source URLs are persisted,
+while price/account facts remain owned by deterministic Providers.
 The unified dispatcher also owns A-share, US, and KR post-market Monitor execution;
 Codex market-review Automations must not duplicate Monitor evaluation or alerts.
+
+Telegram Agent 对入站聊天是独立 opt-in：在通用 `LLM_*` 端点就绪后设置
+`TELEGRAM_AGENT_ENABLED=true`，并复用同一 Bot 的数字 `TELEGRAM_CHAT_ID` allowlist。
+负数群组 chat 还必须设置数字 `TELEGRAM_AGENT_USER_ID`；正数私聊默认只接受该 chat 对应的
+用户。陌生 chat 或陌生用户不会调用模型、工具或确认 gateway。
+启动或管理本地 long poller：
+
+```bash
+uv run trading-partner-agent telegram run
+uv run trading-partner-agent telegram status
+uv run trading-partner-agent telegram install
+uv run trading-partner-agent telegram uninstall
+```
+
+陌生 chat 静默忽略；Agent cursor 与消息回执持久化，Monitor/Agenda/SGOV Outbox
+仍由原有通知 sender 独立处理。Telegram Agent 的 assistant marker 在发消息前写入，
+重启时不重复调用模型或重发已标记回答，但发送前崩溃窗口可能漏发（at-most-once）。
+Pending Action 卡片只携带 `c:<opaque-token>` / `r:<opaque-token>`（不含动作参数）；回调
+再次点击只返回已处理，不会重复执行。若 assistant marker 已落盘而回答或动作卡发送前
+进程崩溃，重放可能缺少该回复/卡片，但不会再次调用模型或重放确认动作。
 
 ## <img src="docs/assets/readme/sections/architecture.svg" alt="" width="24" /> Architecture
 
@@ -385,7 +493,7 @@ into an official benchmark.
 
 ```mermaid
 flowchart TB
-    Host[Codex or another MCP host] --> MCP[Trading Partner MCP<br/>28 compact research tools]
+    Host[Codex or another MCP host] --> MCP[Trading Partner MCP<br/>27 vNext capabilities]
     MCP --> App[Application services<br/>cutoffs · freshness · typed degradation]
     App --> Router[Asset-aware Provider Router<br/>cache · limiter · fallback policy]
     App <--> Store[(SQLite / configured DB<br/>research memory · subjects · plans<br/>snapshots · watchlists · monitors)]

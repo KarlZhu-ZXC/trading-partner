@@ -63,12 +63,14 @@ export function ActionButton({
   children,
   onClick,
   busy = false,
+  disabled = false,
   busyLabel = "Working…",
   tone = "default",
 }: {
   children: ReactNode;
   onClick: () => void;
   busy?: boolean;
+  disabled?: boolean;
   busyLabel?: string;
   tone?: "default" | "warning";
 }) {
@@ -76,7 +78,7 @@ export function ActionButton({
     <button
       className={`action-button ${tone}`}
       onClick={onClick}
-      disabled={busy}
+      disabled={busy || disabled}
       type="button"
     >
       {busy ? busyLabel : children}

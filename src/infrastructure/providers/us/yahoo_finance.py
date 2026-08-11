@@ -70,11 +70,12 @@ _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 _MAX_DAILY_STALE_NATURAL_DAYS = 4
 _SESSION_CLOSE = time(16, 0)
 _KR_SESSION_CLOSE = time(15, 30)
-_CURRENT_QUOTE_CUTOFF_SECONDS = 300
 _EXTENDED_HOURS_PRICE_WARNING = "EXTENDED_HOURS_PRICE"
 _EXTENDED_HOURS_SESSION_RANGE_WARNING = "EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE"
 _INTRADAY_QUOTE_RECOVERY_WARNING = "INTRADAY_QUOTE_RECOVERY"
 _INTRADAY_QUOTE_UNAVAILABLE_WARNING = "INTRADAY_QUOTE_UNAVAILABLE"
+_MARKET_CLOSED_LATEST_KNOWN_WARNING = "MARKET_CLOSED_LATEST_KNOWN"
+_OVERNIGHT_QUOTE_UNAVAILABLE_WARNING = "OVERNIGHT_QUOTE_UNAVAILABLE"
 _PREVIOUS_CLOSE_RECOVERY_WARNING = "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY"
 
 _INTERVAL_WIRE: Mapping[USBarInterval, str] = {
@@ -239,6 +240,7 @@ class YahooFinanceAdapter:
         enabled: bool = True,
         timeout_seconds: float = 15.0,
         user_agent: str = "TradingPartner/1.0",
+        current_window_seconds: int = 300,
         max_fresh_seconds: int = 30,
         max_delayed_seconds: int = 900,
     ) -> None:
@@ -250,6 +252,15 @@ class YahooFinanceAdapter:
             raise DataContractError(
                 "timeout_seconds must be a positive number",
                 details={"field": "timeout_seconds", "rule": "positive"},
+            )
+        if (
+            not isinstance(current_window_seconds, int)
+            or isinstance(current_window_seconds, bool)
+            or current_window_seconds < 0
+        ):
+            raise DataContractError(
+                "current_window_seconds must be a nonnegative int",
+                details={"field": "current_window_seconds", "rule": "nonnegative"},
             )
         if (
             not isinstance(max_fresh_seconds, int)
@@ -279,6 +290,7 @@ class YahooFinanceAdapter:
         self._enabled = bool(enabled)
         self._timeout_seconds = float(timeout_seconds)
         self._user_agent = user_agent
+        self._current_window_seconds = current_window_seconds
         self._max_fresh_seconds = max_fresh_seconds
         self._max_delayed_seconds = max_delayed_seconds
 
@@ -847,8 +859,14 @@ class YahooFinanceAdapter:
         """
         quote_day = quote_at.astimezone(timezone).date()
         same_day_close_allowed = (
-            asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
-            and quote_session is TradingSession.POST_MARKET
+            (
+                asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}
+                and quote_session in {TradingSession.POST_MARKET, TradingSession.OVERNIGHT}
+            )
+            or (
+                asset_type is AssetType.FUTURE
+                and quote_at.astimezone(timezone).time() >= time(18, 0)
+            )
         )
         selected_bar: MarketBar | None = None
         for bar in reversed(bars):
@@ -862,6 +880,7 @@ class YahooFinanceAdapter:
         recoverable_session = quote_session in {
             TradingSession.PRE_MARKET,
             TradingSession.POST_MARKET,
+            TradingSession.OVERNIGHT,
         }
         equity_like = asset_type in {
             AssetType.EQUITY,
@@ -1050,13 +1069,35 @@ class YahooFinanceAdapter:
         additional_warnings: list[str] = []
         if instrument.market is Market.KR:
             additional_warnings.append("YAHOO_KR_DELAYED_QUOTE")
-        current_cutoff = 0 <= (now - as_of).total_seconds() <= _CURRENT_QUOTE_CUTOFF_SECONDS
+        current_cutoff = 0 <= (now - as_of).total_seconds() <= self._current_window_seconds
         regular_age = (as_of - quote_at).total_seconds()
-        if (
-            current_cutoff
-            and meta_session is not TradingSession.CLOSED
+        equity_like = instrument.asset_type in {
+            AssetType.EQUITY,
+            AssetType.ETF,
+            AssetType.INDEX,
+        }
+        # A query shortly after Yahoo's post-market window has closed is still a
+        # current quote request.  The regular-market metadata can then be older
+        # than a real, timestamped post-market print.  Check the bounded
+        # includePrePost minute window for equity-like instruments even though
+        # the request-time session is CLOSED; this recovers only an actual newer
+        # observation and never implies continuous overnight trading.
+        extended_or_closed_us_equity = (
+            instrument.market is Market.US
+            and equity_like
+            and meta_session
+            in {
+                TradingSession.PRE_MARKET,
+                TradingSession.POST_MARKET,
+                TradingSession.OVERNIGHT,
+                TradingSession.CLOSED,
+            }
+        )
+        should_check_intraday = extended_or_closed_us_equity or (
+            meta_session is not TradingSession.CLOSED
             and regular_age > self._max_delayed_seconds
-        ):
+        )
+        if current_cutoff and should_check_intraday:
             try:
                 (
                     intraday_bar,
@@ -1073,11 +1114,6 @@ class YahooFinanceAdapter:
             ):
                 additional_warnings.append(_INTRADAY_QUOTE_UNAVAILABLE_WARNING)
             else:
-                equity_like = instrument.asset_type in {
-                    AssetType.EQUITY,
-                    AssetType.ETF,
-                    AssetType.INDEX,
-                }
                 current_session_observation = (
                     not equity_like
                     or intraday_bar.timestamp.astimezone(timezone).date()
@@ -1093,6 +1129,10 @@ class YahooFinanceAdapter:
                         intraday_meta, quote_at, market=instrument.market
                     )
                     meta_session = quote_session
+                    if request_session is TradingSession.CLOSED:
+                        additional_warnings.append(_MARKET_CLOSED_LATEST_KNOWN_WARNING)
+                    elif request_session is TradingSession.OVERNIGHT:
+                        additional_warnings.append(_OVERNIGHT_QUOTE_UNAVAILABLE_WARNING)
                     if quote_session in {
                         TradingSession.PRE_MARKET,
                         TradingSession.POST_MARKET,
@@ -1114,24 +1154,17 @@ class YahooFinanceAdapter:
                     else:
                         additional_warnings.append(_INTRADAY_QUOTE_RECOVERY_WARNING)
 
-        baseline_at = quote_at
-        baseline_session = quote_session
-        if instrument.asset_type in {AssetType.EQUITY, AssetType.ETF, AssetType.INDEX} and (
-            request_session in {TradingSession.PRE_MARKET, TradingSession.REGULAR}
-            or (
-                request_session is TradingSession.POST_MARKET
-                and quote_session is TradingSession.POST_MARKET
-            )
+        if (
+            request_session is TradingSession.OVERNIGHT
+            and quote_session is not TradingSession.OVERNIGHT
+            and _OVERNIGHT_QUOTE_UNAVAILABLE_WARNING not in additional_warnings
         ):
-            # ``previous_close`` describes the requested current session even
-            # when its latest usable price is an older regular/post-market fact.
-            baseline_at = as_of
-            baseline_session = request_session
+            additional_warnings.append(_OVERNIGHT_QUOTE_UNAVAILABLE_WARNING)
 
         previous_close, previous_close_recovered = self._previous_session_close(
             bars,
-            quote_at=baseline_at,
-            quote_session=baseline_session,
+            quote_at=quote_at,
+            quote_session=quote_session,
             asset_type=instrument.asset_type,
             regular_market_at=regular_market_at,
             regular_market_price=regular_market_price,

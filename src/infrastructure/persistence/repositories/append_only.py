@@ -14,6 +14,9 @@ from sqlalchemy.orm import Mapper
 
 from domain.common.errors import AppendOnlyViolation, ImmutableResearchRecord
 from infrastructure.persistence.orm import (
+    CatalystAgendaIdentityRow,
+    CatalystAgendaSyncReceiptRow,
+    CatalystAgendaVersionRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
     JournalEntryRow,
@@ -27,6 +30,9 @@ from infrastructure.persistence.orm import (
 _LISTENERS_REGISTERED = False
 
 _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
+    CatalystAgendaIdentityRow,
+    CatalystAgendaVersionRow,
+    CatalystAgendaSyncReceiptRow,
     ResearchEvidenceRow,
     SubjectEvidenceLinkRow,
     EvidenceAssessmentRow,
@@ -37,6 +43,9 @@ _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
 )
 
 _PHASE1C_ID_ATTR: dict[type[Any], str] = {
+    CatalystAgendaIdentityRow: "agenda_item_id",
+    CatalystAgendaVersionRow: "agenda_item_id",
+    CatalystAgendaSyncReceiptRow: "receipt_id",
     ResearchEvidenceRow: "evidence_id",
     SubjectEvidenceLinkRow: "link_id",
     EvidenceAssessmentRow: "assessment_id",
@@ -47,6 +56,9 @@ _PHASE1C_ID_ATTR: dict[type[Any], str] = {
 }
 
 _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
+    CatalystAgendaIdentityRow: "catalyst_agenda_identity",
+    CatalystAgendaVersionRow: "catalyst_agenda_version",
+    CatalystAgendaSyncReceiptRow: "catalyst_agenda_sync_receipt",
     ResearchEvidenceRow: "evidence",
     SubjectEvidenceLinkRow: "subject_evidence_link",
     EvidenceAssessmentRow: "evidence_assessment",

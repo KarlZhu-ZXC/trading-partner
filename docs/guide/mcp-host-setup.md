@@ -10,7 +10,7 @@ Install the tagged core package with [uv](https://docs.astral.sh/uv/concepts/too
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.5.1"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.6.0"
 trading-partner-init --json
 ```
 

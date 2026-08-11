@@ -1,7 +1,8 @@
 # Trading Partner 中文快速开始
 
 本指南用于第一次安装核心 MCP，并把它接入 Codex 或其他支持本地 stdio 的
-MCP 客户端。Trading Partner 是研究、事实和长期记忆服务，没有下单接口。
+MCP 客户端。Trading Partner 是研究、事实和长期记忆服务；仅 Schwab 单腿美股/ETF
+提供短时效预览后逐笔确认的下单/状态/撤单接口，不提供自动交易。
 
 ## 1. 安装
 
@@ -9,7 +10,7 @@ MCP 客户端。Trading Partner 是研究、事实和长期记忆服务，没有
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.5.1"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.6.0"
 trading-partner-init --json
 ```
 

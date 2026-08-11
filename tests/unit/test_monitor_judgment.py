@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -10,10 +13,22 @@ from application.ports.monitor_judgment_provider import (
     MonitorJudgmentRequest,
     MonitorJudgmentResponse,
 )
-from application.services.monitor_judgment_service import MonitorJudgmentService
+from application.services.monitor_judgment_service import (
+    MonitorJudgmentService,
+    _daily_returns_aligned,
+)
+from domain.common.enums import TradingSession
+from domain.common.errors import DataContractError, ProviderTimeoutError
+from domain.us_market.enums import USBarInterval
 from infrastructure.providers.llm import (
     BailianMonitorJudgmentProvider,
     DeepSeekMonitorJudgmentProvider,
+)
+from infrastructure.providers.llm.bailian_monitor_judgment import (
+    _StructuredResponse as _BailianStructuredResponse,
+)
+from infrastructure.providers.llm.deepseek_monitor_judgment import (
+    _StructuredResponse as _DeepSeekStructuredResponse,
 )
 
 
@@ -98,6 +113,8 @@ async def test_bailian_adapter_requests_qwen_max_reasoning_search_and_chinese_js
     assert captured["tools"] == [{"type": "web_search"}]
     assert "tool_choice" not in captured
     assert "temperature" not in captured
+    assert "前一已完成常规交易时段收盘" in json.dumps(captured, ensure_ascii=False)
+    assert "禁止称" in json.dumps(captured, ensure_ascii=False)
     await client.aclose()
 
 
@@ -230,7 +247,32 @@ async def test_deepseek_adapter_remains_selectable_with_chinese_json() -> None:
     assert captured["model"] == "deepseek-v4-flash"
     assert captured["reasoning_effort"] == "max"
     assert captured["response_format"] == {"type": "json_object"}
+    assert "previous_regular_session_close" in json.dumps(captured, ensure_ascii=False)
     await client.aclose()
+
+
+@pytest.mark.parametrize(
+    "response_type", (_BailianStructuredResponse, _DeepSeekStructuredResponse)
+)
+@pytest.mark.parametrize("ambiguous", ("相对昨收上涨", "相对上一根 K 线收盘上涨"))
+def test_monitor_llm_rejects_ambiguous_previous_close_language(
+    response_type: type,
+    ambiguous: str,
+) -> None:
+    with pytest.raises(ValueError, match="ambiguous previous-close"):
+        response_type(
+            urgency="WATCH",
+            phase="观察阶段",
+            market_state="市场状态稳定",
+            divergence="NONE",
+            conclusion="WAIT",
+            quantity_min=0,
+            quantity_max=0,
+            summary=ambiguous,
+            evidence_feature_ids=(),
+            next_trigger="等待新的确定性事实",
+            invalidation="关键事实缺失时失效",
+        )
 
 
 def test_judgment_guard_downgrades_unaligned_action_and_clamps_quantity() -> None:
@@ -265,3 +307,479 @@ def test_judgment_guard_downgrades_unaligned_action_and_clamps_quantity() -> Non
     assert (result.quantity_min, result.quantity_max) == (0, 0)
     assert result.web_search_used is True
     assert result.web_source_urls == ("https://example.com/macro",)
+
+
+def test_judgment_guard_allows_quote_aligned_action_with_stale_return_bars() -> None:
+    service = MonitorJudgmentService(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    raw = MonitorJudgmentResponse(
+        urgency="ACTION",
+        phase="A_TOP_RUN",
+        market_state="盘前报价已同步",
+        divergence="BULLISH",
+        conclusion="BUY_SMALL",
+        quantity_min=1,
+        quantity_max=3,
+        summary="fresh quote spread supports a small add",
+        evidence_feature_ids=("relative_strength.gdxu_xau.quote_return_spread_pct",),
+        next_trigger="quote spread confirmation",
+        invalidation="quote alignment lost",
+    )
+
+    result = service._validate(  # noqa: SLF001 - compact invariant test
+        raw,
+        '{"phase_B_remaining":5}',
+        {
+            "sessions_aligned": True,
+            "quote_sessions_aligned": True,
+            "hourly_returns_aligned": False,
+            "daily_returns_aligned": False,
+        },
+        ("relative_strength.gdxu_xau.quote_return_spread_pct",),
+    )
+
+    assert result.conclusion == "BUY_SMALL"
+    assert result.divergence == "BULLISH"
+    assert (result.quantity_min, result.quantity_max) == (1, 3)
+
+
+def test_judgment_guard_rejects_stale_daily_evidence_despite_fresh_quotes() -> None:
+    service = MonitorJudgmentService(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    raw = MonitorJudgmentResponse(
+        urgency="ACTION",
+        phase="A_TOP_RUN",
+        market_state="最新报价已对齐，日线窗口仍过旧。",
+        divergence="BEARISH",
+        conclusion="REDUCE",
+        quantity_min=10,
+        quantity_max=15,
+        summary="不得用过旧日线价差做减仓判断。",
+        evidence_feature_ids=("relative_strength.GDX_GLD.return_1d_spread_pct",),
+        next_trigger="等待日线窗口对齐。",
+        invalidation="日线事实缺失。",
+    )
+
+    result = service._validate(  # noqa: SLF001 - compact invariant test
+        raw,
+        '{"confirmed_position":50,"runner_target_min":15}',
+        {
+            "sessions_aligned": True,
+            "quote_sessions_aligned": True,
+            "hourly_returns_aligned": False,
+            "daily_returns_aligned": False,
+        },
+        ("relative_strength.GDX_GLD.return_1d_spread_pct",),
+    )
+
+    assert result.conclusion == "WAIT"
+    assert result.divergence == "NONE"
+    assert (result.quantity_min, result.quantity_max) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_features_use_live_quotes_without_relabeling_old_bars_as_latest() -> None:
+    now = datetime(2026, 8, 10, 8, 6, tzinfo=UTC)
+    stale_daily = datetime(2026, 8, 5, 20, tzinfo=UTC)
+    quote_times = {
+        "commodity_spot:OTC:XAUUSD": datetime(2026, 8, 10, 8, 5, tzinfo=UTC),
+        "etf:US:GDXU": datetime(2026, 8, 10, 8, 4, tzinfo=UTC),
+    }
+
+    async def snapshot(request):
+        instrument_id = request.instrument_id
+        data = SimpleNamespace(
+            quote_at=quote_times[instrument_id],
+            session=(
+                None
+                if instrument_id.endswith("XAUUSD")
+                else TradingSession.PRE_MARKET
+            ),
+            display_price=Decimal("4354.8") if instrument_id.endswith("XAUUSD") else None,
+            last=Decimal("132.07") if instrument_id.endswith("GDXU") else None,
+            previous_close=(
+                Decimal("4340") if instrument_id.endswith("XAUUSD") else Decimal("130")
+            ),
+            price_basis="mid" if instrument_id.endswith("XAUUSD") else None,
+        )
+        return SimpleNamespace(
+            ok=True,
+            data=data,
+            sources=(SimpleNamespace(name="live_quote"),),
+            warnings=(),
+            errors=(),
+        )
+
+    async def bars(request):
+        count = 5 if request.interval is USBarInterval.SIXTY_MINUTES else 4
+        values = tuple(
+            SimpleNamespace(timestamp=stale_daily, close=Decimal(100 + index))
+            for index in range(count)
+        )
+        return SimpleNamespace(
+            ok=True,
+            data=SimpleNamespace(bars=values),
+            sources=(SimpleNamespace(name="historical_bars"),),
+            warnings=(),
+            errors=(),
+        )
+
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(side_effect=snapshot)
+    market.get_market_bars = AsyncMock(side_effect=bars)
+    clock = MagicMock()
+    clock.now.return_value = now
+    service = MonitorJudgmentService(MagicMock(), market, MagicMock(), clock, MagicMock())
+    monitor = SimpleNamespace(
+        judgment_policy=SimpleNamespace(
+            reference_instrument_ids=("commodity_spot:OTC:XAUUSD", "etf:US:GDXU"),
+            relative_strength_pairs=(
+                ("gdxu_xau", "etf:US:GDXU", "commodity_spot:OTC:XAUUSD"),
+            ),
+        )
+    )
+
+    features, allowed_ids, _signature = await service._features(monitor, ())  # noqa: SLF001
+
+    gdxu = features["instruments"]["etf:US:GDXU"]
+    assert gdxu["latest_price"] == "132.07"
+    assert gdxu["price_session"] == "pre_market"
+    assert gdxu["price_source"] == "quote"
+    assert gdxu["price_time"] == quote_times["etf:US:GDXU"].isoformat()
+    assert gdxu["hourly_return_as_of"] == stale_daily.isoformat()
+    assert gdxu["previous_regular_session_close"] == "130"
+    assert gdxu["return_from_previous_regular_session_close_pct"] is not None
+    assert features["quote_sessions_aligned"] is True
+    assert features["hourly_returns_aligned"] is False
+    assert features["daily_returns_aligned"] is False
+    assert features["sessions_aligned"] is True
+    assert "etf:US:GDXU.hourly_return_as_of" in allowed_ids
+    assert "etf:US:GDXU.return_from_previous_regular_session_close_pct" in allowed_ids
+    assert (
+        "relative_strength.gdxu_xau."
+        "return_from_previous_regular_session_close_spread_pct"
+    ) in allowed_ids
+    assert "quote_sessions_aligned" in allowed_ids
+    assert "hourly_returns_aligned" in allowed_ids
+    assert "daily_returns_aligned" in allowed_ids
+
+
+def test_daily_return_alignment_tolerates_weekend_close_hours() -> None:
+    now = datetime(2026, 8, 10, 8, 6, tzinfo=UTC)
+    features = {
+        "commodity_spot:OTC:XAUUSD": {
+            "return_1d_pct": "1.0",
+            "daily_return_as_of": datetime(2026, 8, 7, 23, 55, tzinfo=UTC).isoformat(),
+        },
+        "etf:US:GDXU": {
+            "return_1d_pct": "2.0",
+            # Same Friday trading date in New York, despite a different UTC close hour.
+            "daily_return_as_of": datetime(2026, 8, 8, 0, 5, tzinfo=UTC).isoformat(),
+        },
+    }
+
+    assert _daily_returns_aligned(features, now) is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_quote_alignment_rejects_stale_or_missing_etf_quote() -> None:
+    now = datetime(2026, 8, 10, 8, 6, tzinfo=UTC)
+    fresh = now - datetime.resolution
+    quote_mode = {"missing": False}
+
+    async def snapshot(request):
+        if request.instrument_id.endswith("GDXU") and quote_mode["missing"]:
+            return SimpleNamespace(ok=False, data=None, sources=(), warnings=(), errors=())
+        quote_at = now - timedelta(hours=9) if request.instrument_id.endswith("GDXU") else fresh
+        data = SimpleNamespace(
+            quote_at=quote_at,
+            session=TradingSession.PRE_MARKET,
+            display_price=None,
+            last=(
+                Decimal("132.07")
+                if request.instrument_id.endswith("GDXU")
+                else Decimal("4354.8")
+            ),
+            previous_close=(
+                Decimal("130")
+                if request.instrument_id.endswith("GDXU")
+                else Decimal("4340")
+            ),
+        )
+        return SimpleNamespace(ok=True, data=data, sources=(), warnings=(), errors=())
+
+    async def bars(request):
+        bar = SimpleNamespace(timestamp=now, close=Decimal("100"))
+        return SimpleNamespace(
+            ok=True,
+            data=SimpleNamespace(bars=(bar, bar, bar, bar, bar)),
+            sources=(),
+            warnings=(),
+            errors=(),
+        )
+
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(side_effect=snapshot)
+    market.get_market_bars = AsyncMock(side_effect=bars)
+    clock = MagicMock()
+    clock.now.return_value = now
+    service = MonitorJudgmentService(MagicMock(), market, MagicMock(), clock, MagicMock())
+    monitor = SimpleNamespace(
+        judgment_policy=SimpleNamespace(
+            reference_instrument_ids=("commodity_spot:OTC:XAUUSD", "etf:US:GDXU"),
+            relative_strength_pairs=(),
+        )
+    )
+
+    stale_features, _, _ = await service._features(monitor, ())  # noqa: SLF001
+    assert stale_features["quote_sessions_aligned"] is False
+    assert stale_features["sessions_aligned"] is False
+
+    quote_mode["missing"] = True
+    missing_features, _, _ = await service._features(monitor, ())  # noqa: SLF001
+    assert missing_features["quote_sessions_aligned"] is False
+    assert missing_features["sessions_aligned"] is False
+
+
+@pytest.mark.asyncio
+async def test_deepseek_rejects_english_only_monitor_explanations() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "urgency": "WATCH",
+                                    "phase": "A",
+                                    "market_state": "old close",
+                                    "divergence": "NONE",
+                                    "conclusion": "WAIT",
+                                    "quantity_min": 0,
+                                    "quantity_max": 0,
+                                    "summary": "wait",
+                                    "evidence_feature_ids": ["sessions_aligned"],
+                                    "next_trigger": "next quote",
+                                    "invalidation": "missing facts",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        base_url="https://api.deepseek.com", transport=httpx.MockTransport(handler)
+    )
+    provider = DeepSeekMonitorJudgmentProvider(
+        api_key="test-secret",
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-flash",
+        reasoning_effort="high",
+        timeout_seconds=10,
+        max_output_tokens=3000,
+        client=client,
+    )
+
+    with pytest.raises(DataContractError):
+        await provider.judge(
+            MonitorJudgmentRequest(
+                playbook="Wait.",
+                confirmed_state_json="{}",
+                feature_snapshot_json='{"sessions_aligned":false}',
+                allowed_feature_ids=("sessions_aligned",),
+            )
+        )
+    await client.aclose()
+
+
+def test_unavailable_judgment_notification_uses_chinese_operational_status() -> None:
+    ids = MagicMock()
+    ids.new.return_value = "monitor_notification_unavailable"
+    service = MonitorJudgmentService(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), ids
+    )
+    created_at = datetime.now(UTC)
+    judgment = SimpleNamespace(
+        quantity_max=None,
+        quantity_min=None,
+        urgency=None,
+        phase=None,
+        conclusion=None,
+        market_state=None,
+        summary="复合判断暂时不可用；确定性规则结果仍然有效。",
+        divergence=None,
+        evidence_feature_ids=(),
+        next_trigger=None,
+        invalidation=None,
+        created_at=created_at,
+    )
+    event = SimpleNamespace(event_id="monitor_event_unavailable", created_at=created_at)
+
+    notification = service._notification(  # noqa: SLF001
+        SimpleNamespace(
+            name="黄金监控", primary_instrument_id="commodity_spot:OTC:XAUUSD"
+        ),
+        judgment,
+        event,
+    )
+
+    assert notification.title == "🧭 XAUUSD · 判断不可用"
+    assert "市场：复合判断暂时不可用" in notification.body
+    assert "错误码：MONITOR_JUDGMENT_UNAVAILABLE" in notification.body
+    assert "未定义" not in notification.body
+    assert "UNKNOWN" not in notification.body
+    assert "建议数量0" not in notification.body
+
+
+@pytest.mark.asyncio
+async def test_model_failure_emits_typed_operational_alert_once() -> None:
+    now = datetime.now(UTC)
+    repository = MagicMock()
+    repository.latest_judgment.return_value = None
+    repository.list_judgments.return_value = ()
+    provider = MagicMock(
+        provider_name="bailian", model="qwen3.8-max", reasoning_effort="high"
+    )
+    provider.judge = AsyncMock(side_effect=ProviderTimeoutError("timed out"))
+    clock = MagicMock()
+    clock.now.return_value = now
+    ids = MagicMock()
+    ids.new.side_effect = (
+        "monitor_judgment_failed",
+        "monitor_event_unavailable",
+        "monitor_notification_unavailable",
+    )
+    service = MonitorJudgmentService(repository, MagicMock(), provider, clock, ids)
+    service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=(
+            {"warning_codes": (), "sessions_aligned": True},
+            ("sessions_aligned",),
+            "feature-signature",
+        )
+    )
+    monitor = SimpleNamespace(
+        monitor_id="monitor_gold",
+        version=3,
+        name="黄金监控",
+        primary_instrument_id="commodity_spot:OTC:XAUUSD",
+        judgment_policy=SimpleNamespace(
+            playbook="等待确定性确认",
+            confirmed_state_json="{}",
+            prompt_version="monitor-judgment-v1",
+        ),
+    )
+
+    result = await service.evaluate(
+        run_id="monitor_run_gold",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+
+    assert result is not None
+    assert result.judgment.status == "FAILED"
+    assert result.judgment.error_codes == ("PROVIDER_TIMEOUT_ERROR",)
+    assert result.event is not None
+    assert result.notification is not None
+    assert "错误码：PROVIDER_TIMEOUT_ERROR" in result.notification.body
+    assert "未定义" not in result.notification.body
+    assert "UNKNOWN" not in result.notification.body
+    assert "建议数量0" not in result.notification.body
+
+    repository.latest_judgment.return_value = result.judgment
+    ids.new.side_effect = ("monitor_judgment_failed_repeat",)
+    repeated = await service.evaluate(
+        run_id="monitor_run_gold_repeat",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+    assert repeated is not None
+    assert repeated.event is None
+    assert repeated.notification is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_error", "primary_code"),
+    (
+        (ProviderTimeoutError("primary timed out"), "PROVIDER_TIMEOUT_ERROR"),
+        (DataContractError("ambiguous model output"), "DATA_CONTRACT_ERROR"),
+    ),
+)
+async def test_bailian_failure_falls_back_to_bailian_deepseek_flash(
+    primary_error: Exception,
+    primary_code: str,
+) -> None:
+    primary = MagicMock(
+        provider_name="bailian", model="qwen3.8-max", reasoning_effort="max"
+    )
+    primary.judge = AsyncMock(side_effect=primary_error)
+    fallback = MagicMock(
+        provider_name="bailian",
+        model="deepseek-v4-flash-0731",
+        reasoning_effort="max",
+    )
+    fallback.judge = AsyncMock(
+        return_value=MonitorJudgmentResponse(
+            urgency="WATCH",
+            phase="A",
+            market_state="盘前报价可用，日线收益仍截止前一已完成常规交易时段收盘。",
+            divergence="NONE",
+            conclusion="WAIT",
+            quantity_min=0,
+            quantity_max=0,
+            summary="等待交易时段进一步确认。",
+            evidence_feature_ids=("sessions_aligned",),
+            next_trigger="等待美股常规交易时段。",
+            invalidation="确定性行情不可用时失效。",
+            reasoning_effort_used="max",
+        )
+    )
+    repository = MagicMock()
+    repository.latest_judgment.return_value = None
+    repository.list_judgments.return_value = ()
+    ids = MagicMock()
+    ids.new.return_value = "monitor_judgment_fallback"
+    clock = MagicMock()
+    clock.now.return_value = datetime.now(UTC)
+    service = MonitorJudgmentService(
+        repository, MagicMock(), primary, clock, ids, fallback
+    )
+    service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=(
+            {"sessions_aligned": True, "warning_codes": ()},
+            ("sessions_aligned",),
+            "feature-signature",
+        )
+    )
+    monitor = SimpleNamespace(
+        monitor_id="monitor_gold",
+        version=1,
+        judgment_policy=SimpleNamespace(
+            playbook="等待确认。",
+            confirmed_state_json="{}",
+            prompt_version="v1",
+        ),
+    )
+
+    result = await service.evaluate(
+        run_id="monitor_run_fallback",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+
+    assert result is not None
+    assert result.judgment.status == "SUCCEEDED"
+    assert result.judgment.provider == "bailian"
+    assert result.judgment.model == "deepseek-v4-flash-0731"
+    assert "MONITOR_JUDGMENT_FALLBACK_USED" in result.judgment.warning_codes
+    assert f"PRIMARY_{primary_code}" in result.judgment.warning_codes
+    fallback.judge.assert_awaited_once()
