@@ -17,6 +17,7 @@ import {
 } from "./components/ui";
 import { envelopeData, listOf, postApi, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
+import { endOfDayIsoOrNull } from "./lib/review-due-date.mjs";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
@@ -118,10 +119,13 @@ export default function OverviewPage() {
     const dueDate = status === "ACKNOWLEDGED" && String(item.status) === "ACKNOWLEDGED"
       ? window.prompt("Optional due date (YYYY-MM-DD):")?.trim()
       : undefined;
-    const dueAt = dueDate ? new Date(`${dueDate}T23:59:59`).toISOString() : undefined;
-    if (dueAt && Number.isNaN(Date.parse(dueAt))) {
-      setReviewError("Due date must use YYYY-MM-DD.");
-      return;
+    let dueAt: string | undefined;
+    if (dueDate) {
+      dueAt = endOfDayIsoOrNull(dueDate) ?? undefined;
+      if (!dueAt) {
+        setReviewError("Due date must use YYYY-MM-DD.");
+        return;
+      }
     }
     setReviewBusy(reviewItemId);
     setReviewError(null);
