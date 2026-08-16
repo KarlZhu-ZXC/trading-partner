@@ -9,6 +9,11 @@ from infrastructure.persistence.orm.agent import (
     AgentMessageRow,
     AgentPendingActionRow,
     AgentToolReceiptRow,
+    AgentTurnRow,
+)
+from infrastructure.persistence.orm.agent_preferences import (
+    AgentPreferencesRevisionRow,
+    AgentPreferencesRow,
 )
 from infrastructure.persistence.orm.catalyst_agenda import (
     CatalystAgendaIdentityRow,
@@ -93,6 +98,11 @@ from infrastructure.persistence.orm.research_memory import (
     SubjectEvidenceLinkRow,
 )
 from infrastructure.persistence.orm.research_selection import WatchlistItemRow
+from infrastructure.persistence.orm.review_item import (
+    ReviewItemActionRow,
+    ReviewItemOccurrenceRow,
+    ReviewItemRow,
+)
 from infrastructure.persistence.orm.system import (
     SchemaVersionRow,
     SystemAuditLogRow,
@@ -115,8 +125,11 @@ __all__ = [
     "AgentMessageRow",
     "AgentToolReceiptRow",
     "AgentPendingActionRow",
+    "AgentTurnRow",
     "AgentChannelCursorRow",
     "AgentChannelHandoffRow",
+    "AgentPreferencesRow",
+    "AgentPreferencesRevisionRow",
     "BrokerOrderIntentRow",
     "JsonStringTuple",
     "SchemaVersionRow",
@@ -187,6 +200,9 @@ __all__ = [
     "TradeRetroRunRow",
     "TradeRetroExportReceiptRow",
     "JudgmentScorecardRunRow",
+    "ReviewItemRow",
+    "ReviewItemActionRow",
+    "ReviewItemOccurrenceRow",
     "CatalystAgendaIdentityRow",
     "CatalystAgendaSyncReceiptRow",
     "CatalystAgendaVersionRow",

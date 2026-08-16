@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from domain.common.errors import (
+    DataContractError,
     IdempotencyConflict,
     PersistenceError,
     TradeRetroReviewVersionConflict,
@@ -55,9 +56,7 @@ def _snapshot(row: TradeRetroPlanSnapshotRow) -> TradeRetroPlanSnapshot:
                 **{
                     **item,
                     "condition_codes": tuple(item["condition_codes"]),
-                    "decision_records": tuple(
-                        tuple(record) for record in item["decision_records"]
-                    ),
+                    "decision_records": tuple(tuple(record) for record in item["decision_records"]),
                 }
             )
             for item in entries
@@ -164,9 +163,7 @@ class SqlAlchemyTradeRetroRepository:
             raise PersistenceError("Trade Retro plan snapshot persistence conflict") from exc
         return value
 
-    def get_plan_snapshot_by_idempotency_key(
-        self, key: str
-    ) -> TradeRetroPlanSnapshot | None:
+    def get_plan_snapshot_by_idempotency_key(self, key: str) -> TradeRetroPlanSnapshot | None:
         with Session(self._engine) as session:
             row = session.scalar(
                 select(TradeRetroPlanSnapshotRow).where(
@@ -179,6 +176,20 @@ class SqlAlchemyTradeRetroRepository:
         with Session(self._engine) as session:
             row = session.get(TradeRetroPlanSnapshotRow, snapshot_id)
             return _snapshot(row) if row is not None else None
+
+    def get_plan_snapshots(
+        self, snapshot_ids: tuple[str, ...]
+    ) -> dict[str, TradeRetroPlanSnapshot]:
+        if not snapshot_ids:
+            return {}
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(TradeRetroPlanSnapshotRow).where(
+                    TradeRetroPlanSnapshotRow.snapshot_id.in_(set(snapshot_ids))
+                )
+            )
+            values = (_snapshot(row) for row in rows)
+            return {value.snapshot_id: value for value in values}
 
     def latest_plan_snapshot_for_period(
         self, *, period_start: datetime, period_end: datetime
@@ -257,9 +268,7 @@ class SqlAlchemyTradeRetroRepository:
             )
             return tuple(_run(row) for row in rows)
 
-    def append_review(
-        self, value: TradeRetroReviewRevision
-    ) -> TradeRetroReviewRevision:
+    def append_review(self, value: TradeRetroReviewRevision) -> TradeRetroReviewRevision:
         existing = self.get_review_by_idempotency_key(value.idempotency_key)
         if existing is not None:
             if existing == value:
@@ -300,9 +309,7 @@ class SqlAlchemyTradeRetroRepository:
             ) from exc
         return value
 
-    def get_review_by_idempotency_key(
-        self, key: str
-    ) -> TradeRetroReviewRevision | None:
+    def get_review_by_idempotency_key(self, key: str) -> TradeRetroReviewRevision | None:
         with Session(self._engine) as session:
             row = session.scalar(
                 select(TradeRetroReviewRevisionRow).where(
@@ -333,6 +340,32 @@ class SqlAlchemyTradeRetroRepository:
             )
             return tuple(_review(row) for row in rows)
 
+    def list_reviews_for_runs(
+        self,
+        run_ids: tuple[str, ...],
+        *,
+        limit_per_run: int = 100,
+    ) -> dict[str, tuple[TradeRetroReviewRevision, ...]]:
+        if type(limit_per_run) is not int or not 1 <= limit_per_run <= 500:
+            raise DataContractError("Trade Retro review limit must be between 1 and 500")
+        if not run_ids:
+            return {}
+        grouped: dict[str, list[TradeRetroReviewRevision]] = {}
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(TradeRetroReviewRevisionRow)
+                .where(TradeRetroReviewRevisionRow.run_id.in_(set(run_ids)))
+                .order_by(
+                    TradeRetroReviewRevisionRow.run_id,
+                    TradeRetroReviewRevisionRow.version.desc(),
+                )
+            )
+            for row in rows:
+                values = grouped.setdefault(row.run_id, [])
+                if len(values) < limit_per_run:
+                    values.append(_review(row))
+        return {run_id: tuple(values) for run_id, values in grouped.items()}
+
     def append_export(self, value: TradeRetroExportReceipt) -> TradeRetroExportReceipt:
         existing = self.get_export_by_idempotency_key(value.idempotency_key)
         if existing is not None:
@@ -356,9 +389,7 @@ class SqlAlchemyTradeRetroRepository:
             raise PersistenceError("Trade Retro export persistence conflict") from exc
         return value
 
-    def get_export_by_idempotency_key(
-        self, key: str
-    ) -> TradeRetroExportReceipt | None:
+    def get_export_by_idempotency_key(self, key: str) -> TradeRetroExportReceipt | None:
         with Session(self._engine) as session:
             row = session.scalar(
                 select(TradeRetroExportReceiptRow).where(

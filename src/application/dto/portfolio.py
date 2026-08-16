@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from application.dto.market import DecimalWire
 from domain.common.enums import VendorId
@@ -82,6 +83,30 @@ class AccountPositionDTO(_DTO):
     unrealized_pnl: DecimalWire | None
     realized_pnl: DecimalWire | None
     currency: str
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def snapshot_price(self) -> DecimalWire | None:
+        """Display-only account price; never promote valuation math to a quote."""
+        if self.market_price is not None:
+            return self.market_price
+        if self.market_value is None or self.quantity <= 0:
+            return None
+        return (abs(self.market_value) / self.quantity).quantize(
+            Decimal("0.0001"), rounding=ROUND_HALF_UP
+        )
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic computed property
+    @property
+    def snapshot_price_basis(
+        self,
+    ) -> Literal["BROKER_REPORTED_PRICE", "BROKER_VALUATION_ONLY"] | None:
+        """Disclose whether snapshot_price is a Provider price or valuation-only math."""
+        if self.market_price is not None:
+            return "BROKER_REPORTED_PRICE"
+        if self.market_value is not None and self.quantity > 0:
+            return "BROKER_VALUATION_ONLY"
+        return None
 
 
 class AccountOpenOrderDTO(_DTO):

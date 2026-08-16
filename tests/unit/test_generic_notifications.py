@@ -343,6 +343,7 @@ async def test_manual_body_markers_never_enter_monitor_formatter() -> None:
     observed: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/sendMessage")
         observed.update(json.loads(request.content))
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 

@@ -5,7 +5,7 @@ import { ChatWorkspace } from "./chat-workspace";
 
 export default function ChatPage() {
   return (
-    <ConsoleShell active="chat" eyebrow="Shared Agent Runtime" title="Agent Chat">
+    <ConsoleShell active="chat">
       <ChatWorkspace />
     </ConsoleShell>
   );

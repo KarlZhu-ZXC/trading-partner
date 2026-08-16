@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine
 
 from application.ports.agent_action_gateway import AgentActionInvocationResult
 from application.services.agent_pending_action_service import (
@@ -17,6 +19,10 @@ from application.services.agent_pending_action_service import (
 from domain.agent.enums import AgentChannel, AgentPendingActionStatus
 from domain.agent.models import AgentPendingAction, arguments_digest
 from domain.common.errors import DataContractError, PersistenceError, TradingPartnerError
+from infrastructure.persistence.agent_pending_action_repository import (
+    SqlAlchemyAgentPendingActionRepository,
+)
+from infrastructure.persistence.metadata import Base
 from interfaces.agent.action_gateway import CompactAgentActionOperationGateway
 from interfaces.mcp.tools.compact import (
     APPEND,
@@ -141,6 +147,165 @@ class Repo:
         self.values[action_id] = updated
         return updated
 
+    def reissue_confirmation_token(
+        self,
+        action_id: str,
+        *,
+        conversation_id: str,
+        channel: AgentChannel,
+        principal: str,
+        expected_version: int,
+        token_sha256: str,
+        now: datetime,
+    ) -> AgentPendingAction:
+        current = self.values[action_id]
+        if current.conversation_id != conversation_id or (
+            current.channel is not channel or current.principal != principal
+        ):
+            raise PersistenceError(
+                "identity",
+                retryable=False,
+                code="AGENT_PENDING_ACTION_IDENTITY_MISMATCH",
+            )
+        if current.version != expected_version:
+            raise PersistenceError(
+                "version",
+                retryable=False,
+                code="AGENT_PENDING_ACTION_VERSION_CONFLICT",
+            )
+        if current.status is not AgentPendingActionStatus.PRESENTED:
+            raise PersistenceError(
+                "state",
+                retryable=False,
+                code="AGENT_PENDING_ACTION_STATE_CONFLICT",
+            )
+        if now >= current.expires_at:
+            self.values[action_id] = replace(
+                current,
+                status=AgentPendingActionStatus.EXPIRED,
+                version=current.version + 1,
+                updated_at=now,
+            )
+            raise PersistenceError(
+                "expired",
+                retryable=False,
+                code="AGENT_PENDING_ACTION_EXPIRED",
+            )
+        updated = replace(
+            current,
+            token_sha256=token_sha256,
+            version=current.version + 1,
+            updated_at=now,
+        )
+        self.values[action_id] = updated
+        return updated
+
+
+def test_sql_repository_lists_unresolved_actions_without_mutating_them(tmp_path: Any) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'agent-unresolved.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAgentPendingActionRepository(engine)
+    now = datetime(2026, 8, 12, 8, 0, tzinfo=UTC)
+
+    def store(
+        action_id: str,
+        status: AgentPendingActionStatus,
+        *,
+        created_minutes: int,
+        expiry_minutes: int,
+    ) -> None:
+        created_at = now + timedelta(minutes=created_minutes)
+        arguments = {"instrument_id": "equity:US:AAPL", "idempotency_key": action_id}
+        repository.create_pending_action(
+            AgentPendingAction(
+                action_id=action_id,
+                conversation_id="agent_conversation_unresolved",
+                channel=AgentChannel.CONSOLE,
+                principal="local-console",
+                normalized_arguments=arguments,
+                arguments_sha256=arguments_digest(arguments),
+                presented_summary=action_id,
+                expires_at=now + timedelta(minutes=expiry_minutes),
+                created_at=created_at,
+                updated_at=created_at,
+                status=status,
+            )
+        )
+
+    store("action_unknown", AgentPendingActionStatus.UNKNOWN, created_minutes=-3, expiry_minutes=5)
+    store("action_stale", AgentPendingActionStatus.EXECUTING, created_minutes=-2, expiry_minutes=-1)
+    store("action_live", AgentPendingActionStatus.EXECUTING, created_minutes=-1, expiry_minutes=5)
+    store(
+        "action_presented",
+        AgentPendingActionStatus.PRESENTED,
+        created_minutes=-4,
+        expiry_minutes=5,
+    )
+
+    unresolved = repository.list_unresolved(now=now, limit=10)
+
+    assert [item.action_id for item in unresolved] == ["action_stale", "action_unknown"]
+    assert repository.get("action_stale").status is AgentPendingActionStatus.EXECUTING
+
+
+def test_sql_repository_reissue_rotates_digest_with_exact_cas(tmp_path: Any) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'agent-reissue.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAgentPendingActionRepository(engine)
+    now = datetime(2026, 8, 12, 8, 0, tzinfo=UTC)
+    arguments = {"instrument_id": "equity:US:AAPL", "idempotency_key": "reissue-1"}
+    old_token_hash = hashlib.sha256(b"old-token").hexdigest()
+    new_token_hash = hashlib.sha256(b"new-token").hexdigest()
+    action = AgentPendingAction(
+        action_id="action_reissue",
+        conversation_id="agent_conversation_reissue",
+        channel=AgentChannel.CONSOLE,
+        principal="local-console",
+        normalized_arguments=arguments,
+        arguments_sha256=arguments_digest(arguments),
+        presented_summary="Add AAPL",
+        expires_at=now + timedelta(minutes=10),
+        created_at=now,
+        updated_at=now,
+        status=AgentPendingActionStatus.PRESENTED,
+        version=2,
+        capability="watchlist_manage",
+        operation="add",
+        token_sha256=old_token_hash,
+    )
+    repository.create_pending_action(action)
+
+    updated = repository.reissue_confirmation_token(
+        action.action_id,
+        conversation_id=action.conversation_id,
+        channel=action.channel,
+        principal=action.principal,
+        expected_version=action.version,
+        token_sha256=new_token_hash,
+        now=now + timedelta(minutes=1),
+    )
+
+    assert updated.version == 3
+    assert updated.token_sha256 == new_token_hash
+    assert updated.normalized_arguments == action.normalized_arguments
+    assert updated.arguments_sha256 == action.arguments_sha256
+    assert updated.capability == action.capability
+    assert updated.operation == action.operation
+    assert updated.expires_at == action.expires_at
+    assert repository.get_by_token_sha256(old_token_hash) is None
+    assert repository.get_by_token_sha256(new_token_hash) == updated
+    with pytest.raises(PersistenceError) as stale:
+        repository.reissue_confirmation_token(
+            action.action_id,
+            conversation_id=action.conversation_id,
+            channel=action.channel,
+            principal=action.principal,
+            expected_version=action.version,
+            token_sha256=old_token_hash,
+            now=now + timedelta(minutes=1),
+        )
+    assert stale.value.code == "AGENT_PENDING_ACTION_VERSION_CONFLICT"
+
 
 class OperationGateway:
     def __init__(self, failure: BaseException | None = None) -> None:
@@ -158,6 +323,13 @@ class OperationGateway:
                 raise ValueError("instrument_id required")
             return dict(arguments)
         if capability == "research_judgment_propose" and operation == "research_state":
+            return dict(arguments)
+        if (capability, operation) in {
+            ("research_judgment_confirm", "candidate"),
+            ("research_memory_append", "agenda_item"),
+            ("research_workflow_run", "trade_retro"),
+            ("research_workflow_run", "judgment_scorecard"),
+        }:
             return dict(arguments)
         raise ValueError("unsupported")
 
@@ -226,7 +398,117 @@ def test_prepare_allowlist_schema_hash_and_token_are_bounded() -> None:
         repo.get_by_token_sha256("not-a-digest")
 
 
-def test_prepare_rejects_broker_sync_and_wrong_candidate_kind() -> None:
+def test_reissue_rotates_only_confirmation_digest_and_invalidates_old_token() -> None:
+    service, repo, _clock = _service()
+    proposal = service.propose(
+        conversation_id="agent_conversation_1",
+        channel=AgentChannel.CONSOLE,
+        principal="local-console",
+        capability="watchlist_manage",
+        operation="add",
+        arguments=_args(),
+        presented_summary="Add AAPL",
+    )
+    old = proposal.action
+
+    reissued = service.reissue_confirmation(
+        action_id=old.action_id,
+        conversation_id=old.conversation_id,
+        channel=old.channel,
+        principal=old.principal,
+        expected_version=old.version,
+    )
+    updated = reissued.action
+
+    assert updated.status is AgentPendingActionStatus.PRESENTED
+    assert updated.version == old.version + 1
+    assert updated.token_sha256 != old.token_sha256
+    assert updated.normalized_arguments == old.normalized_arguments
+    assert updated.arguments_sha256 == old.arguments_sha256
+    assert updated.capability == old.capability
+    assert updated.operation == old.operation
+    assert updated.expires_at == old.expires_at
+    assert repo.get_by_token_sha256(old.token_sha256 or "") is None
+    assert repo.get_by_token_sha256(updated.token_sha256 or "") == updated
+
+    with pytest.raises(PersistenceError) as old_token:
+        service.reject(
+            action_id=old.action_id,
+            token=proposal.confirmation_token,
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            expected_version=updated.version,
+        )
+    assert old_token.value.code == "AGENT_PENDING_ACTION_TOKEN_MISMATCH"
+
+
+def test_reissue_rejects_wrong_scope_terminal_expired_and_stale_version() -> None:
+    service, repo, clock = _service()
+    proposal = service.propose(
+        conversation_id="agent_conversation_1",
+        channel=AgentChannel.CONSOLE,
+        principal="local-console",
+        capability="watchlist_manage",
+        operation="add",
+        arguments=_args(),
+        presented_summary="Add AAPL",
+    )
+    action_id = proposal.action.action_id
+
+    with pytest.raises(PersistenceError) as wrong_scope:
+        service.reissue_confirmation(
+            action_id=action_id,
+            conversation_id="other-conversation",
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            expected_version=proposal.action.version,
+        )
+    assert wrong_scope.value.code == "AGENT_PENDING_ACTION_IDENTITY_MISMATCH"
+
+    with pytest.raises(PersistenceError) as wrong_version:
+        service.reissue_confirmation(
+            action_id=action_id,
+            conversation_id=proposal.action.conversation_id,
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            expected_version=999,
+        )
+    assert wrong_version.value.code == "AGENT_PENDING_ACTION_VERSION_CONFLICT"
+
+    repo.values[action_id] = replace(
+        repo.values[action_id],
+        status=AgentPendingActionStatus.REJECTED,
+    )
+    with pytest.raises(PersistenceError) as terminal:
+        service.reissue_confirmation(
+            action_id=action_id,
+            conversation_id=proposal.action.conversation_id,
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            expected_version=proposal.action.version,
+        )
+    assert terminal.value.code == "AGENT_PENDING_ACTION_STATE_CONFLICT"
+
+    repo.values[action_id] = replace(
+        repo.values[action_id],
+        status=AgentPendingActionStatus.PRESENTED,
+        version=proposal.action.version,
+        expires_at=clock.now() + timedelta(minutes=1),
+    )
+    clock.value = repo.values[action_id].expires_at
+    with pytest.raises(PersistenceError) as expired:
+        service.reissue_confirmation(
+            action_id=action_id,
+            conversation_id=proposal.action.conversation_id,
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            expected_version=proposal.action.version,
+        )
+    assert expired.value.code == "AGENT_PENDING_ACTION_EXPIRED"
+    assert repo.values[action_id].status is AgentPendingActionStatus.EXPIRED
+
+
+def test_prepare_rejects_broker_sync_and_non_effective_proposals() -> None:
     service, _repo, _clock = _service()
     with pytest.raises(DataContractError, match="allowlist"):
         service.propose(
@@ -248,6 +530,58 @@ def test_prepare_rejects_broker_sync_and_wrong_candidate_kind() -> None:
             arguments={"payload": {"kind": "trade_plan"}},
             presented_summary="trade plan",
         )
+    with pytest.raises(DataContractError, match="allowlist"):
+        service.propose(
+            conversation_id="agent_conversation_1",
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            capability="research_judgment_propose",
+            operation="research_state",
+            arguments={"payload": {"kind": "watchlist_item", "action": "archive"}},
+            presented_summary="unsupported candidate transition",
+        )
+
+
+def test_prepare_allows_exact_research_closure_actions_and_requires_user_authority() -> None:
+    service, _repo, _clock = _service()
+    candidate = service.propose(
+        conversation_id="agent_conversation_1",
+        channel=AgentChannel.CONSOLE,
+        principal="local-console",
+        capability="research_judgment_confirm",
+        operation="candidate",
+        arguments={
+            "candidate_id": "candidate_1",
+            "action": "confirm",
+            "reviewed_by": "user",
+            "submitted_via": "codex_chat",
+            "authorization_note": "User explicitly confirmed this exact candidate.",
+        },
+        presented_summary="Confirm the exact candidate",
+    )
+    assert candidate.action.status is AgentPendingActionStatus.PRESENTED
+    assert {
+        ("research_memory_append", "agenda_item"),
+        ("research_workflow_run", "trade_retro"),
+        ("research_workflow_run", "judgment_scorecard"),
+    }.issubset(service.allowlist)
+
+    with pytest.raises(DataContractError) as missing_authority:
+        service.propose(
+            conversation_id="agent_conversation_1",
+            channel=AgentChannel.CONSOLE,
+            principal="local-console",
+            capability="research_judgment_confirm",
+            operation="candidate",
+            arguments={
+                "candidate_id": "candidate_1",
+                "action": "confirm",
+                "reviewed_by": "external_agent",
+                "submitted_via": "direct",
+            },
+            presented_summary="Confirm the candidate",
+        )
+    assert missing_authority.value.code == "AGENT_ACTION_NOT_ALLOWED"
 
 
 def test_expired_executing_action_becomes_unknown_instead_of_retryable() -> None:

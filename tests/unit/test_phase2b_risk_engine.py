@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -149,6 +150,26 @@ async def test_negative_cash_ratio_is_a_breach_not_a_contract_error() -> None:
     assert cash_check.actual == Decimal("-18.52500")
     assert cash_check.status is RiskCheckStatus.BREACH
     assert result.overall_status is RiskOverallStatus.BREACH
+
+
+@pytest.mark.asyncio
+async def test_unavailable_margin_usage_is_incomplete_not_a_false_breach() -> None:
+    account = _account(_position("TTWO", "250"))
+    account = replace(
+        account,
+        margin_used=None,
+        warning_codes=("MOOMOO_MARGIN_USAGE_UNAVAILABLE",),
+    )
+    service = RiskEngineService(
+        _Accounts((account,)), _Policies(_policy(system_default=False))  # type: ignore[arg-type]
+    )
+
+    result, _ = await service.check(RiskCheckInput(), effective_as_of=NOW)
+
+    margin_check = next(item for item in result.checks if item.rule_code == "MARGIN_USAGE_PERCENT")
+    assert margin_check.actual is None
+    assert margin_check.status is RiskCheckStatus.NOT_EVALUATED
+    assert "ACCOUNT_NAV_OR_MARGIN_UNAVAILABLE" in result.data_quality_codes
 
 
 def test_policy_update_is_versioned_and_idempotent(fixed_clock, id_generator) -> None:

@@ -216,6 +216,30 @@ def test_account_and_monitor_gaps_are_machine_readable() -> None:
     assert actions["ACCOUNT_ACTIVITY_COVERAGE_MISSING"] == "SYNC_ACCOUNT_TRANSACTIONS"
 
 
+def test_broker_valuation_only_price_is_not_a_price_time_quality_error() -> None:
+    now = FixedClock().now()
+    snapshot = SimpleNamespace(
+        snapshot_id="snapshot_valuation_only",
+        account_ref="account_valuation_only",
+        provider=VendorId.SCHWAB,
+        account_as_of=now,
+        fetched_at=now,
+        positions=(SimpleNamespace(market_value=100, market_price_at=None),),
+        net_assets=100,
+        degraded=False,
+        warning_codes=("BROKER_VALUATION_PRICE_DERIVED",),
+    )
+
+    envelope = _service(snapshots=(snapshot,)).check()
+
+    assert envelope.data is not None
+    assert envelope.data.account_snapshots[0].valuation_coverage_ratio == 1
+    assert envelope.data.account_snapshots[0].price_time_coverage_ratio == 0
+    assert "ACCOUNT_PRICE_TIME_INCOMPLETE" not in {
+        item.code for item in envelope.data.issues
+    }
+
+
 def test_non_tracking_case_with_live_judgment_is_reported() -> None:
     subject = SimpleNamespace(
         subject_id="case_00000000-0000-7000-8000-000000000001",

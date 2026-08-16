@@ -13,19 +13,33 @@ import httpx
 import pytest
 
 from application.dto.agent import AgentTurnRequest
-from application.ports.agent_model_provider import ModelResponse, ModelToolCall
+from application.ports.agent_model_provider import (
+    ModelCatalog,
+    ModelCatalogItem,
+    ModelResponse,
+    ModelToolCall,
+)
 from application.ports.agent_tool_gateway import (
     AgentToolDescriptor,
     AgentToolReceipt,
     AgentToolResult,
 )
 from application.services.agent_context_service import AgentContextService
+from application.services.agent_conversation_metrics import AgentConversationMetricsService
+from application.services.agent_preferences_service import AgentPreferencesService
 from application.services.agent_runtime_service import AgentRuntimeService
-from domain.agent.enums import AgentChannel, AgentConversationStatus, AgentPendingActionStatus
+from domain.agent.enums import (
+    AgentChannel,
+    AgentConversationStatus,
+    AgentMessageRole,
+    AgentPendingActionStatus,
+    AgentTurnStatus,
+)
 from domain.agent.models import (
     AgentConversation,
     AgentMessage,
     AgentPendingAction,
+    AgentTurn,
     arguments_digest,
 )
 from domain.agent.models import AgentToolReceipt as DurableReceipt
@@ -48,6 +62,7 @@ class _Repository:
         self.conversations: dict[str, AgentConversation] = {}
         self.messages: dict[str, list[AgentMessage]] = {}
         self.receipts: list[DurableReceipt] = []
+        self.turns: dict[str, AgentTurn] = {}
 
     def create_conversation(self, value: AgentConversation) -> AgentConversation:
         self.conversations[value.conversation_id] = value
@@ -127,6 +142,56 @@ class _Repository:
         self.receipts.append(value)
         return value
 
+    def create_turn(self, value: AgentTurn) -> AgentTurn:
+        self.turns[value.turn_id] = value
+        return value
+
+    def get_turn(self, turn_id: str) -> AgentTurn | None:
+        return self.turns.get(turn_id)
+
+    def latest_turn(self, conversation_id: str) -> AgentTurn | None:
+        values = [item for item in self.turns.values() if item.conversation_id == conversation_id]
+        return max(values, key=lambda item: item.started_at) if values else None
+
+    def list_turns(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        newest_first: bool = True,
+    ) -> tuple[AgentTurn, ...]:
+        values = sorted(
+            (item for item in self.turns.values() if item.conversation_id == conversation_id),
+            key=lambda item: item.started_at,
+            reverse=newest_first,
+        )
+        return tuple(values[:limit])
+
+    def update_turn(
+        self,
+        turn_id: str,
+        *,
+        status: AgentTurnStatus,
+        expected_version: int,
+        assistant_message_id: str | None = None,
+        error_code: str | None = None,
+        completed_at: Any = None,
+        now: Any = None,
+    ) -> AgentTurn:
+        current = self.turns[turn_id]
+        assert current.version == expected_version
+        updated = replace(
+            current,
+            status=status,
+            assistant_message_id=assistant_message_id,
+            error_code=error_code,
+            completed_at=completed_at,
+            updated_at=now or current.updated_at,
+            version=current.version + 1,
+        )
+        self.turns[turn_id] = updated
+        return updated
+
     def list_tool_receipts(
         self,
         conversation_id: str,
@@ -144,13 +209,39 @@ class _Repository:
 class _Model:
     def __init__(self, responses: list[ModelResponse]) -> None:
         self.responses = responses
+        self.requests: list[Any] = []
 
     async def complete(self, request: Any) -> ModelResponse:
-        _ = request
+        self.requests.append(request)
         return self.responses.pop(0)
 
     async def aclose(self) -> None:
         return None
+
+
+class _CatalogModel(_Model):
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        super().__init__(responses)
+        self.model = "configured-model"
+        self.config = SimpleNamespace(
+            model="configured-model",
+            api_style="responses",
+            reasoning_mode="effort",
+            native_web_search="responses_web_search",
+            api_key="must-not-leak",
+            base_url="https://secret.example/v1",
+        )
+
+    async def list_models(self, *, force_refresh: bool = False) -> ModelCatalog:
+        _ = force_refresh
+        return ModelCatalog(
+            models=(
+                ModelCatalogItem(id="configured-model"),
+                ModelCatalogItem(id="catalog/model", reasoning_efforts=("high", "max")),
+            ),
+            fetched_at=datetime(2026, 8, 13, tzinfo=UTC),
+            cached=True,
+        )
 
 
 class _FailureModel(_Model):
@@ -204,6 +295,18 @@ class _PendingGateway:
         )
         return SimpleNamespace(action=self.action, result={"ok": True, "receipt_id": "r1"})
 
+    def reissue_confirmation(self, **kwargs: Any) -> Any:
+        assert kwargs["conversation_id"] == self.action.conversation_id
+        assert kwargs["expected_version"] == self.action.version
+        self.token = f"{self.token}-rotated"
+        self.action = replace(
+            self.action,
+            token_sha256=hashlib.sha256(self.token.encode()).hexdigest(),
+            version=self.action.version + 1,
+            updated_at=datetime.now(UTC),
+        )
+        return SimpleNamespace(action=self.action, confirmation_token=self.token)
+
     def reject(self, **kwargs: Any) -> AgentPendingAction:
         assert kwargs["token"] == self.token
         self.action = replace(
@@ -243,6 +346,8 @@ def _client_state(*, enabled: bool, model: _Model | None = None) -> tuple[_Repos
         context_service=context,
         capability_gateway=None,
         runtime=runtime,
+        model_providers={"default": model} if model is not None else {},
+        metrics_service=AgentConversationMetricsService(repository),
         status={
             "channel": "CONSOLE",
             "owner_principal": AGENT_OWNER_PRINCIPAL,
@@ -346,6 +451,18 @@ def test_ephemeral_context_request_is_strictly_bounded_and_forbids_extra() -> No
             content_excerpt="y" * 8_193,
         )
 
+    navigation = EphemeralContextRequest(
+        route_hash="/research?subject=case_1#thesis",
+        surface="research",
+        selected_subject_id="case_1",
+        selected_monitor_id="monitor_1",
+        selected_run_id="run_1",
+        active_tab="thesis",
+        workbench_subject_id="case_1",
+    ).to_dto()
+    assert navigation.as_dict()["selected_subject_id"] == "case_1"
+    assert "case_1" in (navigation.as_dict()["route_hash"] or "")
+
 
 @pytest.mark.asyncio
 async def test_console_agent_sse_emits_fixed_events_and_persists_messages() -> None:
@@ -361,6 +478,7 @@ async def test_console_agent_sse_emits_fixed_events_and_persists_messages() -> N
         )
 
     events = [line for line in response.text.splitlines() if line.startswith("event: ")]
+    payloads = response.text.split("\n\n")
     assert response.status_code == 200
     assert [line.removeprefix("event: ") for line in events] == [
         "message_started",
@@ -371,6 +489,289 @@ async def test_console_agent_sse_emits_fixed_events_and_persists_messages() -> N
         "USER",
         "ASSISTANT",
     ]
+    assert len(repository.turns) == 1
+    turn = next(iter(repository.turns.values()))
+    assert turn.status is AgentTurnStatus.COMPLETED
+    completed_payload = next(item for item in payloads if "event: completed" in item)
+    assert json.loads(completed_payload.split("data: ", 1)[1])["turn_id"] == turn.turn_id
+
+
+@pytest.mark.asyncio
+async def test_console_lists_provider_models_and_forwards_exact_selection() -> None:
+    model = _CatalogModel([ModelResponse(text="回答", model="catalog/model")])
+    _repository, conversation_id = _client_state(enabled=True, model=model)
+    transport = httpx.ASGITransport(app=api.app)
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        catalog = await client.get("/api/agent/providers/default/models", headers=headers)
+        response = await client.post(
+            f"/api/agent/conversations/{conversation_id}/messages/stream",
+            headers=headers,
+            json={
+                "content": "问题",
+                "model_id": "default",
+                "model": "catalog/model",
+                "reasoning_effort": "max",
+            },
+        )
+
+    encoded = json.dumps(catalog.json())
+    assert catalog.status_code == 200
+    assert [item["id"] for item in catalog.json()["models"]] == [
+        "configured-model",
+        "catalog/model",
+    ]
+    assert catalog.json()["models"][1]["reasoning_efforts"] == ["high", "max"]
+    assert "must-not-leak" not in encoded
+    assert "secret.example" not in encoded
+    assert response.status_code == 200
+    assert model.requests[0].model == "catalog/model"
+
+
+@pytest.mark.asyncio
+async def test_console_turn_history_is_readable_after_refresh() -> None:
+    repository, conversation_id = _client_state(
+        enabled=True,
+        model=_Model([ModelResponse(text="unused")]),
+    )
+    now = datetime.now(UTC)
+    repository.create_turn(
+        AgentTurn(
+            turn_id="agent_turn_console",
+            conversation_id=conversation_id,
+            user_message_id="agent_message_missing_user",
+            assistant_message_id=None,
+            channel=AgentChannel.CONSOLE,
+            status=AgentTurnStatus.RUNNING,
+            model_id="model",
+            reasoning_effort=None,
+            started_at=now,
+            updated_at=now,
+        )
+    )
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        response = await client.get(
+            f"/api/agent/conversations/{conversation_id}/turns",
+            headers=headers,
+        )
+    assert response.status_code == 200
+    assert response.json()["latest_turn"]["turn_id"] == "agent_turn_console"
+
+
+@pytest.mark.asyncio
+async def test_console_reconnect_replays_terminal_turn_without_live_runtime() -> None:
+    repository, conversation_id = _client_state(
+        enabled=True,
+        model=_Model([ModelResponse(text="unused")]),
+    )
+    now = datetime.now(UTC)
+    user = repository.append_message(
+        AgentMessage(
+            message_id="agent_message_reconnect_user",
+            conversation_id=conversation_id,
+            role=AgentMessageRole.USER,
+            content="原问题",
+            created_at=now,
+        )
+    )
+    assistant = repository.append_message(
+        AgentMessage(
+            message_id="agent_message_reconnect_assistant",
+            conversation_id=conversation_id,
+            role=AgentMessageRole.ASSISTANT,
+            content="已完成的回答",
+            created_at=now,
+        )
+    )
+    repository.create_turn(
+        AgentTurn(
+            turn_id="agent_turn_reconnect",
+            conversation_id=conversation_id,
+            user_message_id=user.message_id,
+            assistant_message_id=assistant.message_id,
+            channel=AgentChannel.CONSOLE,
+            status=AgentTurnStatus.COMPLETED,
+            started_at=now,
+            updated_at=now,
+            completed_at=now,
+            version=2,
+        )
+    )
+    state = api.app.state.agent_runtime_state
+    api.app.state.agent_runtime_state = replace(state, runtime=None)
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        response = await client.get(
+            f"/api/agent/conversations/{conversation_id}/turns/agent_turn_reconnect/stream",
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert "event: completed" in response.text
+    assert "已完成的回答" in response.text
+    assert '"replay":true' in response.text
+
+
+@pytest.mark.asyncio
+async def test_console_retry_replays_failed_turn_from_durable_original_prompt() -> None:
+    model = _Model([ModelResponse(text="重试已完成")])
+    repository, conversation_id = _client_state(enabled=True, model=model)
+    failed_at = datetime.now(UTC)
+    original = repository.append_message(
+        AgentMessage(
+            message_id="agent_message_retry_source",
+            conversation_id=conversation_id,
+            role=AgentMessageRole.USER,
+            content="读取原始问题",
+            channel=AgentChannel.CONSOLE,
+            created_at=failed_at,
+        )
+    )
+    repository.create_turn(
+        AgentTurn(
+            turn_id="agent_turn_retry_source",
+            conversation_id=conversation_id,
+            user_message_id=original.message_id,
+            channel=AgentChannel.CONSOLE,
+            status=AgentTurnStatus.FAILED,
+            model_id="default",
+            reasoning_effort="high",
+            error_code="AGENT_TURN_PROCESS_INTERRUPTED",
+            started_at=failed_at,
+            updated_at=failed_at,
+            completed_at=failed_at,
+            version=2,
+        )
+    )
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        response = await client.post(
+            f"/api/agent/conversations/{conversation_id}/turns/agent_turn_retry_source/retry",
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert "event: completed" in response.text
+    assert "重试已完成" in response.text
+    assert len(model.requests) == 1
+    assert model.requests[0].reasoning_effort == "high"
+    turns = repository.list_turns(conversation_id)
+    assert len(turns) == 2
+    assert turns[0].status is AgentTurnStatus.COMPLETED
+    assert turns[0].turn_id != "agent_turn_retry_source"
+    repeated_prompts = [
+        item.content for item in repository.messages[conversation_id]
+    ].count("读取原始问题")
+    assert repeated_prompts == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_conversation_metrics_are_durable_and_secret_safe() -> None:
+    repository, conversation_id = _client_state(
+        enabled=True,
+        model=_Model([ModelResponse(text="unused")]),
+    )
+    repository.append_message(
+        AgentMessage(
+            message_id="agent_message_metrics",
+            conversation_id=conversation_id,
+            role=AgentMessageRole.ASSISTANT,
+            content="answer",
+            model_receipt_json=json.dumps(
+                {
+                    "model_calls": 2,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    "latency_ms": 220,
+                    "web_search_used": True,
+                    "api_style": "responses",
+                }
+            ),
+            created_at=datetime.now(UTC),
+        )
+    )
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        response = await client.get(
+            f"/api/agent/conversations/{conversation_id}/metrics",
+            headers=headers,
+        )
+    assert response.status_code == 200
+    metrics = response.json()["metrics"]
+    assert metrics["model_calls"] == 2
+    assert metrics["total_tokens"] == 15
+    assert metrics["latency_ms"] == 220
+    assert metrics["api_styles"] == ["responses"]
+
+
+@pytest.mark.asyncio
+async def test_console_agent_preferences_are_versioned_and_reject_fact_fields() -> None:
+    class PreferencesRepo:
+        value = None
+        revisions: list[Any] = []
+
+        def get(self, owner: str) -> Any:
+            return self.value if self.value and self.value.owner_principal == owner else None
+
+        def create(self, value: Any, revision: Any) -> Any:
+            self.value = value
+            self.revisions.append(revision)
+            return value
+
+        def update(self, value: Any, *, expected_version: int, revision: Any) -> Any:
+            assert self.value.version == expected_version
+            self.value = value
+            self.revisions.append(revision)
+            return value
+
+        def list_history(self, owner: str, *, limit: int = 100) -> tuple[Any, ...]:
+            return tuple(item for item in self.revisions if item.owner_principal == owner)[:limit]
+
+    _repository, _conversation_id = _client_state(
+        enabled=True,
+        model=_Model([ModelResponse(text="unused")]),
+    )
+    service = AgentPreferencesService(PreferencesRepo(), SystemClock(), Uuid7IdGenerator())
+    api.app.state.agent_runtime_state = replace(
+        api.app.state.agent_runtime_state,
+        preferences_service=service,
+    )
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        initial = await client.get("/api/agent/preferences", headers=headers)
+        updated = await client.put(
+            "/api/agent/preferences",
+            headers=headers,
+            json={
+                "language": "en",
+                "response_density": "compact",
+                "expected_version": 0,
+                "idempotency_key": "console-pref-create",
+                "authorization_note": "Explicit Console presentation preference.",
+            },
+        )
+        rejected = await client.put(
+            "/api/agent/preferences",
+            headers=headers,
+            json={
+                "price": 4310,
+                "expected_version": 1,
+                "idempotency_key": "console-pref-bad",
+                "authorization_note": "Must reject factual fields.",
+            },
+        )
+        history = await client.get("/api/agent/preferences/history", headers=headers)
+    assert initial.json()["preferences"]["version"] == 0
+    assert updated.status_code == 200
+    assert updated.json()["preferences"]["language"] == "en"
+    assert updated.json()["preferences"]["version"] == 1
+    assert rejected.status_code == 422
+    assert len(history.json()["items"]) == 1
 
 
 def test_agent_status_metadata_is_secret_safe() -> None:
@@ -394,6 +795,20 @@ def test_agent_status_metadata_is_secret_safe() -> None:
     state = build_agent_runtime_state(container, CompactCapabilityRegistry())
     encoded = json.dumps(state.status, ensure_ascii=False)
     assert state.status["model"] == "safe-model"
+    assert state.status["default_model_id"] == "default"
+    assert state.status["models"] == [
+        {
+            "id": "default",
+            "provider": "default",
+            "model": "safe-model",
+            "api_style": "responses",
+            "reasoning_mode": "effort",
+            "reasoning_effort": None,
+            "reasoning_efforts": ["low", "medium", "high", "max"],
+            "native_web_search": "disabled",
+            "is_default": True,
+        }
+    ]
     assert "secret.example" not in encoded
     assert "secret-key" not in encoded
     assert "api_key" not in encoded
@@ -450,6 +865,28 @@ async def test_pending_action_console_projection_and_confirm_token_alias() -> No
 
 
 @pytest.mark.asyncio
+async def test_pending_action_reissue_returns_one_new_token_and_safe_projection() -> None:
+    _repository, conversation_id, old_token, pending = _pending_client_state()
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        response = await client.post(
+            f"/api/agent/conversations/{conversation_id}/pending-actions/"
+            f"{pending.action.action_id}/reissue",
+            headers=headers,
+            json={"expected_version": 2},
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["confirmation_token"] != old_token
+    assert body["action"]["version"] == 3
+    encoded = json.dumps(body, ensure_ascii=False)
+    assert "token_sha256" not in encoded
+    assert pending.action.token_sha256 not in encoded
+
+
+@pytest.mark.asyncio
 async def test_sse_tool_events_and_failures_are_bounded() -> None:
     model = _Model(
         [
@@ -488,7 +925,7 @@ async def test_sse_tool_events_and_failures_are_bounded() -> None:
     ]
 
     failure_model = _FailureModel([])
-    _repository, conversation_id = _client_state(enabled=True, model=failure_model)
+    failure_repository, conversation_id = _client_state(enabled=True, model=failure_model)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
         failed = await client.post(
             f"/api/agent/conversations/{conversation_id}/messages/stream",
@@ -498,6 +935,10 @@ async def test_sse_tool_events_and_failures_are_bounded() -> None:
     assert "failed" in failed.text
     assert "secret.example" not in failed.text
     assert "api_key=secret" not in failed.text
+    failed_turn = next(iter(failure_repository.turns.values()))
+    assert failed_turn.status is AgentTurnStatus.FAILED
+    failed_payload = next(item for item in failed.text.split("\n\n") if "event: failed" in item)
+    assert json.loads(failed_payload.split("data: ", 1)[1])["turn_id"] == failed_turn.turn_id
 
 
 @pytest.mark.asyncio

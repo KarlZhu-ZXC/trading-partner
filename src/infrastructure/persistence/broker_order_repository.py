@@ -168,12 +168,12 @@ class SqlAlchemyBrokerOrderRepository:
         confirmed_by: str,
         submitted_via: str,
         authorization_note: str,
-    ) -> BrokerOrderIntent:
+    ) -> tuple[BrokerOrderIntent, bool]:
         current = self.get(order_intent_id)
         if current is None:
             raise BrokerOrderNotFound("Broker order intent was not found")
         if current.submit_idempotency_key == submit_idempotency_key:
-            return current
+            return current, False
         if current.status is not BrokerOrderIntentStatus.PREVIEWED:
             raise BrokerOrderStateConflict(
                 "Broker order preview is no longer submit-capable",
@@ -206,28 +206,31 @@ class SqlAlchemyBrokerOrderRepository:
                         replay is not None
                         and replay.submit_idempotency_key == submit_idempotency_key
                     ):
-                        return replay
+                        return replay, False
                     raise BrokerOrderStateConflict("Broker order submit was claimed elsewhere")
                 session.commit()
         except IntegrityError as exc:
             raise IdempotencyConflict("Broker submit idempotency key was reused") from exc
         claimed = self.get(order_intent_id)
         assert claimed is not None
-        return claimed
+        return claimed, True
 
     def _mark(
         self,
         *,
         order_intent_id: str,
         now: datetime,
-        status: BrokerOrderIntentStatus,
+        status: BrokerOrderIntentStatus | None,
         **values: object,
     ) -> BrokerOrderIntent:
+        update_values: dict[str, object] = {"updated_at": now.isoformat(), **values}
+        if status is not None:
+            update_values["status"] = status.value
         with Session(self._engine) as session:
             result = session.execute(
                 update(BrokerOrderIntentRow)
                 .where(BrokerOrderIntentRow.order_intent_id == order_intent_id)
-                .values(status=status.value, updated_at=now.isoformat(), **values)
+                .values(**update_values)
             )
             if result.rowcount != 1:  # type: ignore[attr-defined]
                 raise BrokerOrderNotFound("Broker order intent was not found")
@@ -270,9 +273,79 @@ class SqlAlchemyBrokerOrderRepository:
         )
 
     def mark_cancelled(self, *, order_intent_id: str, now: datetime) -> BrokerOrderIntent:
+        """Persist acceptance of a cancel request, not completion of cancellation.
+
+        The provider cancel endpoint is asynchronous from the order-intent
+        perspective.  A successful request therefore remains
+        ``CANCEL_REQUESTED`` until a later provider status observation confirms
+        ``CANCELED``/``CANCELLED``.
+        """
+        return self.mark_cancel_requested(order_intent_id=order_intent_id, now=now)
+
+    def mark_cancel_requested(
+        self, *, order_intent_id: str, now: datetime
+    ) -> BrokerOrderIntent:
         return self._mark(
             order_intent_id=order_intent_id,
             now=now,
             status=BrokerOrderIntentStatus.CANCEL_REQUESTED,
             provider_status="CANCEL_REQUEST_ACCEPTED",
         )
+
+    def record_provider_observation(
+        self,
+        *,
+        order_intent_id: str,
+        provider_status: str,
+        now: datetime,
+        status: BrokerOrderIntentStatus | None = None,
+    ) -> BrokerOrderIntent:
+        """Persist a bounded provider status observation without raw payloads.
+
+        Unless a caller explicitly supplies a domain status transition (for
+        example, a provider ``CANCELED`` observation), the durable intent
+        status is preserved.  This keeps provider terminal statuses such as
+        ``FILLED`` or ``REJECTED`` from being mistaken for an intent lifecycle
+        transition.
+        """
+        values: dict[str, object] = {"provider_status": provider_status}
+        return self._mark(
+            order_intent_id=order_intent_id,
+            now=now,
+            # A plain observation updates the provider receipt atomically and
+            # preserves whatever intent status a concurrent cancel/submit
+            # operation committed.  An explicit status is only used for a
+            # provider lifecycle transition such as cancellation confirmation.
+            status=status,
+            **values,
+        )
+
+    def list_unresolved(self, limit: int = 100) -> tuple[BrokerOrderIntent, ...]:
+        """Return unresolved durable intents, newest updates first.
+
+        ``UNKNOWN`` submit outcomes and accepted-but-unconfirmed cancellation
+        requests require operator attention.  The query is read-only and
+        deliberately does not contact a provider or retry either state.
+        """
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer in [1,500]")
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(BrokerOrderIntentRow)
+                .where(
+                    BrokerOrderIntentRow.status.in_(
+                        (
+                            BrokerOrderIntentStatus.SUBMITTING.value,
+                            BrokerOrderIntentStatus.UNKNOWN.value,
+                            BrokerOrderIntentStatus.CANCEL_REQUESTED.value,
+                        )
+                    )
+                )
+                .order_by(
+                    BrokerOrderIntentRow.updated_at.desc(),
+                    BrokerOrderIntentRow.created_at.desc(),
+                    BrokerOrderIntentRow.order_intent_id.desc(),
+                )
+                .limit(limit)
+            ).all()
+            return tuple(_intent(row) for row in rows)

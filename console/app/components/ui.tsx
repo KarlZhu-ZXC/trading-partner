@@ -1,7 +1,58 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+
+export function RequiredMark() {
+  return <b className="required-mark" aria-hidden="true">*</b>;
+}
+
+export function FieldLabel({ children, required = false }: { children: ReactNode; required?: boolean }) {
+  return <span>{required && <RequiredMark />}{children}</span>;
+}
+
+export type HorizontalTabItem<T extends string> = {
+  id: T;
+  label: ReactNode;
+  suffix?: ReactNode;
+  attention?: boolean;
+};
+
+export function HorizontalTabs<T extends string>({
+  items,
+  value,
+  onChange,
+  ariaLabel,
+  idPrefix,
+  panelIdPrefix,
+  className = "",
+}: {
+  items: ReadonlyArray<HorizontalTabItem<T>>;
+  value: T;
+  onChange: (value: T) => void;
+  ariaLabel: string;
+  idPrefix: string;
+  panelIdPrefix: string;
+  className?: string;
+}) {
+  function move(event: KeyboardEvent<HTMLButtonElement>, current: T) {
+    const index = items.findIndex((item) => item.id === current);
+    let nextIndex: number;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % items.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + items.length) % items.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = items.length - 1;
+    else return;
+    event.preventDefault();
+    const next = items[nextIndex];
+    onChange(next.id);
+    document.getElementById(`${idPrefix}-${next.id}`)?.focus();
+  }
+
+  return <nav className={`horizontal-tabs ${className}`.trim()} aria-label={ariaLabel} role="tablist">{items.map((item) => <button id={`${idPrefix}-${item.id}`} key={item.id} className={`${value === item.id ? "selected" : ""}${item.attention ? " attention" : ""}`} type="button" role="tab" aria-selected={value === item.id} aria-controls={`${panelIdPrefix}-${item.id}`} tabIndex={value === item.id ? 0 : -1} onKeyDown={(event) => move(event, item.id)} onClick={() => onChange(item.id)}><span>{item.label}</span>{item.suffix}</button>)}</nav>;
+}
 
 export function Card({
   title,
+  subtitle,
+  description,
   kicker,
   action,
   id,
@@ -9,35 +60,52 @@ export function Card({
   children,
 }: {
   title?: string;
+  subtitle?: string;
+  description?: string;
   kicker?: string;
   action?: ReactNode;
   id?: string;
   className?: string;
   children: ReactNode;
 }) {
+  const bodyDescription = kicker ? (description ?? subtitle) : description;
   return (
     <section className={`card ${className}`} id={id}>
-      {(title || kicker || action) && (
+      {(title || subtitle || kicker || action) && (
         <header className="card-head">
-          <div>
+          <div className="card-heading-copy">
             {kicker && <p className="card-kicker">{kicker}</p>}
             {title && <h2>{title}</h2>}
+            {!kicker && subtitle && <p className="card-subtitle">{subtitle}</p>}
           </div>
           {action}
         </header>
       )}
+      {bodyDescription && <p className="card-description">{bodyDescription}</p>}
       {children}
     </section>
   );
 }
 
+export function DescriptionList({
+  items,
+  columns = 4,
+  className = "",
+}: {
+  items: Array<{ label: string; value: ReactNode; detail?: ReactNode }>;
+  columns?: 2 | 3 | 4 | 6;
+  className?: string;
+}) {
+  return <dl className={`description-list columns-${columns} ${className}`}>{items.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd>{item.detail != null && <small>{item.detail}</small>}</div>)}</dl>;
+}
+
 export function Badge({ value }: { value: string | null | undefined }) {
   const label = value ?? "UNKNOWN";
-  const tone = ["OK", "HEALTHY", "SUCCEEDED", "ACTIVE", "QUIET", "FRESH", "RECOVERED", "RESOLVE", "SUPPORTED"].includes(
+  const tone = ["OK", "HEALTHY", "SUCCEEDED", "ACTIVE", "AVAILABLE", "DURABLE", "QUIET", "FRESH", "RECOVERED", "RESOLVE", "SUPPORTED"].includes(
     label.toUpperCase(),
   )
     ? "good"
-    : ["TRIGGERED", "EXPIRING", "DEGRADED", "WARNING", "ACKNOWLEDGE", "NOT_EVALUATED", "UNSUPPORTED", "MEDIUM"].includes(label.toUpperCase())
+    : ["TRIGGERED", "EXPIRING", "DEGRADED", "LIMITED", "WARNING", "ACKNOWLEDGE", "REVIEW", "NOT_EVALUATED", "UNSUPPORTED", "MEDIUM"].includes(label.toUpperCase())
       ? "warn"
       : ["FAILED", "ERROR", "DEAD_LETTER", "HIGH"].includes(label.toUpperCase())
         ? "bad"
@@ -110,7 +178,7 @@ export function DataBoundary({
   if (error)
     return (
       <div className="state-panel error-state">
-        <strong>Local API disconnected</strong>
+        <strong>Local API Disconnected</strong>
         <span>Run uv run trading-partner-console first ({error})</span>
       </div>
     );

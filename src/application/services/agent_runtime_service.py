@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, replace
+from datetime import timedelta
 from typing import Any, Protocol, cast
 
 from application.dto.agent import (
@@ -23,32 +26,53 @@ from application.ports.agent_model_provider import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    ModelStreamChunk,
     ModelTool,
     ModelToolCall,
     ModelUsage,
 )
-from application.ports.agent_tool_gateway import AgentToolGateway, AgentToolReceipt
+from application.ports.agent_tool_gateway import (
+    AgentToolDescriptor,
+    AgentToolGateway,
+    AgentToolReceipt,
+)
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.services.agent_context_service import AgentContextService
+from application.services.agent_evidence_guard import evidence_manifest_json, guard_agent_response
 from application.services.agent_pending_action_service import (
     PendingActionProposal,
     pending_action_wire,
 )
-from domain.agent.enums import AgentMessageRole
-from domain.agent.models import AgentMessage, arguments_digest
+from domain.agent.enums import AgentMessageRole, AgentTurnStatus
+from domain.agent.models import AgentMessage, AgentTurn, arguments_digest
 from domain.agent.models import AgentToolReceipt as DurableToolReceipt
-from domain.common.errors import DataContractError, PersistenceError, TradingPartnerError
+from domain.common.errors import (
+    DataContractError,
+    PersistenceError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    TradingPartnerError,
+)
 from domain.common.ids import EntityIdPrefix
 
 _CAPABILITY_SEARCH_TOOL = ModelTool(
     name="tp_capability_search",
-    description="按当前问题检索一个或少量 Trading Partner 精确只读能力 schema。",
+    description=(
+        "按当前问题检索一个或少量 Trading Partner 精确 operation schema；read 只读，"
+        "propose 只创建不生效的 Proposal，prepare_action 返回最终待确认动作 schema。"
+    ),
     parameters={
         "type": "object",
         "properties": {
             "query": {"type": "string", "minLength": 1, "maxLength": 500},
             "limit": {"type": "integer", "minimum": 1, "maximum": 8, "default": 8},
+            "mode": {
+                "type": "string",
+                "enum": ["read", "propose", "prepare_action"],
+                "default": "read",
+            },
         },
         "required": ["query"],
         "additionalProperties": False,
@@ -65,6 +89,23 @@ _READ_TOOL = ModelTool(
             "arguments": {"type": "object"},
         },
         "required": ["capability", "arguments"],
+        "additionalProperties": False,
+    },
+)
+_PROPOSE_TOOL = ModelTool(
+    name="tp_propose",
+    description=(
+        "创建一个不会自动生效的 Instrument、Thesis 或 Trade Plan Proposal；"
+        "只在用户明确要求提出该变更时使用，最终生效仍需用户批准 Proposal。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "capability": {"type": "string", "const": "research_judgment_propose"},
+            "operation": {"type": "string", "enum": ["research_state", "thesis_revision"]},
+            "arguments": {"type": "object"},
+        },
+        "required": ["capability", "operation", "arguments"],
         "additionalProperties": False,
     },
 )
@@ -86,7 +127,8 @@ _PREPARE_TOOL = ModelTool(
         "additionalProperties": False,
     },
 )
-_AGENT_TOOLS = (_CAPABILITY_SEARCH_TOOL, _READ_TOOL, _PREPARE_TOOL)
+_AGENT_TOOLS = (_CAPABILITY_SEARCH_TOOL, _READ_TOOL, _PROPOSE_TOOL, _PREPARE_TOOL)
+_MAX_PARALLEL_READS = 4
 
 
 class AgentTurnLock(Protocol):
@@ -94,8 +136,35 @@ class AgentTurnLock(Protocol):
 
     def release(self) -> None: ...
 
+
 AgentTurnEventSink = Callable[[AgentTurnEvent], Awaitable[None] | None]
 _SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._-]+\.png$")
+_SAFE_ARTIFACT_URL = re.compile(r"^/api/agent/artifacts/[A-Za-z0-9._-]+\.png$")
+_SAFE_FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,95}$")
+_SAFE_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
+_AUTO_COMPLEX_PATTERN = re.compile(
+    r"(?:thesis|trade\s*plan|plan|portfolio|multi[- ]?asset|monitor|web|search|research|"
+    r"position|risk|compare|comparison|deep|执行|下单|持仓|组合|多资产|研究|计划|论点|监控|网页|搜索|风险)",
+    re.IGNORECASE,
+)
+_ACTION_PATTERN = re.compile(
+    r"(?:buy|sell|order|execute|confirm|place|trade|prepare_action|下单|买入|卖出|执行|确认)",
+    re.IGNORECASE,
+)
+_READ_SEARCH_PATTERN = re.compile(
+    r"(?:read|search|lookup|query|quote|price|status|查看|查询|搜索|读取|行情|价格|信息|持仓)",
+    re.IGNORECASE,
+)
+_STALE_TURN_RECOVERY_AFTER = timedelta(seconds=30)
+
+
+@dataclass(slots=True)
+class _ActiveTurn:
+    task: asyncio.Task[object]
+    cancel_event: asyncio.Event
+    event_sink: AgentTurnEventSink | None
+    turn: AgentTurn
+    pending_action: bool = False
 
 
 def _ephemeral_context_message(context: EphemeralContext) -> ModelMessage:
@@ -128,6 +197,9 @@ def _chart_artifact_url(value: object) -> str | None:
     """Extract only a persisted PNG basename from a compact chart result."""
 
     if isinstance(value, Mapping):
+        direct_url = value.get("artifact_url")
+        if isinstance(direct_url, str) and _SAFE_ARTIFACT_URL.fullmatch(direct_url):
+            return direct_url
         artifact = value.get("chart_artifact")
         if isinstance(artifact, Mapping):
             raw_path = artifact.get("path")
@@ -160,7 +232,10 @@ class AgentRuntimeService:
         clock: Clock,
         id_generator: IdGenerator,
         system_prompt: str,
+        model_providers: Mapping[str, AgentModelProvider] | None = None,
+        default_model_id: str = "default",
         pending_action_gateway: AgentPendingActionGateway | None = None,
+        preferences_service: Any | None = None,
         turn_lock_factory: Callable[[str], AgentTurnLock] | None = None,
         max_tool_rounds: int = 6,
         max_tool_result_bytes: int = 64_000,
@@ -171,18 +246,596 @@ class AgentRuntimeService:
             raise ValueError("invalid Agent runtime bounds")
         self._repository = repository
         self._context = context_service
-        self._model = model_provider
+        self._models = dict(model_providers or {})
+        self._models.setdefault(default_model_id, model_provider)
+        self._default_model_id = default_model_id
         self._gateway = tool_gateway
         self._clock = clock
         self._id_generator = id_generator
         self._system_prompt = system_prompt
         self._pending_action_gateway = pending_action_gateway
+        self._preferences_service = preferences_service
         self._turn_lock_factory = turn_lock_factory
         self._max_tool_rounds = max_tool_rounds
         self._max_tool_result_bytes = max_tool_result_bytes
         # Conversation turns are serialized at the core boundary so Console,
         # Telegram, and any future adapter cannot append interleaved messages.
         self._conversation_locks: dict[str, asyncio.Lock] = {}
+        # Runtime-only cancellation handles. Durable turn state remains the
+        # source of truth so a process restart never reruns a cancelled turn.
+        self._active_turns: dict[str, _ActiveTurn] = {}
+        # The pending gateway owns the write allowlist. A capability gateway
+        # may expose a narrow descriptor injection hook without importing that
+        # concrete service into the application layer.
+        if pending_action_gateway is not None:
+            allowlist = getattr(pending_action_gateway, "allowlist", None)
+            if allowlist is None:
+                service = getattr(pending_action_gateway, "service", None)
+                allowlist = getattr(service, "allowlist", None)
+            configure = getattr(self._gateway, "set_action_allowlist", None)
+            if callable(configure) and allowlist is not None:
+                try:
+                    configure(tuple(allowlist))
+                except (TypeError, ValueError):
+                    # Descriptor discovery must fail closed if an adapter does
+                    # not accept the injected shape.
+                    configure(())
+
+    @staticmethod
+    def _configured_reasoning_efforts(
+        model_provider: AgentModelProvider,
+    ) -> tuple[str, ...] | None:
+        """Return configured effort choices, or ``None`` for legacy test adapters."""
+
+        config = getattr(model_provider, "config", None)
+        if config is None:
+            return None
+        mode = getattr(config, "reasoning_mode", "none")
+        if mode == "thinking":
+            return ("high", "max")
+        if mode == "effort":
+            return ("low", "medium", "high", "max")
+        return ()
+
+    @staticmethod
+    def _native_web_search_enabled(model_provider: AgentModelProvider) -> bool:
+        """Enable native Web Search by default only when the route supports it."""
+
+        config = getattr(model_provider, "config", None)
+        return getattr(config, "native_web_search", "disabled") == "responses_web_search"
+
+    async def _resolve_model_selection(
+        self,
+        model_provider: AgentModelProvider,
+        requested_model: str | None,
+        reasoning_effort: str | None,
+    ) -> str | None:
+        """Resolve a catalog-backed model name and reject client-side tampering."""
+
+        config = getattr(model_provider, "config", None)
+        configured_model = getattr(config, "model", None) or getattr(
+            model_provider,
+            "model",
+            None,
+        )
+        selected_model = requested_model or configured_model
+        if selected_model is not None and (
+            not isinstance(selected_model, str)
+            or _SAFE_MODEL_NAME.fullmatch(selected_model) is None
+        ):
+            raise DataContractError("Agent model selection is unavailable")
+
+        catalog_efforts: tuple[str, ...] = ()
+        if selected_model is not None and selected_model != configured_model:
+            list_models = getattr(model_provider, "list_models", None)
+            if not callable(list_models):
+                raise DataContractError("Agent model selection is unavailable")
+            catalog = await list_models()
+            match = next(
+                (
+                    item
+                    for item in getattr(catalog, "models", ())
+                    if getattr(item, "id", None) == selected_model
+                ),
+                None,
+            )
+            if match is None:
+                raise DataContractError("Agent model selection is unavailable")
+            catalog_efforts = tuple(getattr(match, "reasoning_efforts", ()))
+
+        allowed_efforts = catalog_efforts or self._configured_reasoning_efforts(model_provider)
+        if (
+            reasoning_effort is not None
+            and allowed_efforts is not None
+            and reasoning_effort not in allowed_efforts
+        ):
+            raise DataContractError("Agent reasoning effort is unavailable")
+        return selected_model
+
+    @staticmethod
+    def _is_action_intent(content: str) -> bool:
+        return _ACTION_PATTERN.search(content) is not None
+
+    def _auto_provider_id(self, content: str) -> tuple[str, str]:
+        """Choose a deterministic fast/strong route for ``model_id=auto``."""
+
+        default_id = self._default_model_id
+        if _AUTO_COMPLEX_PATTERN.search(content) is not None or len(content) > 180:
+            return default_id, "auto_complex_default"
+        fast_candidates = (
+            provider_id
+            for provider_id in self._models
+            if provider_id != default_id
+            and (
+                provider_id.casefold() in {"deepseek", "fast", "flash"}
+                or any(marker in provider_id.casefold() for marker in ("fast", "flash", "mini"))
+            )
+        )
+        fast_id = next(fast_candidates, None)
+        if fast_id is None:
+            for provider_id in self._models:
+                if provider_id != default_id:
+                    fast_id = provider_id
+                    break
+        if fast_id is None:
+            return default_id, "auto_simple_default"
+        return fast_id, "auto_simple_fast"
+
+    def _select_provider(
+        self,
+        request: AgentTurnRequest,
+    ) -> tuple[str, AgentModelProvider, str, bool]:
+        requested_id = request.model_id
+        if requested_id == "auto":
+            provider_id, reason = self._auto_provider_id(request.content)
+            provider = self._models.get(provider_id)
+            if provider is None:
+                raise DataContractError("Agent model selection is unavailable")
+            return provider_id, provider, reason, True
+        provider_id = requested_id or self._default_model_id
+        provider = self._models.get(provider_id)
+        if provider is None:
+            raise DataContractError("Agent model selection is unavailable")
+        return provider_id, provider, "manual_provider", False
+
+    @staticmethod
+    def _fallback_allowed(error: BaseException) -> bool:
+        return isinstance(
+            error,
+            (ProviderTimeoutError, ProviderRateLimitError, ProviderUnavailableError),
+        )
+
+    async def cancel_turn(
+        self,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        owner_principal: str,
+    ) -> AgentTurn:
+        """Cancel exactly the latest active owned turn and propagate upstream."""
+
+        self._context.require_owned_active(conversation_id, owner_principal)
+        getter = getattr(self._repository, "get_turn", None)
+        latest_getter = getattr(self._repository, "latest_turn", None) or getattr(
+            self._repository,
+            "get_latest_turn",
+            None,
+        )
+        turn = cast(AgentTurn | None, getter(turn_id)) if callable(getter) else None
+        latest = (
+            cast(AgentTurn | None, latest_getter(conversation_id))
+            if callable(latest_getter)
+            else None
+        )
+        if turn is None or turn.conversation_id != conversation_id:
+            raise PersistenceError(
+                "Agent turn was not found",
+                retryable=False,
+                code="AGENT_TURN_NOT_FOUND",
+            )
+        if latest is None or latest.turn_id != turn_id:
+            raise PersistenceError(
+                "Only the latest Agent turn may be cancelled",
+                retryable=False,
+                code="AGENT_TURN_NOT_LATEST",
+            )
+        if turn.status is AgentTurnStatus.CANCELLED:
+            return turn
+        if turn.status not in {AgentTurnStatus.RUNNING, AgentTurnStatus.WAITING_TOOL}:
+            raise PersistenceError(
+                "Agent turn is no longer active",
+                retryable=False,
+                code="AGENT_TURN_NOT_ACTIVE",
+            )
+        active = self._active_turns.get(turn_id)
+        if active is not None and active.pending_action:
+            raise PersistenceError(
+                "Agent turn has a pending write action",
+                retryable=False,
+                code="AGENT_TURN_WRITE_PENDING",
+            )
+        # A process restart can lose the in-memory handle while the durable
+        # pending-action row remains PROPOSED/PRESENTED/CONFIRMED/EXECUTING.
+        # Refuse cancellation in that window as well; otherwise a user could
+        # cancel a turn while its confirmation/execution is still in flight.
+        pending_list = getattr(self._pending_action_gateway, "list", None)
+        if callable(pending_list):
+            try:
+                pending_values = pending_list(
+                    conversation_id,
+                    channel=turn.channel,
+                    principal=owner_principal,
+                    include_terminal=False,
+                    limit=100,
+                )
+            except (LookupError, PermissionError, TypeError, ValueError):
+                pending_values = ()
+            if not isinstance(pending_values, (tuple, list)):
+                pending_values = ()
+            if any(
+                getattr(getattr(item, "status", None), "value", getattr(item, "status", None))
+                in {"PROPOSED", "PRESENTED", "CONFIRMED", "EXECUTING"}
+                for item in pending_values
+            ):
+                raise PersistenceError(
+                    "Agent turn has a pending write action",
+                    retryable=False,
+                    code="AGENT_TURN_WRITE_PENDING",
+                )
+        updated = self._transition_turn(
+            turn,
+            status=AgentTurnStatus.CANCELLED,
+            error_code="AGENT_TURN_CANCELLED",
+            completed_at=self._clock.now(),
+        )
+        if active is not None:
+            active.cancel_event.set()
+            await self._emit_event(
+                active.event_sink,
+                AgentTurnEvent(
+                    type="cancelled",
+                    data={
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "code": "AGENT_TURN_CANCELLED",
+                    },
+                ),
+            )
+            if active.task is not asyncio.current_task():
+                active.task.cancel()
+                # Yield once so an in-flight Provider await receives the
+                # cancellation before this HTTP request returns; do not wait
+                # unboundedly for a misbehaving upstream adapter.
+                await asyncio.sleep(0)
+        return updated
+
+    @staticmethod
+    def _safe_error_code(error: BaseException) -> str:
+        """Reduce any failure to a bounded machine code; never store text."""
+
+        code = error.code if isinstance(error, TradingPartnerError) else "AGENT_RUNTIME_FAILED"
+        if not isinstance(code, str) or re.fullmatch(r"[A-Z0-9][A-Z0-9_.:-]{0,127}", code) is None:
+            return "AGENT_RUNTIME_FAILED"
+        return code
+
+    def _transition_turn(
+        self,
+        turn: AgentTurn,
+        *,
+        status: AgentTurnStatus,
+        assistant_message_id: str | None = None,
+        error_code: str | None = None,
+        completed_at: Any = None,
+    ) -> AgentTurn:
+        updater = getattr(self._repository, "update_turn", None)
+        if updater is None:
+            return turn
+        value: AgentTurn = updater(
+            turn.turn_id,
+            status=status,
+            expected_version=turn.version,
+            assistant_message_id=assistant_message_id,
+            error_code=error_code,
+            completed_at=completed_at,
+            now=self._clock.now(),
+        )
+        return value
+
+    def _create_turn(
+        self,
+        *,
+        conversation_id: str,
+        user_message_id: str,
+        channel: Any,
+        model_id: str,
+        reasoning_effort: str | None,
+    ) -> AgentTurn | None:
+        creator = getattr(self._repository, "create_turn", None)
+        if creator is None:
+            return None
+        now = self._clock.now()
+        turn = AgentTurn(
+            turn_id=self._id_generator.new(EntityIdPrefix.AGENT_TURN),
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=None,
+            channel=channel,
+            status=AgentTurnStatus.RUNNING,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
+            started_at=now,
+            updated_at=now,
+        )
+        value: AgentTurn = creator(turn)
+        return value
+
+    def _check_cancelled(self, turn_id: str | None) -> None:
+        if turn_id is not None:
+            active = self._active_turns.get(turn_id)
+            if active is not None and active.cancel_event.is_set():
+                raise asyncio.CancelledError
+            getter = getattr(self._repository, "get_turn", None)
+            current = cast(AgentTurn | None, getter(turn_id)) if callable(getter) else None
+            if current is not None and current.status is AgentTurnStatus.CANCELLED:
+                raise asyncio.CancelledError
+
+    def recover_interrupted_turn(self, turn_id: str) -> AgentTurn | None:
+        """Converge an orphaned active turn after a process restart.
+
+        The short grace period avoids racing the task-registration window in a
+        freshly started request; once elapsed, an active turn with no local
+        task is a durable, retryable process interruption.
+        """
+
+        getter = getattr(self._repository, "get_turn", None)
+        turn = cast(AgentTurn | None, getter(turn_id)) if callable(getter) else None
+        if turn is None or turn.is_terminal:
+            return turn
+        if turn_id in self._active_turns:
+            return turn
+        if self._clock.now() - turn.updated_at < _STALE_TURN_RECOVERY_AFTER:
+            return turn
+        try:
+            return self._transition_turn(
+                turn,
+                status=AgentTurnStatus.FAILED,
+                error_code="AGENT_TURN_PROCESS_INTERRUPTED",
+                completed_at=self._clock.now(),
+            )
+        except PersistenceError:
+            refreshed = getter(turn_id) if callable(getter) else None
+            return cast(AgentTurn | None, refreshed)
+
+    def _preferences_message(self, owner_principal: str) -> ModelMessage | None:
+        """Inject presentation-only preferences as explicitly untrusted context."""
+
+        service = self._preferences_service
+        getter = getattr(service, "get", None) if service is not None else None
+        if not callable(getter):
+            return None
+        try:
+            preferences = getter(owner_principal)
+            as_dict = getattr(preferences, "as_dict", None)
+            values = as_dict() if callable(as_dict) else None
+        except Exception:  # noqa: BLE001 - preferences never block a factual turn
+            return None
+        if not isinstance(values, Mapping):
+            return None
+        safe_values = {
+            key: values[key]
+            for key in (
+                "language",
+                "response_density",
+                "preferred_source_codes",
+                "risk_style",
+                "default_chart",
+                "version",
+            )
+            if key in values
+        }
+        encoded = json.dumps(
+            safe_values,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return ModelMessage(
+            role="system",
+            content=(
+                "以下是用户的 Agent 展示偏好，仅控制语言、回答密度、来源偏好、"
+                "风险表达方式和默认图表；Web Search 在 Provider 支持时始终默认开启。"
+                "这些偏好不是事实、记忆、授权或交易意图，"
+                "不得替代工具读取，也不得改变风险/订单/研究状态。"
+                f"<presentation_preferences>{encoded}</presentation_preferences>"
+            ),
+        )
+
+    async def _complete_model_request(
+        self,
+        *,
+        model_provider: AgentModelProvider,
+        request: ModelRequest,
+        event_sink: AgentTurnEventSink | None,
+        conversation_id: str,
+        turn_id: str | None,
+    ) -> ModelResponse:
+        """Use provider streaming when available, falling back to complete()."""
+
+        stream_method = getattr(model_provider, "stream", None)
+        if not callable(stream_method):
+            response = await model_provider.complete(request)
+            if response.text:
+                await self._emit_event(
+                    event_sink,
+                    AgentTurnEvent(
+                        type="text_delta",
+                        data={
+                            "conversation_id": conversation_id,
+                            "turn_id": turn_id,
+                            "text": response.text,
+                            "delta": response.text,
+                        },
+                    ),
+                )
+            return response
+
+        text_parts: list[str] = []
+        tool_calls: dict[str, ModelToolCall] = {}
+        latest_usage: ModelUsage | None = None
+        model: str | None = None
+        finish_reason: str | None = None
+        web_search_used = False
+        web_extractor_used = False
+        source_urls: list[str] = []
+        request_id: str | None = None
+        latest_latency_ms: int | None = None
+        final_response: ModelResponse | None = None
+        saw_event = False
+        streamed_content = False
+        try:
+            stream_result = stream_method(request)
+            if inspect.isawaitable(stream_result):
+                stream_result = await stream_result
+            async for chunk in stream_result:
+                self._check_cancelled(turn_id)
+                if isinstance(chunk, ModelResponse):
+                    final_response = chunk
+                    saw_event = True
+                    continue
+                if not isinstance(chunk, ModelStreamChunk):
+                    raise DataContractError("Agent model stream returned an invalid chunk")
+                saw_event = saw_event or bool(
+                    chunk.text_delta
+                    or chunk.tool_calls
+                    or chunk.final_response is not None
+                    or chunk.web_search_used
+                    or chunk.web_extractor_used
+                    or chunk.web_source_urls
+                    or chunk.done
+                )
+                if chunk.text_delta:
+                    streamed_content = True
+                    text_parts.append(chunk.text_delta)
+                    await self._emit_event(
+                        event_sink,
+                        AgentTurnEvent(
+                            type="text_delta",
+                            data={
+                                "conversation_id": conversation_id,
+                                "turn_id": turn_id,
+                                "text": chunk.text_delta,
+                                "delta": chunk.text_delta,
+                            },
+                        ),
+                    )
+                for call in chunk.tool_calls:
+                    streamed_content = True
+                    existing = tool_calls.get(call.id)
+                    if existing is None and len(tool_calls) == 1 and call.id.startswith("call_"):
+                        # Chat/Responses continuations often omit the stable
+                        # provider call id and expose only an array index.
+                        existing = next(iter(tool_calls.values()))
+                        call = replace(call, id=existing.id)
+                    if existing is None:
+                        tool_calls[call.id] = call
+                    else:
+                        tool_calls[call.id] = ModelToolCall(
+                            id=call.id,
+                            name=call.name or existing.name,
+                            arguments=existing.arguments + call.arguments,
+                        )
+                latest_usage = chunk.usage or latest_usage
+                model = chunk.model or model
+                finish_reason = chunk.finish_reason or finish_reason
+                if chunk.latency_ms is not None:
+                    latest_latency_ms = chunk.latency_ms
+                web_search_used = web_search_used or chunk.web_search_used
+                web_extractor_used = web_extractor_used or chunk.web_extractor_used
+                if chunk.web_search_used or chunk.web_extractor_used or chunk.web_source_urls:
+                    streamed_content = True
+                for url in chunk.web_source_urls:
+                    if url not in source_urls and len(source_urls) < 20:
+                        source_urls.append(url)
+                request_id = chunk.request_id or request_id
+                if chunk.final_response is not None:
+                    streamed_content = True
+                    final_response = chunk.final_response
+        except (
+            ProviderTimeoutError,
+            ProviderRateLimitError,
+            ProviderUnavailableError,
+        ) as error:
+            # The auto router may retry only before the first visible delta.
+            error.__dict__["agent_stream_emitted"] = streamed_content
+            raise
+        except NotImplementedError:
+            if saw_event:
+                raise
+            response = await model_provider.complete(request)
+            if response.text:
+                await self._emit_event(
+                    event_sink,
+                    AgentTurnEvent(
+                        type="text_delta",
+                        data={
+                            "conversation_id": conversation_id,
+                            "turn_id": turn_id,
+                            "text": response.text,
+                            "delta": response.text,
+                        },
+                    ),
+                )
+            return response
+
+        if final_response is not None:
+            # Responses ``completed`` events can carry the complete text even
+            # after deltas. Never append that text a second time.
+            text = "".join(text_parts) if text_parts else final_response.text
+            if not text_parts and final_response.text:
+                await self._emit_event(
+                    event_sink,
+                    AgentTurnEvent(
+                        type="text_delta",
+                        data={
+                            "conversation_id": conversation_id,
+                            "turn_id": turn_id,
+                            "text": final_response.text,
+                            "delta": final_response.text,
+                        },
+                    ),
+                )
+            merged_calls = tuple(tool_calls.values()) or final_response.tool_calls
+            return replace(
+                final_response,
+                text=text,
+                tool_calls=merged_calls,
+                usage=final_response.usage or latest_usage,
+                model=final_response.model or model,
+                finish_reason=final_response.finish_reason or finish_reason,
+                latency_ms=(
+                    final_response.latency_ms
+                    if final_response.latency_ms is not None
+                    else latest_latency_ms
+                ),
+                web_search_used=final_response.web_search_used or web_search_used,
+                web_extractor_used=final_response.web_extractor_used or web_extractor_used,
+                web_source_urls=tuple(
+                    dict.fromkeys((*final_response.web_source_urls, *source_urls))
+                )[:20],
+                request_id=final_response.request_id or request_id,
+            )
+        return ModelResponse(
+            text="".join(text_parts),
+            tool_calls=tuple(tool_calls.values()),
+            usage=latest_usage,
+            model=model,
+            finish_reason=finish_reason,
+            web_search_used=web_search_used,
+            web_extractor_used=web_extractor_used,
+            web_source_urls=tuple(source_urls),
+            request_id=request_id,
+            latency_ms=latest_latency_ms,
+        )
 
     async def run_turn(
         self,
@@ -192,6 +845,7 @@ class AgentRuntimeService:
     ) -> AgentTurnResult:
         lock = self._conversation_locks.setdefault(request.conversation_id, asyncio.Lock())
         async with lock:
+            owned_turn: list[AgentTurn] = []
             process_lock = (
                 self._turn_lock_factory(request.conversation_id)
                 if self._turn_lock_factory is not None
@@ -204,23 +858,45 @@ class AgentRuntimeService:
                     code="AGENT_CONVERSATION_TURN_BUSY",
                 )
             try:
-                return await self._run_turn(request, event_sink=event_sink)
+                return await self._run_turn(
+                    request,
+                    event_sink=event_sink,
+                    owned_turn=owned_turn,
+                )
             except Exception as error:
+                turn = None
+                if owned_turn:
+                    getter = getattr(self._repository, "get_turn", None)
+                    turn = getter(owned_turn[0].turn_id) if callable(getter) else owned_turn[0]
+                    if turn is not None and turn.status not in {
+                        AgentTurnStatus.RUNNING,
+                        AgentTurnStatus.WAITING_TOOL,
+                    }:
+                        turn = None
+                if turn is not None:
+                    with contextlib.suppress(Exception):
+                        turn = self._transition_turn(
+                            turn,
+                            status=AgentTurnStatus.FAILED,
+                            error_code=self._safe_error_code(error),
+                            completed_at=self._clock.now(),
+                        )
                 await self._emit_event(
                     event_sink,
                     AgentTurnEvent(
                         type="failed",
                         data={
                             "conversation_id": request.conversation_id,
-                            "code": error.code
-                            if isinstance(error, TradingPartnerError)
-                            else "AGENT_RUNTIME_FAILED",
+                            "turn_id": turn.turn_id if turn is not None else None,
+                            "code": self._safe_error_code(error),
                             "message": "Agent 本轮未完成。",
                         },
                     ),
                 )
                 raise
             finally:
+                for active_turn in owned_turn:
+                    self._active_turns.pop(active_turn.turn_id, None)
                 if process_lock is not None:
                     process_lock.release()
 
@@ -229,12 +905,23 @@ class AgentRuntimeService:
         request: AgentTurnRequest,
         *,
         event_sink: AgentTurnEventSink | None = None,
+        owned_turn: list[AgentTurn] | None = None,
     ) -> AgentTurnResult:
         if not request.content.strip() or len(request.content) > 64_000:
             raise DataContractError("Agent user message must be nonblank bounded text")
+        model_id, model_provider, route_reason, is_auto_route = self._select_provider(request)
+        fallback_from: str | None = None
+        fallback_code: str | None = None
+        if request.reasoning_effort not in {None, "low", "medium", "high", "max"}:
+            raise DataContractError("Agent reasoning effort is unavailable")
         conversation = self._context.require_owned_active(
             request.conversation_id,
             request.owner_principal,
+        )
+        selected_model = await self._resolve_model_selection(
+            model_provider,
+            request.model,
+            request.reasoning_effort,
         )
         user_message = self._repository.append_message(
             AgentMessage(
@@ -247,6 +934,24 @@ class AgentRuntimeService:
                 created_at=self._clock.now(),
             )
         )
+        turn = self._create_turn(
+            conversation_id=conversation.conversation_id,
+            user_message_id=user_message.message_id,
+            channel=request.channel,
+            model_id=model_id,
+            reasoning_effort=request.reasoning_effort,
+        )
+        if turn is not None and owned_turn is not None:
+            owned_turn.append(turn)
+            task = asyncio.current_task()
+            if task is None:
+                raise RuntimeError("Agent turn requires an asyncio task")
+            self._active_turns[turn.turn_id] = _ActiveTurn(
+                task=cast(asyncio.Task[object], task),
+                cancel_event=asyncio.Event(),
+                event_sink=event_sink,
+                turn=turn,
+            )
         await self._emit_event(
             event_sink,
             AgentTurnEvent(
@@ -254,6 +959,12 @@ class AgentRuntimeService:
                 data={
                     "conversation_id": conversation.conversation_id,
                     "user_message_id": user_message.message_id,
+                    "turn_id": turn.turn_id if turn is not None else None,
+                    "model_id": model_id,
+                    "provider_id": model_id,
+                    "model": selected_model,
+                    "reasoning_effort": request.reasoning_effort,
+                    "route_reason": route_reason,
                 },
             ),
         )
@@ -265,20 +976,88 @@ class AgentRuntimeService:
             conversation=conversation,
             system_prompt=self._system_prompt,
         )
+        preferences_message = self._preferences_message(request.owner_principal)
+        if preferences_message is not None:
+            messages.append(preferences_message)
         if request.ephemeral_context is not None:
             if not isinstance(request.ephemeral_context, EphemeralContext):
                 raise DataContractError("Agent ephemeral context has an invalid type")
             messages.append(_ephemeral_context_message(request.ephemeral_context))
         receipts: list[AgentToolReceipt] = []
         tool_trace: list[str] = []
-        capability_search_cache: dict[tuple[str, int], object] = {}
+        artifact_urls: list[str] = []
+        tool_payloads: list[object] = []
+        capability_search_audits: list[dict[str, object]] = []
+        capability_search_cache: dict[tuple[str, int, str], object] = {}
         final_response: ModelResponse | None = None
         model_responses: list[ModelResponse] = []
         tool_rounds = 0
         while tool_rounds <= self._max_tool_rounds:
-            response = await self._model.complete(
-                ModelRequest(messages=tuple(messages), tools=_AGENT_TOOLS)
+            self._check_cancelled(turn.turn_id if turn is not None else None)
+            model_request = ModelRequest(
+                messages=tuple(messages),
+                tools=_AGENT_TOOLS,
+                model=selected_model,
+                reasoning_effort=request.reasoning_effort,
+                native_web_search=self._native_web_search_enabled(model_provider),
             )
+            try:
+                response = await self._complete_model_request(
+                    model_provider=model_provider,
+                    request=model_request,
+                    event_sink=event_sink,
+                    conversation_id=conversation.conversation_id,
+                    turn_id=turn.turn_id if turn is not None else None,
+                )
+            except (
+                ProviderTimeoutError,
+                ProviderRateLimitError,
+                ProviderUnavailableError,
+            ) as error:
+                if (
+                    is_auto_route
+                    and not model_responses
+                    and not self._is_action_intent(request.content)
+                    and _READ_SEARCH_PATTERN.search(request.content) is not None
+                    and self._fallback_allowed(error)
+                    and not getattr(error, "agent_stream_emitted", False)
+                ):
+                    alternative_ids = [
+                        candidate
+                        for candidate in self._models
+                        if candidate != model_id and candidate != "auto"
+                    ]
+                    if alternative_ids:
+                        fallback_from = model_id
+                        fallback_code = self._safe_error_code(error)
+                        model_id = alternative_ids[0]
+                        model_provider = self._models[model_id]
+                        route_reason = "auto_fallback"
+                        selected_model = await self._resolve_model_selection(
+                            model_provider,
+                            request.model,
+                            request.reasoning_effort,
+                        )
+                        if turn is not None:
+                            turn = replace(turn, model_id=model_id)
+                        response = await self._complete_model_request(
+                            model_provider=model_provider,
+                            request=replace(
+                                model_request,
+                                model=selected_model,
+                                native_web_search=self._native_web_search_enabled(
+                                    model_provider
+                                ),
+                            ),
+                            event_sink=event_sink,
+                            conversation_id=conversation.conversation_id,
+                            turn_id=turn.turn_id if turn is not None else None,
+                        )
+                    else:
+                        raise
+                else:
+                    raise
+            self._check_cancelled(turn.turn_id if turn is not None else None)
             model_responses.append(response)
             if not response.tool_calls:
                 final_response = response
@@ -290,8 +1069,22 @@ class AgentRuntimeService:
                     finish_reason="tool_round_limit",
                     usage=response.usage,
                 )
+                await self._emit_event(
+                    event_sink,
+                    AgentTurnEvent(
+                        type="text_delta",
+                        data={
+                            "conversation_id": conversation.conversation_id,
+                            "turn_id": turn.turn_id if turn is not None else None,
+                            "text": final_response.text,
+                            "delta": final_response.text,
+                        },
+                    ),
+                )
                 break
             tool_rounds += 1
+            if turn is not None:
+                turn = self._transition_turn(turn, status=AgentTurnStatus.WAITING_TOOL)
             messages.append(
                 ModelMessage(
                     role="assistant",
@@ -299,30 +1092,46 @@ class AgentRuntimeService:
                     tool_calls=response.tool_calls,
                 )
             )
-            for call in response.tool_calls:
-                if len(tool_trace) < 32:
-                    tool_trace.append(call.name)
-                await self._emit_event(
-                    event_sink,
-                    AgentTurnEvent(
-                        type="tool_started",
-                        data={
-                            "conversation_id": conversation.conversation_id,
-                            "tool_call_id": call.id,
-                            "name": call.name,
-                        },
-                    ),
-                )
-                payload, receipt, pending = await self._handle_tool_call(
-                    call=call,
-                    conversation_id=conversation.conversation_id,
-                    message_id=user_message.message_id,
-                    channel=request.channel,
-                    principal=request.owner_principal,
-                    capability_search_cache=capability_search_cache,
-                )
+
+            current_turn_id = turn.turn_id if turn is not None else None
+
+            async def finish_tool_call(
+                call: ModelToolCall,
+                outcome: tuple[
+                    object,
+                    AgentToolReceipt | None,
+                    tuple[PendingActionProposal, str] | None,
+                ],
+                _turn_id: str | None = current_turn_id,
+            ) -> None:
+                self._check_cancelled(_turn_id)
+                payload, receipt, pending = outcome
+                if call.name in {"tp_read", "tp_propose"} and len(tool_payloads) < 32:
+                    tool_payloads.append(payload)
+                if isinstance(payload, Mapping):
+                    audit = payload.get("routing_audit")
+                    if isinstance(audit, Mapping) and len(capability_search_audits) < 16:
+                        capability_search_audits.append(dict(audit))
                 if receipt is not None:
                     receipts.append(receipt)
+                artifact_url_candidate = (
+                    payload.get("artifact_url")
+                    if isinstance(payload, Mapping)
+                    and isinstance(payload.get("artifact_url"), str)
+                    else None
+                )
+                artifact_url = (
+                    artifact_url_candidate
+                    if artifact_url_candidate is not None
+                    and _SAFE_ARTIFACT_URL.fullmatch(artifact_url_candidate) is not None
+                    else None
+                )
+                if (
+                    artifact_url is not None
+                    and artifact_url not in artifact_urls
+                    and len(artifact_urls) < 20
+                ):
+                    artifact_urls.append(artifact_url)
                 await self._emit_event(
                     event_sink,
                     AgentTurnEvent(
@@ -332,16 +1141,14 @@ class AgentRuntimeService:
                             "tool_call_id": call.id,
                             "name": call.name,
                             "receipt": receipt.as_dict() if receipt is not None else None,
-                            "artifact_url": (
-                                payload.get("artifact_url")
-                                if isinstance(payload, Mapping)
-                                and isinstance(payload.get("artifact_url"), str)
-                                else None
-                            ),
+                            "artifact_url": artifact_url,
                         },
                     ),
                 )
                 if pending is not None:
+                    active = self._active_turns.get(_turn_id or "")
+                    if active is not None:
+                        active.pending_action = True
                     proposal, token = pending
                     await self._emit_event(
                         event_sink,
@@ -365,18 +1172,127 @@ class AgentRuntimeService:
                         content=self._bounded_tool_text(payload),
                     )
                 )
+
+            # A model can request multiple independent reads in one response.
+            # Emit and append them in model order while allowing the provider
+            # calls themselves to overlap.  Any mixed batch stays serial so a
+            # search or pending-action operation cannot race a read.
+            parallel_reads = len(response.tool_calls) > 1 and all(
+                call.name == "tp_read" for call in response.tool_calls
+            )
+            if parallel_reads:
+                for call in response.tool_calls:
+                    if len(tool_trace) < 32:
+                        tool_trace.append(call.name)
+                    await self._emit_event(
+                        event_sink,
+                        AgentTurnEvent(
+                            type="tool_started",
+                            data={
+                                "conversation_id": conversation.conversation_id,
+                                "tool_call_id": call.id,
+                                "name": call.name,
+                            },
+                        ),
+                    )
+                semaphore = asyncio.Semaphore(_MAX_PARALLEL_READS)
+
+                async def bounded_read(
+                    call: ModelToolCall,
+                    _semaphore: asyncio.Semaphore = semaphore,
+                    _turn_id: str | None = current_turn_id,
+                ) -> tuple[
+                    object,
+                    AgentToolReceipt | None,
+                    tuple[PendingActionProposal, str] | None,
+                ]:
+                    self._check_cancelled(_turn_id)
+                    async with _semaphore:
+                        return await self._handle_tool_call(
+                            call=call,
+                            conversation_id=conversation.conversation_id,
+                            message_id=user_message.message_id,
+                            channel=request.channel,
+                            principal=request.owner_principal,
+                            capability_search_cache=capability_search_cache,
+                        )
+
+                outcomes = await asyncio.gather(
+                    *(bounded_read(call) for call in response.tool_calls)
+                )
+                for call, outcome in zip(response.tool_calls, outcomes, strict=True):
+                    await finish_tool_call(call, outcome)
+            else:
+                for call in response.tool_calls:
+                    self._check_cancelled(current_turn_id)
+                    if len(tool_trace) < 32:
+                        tool_trace.append(call.name)
+                    await self._emit_event(
+                        event_sink,
+                        AgentTurnEvent(
+                            type="tool_started",
+                            data={
+                                "conversation_id": conversation.conversation_id,
+                                "tool_call_id": call.id,
+                                "name": call.name,
+                            },
+                        ),
+                    )
+                    outcome = await self._handle_tool_call(
+                        call=call,
+                        conversation_id=conversation.conversation_id,
+                        message_id=user_message.message_id,
+                        channel=request.channel,
+                        principal=request.owner_principal,
+                        capability_search_cache=capability_search_cache,
+                    )
+                    await finish_tool_call(call, outcome)
         if final_response is None or not final_response.text.strip():
             raise DataContractError("Agent model returned no final answer")
-        await self._emit_event(
-            event_sink,
-            AgentTurnEvent(
-                type="text_delta",
-                data={
-                    "conversation_id": conversation.conversation_id,
-                    "text": final_response.text,
-                },
-            ),
+        evidence_guard = guard_agent_response(
+            final_response.text,
+            receipts=receipts,
+            tool_payloads=tool_payloads,
         )
+        if evidence_guard.repair_request is not None:
+            repair_message = ModelMessage(
+                role="system",
+                content=(
+                    "当前回答需要依据本轮证据修复。不要调用工具、不要执行动作，"
+                    "只返回修复后的最终回答。\n"
+                    + json.dumps(
+                        evidence_guard.repair_request,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                ),
+            )
+            try:
+                repair_response = await model_provider.complete(
+                    ModelRequest(
+                        messages=(*messages, repair_message),
+                        tools=(),
+                        model=selected_model,
+                        reasoning_effort=request.reasoning_effort,
+                    )
+                )
+                if repair_response.text.strip() and not repair_response.tool_calls:
+                    repaired_guard = guard_agent_response(
+                        repair_response.text,
+                        receipts=receipts,
+                        tool_payloads=tool_payloads,
+                    )
+                    evidence_guard = repaired_guard
+                    final_response = replace(
+                        repair_response,
+                        text=repaired_guard.text,
+                    )
+                    model_responses.append(repair_response)
+            except Exception:  # noqa: BLE001 - retain safe marked answer on repair failure
+                pass
+        final_response = replace(final_response, text=evidence_guard.text)
+        evidence_manifest = evidence_manifest_json(evidence_guard)
         assistant_message = self._repository.append_message(
             AgentMessage(
                 message_id=self._id_generator.new(EntityIdPrefix.AGENT_MESSAGE),
@@ -397,18 +1313,44 @@ class AgentRuntimeService:
                 model=final_response.model,
                 request_id=final_response.request_id,
                 model_receipt_json=self._model_receipt_json(
-                    final_response, model_responses, tool_rounds, tool_trace
+                    final_response,
+                    model_responses,
+                    tool_rounds,
+                    tool_trace,
+                    artifact_urls=artifact_urls,
+                    selected_provider_id=model_id,
+                    selected_model=selected_model,
+                    route_reason=route_reason,
+                    fallback_from=fallback_from,
+                    fallback_code=fallback_code,
+                    api_style=getattr(
+                        getattr(model_provider, "config", None),
+                        "api_style",
+                        None,
+                    ),
+                    capability_search_audits=capability_search_audits,
+                    evidence_manifest=evidence_manifest,
                 ),
                 created_at=self._clock.now(),
             )
         )
-        await self._maybe_refresh_summary(conversation.conversation_id, request.owner_principal)
+        if turn is not None:
+            turn = self._transition_turn(
+                turn,
+                status=AgentTurnStatus.COMPLETED,
+                assistant_message_id=assistant_message.message_id,
+                completed_at=self._clock.now(),
+            )
+        await self._maybe_refresh_summary(
+            conversation.conversation_id,
+            request.owner_principal,
+            model_provider,
+            selected_model,
+        )
         aggregate_usage = self._aggregate_usage(model_responses)
         aggregate_latency_ms = self._aggregate_latency(model_responses)
         aggregate_urls = tuple(
-            dict.fromkeys(
-                url for response in model_responses for url in response.web_source_urls
-            )
+            dict.fromkeys(url for response in model_responses for url in response.web_source_urls)
         )[:20]
         result = AgentTurnResult(
             conversation_id=conversation.conversation_id,
@@ -417,6 +1359,15 @@ class AgentRuntimeService:
             text=final_response.text,
             tool_rounds=tool_rounds,
             tool_receipts=tuple(receipts),
+            turn_id=turn.turn_id if turn is not None else None,
+            selected_provider_id=model_id,
+            selected_model=assistant_message.model or selected_model,
+            route_reason=route_reason,
+            fallback_from=fallback_from,
+            fallback_code=fallback_code,
+            artifact_urls=tuple(artifact_urls),
+            evidence_manifest=evidence_manifest,
+            capability_search_audits=tuple(capability_search_audits),
             usage=aggregate_usage,
             web_search_used=any(item.web_search_used for item in model_responses),
             web_extractor_used=any(item.web_extractor_used for item in model_responses),
@@ -431,6 +1382,7 @@ class AgentRuntimeService:
                 type="completed",
                 data={
                     "conversation_id": result.conversation_id,
+                    "turn_id": result.turn_id,
                     "user_message_id": result.user_message_id,
                     "assistant_message_id": result.assistant_message_id,
                     "tool_rounds": result.tool_rounds,
@@ -441,6 +1393,22 @@ class AgentRuntimeService:
                     "model_request_id": result.model_request_id,
                     "model_latency_ms": result.model_latency_ms,
                     "tool_trace": list(result.tool_trace[:32]),
+                    "model_id": model_id,
+                    "provider_id": model_id,
+                    "model": assistant_message.model,
+                    "reasoning_effort": request.reasoning_effort,
+                    "selected_provider_id": result.selected_provider_id,
+                    "selected_model": result.selected_model,
+                    "route_reason": result.route_reason,
+                    "fallback_from": result.fallback_from,
+                    "fallback_code": result.fallback_code,
+                    "artifact_urls": list(result.artifact_urls),
+                    "evidence_manifest": (
+                        json.loads(result.evidence_manifest)
+                        if result.evidence_manifest is not None
+                        else None
+                    ),
+                    "capability_search_audits": list(result.capability_search_audits),
                 },
             ),
         )
@@ -462,6 +1430,153 @@ class AgentRuntimeService:
         except Exception:  # noqa: BLE001 - event consumers are non-critical
             return
 
+    def _search_capabilities(
+        self,
+        query: str,
+        limit: int,
+        mode: str,
+    ) -> tuple[AgentToolDescriptor, ...]:
+        """Call new mode-aware gateways while retaining legacy read adapters."""
+
+        search = self._gateway.search
+        try:
+            parameters = inspect.signature(search).parameters
+            accepts_mode = "mode" in parameters or any(
+                item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+            )
+        except (TypeError, ValueError):
+            accepts_mode = False
+        if accepts_mode:
+            return search(query, limit, mode=mode)  # type: ignore[call-arg]
+        if mode == "read":
+            return search(query, limit)
+        return ()
+
+    def _validation_hint(
+        self,
+        *,
+        tool_name: str,
+        decoded: Mapping[str, Any] | None,
+    ) -> dict[str, list[str]]:
+        """Return only safe schema field names, never provider exception text."""
+
+        missing: list[str] = []
+        invalid: list[str] = []
+
+        def add_missing(values: object) -> None:
+            if not isinstance(values, (list, tuple)):
+                return
+            for item in values:
+                if (
+                    isinstance(item, str)
+                    and _SAFE_FIELD_NAME.fullmatch(item)
+                    and item not in missing
+                ):
+                    missing.append(item)
+
+        def add_invalid(values: object) -> None:
+            if not isinstance(values, (list, tuple)):
+                return
+            for item in values:
+                if (
+                    isinstance(item, str)
+                    and _SAFE_FIELD_NAME.fullmatch(item)
+                    and item not in invalid
+                ):
+                    invalid.append(item)
+
+        if not isinstance(decoded, Mapping):
+            return {"missing": missing, "invalid": invalid}
+        if tool_name == "tp_capability_search":
+            add_missing([key for key in ("query",) if key not in decoded])
+            add_invalid([key for key in decoded if key not in {"query", "limit", "mode"}])
+            if "query" in decoded and (
+                not isinstance(decoded.get("query"), str) or not str(decoded.get("query")).strip()
+            ):
+                add_invalid(["query"])
+            if "limit" in decoded and (
+                type(decoded.get("limit")) is not int or not 1 <= int(decoded.get("limit", 0)) <= 8
+            ):
+                add_invalid(["limit"])
+            if "mode" in decoded and decoded.get("mode") not in {
+                "read",
+                "propose",
+                "prepare_action",
+            }:
+                add_invalid(["mode"])
+        elif tool_name in {"tp_read", "tp_propose"}:
+            add_missing([key for key in ("capability", "arguments") if key not in decoded])
+            add_invalid(
+                [key for key in decoded if key not in {"capability", "operation", "arguments"}]
+            )
+            capability = decoded.get("capability")
+            operation = decoded.get("operation")
+            arguments = decoded.get("arguments")
+            if not isinstance(capability, str) or not capability.strip():
+                add_invalid(["capability"])
+            if operation is not None and not isinstance(operation, str):
+                add_invalid(["operation"])
+            if not isinstance(arguments, Mapping):
+                add_invalid(["arguments"])
+            descriptor_getter = getattr(self._gateway, "descriptor", None)
+            descriptor = None
+            if callable(descriptor_getter) and isinstance(capability, str):
+                try:
+                    descriptor = descriptor_getter(
+                        capability,
+                        operation if isinstance(operation, str) else None,
+                    )
+                except (LookupError, PermissionError, TypeError, ValueError):
+                    descriptor = None
+            if descriptor is not None and isinstance(arguments, Mapping):
+                try:
+                    schema = descriptor.arguments_schema
+                except (AttributeError, TypeError, ValueError):
+                    schema = {}
+                if isinstance(schema, Mapping):
+                    properties = schema.get("properties")
+                    required = schema.get("required")
+                    if isinstance(required, list):
+                        add_missing([key for key in required if key not in arguments])
+                    if (
+                        isinstance(properties, Mapping)
+                        and schema.get("additionalProperties") is False
+                    ):
+                        add_invalid([key for key in arguments if key not in properties])
+        elif tool_name == "tp_prepare_action":
+            add_missing(
+                [
+                    key
+                    for key in ("capability", "operation", "arguments", "presented_summary")
+                    if key not in decoded
+                ]
+            )
+            add_invalid(
+                [
+                    key
+                    for key in decoded
+                    if key not in {"capability", "operation", "arguments", "presented_summary"}
+                ]
+            )
+            if (
+                not isinstance(decoded.get("capability"), str)
+                or not str(decoded.get("capability", "")).strip()
+            ):
+                add_invalid(["capability"])
+            if (
+                not isinstance(decoded.get("operation"), str)
+                or not str(decoded.get("operation", "")).strip()
+            ):
+                add_invalid(["operation"])
+            if not isinstance(decoded.get("arguments"), Mapping):
+                add_invalid(["arguments"])
+            summary = decoded.get("presented_summary")
+            if not isinstance(summary, str) or not summary.strip() or len(summary) > 2_000:
+                add_invalid(["presented_summary"])
+        missing.sort()
+        invalid.sort()
+        return {"missing": missing, "invalid": invalid}
+
     async def _handle_tool_call(
         self,
         *,
@@ -470,7 +1585,7 @@ class AgentRuntimeService:
         message_id: str,
         channel: Any,
         principal: str,
-        capability_search_cache: dict[tuple[str, int], object] | None = None,
+        capability_search_cache: dict[tuple[str, int, str], object] | None = None,
     ) -> tuple[object, AgentToolReceipt | None, tuple[PendingActionProposal, str] | None]:
         try:
             decoded = json.loads(call.arguments)
@@ -483,32 +1598,53 @@ class AgentRuntimeService:
                 capability_search_cache = {}
             query = decoded.get("query")
             limit = decoded.get("limit", 8)
-            if not isinstance(query, str) or not query.strip() or type(limit) is not int:
-                return self._tool_error("AGENT_TOOL_ARGUMENTS_INVALID"), None, None
+            mode = decoded.get("mode", "read")
+            hints = self._validation_hint(tool_name=call.name, decoded=decoded)
+            if (
+                not isinstance(query, str)
+                or not query.strip()
+                or type(limit) is not int
+                or mode not in {"read", "propose", "prepare_action"}
+            ):
+                return self._tool_error("AGENT_TOOL_SCHEMA_INVALID", **hints), None, None
             try:
                 bounded_limit = min(max(limit, 1), 8)
-                cache_key = (" ".join(query.casefold().split()), bounded_limit)
+                cache_key = (" ".join(query.casefold().split()), bounded_limit, mode)
                 cached = capability_search_cache.get(cache_key)
                 if cached is not None:
                     return cached, None, None
-                descriptors = self._gateway.search(query, bounded_limit)
+                descriptors = self._search_capabilities(query, bounded_limit, mode)
             except TradingPartnerError as exc:
                 return self._tool_error(exc.code), None, None
             except (LookupError, PermissionError, ValueError):
                 return self._tool_error("AGENT_CAPABILITY_SEARCH_FAILED"), None, None
-            payload = {"capabilities": [item.as_dict() for item in descriptors]}
+            payload: dict[str, object] = {
+                "capabilities": [item.as_dict() for item in descriptors]
+            }
+            audit_method = getattr(self._gateway, "search_audit", None)
+            if callable(audit_method):
+                try:
+                    audit = audit_method(query, bounded_limit, mode=mode)
+                except (LookupError, PermissionError, TypeError, ValueError, TradingPartnerError):
+                    audit = None
+                if isinstance(audit, Mapping):
+                    payload["routing_audit"] = dict(audit)
             capability_search_cache[cache_key] = payload
             return payload, None, None
         if call.name == "tp_prepare_action":
             if self._pending_action_gateway is None:
-                return {
-                    "ok": False,
-                    "status": "DISABLED",
-                    "error": {
-                        "code": "AGENT_ACTIONS_DISABLED",
-                        "message": "当前 Agent 动作未配置；动作未写入、未确认、未执行。",
+                return (
+                    {
+                        "ok": False,
+                        "status": "DISABLED",
+                        "error": {
+                            "code": "AGENT_ACTIONS_DISABLED",
+                            "message": "当前 Agent 动作未配置；动作未写入、未确认、未执行。",
+                        },
                     },
-                }, None, None
+                    None,
+                    None,
+                )
             capability = decoded.get("capability")
             operation = decoded.get("operation")
             arguments = decoded.get("arguments")
@@ -520,7 +1656,14 @@ class AgentRuntimeService:
                 or not isinstance(summary, str)
                 or len(summary) > 2_000
             ):
-                return self._tool_error("AGENT_TOOL_ARGUMENTS_INVALID"), None, None
+                return (
+                    self._tool_error(
+                        "AGENT_TOOL_SCHEMA_INVALID",
+                        **self._validation_hint(tool_name=call.name, decoded=decoded),
+                    ),
+                    None,
+                    None,
+                )
             try:
                 proposal = self._pending_action_gateway.prepare(
                     conversation_id=conversation_id,
@@ -532,13 +1675,26 @@ class AgentRuntimeService:
                     presented_summary=summary,
                 )
             except TradingPartnerError as exc:
+                if exc.code == "AGENT_ACTION_SCHEMA_INVALID":
+                    return (
+                        self._tool_error(
+                            exc.code,
+                            **self._validation_hint(tool_name=call.name, decoded=decoded),
+                        ),
+                        None,
+                        None,
+                    )
                 return self._tool_error(exc.code), None, None
-            return {
-                "ok": True,
-                "status": proposal.action.status.value,
-                "pending_action": pending_action_wire(proposal.action),
-            }, None, (proposal, proposal.confirmation_token)
-        if call.name != "tp_read":
+            return (
+                {
+                    "ok": True,
+                    "status": proposal.action.status.value,
+                    "pending_action": pending_action_wire(proposal.action),
+                },
+                None,
+                (proposal, proposal.confirmation_token),
+            )
+        if call.name not in {"tp_read", "tp_propose"}:
             return self._tool_error("AGENT_TOOL_UNKNOWN"), None, None
         capability = decoded.get("capability")
         operation = decoded.get("operation")
@@ -546,15 +1702,51 @@ class AgentRuntimeService:
         if (
             not isinstance(capability, str)
             or (operation is not None and not isinstance(operation, str))
+            or (call.name == "tp_propose" and not isinstance(operation, str))
             or not isinstance(arguments, Mapping)
         ):
-            return self._tool_error("AGENT_TOOL_ARGUMENTS_INVALID"), None, None
+            return (
+                self._tool_error(
+                    "AGENT_TOOL_SCHEMA_INVALID",
+                    **self._validation_hint(tool_name=call.name, decoded=decoded),
+                ),
+                None,
+                None,
+            )
         try:
-            result = await self._gateway.read(capability, operation, arguments)
+            result = (
+                await self._gateway.propose(capability, operation, arguments)
+                if call.name == "tp_propose" and isinstance(operation, str)
+                else await self._gateway.read(capability, operation, arguments)
+            )
         except TradingPartnerError as exc:
             return self._tool_error(exc.code), None, None
         except (LookupError, PermissionError, ValueError):
-            return self._tool_error("AGENT_TOOL_READ_DENIED"), None, None
+            return (
+                self._tool_error(
+                    "AGENT_TOOL_PROPOSE_DENIED"
+                    if call.name == "tp_propose"
+                    else "AGENT_TOOL_READ_DENIED",
+                    **self._validation_hint(tool_name=call.name, decoded=decoded),
+                ),
+                None,
+                None,
+            )
+        except Exception as exc:  # noqa: BLE001 - classify without exposing provider text
+            if exc.__class__.__name__ == "ToolError":
+                return (
+                    self._tool_error(
+                        "AGENT_TOOL_SCHEMA_INVALID",
+                        **self._validation_hint(tool_name=call.name, decoded=decoded),
+                    ),
+                    None,
+                    None,
+                )
+            return self._tool_error(
+                "AGENT_TOOL_PROPOSE_DENIED"
+                if call.name == "tp_propose"
+                else "AGENT_TOOL_READ_DENIED"
+            ), None, None
         receipt = result.receipt
         durable = DurableToolReceipt(
             receipt_id=self._id_generator.new(EntityIdPrefix.AGENT_TOOL_RECEIPT),
@@ -571,7 +1763,7 @@ class AgentRuntimeService:
         )
         self._repository.append_tool_receipt(durable)
         read_payload = cast(dict[str, object], result.as_dict())
-        if capability == "technical_render_chart":
+        if call.name == "tp_read" and capability == "technical_render_chart":
             artifact_url = _chart_artifact_url(result.result)
             if artifact_url is not None:
                 read_payload["artifact_url"] = artifact_url
@@ -601,8 +1793,18 @@ class AgentRuntimeService:
         )
 
     @staticmethod
-    def _tool_error(code: str) -> dict[str, object]:
-        return {"ok": False, "error": {"code": code, "message": "工具调用未执行。"}}
+    def _tool_error(
+        code: str,
+        *,
+        missing: list[str] | None = None,
+        invalid: list[str] | None = None,
+    ) -> dict[str, object]:
+        error: dict[str, object] = {"code": code, "message": "工具调用未执行。"}
+        if missing:
+            error["missing"] = sorted(set(missing))[:32]
+        if invalid:
+            error["invalid"] = sorted(set(invalid))[:32]
+        return {"ok": False, "error": error}
 
     @staticmethod
     def _model_receipt_json(
@@ -610,6 +1812,16 @@ class AgentRuntimeService:
         responses: list[ModelResponse],
         tool_rounds: int,
         tool_trace: list[str],
+        *,
+        artifact_urls: list[str] | None = None,
+        selected_provider_id: str | None = None,
+        selected_model: str | None = None,
+        route_reason: str | None = None,
+        fallback_from: str | None = None,
+        fallback_code: str | None = None,
+        api_style: str | None = None,
+        capability_search_audits: list[dict[str, object]] | None = None,
+        evidence_manifest: str | None = None,
     ) -> str:
         usage = AgentRuntimeService._aggregate_usage(responses)
         latency_ms = AgentRuntimeService._aggregate_latency(responses)
@@ -637,8 +1849,79 @@ class AgentRuntimeService:
                 for item in responses[:8]
             ],
             "tool_trace": tool_trace[:32],
+            "artifact_urls": list((artifact_urls or [])[:20]),
+            "selected_provider_id": selected_provider_id,
+            "selected_model": selected_model,
+            "route_reason": route_reason,
+            "fallback_from": fallback_from,
+            "fallback_code": fallback_code,
+            "api_style": api_style,
+            "capability_search_audits": (capability_search_audits or [])[:16],
+            "evidence_manifest": (
+                json.loads(evidence_manifest)
+                if isinstance(evidence_manifest, str)
+                else None
+            ),
         }
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) <= 16_384:
+            return encoded
+
+        # AgentMessage bounds the durable receipt as a whole.  Keep the
+        # evidence manifest auditable, but replace an oversized nested
+        # manifest/audit payload with a digest marker instead of allowing a
+        # successful turn to fail during assistant-message persistence.
+        manifest = value.get("evidence_manifest")
+        if manifest is not None:
+            raw_manifest = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            value["evidence_manifest"] = {
+                "version": "agent_evidence_v1",
+                "truncated": True,
+                "size_bytes": len(raw_manifest),
+                "sha256": hashlib.sha256(raw_manifest).hexdigest(),
+            }
+        def bounded_list(key: str, limit: int) -> list[Any]:
+            raw = value.get(key)
+            return list(raw[:limit]) if isinstance(raw, list) else []
+
+        value["capability_search_audits"] = bounded_list("capability_search_audits", 4)
+        value["model_attempts"] = bounded_list("model_attempts", 2)
+        value["tool_trace"] = bounded_list("tool_trace", 8)
+        value["web_source_urls"] = bounded_list("web_source_urls", 4)
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) <= 16_384:
+            return encoded
+
+        # A final compact projection preserves the fields needed for replay,
+        # routing, and evidence status under the hard persistence cap.
+        compact = {
+            key: value.get(key)
+            for key in (
+                "model",
+                "finish_reason",
+                "model_calls",
+                "tool_rounds",
+                "usage",
+                "web_search_used",
+                "web_extractor_used",
+                "request_id",
+                "latency_ms",
+                "selected_provider_id",
+                "selected_model",
+                "route_reason",
+                "fallback_from",
+                "fallback_code",
+                "api_style",
+                "artifact_urls",
+                "evidence_manifest",
+            )
+        }
+        return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @staticmethod
     def _aggregate_usage(responses: list[ModelResponse]) -> ModelUsage | None:
@@ -664,14 +1947,20 @@ class AgentRuntimeService:
         values = [item.latency_ms for item in responses if item.latency_ms is not None]
         return sum(values) if values else None
 
-    async def _maybe_refresh_summary(self, conversation_id: str, owner_principal: str) -> None:
+    async def _maybe_refresh_summary(
+        self,
+        conversation_id: str,
+        owner_principal: str,
+        model_provider: AgentModelProvider,
+        selected_model: str | None,
+    ) -> None:
         try:
             conversation = self._context.require_owned_active(conversation_id, owner_principal)
             work = self._context.summary_request(conversation)
             if work is None:
                 return
             request, through_sequence = work
-            response = await self._model.complete(request)
+            response = await model_provider.complete(replace(request, model=selected_model))
             if response.text.strip():
                 self._context.store_summary(
                     conversation=conversation,

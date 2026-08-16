@@ -15,6 +15,8 @@ from domain.agent import (
     AgentMessageRole,
     AgentPendingAction,
     AgentPendingActionStatus,
+    AgentTurn,
+    AgentTurnStatus,
     arguments_digest,
 )
 from domain.common.errors import PersistenceError
@@ -188,3 +190,51 @@ def test_message_sequence_is_atomic_and_external_refs_are_channel_scoped(
         )
     )
     assert telegram.sequence == 13
+
+
+def test_turn_lifecycle_is_durable_and_compare_and_set(orm_sqlite_url: str) -> None:
+    repo = SqlAlchemyAgentConversationRepository(create_engine_from_url(orm_sqlite_url))
+    conversation, now = _conversation()
+    repo.create_conversation(conversation)
+    user = repo.append_message(
+        AgentMessage(
+            "agent_message_turn_user",
+            conversation.conversation_id,
+            AgentMessageRole.USER,
+            "turn",
+            now,
+            channel=AgentChannel.CONSOLE,
+        )
+    )
+    turn = AgentTurn(
+        turn_id="agent_turn_test",
+        conversation_id=conversation.conversation_id,
+        user_message_id=user.message_id,
+        assistant_message_id=None,
+        channel=AgentChannel.CONSOLE,
+        status=AgentTurnStatus.RUNNING,
+        model_id="test-model",
+        reasoning_effort="high",
+        started_at=now,
+        updated_at=now,
+    )
+    assert repo.create_turn(turn) == turn
+    assert repo.latest_turn(conversation.conversation_id) == turn
+    waiting = repo.update_turn(
+        turn.turn_id,
+        status=AgentTurnStatus.WAITING_TOOL,
+        expected_version=1,
+        now=now,
+    )
+    assert waiting.status is AgentTurnStatus.WAITING_TOOL
+    assert waiting.version == 2
+    with pytest.raises(PersistenceError) as stale:
+        repo.update_turn(
+            turn.turn_id,
+            status=AgentTurnStatus.FAILED,
+            expected_version=1,
+            error_code="AGENT_RUNTIME_FAILED",
+            completed_at=now,
+            now=now,
+        )
+    assert stale.value.code == "AGENT_TURN_VERSION_CONFLICT"

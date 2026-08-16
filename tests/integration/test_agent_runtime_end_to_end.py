@@ -179,7 +179,12 @@ async def test_agent_runtime_reads_durable_positions_and_confirms_research_write
                         ),
                     )
                 ),
-                ModelResponse(text="已读取本地持仓快照。"),
+                ModelResponse(
+                    text=(
+                        "已读取本地持仓快照；该 durable snapshot 的 freshness "
+                        "当前为 unknown，请按快照时间判断。"
+                    )
+                ),
                 ModelResponse(
                     tool_calls=(
                         _call(
@@ -222,13 +227,19 @@ async def test_agent_runtime_reads_durable_positions_and_confirms_research_write
             ),
             event_sink=capture,
         )
-        assert read_result.text == "已读取本地持仓快照。"
+        assert read_result.text == (
+            "已读取本地持仓快照；该 durable snapshot 的 freshness "
+            "当前为 unknown，请按快照时间判断。"
+        )
+        assert read_result.evidence_manifest is not None
+        assert "FRESHNESS_UNKNOWN" in read_result.evidence_manifest
         assert read_result.tool_trace == ("tp_capability_search", "tp_read")
         assert len(read_result.tool_receipts) == 1
         assert read_result.tool_receipts[0].operation == "positions"
         assert {tool.name for tool in model.requests[0].tools} == {
             "tp_capability_search",
             "tp_read",
+            "tp_propose",
             "tp_prepare_action",
         }
         assert any(

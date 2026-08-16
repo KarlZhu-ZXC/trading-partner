@@ -40,6 +40,18 @@ class AgentPendingActionRepository(Protocol):
         now: datetime | None = None,
     ) -> AgentPendingAction: ...
 
+    def reissue_confirmation_token(
+        self,
+        action_id: str,
+        *,
+        conversation_id: str,
+        channel: AgentChannel,
+        principal: str,
+        expected_version: int,
+        token_sha256: str,
+        now: datetime,
+    ) -> AgentPendingAction: ...
+
     def list_pending_actions(
         self,
         conversation_id: str,
@@ -47,6 +59,13 @@ class AgentPendingActionRepository(Protocol):
         channel: AgentChannel | None = None,
         principal: str | None = None,
         include_terminal: bool = False,
+        limit: int = 100,
+    ) -> tuple[AgentPendingAction, ...]: ...
+
+    def list_unresolved(
+        self,
+        *,
+        now: datetime,
         limit: int = 100,
     ) -> tuple[AgentPendingAction, ...]: ...
 

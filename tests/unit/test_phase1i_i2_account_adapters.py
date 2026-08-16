@@ -72,7 +72,16 @@ class _Context:
             "refresh_cache": True,
             "currency": "USD",
         }
-        return 0, [{"currency": "USD", "cash": 100, "power": 200, "total_assets": 350}]
+        return 0, [
+            {
+                "currency": "USD",
+                "cash": 100,
+                "power": 200,
+                "total_assets": 350,
+                "interest_charged_amount": 25,
+                "initial_margin": 240,
+            }
+        ]
 
     def position_list_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
         self.calls.append("positions")
@@ -155,6 +164,8 @@ async def test_moomoo_adapter_calls_only_read_surface_and_redacts_account_id() -
     assert snapshot.base_currency == "USD"
     assert snapshot.positions[0].market_price == Decimal("125")
     assert snapshot.positions[0].market_price_at == snapshot.fetched_at
+    assert snapshot.margin_used == Decimal("25")
+    assert "MOOMOO_MARGIN_USAGE_UNAVAILABLE" not in snapshot.warning_codes
     assert "PRICE_TIME_IS_FETCH_TIME" in snapshot.warning_codes
     assert "PRICE_TIME_UNAVAILABLE" not in snapshot.warning_codes
     assert "PRICE_TIME_IS_FETCH_TIME" in result.meta.warnings
@@ -167,6 +178,36 @@ async def test_moomoo_adapter_calls_only_read_surface_and_redacts_account_id() -
     ]
     assert len({scope for _operation, scope in limiter.calls}) == 1
     assert "998877" not in repr(limiter.calls)
+
+
+@pytest.mark.asyncio
+async def test_moomoo_initial_margin_is_never_mapped_as_financing_usage() -> None:
+    class _NoDebtContext(_Context):
+        def accinfo_query(self, **kwargs: object) -> tuple[int, list[dict[str, object]]]:
+            return 0, [
+                {
+                    "currency": "USD",
+                    "cash": 100,
+                    "power": 200,
+                    "total_assets": 350,
+                    "interest_charged_amount": "N/A",
+                    "initial_margin": 240,
+                }
+            ]
+
+    adapter = MoomooAccountAdapter(
+        _Ids(),
+        enabled=True,
+        host="127.0.0.1",
+        port=11111,
+        clock=_Clock(),
+        context_factory=lambda _host, _port: _NoDebtContext(),
+    )
+
+    result = await adapter.get_account_snapshots(as_of=datetime(2026, 7, 18, 12, tzinfo=UTC))
+
+    assert result.value[0].margin_used is None
+    assert "MOOMOO_MARGIN_USAGE_UNAVAILABLE" in result.value[0].warning_codes
 
 
 def test_moomoo_production_adapter_has_no_trade_write_surface() -> None:

@@ -113,6 +113,12 @@ _AGENT_RUNTIME_TABLES = {
     "agent_pending_actions",
     "agent_channel_cursors",
     "agent_channel_handoffs",
+    "agent_turns",
+}
+_REVIEW_ITEM_TABLES = {
+    "review_items",
+    "review_item_actions",
+    "review_item_occurrences",
 }
 
 _PHASE3_TABLES = {
@@ -132,7 +138,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0046_agent_channel_handoffs"})
+_HEAD_REVISIONS = frozenset({"0051_moomoo_margin_semantics"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -169,6 +175,51 @@ _EXPECTED_SCHEMA_VERSIONS = {
 }
 
 
+def test_moomoo_margin_semantics_migration_discards_legacy_value(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'moomoo-margin.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0050_agent_preferences")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO account_snapshots("
+                "snapshot_id, fingerprint, account_ref, provider, environment, "
+                "base_currency, account_as_of, fetched_at, cash, buying_power, "
+                "net_assets, margin_used, open_orders_json, degraded, warning_codes_json"
+                ") VALUES ("
+                "'snapshot_legacy_moomoo', 'legacy-moomoo-fingerprint', 'moomoo_hash', "
+                "'moomoo', 'real', 'USD', '2026-08-12T21:11:21+00:00', "
+                "'2026-08-12T21:11:21+00:00', '167.45', '2118.58', '3153.05', "
+                "'2080.96', '[]', 1, '[]')"
+            )
+        )
+
+    command.upgrade(cfg, "0051_moomoo_margin_semantics")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT margin_used FROM account_snapshots "
+                "WHERE snapshot_id='snapshot_legacy_moomoo'"
+            )
+        ).scalar_one() is None
+
+    command.downgrade(cfg, "0050_agent_preferences")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT margin_used FROM account_snapshots "
+                "WHERE snapshot_id='snapshot_legacy_moomoo'"
+            )
+        ).scalar_one() is None
+    engine.dispose()
+
+
 def test_migration_round_trip(
     tmp_path: Path,
     project_root: Path,
@@ -199,6 +250,7 @@ def test_migration_round_trip(
     assert _AGENDA_TABLES.issubset(tables_after_first)
     assert _BROKER_EXECUTION_TABLES.issubset(tables_after_first)
     assert _AGENT_RUNTIME_TABLES.issubset(tables_after_first)
+    assert _REVIEW_ITEM_TABLES.issubset(tables_after_first)
     agenda_columns = {item["name"] for item in insp.get_columns("catalyst_agenda_versions")}
     assert {
         "case_id",

@@ -200,7 +200,7 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     # 1,150 includes explicit Scorecard, Catalyst Agenda, isolated live-order,
     # Shared Agent model/repository wiring, and the cross-process Agent turn-lock
     # factory without forcing interfaces to import infrastructure.
-    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_150
+    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_160
     assert set(ApplicationContainer.__dataclass_fields__) == {
         "settings",
         "context",
@@ -220,10 +220,10 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     declaration_modules = [
         path for path in orm_root.glob("*.py") if path.name not in {"__init__.py", "common.py"}
     ]
-    # Trade Retro, Judgment Scorecard, Catalyst Agenda, and Shared Agent Runtime
-    # each own one small module; keep the graph bounded without folding unrelated
-    # records into the transaction ledger.
-    assert len(declaration_modules) <= 15
+    # Trade Retro, Judgment Scorecard, Catalyst Agenda, Shared Agent Runtime,
+    # Agent Preferences, and the durable Review Queue each own one small module;
+    # keep the graph bounded without folding unrelated records together.
+    assert len(declaration_modules) <= 18
     largest_module = max(
         len(path.read_text(encoding="utf-8").splitlines()) for path in declaration_modules
     )

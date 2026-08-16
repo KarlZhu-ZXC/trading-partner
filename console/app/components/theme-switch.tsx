@@ -29,7 +29,7 @@ export function ThemeSwitch() {
   return (
     <div className="theme-switch" role="group" aria-label="Theme">
       <button
-        aria-label="Light theme"
+        aria-label="Light Theme"
         aria-pressed={theme === "light"}
         className={theme === "light" ? "active" : ""}
         onClick={() => selectTheme("light")}
@@ -39,7 +39,7 @@ export function ThemeSwitch() {
         <span className="theme-switch-label">Light</span>
       </button>
       <button
-        aria-label="Dark theme"
+        aria-label="Dark Theme"
         aria-pressed={theme === "dark"}
         className={theme === "dark" ? "active" : ""}
         onClick={() => selectTheme("dark")}

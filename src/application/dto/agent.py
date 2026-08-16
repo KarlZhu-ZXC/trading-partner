@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -17,6 +18,14 @@ EPHEMERAL_CONTEXT_PATH_MAX_CHARS = 1_024
 EPHEMERAL_CONTEXT_SELECTION_MAX_CHARS = 8_192
 EPHEMERAL_CONTEXT_EXCERPT_MAX_CHARS = 16_384
 EPHEMERAL_CONTEXT_MAX_BYTES = 16_384
+EPHEMERAL_CONTEXT_ROUTE_HASH_MAX_CHARS = 256
+EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS = 160
+EPHEMERAL_CONTEXT_SURFACE_MAX_CHARS = 96
+_EPHEMERAL_CONTEXT_ROUTE_HASH_PATTERN = re.compile(
+    r"^[A-Za-z0-9._~:/?#=&%+-]+$"
+)
+_EPHEMERAL_CONTEXT_SURFACE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]*$")
+_EPHEMERAL_CONTEXT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,12 +40,38 @@ class EphemeralContext:
     location: str | None = None
     selection: str | None = None
     content_excerpt: str | None = None
+    route_hash: str | None = None
+    surface: str | None = None
+    selected_subject_id: str | None = None
+    selected_monitor_id: str | None = None
+    selected_run_id: str | None = None
+    active_tab: str | None = None
+    workbench_subject_id: str | None = None
 
     def __post_init__(self) -> None:
         values = (
             ("location", self.location, EPHEMERAL_CONTEXT_PATH_MAX_CHARS),
             ("selection", self.selection, EPHEMERAL_CONTEXT_SELECTION_MAX_CHARS),
             ("content_excerpt", self.content_excerpt, EPHEMERAL_CONTEXT_EXCERPT_MAX_CHARS),
+            ("route_hash", self.route_hash, EPHEMERAL_CONTEXT_ROUTE_HASH_MAX_CHARS),
+            ("surface", self.surface, EPHEMERAL_CONTEXT_SURFACE_MAX_CHARS),
+            (
+                "selected_subject_id",
+                self.selected_subject_id,
+                EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS,
+            ),
+            (
+                "selected_monitor_id",
+                self.selected_monitor_id,
+                EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS,
+            ),
+            ("selected_run_id", self.selected_run_id, EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS),
+            ("active_tab", self.active_tab, EPHEMERAL_CONTEXT_SURFACE_MAX_CHARS),
+            (
+                "workbench_subject_id",
+                self.workbench_subject_id,
+                EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS,
+            ),
         )
         total_bytes = 0
         for field_name, value, max_chars in values:
@@ -47,6 +82,23 @@ class EphemeralContext:
                     raise ValueError(f"{field_name} must not be blank")
                 if len(value) > max_chars:
                     raise ValueError(f"{field_name} exceeds the bounded context limit")
+                pattern = (
+                    _EPHEMERAL_CONTEXT_ROUTE_HASH_PATTERN
+                    if field_name == "route_hash"
+                    else _EPHEMERAL_CONTEXT_SURFACE_PATTERN
+                    if field_name in {"surface", "active_tab"}
+                    else _EPHEMERAL_CONTEXT_ID_PATTERN
+                    if field_name
+                    in {
+                        "selected_subject_id",
+                        "selected_monitor_id",
+                        "selected_run_id",
+                        "workbench_subject_id",
+                    }
+                    else None
+                )
+                if pattern is not None and pattern.fullmatch(value) is None:
+                    raise ValueError(f"{field_name} has an invalid context pattern")
                 total_bytes += len(value.encode("utf-8"))
         if total_bytes > EPHEMERAL_CONTEXT_MAX_BYTES:
             raise ValueError("ephemeral context exceeds the bounded total size")
@@ -58,6 +110,13 @@ class EphemeralContext:
             "location": self.location,
             "selection": self.selection,
             "content_excerpt": self.content_excerpt,
+            "route_hash": self.route_hash,
+            "surface": self.surface,
+            "selected_subject_id": self.selected_subject_id,
+            "selected_monitor_id": self.selected_monitor_id,
+            "selected_run_id": self.selected_run_id,
+            "active_tab": self.active_tab,
+            "workbench_subject_id": self.workbench_subject_id,
         }
 
 
@@ -69,6 +128,7 @@ AgentTurnEventName = Literal[
     "text_delta",
     "completed",
     "failed",
+    "cancelled",
 ]
 
 
@@ -100,6 +160,9 @@ class AgentTurnRequest:
     owner_principal: str
     channel: AgentChannel
     content: str
+    model_id: str | None = None
+    model: str | None = None
+    reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
     external_message_ref: str | None = None
     ephemeral_context: EphemeralContext | None = None
 
@@ -112,6 +175,17 @@ class AgentTurnResult:
     text: str
     tool_rounds: int
     tool_receipts: tuple[AgentToolReceipt, ...]
+    # Durable lifecycle identity.  ``None`` is retained for lightweight
+    # compatibility fixtures that do not provide the turn repository.
+    turn_id: str | None = None
+    selected_provider_id: str | None = None
+    selected_model: str | None = None
+    route_reason: str | None = None
+    fallback_from: str | None = None
+    fallback_code: str | None = None
+    artifact_urls: tuple[str, ...] = ()
+    evidence_manifest: str | None = None
+    capability_search_audits: tuple[Mapping[str, object], ...] = ()
     usage: ModelUsage | None = None
     web_search_used: bool = False
     web_extractor_used: bool = False

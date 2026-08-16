@@ -12,6 +12,7 @@ from application.ports.account_transaction_repository import AccountTransactionR
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from application.ports.agent_handoff_repository import AgentHandoffRepository
 from application.ports.agent_pending_action_repository import AgentPendingActionRepository
+from application.ports.agent_preferences_repository import AgentPreferencesRepository
 from application.ports.broker_order_repository import BrokerOrderRepository
 from application.ports.catalyst_agenda_repository import CatalystAgendaRepository
 from application.ports.catalyst_agenda_scope_reader import CatalystAgendaScopeReader
@@ -25,6 +26,7 @@ from application.ports.industry_metric_repository import IndustryMetricRepositor
 from application.ports.judgment_scorecard_repository import JudgmentScorecardRepository
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
+from application.ports.review_item_repository import ReviewItemRepository
 from application.ports.secret_redactor import SecretRedactor
 from application.ports.trade_retro_repository import TradeRetroRepository
 from application.ports.workflow_run_repository import WorkflowRunRepository
@@ -44,6 +46,9 @@ from infrastructure.persistence.agent_conversation_repository import (
 from infrastructure.persistence.agent_handoff_repository import SqlAlchemyAgentHandoffRepository
 from infrastructure.persistence.agent_pending_action_repository import (
     SqlAlchemyAgentPendingActionRepository,
+)
+from infrastructure.persistence.agent_preferences_repository import (
+    SqlAlchemyAgentPreferencesRepository,
 )
 from infrastructure.persistence.broker_order_repository import (
     SqlAlchemyBrokerOrderRepository,
@@ -71,6 +76,7 @@ from infrastructure.persistence.repositories.catalyst_agenda import (
     SqlAlchemyCatalystAgendaRepository,
 )
 from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchUnitOfWork
+from infrastructure.persistence.review_item_repository import SqlAlchemyReviewItemRepository
 from infrastructure.persistence.trade_retro_repository import SqlAlchemyTradeRetroRepository
 from infrastructure.persistence.watchlist_hub_unit_of_work import (
     SqlAlchemyWatchlistHubUnitOfWork,
@@ -94,6 +100,7 @@ class PersistenceInfrastructure:
     agent_conversations: AgentConversationRepository
     agent_handoffs: AgentHandoffRepository
     agent_pending_actions: AgentPendingActionRepository
+    agent_preferences: AgentPreferencesRepository
     broker_orders: BrokerOrderRepository
     workflow_runs: WorkflowRunRepository
     historical_validation_artifacts: HistoricalValidationArtifactRepository
@@ -104,6 +111,7 @@ class PersistenceInfrastructure:
     catalyst_agenda: CatalystAgendaRepository
     catalyst_agenda_scope: CatalystAgendaScopeReader
     catalyst_agenda_sync: CatalystAgendaSyncRepository
+    review_items: ReviewItemRepository
     research_uow_factory: ResearchUowFactory
     watchlist_uow_factory: WatchlistUowFactory
 
@@ -144,6 +152,7 @@ def build_persistence_infrastructure(
         agent_conversations=SqlAlchemyAgentConversationRepository(engine),
         agent_handoffs=SqlAlchemyAgentHandoffRepository(engine),
         agent_pending_actions=SqlAlchemyAgentPendingActionRepository(engine),
+        agent_preferences=SqlAlchemyAgentPreferencesRepository(engine),
         broker_orders=SqlAlchemyBrokerOrderRepository(engine),
         workflow_runs=SqlAlchemyWorkflowRunRepository(engine),
         historical_validation_artifacts=FileHistoricalValidationArtifactRepository(
@@ -156,6 +165,7 @@ def build_persistence_infrastructure(
         catalyst_agenda=SqlAlchemyCatalystAgendaRepository(engine),
         catalyst_agenda_scope=SqlAlchemyCatalystAgendaScopeReader(engine),
         catalyst_agenda_sync=SqlAlchemyCatalystAgendaSyncRepository(engine),
+        review_items=SqlAlchemyReviewItemRepository(engine),
         research_uow_factory=research_uow_factory,
         watchlist_uow_factory=watchlist_uow_factory,
     )

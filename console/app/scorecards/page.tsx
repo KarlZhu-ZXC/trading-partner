@@ -175,7 +175,7 @@ function ScorecardCard({
   const dimensions = asList(run.dimensions);
   const warningCodes = listOf<string>(run, "warning_codes");
   return (
-    <article className="scorecard-card">
+    <article id={`scorecard-${text(run.scorecard_id)}`} className="scorecard-card">
       <header className="scorecard-run-header">
         <div>
           <strong>{text(run.subject_title, short(id(run.subject_id), 30))}</strong>
@@ -185,12 +185,12 @@ function ScorecardCard({
       </header>
       <div className="scorecard-run-meta">
         <span>Generated <strong>{text(run.generated_at)}</strong></span>
-        <span>Execution effect: <strong>{text(run.execution_effect, "false")}</strong></span>
+        <span>Execution Effect: <strong>{text(run.execution_effect, "false")}</strong></span>
         <span>Algorithm <strong>{text(run.algorithm_version)}</strong></span>
         <span>Schema <strong>{text(run.schema_version)}</strong></span>
         <span>Thesis: <strong>{text(run.thesis_title, short(text(run.thesis_id), 24))}</strong></span>
-        <span>Locked revision: <strong>{text(run.thesis_revision_id)} (v{text(run.thesis_revision_no, "—")})</strong></span>
-        <span>Input fingerprint: <strong className="mono">{text(run.input_fingerprint)}</strong></span>
+        <span>Locked Revision: <strong>{text(run.thesis_revision_id)} (v{text(run.thesis_revision_no, "—")})</strong></span>
+        <span>Input Fingerprint: <strong className="mono">{text(run.input_fingerprint)}</strong></span>
       </div>
       {!!warningCodes.length && (
         <p className="scorecard-run-note">
@@ -199,7 +199,7 @@ function ScorecardCard({
         </p>
       )}
       <details>
-        <summary>Dimension outcome details ({dimensions.length})</summary>
+        <summary>Dimension Outcome Details ({dimensions.length})</summary>
         {dimensions.length === 0 ? (
           <p className="mono">No dimension records were returned.</p>
         ) : (
@@ -230,7 +230,7 @@ function ScorecardCard({
                         <span key={`${text(fact.key)}-${index}`}>{text(fact.key)}: {text(fact.value)}</span>
                       ))}
                     </dd>
-                    <dt>Source refs</dt>
+                    <dt>Source Refs</dt>
                     <dd>
                       {sourceRefs.length === 0 ? "None" : sourceRefs.map((ref, index) => (
                         <span key={`${text(ref.kind)}:${text(ref.entity_id)}:${index}`}>
@@ -252,7 +252,10 @@ function ScorecardCard({
 }
 
 export default function JudgmentScorecardsPage() {
-  const [subjectId, setSubjectId] = useState<string>(ALL_SUBJECTS);
+  const [subjectId, setSubjectId] = useState<string>(() => {
+    if (typeof window === "undefined") return ALL_SUBJECTS;
+    return new URLSearchParams(window.location.search).get("subject_id") || ALL_SUBJECTS;
+  });
   const [thesisId, setThesisId] = useState<string>("");
   const [historyOffset, setHistoryOffset] = useState(0);
   const [outcomeFilter, setOutcomeFilter] = useState<string>("ALL");
@@ -288,10 +291,10 @@ export default function JudgmentScorecardsPage() {
   }, [selectedSubject, subjectId, allScorecards]);
 
   useEffect(() => {
-    if (subjectId !== ALL_SUBJECTS && !subjectById.has(subjectId)) {
+    if (subjects.length > 0 && subjectId !== ALL_SUBJECTS && !subjectById.has(subjectId)) {
       setSubjectId(ALL_SUBJECTS);
     }
-  }, [subjectById, subjectId]);
+  }, [subjectById, subjectId, subjects.length]);
 
   const outcomeSet = useMemo(() => {
     const codes = new Set(["ALL"]);
@@ -326,9 +329,6 @@ export default function JudgmentScorecardsPage() {
 
   async function generate() {
     if (!canGenerate) return;
-    if (!window.confirm(
-      "Scorecard generation is read-only and will not modify research state, holdings, or orders. Continue?",
-    )) return;
     setBusy("generate");
     setError(null);
     setMessage(null);
@@ -361,7 +361,7 @@ export default function JudgmentScorecardsPage() {
   }
 
   return (
-    <ConsoleShell active="scorecards" eyebrow="Judgment evidence quality" title="Judgment Scorecards">
+    <ConsoleShell active="scorecards">
       <DataBoundary loading={scorecardsApi.loading} error={scorecardsApi.error}>
         <div className="page-actions">
           <RefreshButton loading={scorecardsApi.loading} onClick={scorecardsApi.refresh} />
@@ -383,7 +383,7 @@ export default function JudgmentScorecardsPage() {
             <label>
               <span>Subject</span>
               <select value={subjectId} onChange={(event) => { setSubjectId(event.target.value); setThesisId(""); setHistoryOffset(0); }}>
-                <option value={ALL_SUBJECTS}>All subjects (browse only)</option>
+                <option value={ALL_SUBJECTS}>All Subjects (Browse Only)</option>
                 {subjects.map((subject) => (
                   <option key={id(subject.subject_id)} value={id(subject.subject_id)}>
                     {text(subject.title)} ({text(subject.status)}) · {short(id(subject.primary_instrument_id))}
@@ -409,7 +409,7 @@ export default function JudgmentScorecardsPage() {
               </select>
             </label>
             <label>
-              <span>Dimension outcome</span>
+              <span>Dimension Outcome</span>
               <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value)}>
                 {outcomeSet.sort().map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
@@ -432,7 +432,7 @@ export default function JudgmentScorecardsPage() {
             )}
           <div className="page-actions">
             <button className="action-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset(Math.max(0, historyOffset - 50))} type="button">Previous 50</button>
-            <small>{scorecardTotal} total · showing {allScorecards.length === 0 ? 0 : historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>
+            <small>{scorecardTotal} Total · Showing {allScorecards.length === 0 ? 0 : historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>
             <button className="action-button" disabled={!scorecardHasMore} onClick={() => setHistoryOffset(historyOffset + 50)} type="button">Next 50</button>
           </div>
         </Card>

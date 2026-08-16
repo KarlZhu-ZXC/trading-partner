@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ConsoleShell } from "./components/console-shell";
 import {
+  ActionButton,
   Badge,
   Card,
   DataBoundary,
@@ -13,37 +15,44 @@ import {
   monitorAnchorId,
   shortId,
 } from "./components/ui";
-import { envelopeData, listOf, useApi } from "./lib/api";
+import { envelopeData, listOf, postApi, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
 
-function toNumber(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function agendaSummary(payload: unknown) {
   const source = envelopeData<Dict>(payload);
-  const coverage = envelopeData<Dict>(source?.coverage) ?? envelopeData<Dict>(source?.agenda) ?? envelopeData<Dict>(source?.summary) ?? source;
-  const summary = envelopeData<Dict>(coverage) ?? coverage ?? null;
-  const coverageGaps = Array.isArray((summary as Dict | null)?.coverage_gaps)
-    ? ((summary as Dict).coverage_gaps as unknown[])
-    : [];
+  const items = listOf<Dict>(source, "items");
+  const coverage = listOf<Dict>(source, "coverage");
+  const now = Date.now();
+  const sevenDays = now + 7 * 24 * 60 * 60 * 1000;
+  const isOverdue = (item: Dict) => Array.isArray(item.limitation_codes)
+    && item.limitation_codes.includes("AGENDA_OUTCOME_UNVERIFIED");
+  const upcoming = items.filter((item) => String(item.status) === "UPCOMING" && !isOverdue(item));
   return {
-    upcoming7d: toNumber(summary?.future_7d ?? summary?.upcoming_7d ?? summary?.upcoming_7_day),
-    upcoming: toNumber(summary?.upcoming_count ?? summary?.upcoming),
-    overdue: toNumber(summary?.overdue_count ?? summary?.overdue),
-    coverageGap: ("coverage_gap_count" in (summary ?? {}) || "coverage_gap" in (summary ?? {}))
-      ? toNumber(summary?.coverage_gap_count ?? summary?.coverage_gap)
-      : toNumber(coverageGaps.length),
+    upcoming7d: upcoming.filter((item) => {
+      const startsAt = Date.parse(String(item.window_start ?? ""));
+      return Number.isFinite(startsAt) && startsAt <= sevenDays;
+    }).length,
+    upcoming: upcoming.length,
+    overdue: items.filter(isOverdue).length,
+    coverageGap: coverage.filter((item) => String(item.status) === "UNAVAILABLE").length,
   };
+}
+
+function durationLabel(value: unknown): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+  return `${(seconds / 86400).toFixed(1)}d`;
 }
 
 export default function OverviewPage() {
   const result = useApi<Dict>("/api/overview");
-  const agenda = useApi<Dict>("/api/agenda");
+  const [reviewBusy, setReviewBusy] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
   const monitorItems = listOf<Dict>(monitorData, "items");
@@ -78,27 +87,71 @@ export default function OverviewPage() {
       .map((item) => String(item.subject_ref)),
   ).size;
   const researchAttention = listOf<Dict>(result.data, "research_attention");
+  const workflowAttention = listOf<Dict>(result.data, "workflow_attention");
+  const reviewItems = listOf<Dict>(result.data, "review_items");
+  const reviewMetrics = (result.data?.review_item_metrics ?? {}) as Dict;
+  const unresolvedReviewCount = Number(reviewMetrics.open_count ?? 0)
+    + Number(reviewMetrics.acknowledged_count ?? 0);
+  const closedReviewItems = listOf<Dict>(result.data, "review_item_history").filter((item) =>
+    ["RESOLVED", "AUTO_RESOLVED"].includes(String(item.status))
+  );
   const notices = buildConsoleNotices({
     monitorItems,
     runs,
     researchAttention,
+    workflowAttention,
     notifications,
     qualityIssues,
     qualityAccounts,
     qualityActivity,
     qualityRoutes,
   });
-  const agendaCounts = agendaSummary(agenda.data);
+  const agendaCounts = agendaSummary(result.data?.agenda_summary);
+
+  async function transitionReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") {
+    const reviewItemId = String(item.review_item_id ?? "");
+    if (!reviewItemId) return;
+    const resolutionNote = status === "RESOLVED"
+      ? window.prompt("What durable fact or completed action closes this review item?")?.trim()
+      : undefined;
+    if (status === "RESOLVED" && !resolutionNote) return;
+    const dueDate = status === "ACKNOWLEDGED" && String(item.status) === "ACKNOWLEDGED"
+      ? window.prompt("Optional due date (YYYY-MM-DD):")?.trim()
+      : undefined;
+    const dueAt = dueDate ? new Date(`${dueDate}T23:59:59`).toISOString() : undefined;
+    if (dueAt && Number.isNaN(Date.parse(dueAt))) {
+      setReviewError("Due date must use YYYY-MM-DD.");
+      return;
+    }
+    setReviewBusy(reviewItemId);
+    setReviewError(null);
+    try {
+      await postApi<Dict>(`/api/review-items/${encodeURIComponent(reviewItemId)}/transition`, {
+        status,
+        expected_version: Number(item.version),
+        resolution_note: resolutionNote,
+        due_at: dueAt,
+        idempotency_key: `console-review-${reviewItemId}-${status.toLowerCase()}-${crypto.randomUUID()}`,
+        authorization_note: `User explicitly selected ${status.toLowerCase()} in the Console Decision Inbox.`,
+        confirmation: "review_item_update",
+      });
+      result.refresh();
+    } catch (cause) {
+      setReviewError(cause instanceof Error ? cause.message : "Review item update failed");
+    } finally {
+      setReviewBusy(null);
+    }
+  }
 
   return (
-    <ConsoleShell active="overview" eyebrow="System overview" title="Investment Research Console">
+    <ConsoleShell active="overview">
       <DataBoundary loading={result.loading} error={result.error}>
-        <Card className="span-12" kicker="CATALYST AGENDA" title="Catalyst Agenda pulse" action={<Link href="/agenda">Open /agenda</Link>}>
+        <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<Link href="/agenda">Open /agenda</Link>}>
           <div className="agenda-summary-grid">
-            <div><span>Upcoming 7 days</span><strong>{String(agendaCounts.upcoming7d)}</strong></div>
+            <div><span>Upcoming 7 Days</span><strong>{String(agendaCounts.upcoming7d)}</strong></div>
             <div><span>Upcoming</span><strong>{String(agendaCounts.upcoming)}</strong></div>
             <div><span>Overdue</span><strong>{String(agendaCounts.overdue)}</strong></div>
-            <div><span>Coverage gap</span><strong>{String(agendaCounts.coverageGap)}</strong></div>
+            <div><span>Coverage Gap</span><strong>{String(agendaCounts.coverageGap)}</strong></div>
           </div>
         </Card>
 
@@ -123,34 +176,48 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card className="span-12" kicker="TODAY" title="Decision Inbox" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
-            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No manual action required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          <Card className="span-12" kicker="DECISION WORKFLOW" title="Today’s Inbox" subtitle="Manual actions that need a deliberate response" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
+            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Manual Action Required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">
-                <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the current source status</small></div>
+                <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the Current Source Status</small></div>
                 <div className="attention-queue">{notices.automaticItems.slice(0, 6).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>
               </div>
             ) : null}
+          </Card>
+          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue" subtitle="Items awaiting acknowledgment, scheduling, or resolution" action={<Badge value={`${unresolvedReviewCount} UNRESOLVED`} />}>
+            <div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
+              <span>Open<strong>{String(Number(reviewMetrics.open_count ?? 0) + Number(reviewMetrics.acknowledged_count ?? 0))}</strong></span>
+              <span>Overdue<strong>{String(reviewMetrics.overdue_count ?? 0)}</strong></span>
+              <span>Oldest Current Gap<strong>{durationLabel(reviewMetrics.oldest_current_open_age_seconds)}</strong></span>
+              <span>Median Acknowledge<strong>{durationLabel(reviewMetrics.median_open_to_ack_seconds)}</strong><small>n={String(reviewMetrics.acknowledgment_sample_size ?? 0)}</small></span>
+              <span>Median Close<strong>{durationLabel(reviewMetrics.median_open_to_close_seconds)}</strong><small>n={String(reviewMetrics.closure_sample_size ?? 0)}</small></span>
+              <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
+            </div>
+            {reviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Unresolved ReviewItems</strong><small>Recovered source conditions are closed automatically; human resolutions retain their receipt.</small></div></div> : <div className="review-item-list">{reviewItems.slice(0, 20).map((item) => <article className="review-item-row" key={String(item.review_item_id)}><Link href={String(item.href ?? "/")}><Badge value={String(item.severity ?? "ATTENTION")} /><div><strong>{String(item.title ?? "Review required")}</strong><span>{String(item.detail ?? "Inspect the durable source.")}</span><small>{String(item.status)} · seen {formatDate(item.first_seen_at)} → {formatDate(item.last_seen_at)} · occurrence {String(item.occurrence_count)}{item.due_at ? ` · due ${formatDate(item.due_at)}` : ""}</small></div></Link><div className="review-item-actions"><ActionButton busy={reviewBusy === item.review_item_id} onClick={() => { void transitionReviewItem(item, "ACKNOWLEDGED"); }}>{String(item.status) === "ACKNOWLEDGED" ? "Update Due" : "Acknowledge"}</ActionButton><ActionButton busy={reviewBusy === item.review_item_id} tone="warning" onClick={() => { void transitionReviewItem(item, "RESOLVED"); }}>Resolve</ActionButton></div></article>)}</div>}
+            {reviewError ? <div className="inline-error">{reviewError}</div> : null}
+            {closedReviewItems.length > 0 ? <details className="review-item-history"><summary>Recently Closed · {closedReviewItems.length}</summary><div>{closedReviewItems.slice(0, 12).map((item) => <article key={String(item.review_item_id)}><div><Badge value={String(item.status)} /><strong>{String(item.title)}</strong></div><span>{String(item.resolution_note ?? "The durable source no longer reports this issue.")}</span><small>{formatDate(item.resolved_at)} · occurrence {String(item.occurrence_count)}{item.resolution_ref ? ` · ${String(item.resolution_ref)}` : ""}</small></article>)}</div></details> : null}
           </Card>
           <Card
             className="span-12"
             kicker="DATA QUALITY"
             title="Data Quality Center"
+            subtitle="Freshness and completeness of persisted facts"
             action={<Badge value={String(quality?.status ?? "UNKNOWN")} />}
           >
             <div className="quality-center-grid">
               <div className="metric-pairs quality-metrics">
-                <div><span>Account Snapshots</span><strong>{qualityAccounts.length}</strong><small>Latest durable versions</small></div>
-                <div><span>Activity Coverage</span><strong>{qualityActivity.length}</strong><small>Latest receipt per account</small></div>
-                <div><span>Active Monitors</span><strong>{qualityMonitors.length}</strong><small>Latest runs, read only</small></div>
-                <div><span>Monitor Blind Spots</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>Not run / unevaluated / incomplete</small></div>
+                <div><span>Account Snapshots</span><strong>{qualityAccounts.length}</strong><small>Latest Durable Versions</small></div>
+                <div><span>Activity Coverage</span><strong>{qualityActivity.length}</strong><small>Latest Receipt per Account</small></div>
+                <div><span>Active Monitors</span><strong>{qualityMonitors.length}</strong><small>Latest Runs, Read Only</small></div>
+                <div><span>Monitor Blind Spots</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>Not Run / Unevaluated / Incomplete</small></div>
                 <div><span>24h Provider Fallbacks</span><strong className={recentFallbacks ? "text-amber" : ""}>{recentFallbacks}</strong><small>{qualityRoutes.length} market/category pairs</small></div>
-                <div><span>24h Provider Failures</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>Secret-safe route receipts</small></div>
+                <div><span>24h Provider Failures</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>Secret-Safe Route Receipts</small></div>
               </div>
               <div className="quality-issues">
                 <div className="quality-section-heading">
                   <span>Current Gaps</span>
-                  <small>{notices.qualityItems.length} groups · no upstream requests</small>
+                  <small>{notices.qualityItems.length} Groups · No Upstream Requests</small>
                 </div>
                 {notices.qualityItems.length === 0 ? (
                   <Empty>No quality gaps found in durable evidence.</Empty>
@@ -178,7 +245,8 @@ export default function OverviewPage() {
             className="span-8"
             kicker="MONITOR PULSE"
             title="Current Monitor Posture"
-            action={<Link className="text-link" href="/monitors">View all →</Link>}
+            subtitle="Latest rule state from each active definition"
+            action={<Link className="text-link" href="/monitors">View All →</Link>}
           >
             {activeMonitorItems.length === 0 ? (
               <Empty>No Monitor definitions yet.</Empty>
@@ -200,7 +268,7 @@ export default function OverviewPage() {
                         </Link>
                         <span>Created {formatDate(item.monitor_created_at ?? monitor.created_at)} · {String(monitor.cadence ?? "—")} · v{String(monitor.version ?? "—")}</span>
                       </div>
-                      <div className="state-dots" aria-label="Rule states">
+                      <div className="state-dots" aria-label="Rule States">
                         {states.slice(0, 10).map((state) => (
                           <i
                             className={`state-dot ${String(state.state ?? "").toLowerCase()}`}
@@ -220,11 +288,11 @@ export default function OverviewPage() {
             )}
           </Card>
 
-          <Card className="span-4" kicker="AUTOMATION" title="Post-Market Run">
+          <Card className="span-4" kicker="AUTOMATION" title="Post-Market Run" subtitle="Latest scheduled account and Watchlist refresh">
             <div className="status-hero">
               <Badge value={String(sync?.health ?? "UNKNOWN")} />
               <strong>{String(sync?.run_status ?? "No receipt")}</strong>
-              <span>Latest session {String(sync?.receipt_session_date ?? "—")}</span>
+              <span>Latest Session {String(sync?.receipt_session_date ?? "—")}</span>
             </div>
             <dl className="detail-list">
               <div><dt>Account Sync</dt><dd>{String(sync?.portfolio_status ?? "—")}</dd></div>
@@ -233,7 +301,7 @@ export default function OverviewPage() {
             </dl>
           </Card>
 
-          <Card className="span-7" kicker="RECENT RUNS" title="Recent Monitor Runs">
+          <Card className="span-7" kicker="OBSERVATION HISTORY" title="Recent Monitor Runs" subtitle="Latest immutable evaluation batches">
             {runs.length === 0 ? <Empty>No run history yet.</Empty> : (
               <div className="table-wrap">
                 <table>
@@ -258,7 +326,7 @@ export default function OverviewPage() {
             )}
           </Card>
 
-          <Card className="span-5" kicker="OPERATIONS" title="Local Runtime">
+          <Card className="span-5" kicker="OPERATIONS" title="Local Runtime" subtitle="Database, backups, and notification delivery">
             <div className="metric-pairs">
               <div><span>Database</span><strong>{formatBytes(maintenance?.database_bytes)}</strong><small>{String(maintenance?.database_filename ?? "—")}</small></div>
               <div><span>Backups</span><strong>{String(maintenance?.backup_files ?? 0)}</strong><small>Latest {formatDate(maintenance?.latest_backup_at)}</small></div>

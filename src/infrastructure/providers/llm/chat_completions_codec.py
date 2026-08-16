@@ -10,6 +10,7 @@ from application.ports.agent_model_provider import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    ModelStreamChunk,
     ModelTool,
     ModelToolCall,
     ModelUsage,
@@ -80,6 +81,58 @@ class ChatCompletionsCodec:
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
         )
 
+    @staticmethod
+    def decode_stream_event(payload: Mapping[str, Any]) -> ModelStreamChunk:
+        """Decode one Chat Completions SSE JSON object.
+
+        Providers are inconsistent about whether ``usage`` appears on the
+        final ``[DONE]`` event or the preceding choice.  This method accepts
+        either shape and leaves aggregation to the runtime.
+        """
+
+        choices = payload.get("choices", ())
+        if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)):
+            raise DataContractError("LLM chat stream choices are invalid")
+        if not choices:
+            return ModelStreamChunk(
+                usage=_usage(payload.get("usage")),
+                model=payload.get("model") if isinstance(payload.get("model"), str) else None,
+                request_id=next(
+                    (
+                        payload.get(key)
+                        for key in ("id", "request_id")
+                        if isinstance(payload.get(key), str) and payload.get(key)
+                    ),
+                    None,
+                ),
+                done=True,
+            )
+        first = choices[0]
+        if not isinstance(first, Mapping):
+            raise DataContractError("LLM chat stream choice is invalid")
+        delta = first.get("delta", {})
+        if not isinstance(delta, Mapping):
+            raise DataContractError("LLM chat stream delta is invalid")
+        text = _content_text(delta.get("content"))
+        calls = _stream_tool_calls(delta.get("tool_calls"))
+        finish_reason = first.get("finish_reason")
+        return ModelStreamChunk(
+            text_delta=text,
+            tool_calls=calls,
+            usage=_usage(payload.get("usage")),
+            model=payload.get("model") if isinstance(payload.get("model"), str) else None,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            request_id=next(
+                (
+                    payload.get(key)
+                    for key in ("id", "request_id")
+                    if isinstance(payload.get(key), str) and payload.get(key)
+                ),
+                None,
+            ),
+            done=finish_reason is not None,
+        )
+
 
 def _content_text(content: object) -> str:
     if isinstance(content, str):
@@ -121,6 +174,31 @@ def _tool_calls(raw: object) -> tuple[ModelToolCall, ...]:
             raise DataContractError("LLM chat response function arguments are invalid")
         call_id = item.get("id")
         if not isinstance(call_id, str) or not call_id.strip():
+            call_id = f"call_{index}"
+        result.append(ModelToolCall(id=call_id, name=name, arguments=arguments))
+    return tuple(result)
+
+
+def _stream_tool_calls(raw: object) -> tuple[ModelToolCall, ...]:
+    """Decode permissive tool-call deltas (name may arrive only once)."""
+
+    if raw is None:
+        return ()
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise DataContractError("LLM chat stream tool calls are invalid")
+    result: list[ModelToolCall] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise DataContractError("LLM chat stream tool call is invalid")
+        function = item.get("function")
+        if not isinstance(function, Mapping):
+            raise DataContractError("LLM chat stream function call is invalid")
+        name = function.get("name", "")
+        arguments = function.get("arguments", "")
+        if not isinstance(name, str) or not isinstance(arguments, str):
+            raise DataContractError("LLM chat stream function fields are invalid")
+        call_id = item.get("id")
+        if not isinstance(call_id, str) or not call_id:
             call_id = f"call_{index}"
         result.append(ModelToolCall(id=call_id, name=name, arguments=arguments))
     return tuple(result)

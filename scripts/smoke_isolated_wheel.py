@@ -182,7 +182,7 @@ def main() -> int:
             revision = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()
-        if revision != ("0046_agent_channel_handoffs",):
+        if revision != ("0051_moomoo_margin_semantics",):
             print(f"unexpected packaged migration head: {revision}", file=sys.stderr)
             return 1
 

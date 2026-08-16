@@ -238,8 +238,7 @@ class TradeRetroReviewRevisionDTO(_DTO):
             note_markdown=value.note_markdown,
             action_items=value.action_items,
             finding_reviews=tuple(
-                TradeRetroFindingReviewDTO.from_domain(item)
-                for item in value.finding_reviews
+                TradeRetroFindingReviewDTO.from_domain(item) for item in value.finding_reviews
             ),
             reviewed_by=value.reviewed_by,
             authorization_note=value.authorization_note,
@@ -256,6 +255,7 @@ class TradeRetroRunDTO(_DTO):
     generated_at: datetime
     status: str
     plan_snapshot_id: str | None
+    subject_ids: tuple[str, ...] = ()
     transaction_ids: tuple[str, ...]
     findings: tuple[TradeRetroFindingDTO, ...]
     warning_codes: tuple[str, ...]
@@ -274,6 +274,7 @@ class TradeRetroRunDTO(_DTO):
         value: TradeRetroRun,
         *,
         reviews: tuple[TradeRetroReviewRevision, ...] = (),
+        subject_ids: tuple[str, ...] = (),
     ) -> TradeRetroRunDTO:
         return cls(
             run_id=value.run_id,
@@ -282,6 +283,7 @@ class TradeRetroRunDTO(_DTO):
             generated_at=value.generated_at,
             status=value.status.value,
             plan_snapshot_id=value.plan_snapshot_id,
+            subject_ids=subject_ids,
             transaction_ids=value.transaction_ids,
             findings=tuple(TradeRetroFindingDTO.from_domain(item) for item in value.findings),
             warning_codes=value.warning_codes,
@@ -294,9 +296,7 @@ class TradeRetroRunDTO(_DTO):
             latest_review=(
                 TradeRetroReviewRevisionDTO.from_domain(reviews[0]) if reviews else None
             ),
-            review_history=tuple(
-                TradeRetroReviewRevisionDTO.from_domain(item) for item in reviews
-            ),
+            review_history=tuple(TradeRetroReviewRevisionDTO.from_domain(item) for item in reviews),
         )
 
 

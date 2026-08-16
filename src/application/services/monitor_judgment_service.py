@@ -169,7 +169,16 @@ class MonitorJudgmentService:
                     "MONITOR_JUDGMENT_FALLBACK_USED",
                     f"PRIMARY_{primary_error.code}",
                 )
-                raw = await selected_provider.judge(judgment_request)
+                try:
+                    raw = await selected_provider.judge(judgment_request)
+                except DataContractError:
+                    # A malformed model payload has no execution effect and is
+                    # safe to retry once. Keep the retry bounded; a second
+                    # invalid payload remains an explicit failed judgment.
+                    fallback_warning_codes += (
+                        "MONITOR_JUDGMENT_FALLBACK_CONTRACT_RETRIED",
+                    )
+                    raw = await selected_provider.judge(judgment_request)
             normalized = self._validate(raw, policy.confirmed_state_json, features, allowed_ids)
             fingerprint = _hash(
                 {
@@ -687,15 +696,37 @@ class MonitorJudgmentService:
             else monitor.name[:24]
         )
         error_codes = tuple(getattr(judgment, "error_codes", ()))
+        warning_codes = tuple(getattr(judgment, "warning_codes", ()))
         rendered_errors = ", ".join(error_codes) or "MONITOR_JUDGMENT_UNAVAILABLE"
-        body = "\n".join(
+        lines = [
+            "状态：复合判断暂时不可用；确定性规则结果仍然有效。",
+            f"错误码：{rendered_errors}",
+        ]
+        provider = getattr(judgment, "provider", None)
+        model = getattr(judgment, "model", None)
+        if provider or model:
+            lines.append(f"失败模型：{provider or '未知 Provider'} / {model or '未知模型'}")
+        if "MONITOR_JUDGMENT_FALLBACK_USED" in warning_codes:
+            primary_error = next(
+                (
+                    item.removeprefix("PRIMARY_")
+                    for item in warning_codes
+                    if item.startswith("PRIMARY_")
+                ),
+                "UNKNOWN",
+            )
+            lines.append(f"调用路径：主模型失败（{primary_error}），已尝试 fallback")
+        if "MONITOR_JUDGMENT_FALLBACK_CONTRACT_RETRIED" in warning_codes:
+            lines.append("fallback：首次输出未通过结构校验，已进行一次有界重试")
+        if "DATA_CONTRACT_ERROR" in error_codes:
+            lines.append("失败阶段：模型输出结构校验；未采用不合规结果")
+        lines.extend(
             (
-                "状态：复合判断暂时不可用；确定性规则结果仍然有效。",
-                f"错误码：{rendered_errors}",
-                "市场：复合判断暂时不可用",
-                "说明：本轮未生成模型结论；请稍后重试。",
+                "市场：未生成新的模型判断",
+                "处理：等待下一轮自动重试；价格规则仍按确定性结果运行。",
             )
         )
+        body = "\n".join(lines)
         return NotificationMessage(
             notification_id=self._ids.new(EntityIdPrefix.MONITOR_NOTIFICATION),
             source_type=NotificationSourceType.MONITOR_EVENT,

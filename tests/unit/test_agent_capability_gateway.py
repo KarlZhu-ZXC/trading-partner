@@ -45,6 +45,27 @@ async def _write(*, value: int = 1) -> dict[str, Any]:
     return {"data": {"value": value}}
 
 
+async def _proposal(
+    *,
+    case_id: str,
+    payload: dict[str, Any],
+    proposed_by: str,
+    idempotency_key: str,
+    operation: str = "thesis_revision",
+) -> dict[str, Any]:
+    return {
+        "request_id": "req_proposal",
+        "data": {
+            "case_id": case_id,
+            "kind": payload.get("kind"),
+            "proposed_by": proposed_by,
+            "idempotency_key": idempotency_key,
+            "operation": operation,
+            "status": "PENDING",
+        },
+    }
+
+
 def _registry() -> CompactCapabilityRegistry:
     registry = CompactCapabilityRegistry()
     registry.add_capability(_health, name="system_health", policy=READ_DURABLE)
@@ -63,10 +84,39 @@ def _registry() -> CompactCapabilityRegistry:
         ),
         policy=READ_DURABLE,
     )
+    _register_dispatch_tool(
+        registry,
+        name="action_manage",
+        description="Write one exact action after explicit confirmation.",
+        variants=(
+            _spec("add", _write, ("value",)),
+            _spec("remove", _write, ("value",)),
+        ),
+        policy=APPEND,
+    )
     registry.add_capability(
         _health,
         name="technical_render_chart",
         policy=LOCAL_ARTIFACT,
+    )
+    return registry
+
+
+def _proposal_registry() -> CompactCapabilityRegistry:
+    registry = _registry()
+    _register_dispatch_tool(
+        registry,
+        name="research_judgment_propose",
+        description="Create one non-effective research proposal.",
+        variants=(
+            _spec(
+                "thesis_revision",
+                _proposal,
+                ("case_id", "payload", "proposed_by", "idempotency_key"),
+                adapter_operation="thesis_revision",
+            ),
+        ),
+        policy=APPEND,
     )
     return registry
 
@@ -76,6 +126,7 @@ def test_private_agent_capabilities_are_registry_metadata_only() -> None:
     assert {tool.name for tool in registry.list_tools()} == {
         "system_health",
         "watchlist_manage",
+        "action_manage",
         "grouped_read",
         "technical_render_chart",
     }
@@ -104,6 +155,54 @@ def test_search_returns_only_agent_a_read_operations() -> None:
 def test_search_does_not_return_unrelated_defaults_for_unknown_language() -> None:
     gateway = AgentCapabilityGateway(_registry())
     assert gateway.search("完全未知的能力", limit=3) == ()
+
+
+def test_prepare_action_search_returns_only_injected_allowlist_schema() -> None:
+    gateway = AgentCapabilityGateway(
+        _registry(),
+        action_allowlist=(("action_manage", "add"),),
+    )
+    descriptors = gateway.search("add", mode="prepare_action", limit=8)
+    assert [(item.capability, item.operation) for item in descriptors] == [
+        ("action_manage", "add")
+    ]
+    assert descriptors[0].auto_allowed is False
+    assert gateway.search("add", mode="read", limit=8) == ()
+
+
+@pytest.mark.asyncio
+async def test_proposal_search_and_invoke_skip_only_the_redundant_outer_gate() -> None:
+    gateway = AgentCapabilityGateway(_proposal_registry())
+    descriptors = gateway.search("thesis revision", mode="propose", limit=8)
+    assert [(item.capability, item.operation) for item in descriptors] == [
+        ("research_judgment_propose", "thesis_revision")
+    ]
+    assert descriptors[0].auto_allowed is True
+    assert descriptors[0].confirmation_required is False
+
+    result = await gateway.propose(
+        "research_judgment_propose",
+        "thesis_revision",
+        {
+            "case_id": "case_test",
+            "payload": {"kind": "thesis_revision"},
+            "proposed_by": "user",
+            "idempotency_key": "proposal-test",
+        },
+    )
+    assert result.result["data"]["status"] == "PENDING"
+    assert result.receipt.request_id == "req_proposal"
+    with pytest.raises(AgentCapabilityAccessDeniedError):
+        await gateway.propose(
+            "research_judgment_propose",
+            "thesis_revision",
+            {
+                "case_id": "case_test",
+                "payload": {"kind": "trade_plan"},
+                "proposed_by": "user",
+                "idempotency_key": "wrong-kind",
+            },
+        )
 
 
 def test_chinese_alias_routes_to_matching_capability() -> None:
@@ -238,6 +337,64 @@ def test_large_quote_batch_compaction_preserves_latest_price_and_baseline() -> N
     }
     assert first["source_codes"] == ["primary:yfinance"]
     assert first["warning_codes"] == ["EXTENDED_HOURS_PRICE"]
+
+
+@pytest.mark.parametrize(
+    ("capability", "operation", "data_key"),
+    (
+        ("monitor_read", "dashboard", "monitors"),
+        ("monitor_read", "runs", "runs"),
+        ("portfolio_analyze", "exposure", "positions"),
+        ("research_memory_get", "timeline", "entries"),
+        ("research_memory_get", "search", "results"),
+        ("research_memory_get", "agenda", "items"),
+        ("us_company_get", "filings", "filings"),
+        ("us_company_get", "live_news", "items"),
+        ("us_company_get", "company_updates", "updates"),
+        ("decision_workbench_review_queue", "open_items", "items"),
+    ),
+)
+def test_operation_compaction_keeps_provenance_and_decision_data(
+    capability: str,
+    operation: str,
+    data_key: str,
+) -> None:
+    value = {
+        "ok": True,
+        "as_of": "2026-08-13T10:00:00+08:00",
+        "fetched_at": "2026-08-13T10:00:01+08:00",
+        "freshness": "fresh",
+        "degraded": True,
+        "sources": [{"name": "durable_store", "role": "PRIMARY"}],
+        "warnings": [{"code": "STALE_DATA", "message": "do not include this text"}],
+        "errors": [{"code": "UPSTREAM_TIMEOUT", "message": "do not include this text"}],
+        "data": {
+            data_key: [
+                {
+                    "monitor_id": "monitor_1",
+                    "status": "ACTIVE",
+                    "severity": "HIGH",
+                    "current_value": "101.25",
+                    "unbounded": "x" * 2_000,
+                }
+                for _ in range(32)
+            ]
+        },
+    }
+
+    compacted = compact_tool_result(
+        value,
+        max_bytes=2_048,
+        capability=capability,
+        operation=operation,
+    )
+    encoded = json.dumps(compacted, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert len(encoded.encode()) <= 2_048
+    assert compacted["compaction"] == f"{capability}_{operation}_v1"
+    assert compacted["as_of"] == value["as_of"]
+    assert compacted["degraded"] is True
+    assert compacted["data"][data_key][0]["status"] == "ACTIVE"
+    assert "do not include this text" not in encoded
 
 
 def test_agent_prompt_binds_previous_close_semantics() -> None:

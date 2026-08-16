@@ -29,6 +29,7 @@ def test_agent_runtime_migration_creates_agent_tables(
         "agent_pending_actions",
         "agent_channel_cursors",
         "agent_channel_handoffs",
+        "agent_turns",
     }.issubset(tables)
     with engine.connect() as connection:
         connection.execute(

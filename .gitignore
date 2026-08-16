@@ -38,6 +38,7 @@ data/automation/
 data/backups/
 data/research/hog_cycle/
 data/research/lidaxiao_bilibili/
+data/research/bossmo_bilibili/
 !data/.gitkeep
 
 # IDE / OS
@@ -54,6 +55,7 @@ Thumbs.db
 tmp/
 temp/
 .cache/
+/.codex-audits/
 
 docs/archive
 docs/progress

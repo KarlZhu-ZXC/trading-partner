@@ -159,6 +159,26 @@ def test_schwab_runtime_never_starts_browser_oauth(
     assert "client_from_login_flow" not in source
 
 
+def test_schwab_read_http_failure_retains_safe_stage_and_status() -> None:
+    class _Session:
+        def request(self, *_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(status_code=503)
+
+    client = object.__new__(SchwabPyReadClient)
+    client._client = SimpleNamespace(session=_Session())  # type: ignore[attr-defined]
+
+    with pytest.raises(ProviderUnavailableError) as failure:
+        client.accounts_with_positions()
+
+    assert failure.value.details == {
+        "vendor": "schwab",
+        "operation": "account_snapshot",
+        "error_type": "http_failure",
+        "status_code": 503,
+        "status_class": "5xx",
+    }
+
+
 @pytest.mark.asyncio
 async def test_schwab_snapshot_normalizes_selected_account_without_plain_identity(
     id_generator: object, fixed_clock: object
@@ -174,6 +194,8 @@ async def test_schwab_snapshot_normalizes_selected_account_without_plain_identit
     assert snapshot.positions[1].side is AccountPositionSide.SHORT
     assert snapshot.positions[1].market_value == Decimal("-425")
     assert snapshot.positions[0].market_price is None
+    assert "BROKER_VALUATION_PRICE_DERIVED" in snapshot.warning_codes
+    assert "PRICE_TIME_UNAVAILABLE" not in snapshot.warning_codes
     assert "12345678" not in repr(result)
     assert _ACCOUNT_HASH not in repr(result)
 

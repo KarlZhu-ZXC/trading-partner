@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_TRADING_PARTNER_API ?? "http://127.0.0.1:8765";
+  process.env.NEXT_PUBLIC_TRADING_PARTNER_API ?? "/api/console";
 
 const CONSOLE_TOKEN_HEADER = "X-Trading-Partner-Console-Token";
 let sessionTokenPromise: Promise<string> | null = null;

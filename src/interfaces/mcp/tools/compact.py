@@ -1410,8 +1410,9 @@ def create_compact_capability_registry(
         registry,
         name="research_judgment_propose",
         description=(
-            "Propose Research state, Instrument Selection, Trade Plan, or Thesis "
-            "changes; never confirm them."
+            "Propose Research state, an Instrument attachment, Trade Plan, or Thesis "
+            "changes; never confirm them. A confirmed watchlist_item create attaches "
+            "the Instrument directly; do not require Shortlist or Select afterward."
         ),
         variants=(
             _spec(

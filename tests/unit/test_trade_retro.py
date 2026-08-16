@@ -274,9 +274,9 @@ class _ResearchUow:
             conditions=(),
         )
         self.subjects = SimpleNamespace(
-            list=lambda **kwargs: (subject,)
-            if kwargs.get("status") is ResearchSubjectStatus.ACTIVE
-            else ()
+            list=lambda **kwargs: (
+                (subject,) if kwargs.get("status") is ResearchSubjectStatus.ACTIVE else ()
+            )
         )
         self.trade_plans = SimpleNamespace(get_current_by_subject=lambda _subject_id: plan)
         self.decisions = SimpleNamespace(list_by_subject=lambda *_args, **_kwargs: ())
@@ -383,6 +383,7 @@ async def test_trade_retro_uses_pretrade_snapshot_and_preserves_obsidian_text(tm
     history = service.history(TradeRetroHistoryInput())
     assert history.ok and history.data is not None
     assert history.data.runs[0].run_id == retro.data.run_id
+    assert history.data.runs[0].subject_ids == ("case_00000000-0000-7000-8000-000000000001",)
     finding_key = retro.data.findings[0].finding_key
 
     clock.set(end + timedelta(hours=2))
@@ -506,9 +507,7 @@ def test_trade_retro_imports_legacy_markdown_without_inventing_findings(tmp_path
     )
     assert duplicate.ok and duplicate.data is not None
     assert duplicate.data.run_id == imported.data.run_id
-    assert tuple(item.code for item in duplicate.warnings) == (
-        "DUPLICATE_IDEMPOTENCY_KEY",
-    )
+    assert tuple(item.code for item in duplicate.warnings) == ("DUPLICATE_IDEMPOTENCY_KEY",)
     conflict = service.import_legacy_markdown(
         start=start,
         end=end,

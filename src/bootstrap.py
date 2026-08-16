@@ -1,4 +1,5 @@
 """Composition root — the only module that wires application and infrastructure."""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +11,7 @@ from typing import Any
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from application.ports.agent_handoff_repository import AgentHandoffRepository
 from application.ports.agent_pending_action_repository import AgentPendingActionRepository
+from application.ports.agent_preferences_repository import AgentPreferencesRepository
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
@@ -36,6 +38,7 @@ from application.services.a_share_snapshot_service import AShareSnapshotService
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.agent_conversation_metrics import AgentConversationMetricsService
 from application.services.broker_order_service import BrokerOrderService
 from application.services.cash_sweep_shadow_service import CashSweepShadowService
 from application.services.catalyst_agenda_notification_service import (
@@ -89,6 +92,7 @@ from application.services.research_state_query_service import ResearchStateQuery
 from application.services.research_subject_service import ResearchSubjectService
 from application.services.research_timeline_service import ResearchTimelineService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
+from application.services.review_item_service import ReviewItemService
 from application.services.risk_engine_service import RiskEngineService
 from application.services.risk_policy_service import RiskPolicyService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
@@ -127,7 +131,7 @@ from infrastructure.composition import (
     CompositionOverrides,
     ProviderCompositionOverrides,
     RuntimeResources,
-    build_agent_model_provider,
+    build_agent_model_providers,
     build_monitor_judgment_fallback_provider,
     build_monitor_judgment_provider,
     build_persistence_infrastructure,
@@ -253,6 +257,8 @@ class OperationalServices:
     agent_conversations: AgentConversationRepository
     agent_handoffs: AgentHandoffRepository
     agent_pending_actions: AgentPendingActionRepository
+    agent_metrics: AgentConversationMetricsService
+    agent_preferences: AgentPreferencesRepository
 
     @property
     def monitor_notifications(self) -> NotificationService:
@@ -394,6 +400,11 @@ def build_application(
         clock,
         id_generator,
         secret_redactor,
+    )
+    review_item_service = ReviewItemService(
+        persistence.review_items,
+        clock,
+        id_generator,
     )
 
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
@@ -841,9 +852,17 @@ def build_application(
         monitor_fact_resolver,
         monitor_judgment_service,
         session_calendars=monitor_schedule_service.session_calendars,
+        provider_retry_attempts=3,
+        provider_retry_delay_seconds=0.5,
     )
     trade_retro_narrative_provider = build_trade_retro_narrative_provider(settings)
-    agent_model_provider = build_agent_model_provider(settings)
+    agent_model_providers = build_agent_model_providers(settings)
+    default_agent_model_id = settings.default_agent_llm_id
+    agent_model_provider = (
+        agent_model_providers.get(default_agent_model_id)
+        if default_agent_model_id is not None
+        else None
+    )
     trade_retro_service = TradeRetroService(
         persistence.trade_retro,
         account_transaction_repository,
@@ -934,6 +953,7 @@ def build_application(
         calendar=us_market_calendar,
         portfolio=portfolio_tool_coordinator,
         preview=cash_sweep_shadow_service,
+        broker_orders=broker_order_service,
         notifications=notification_service,
         clock=clock,
         hard_cash_floor=settings.sgov_shadow_hard_cash_floor,
@@ -1040,6 +1060,7 @@ def build_application(
             monitor_judgment_fallback_provider=monitor_judgment_fallback_provider,
             trade_retro_narrative_provider=trade_retro_narrative_provider,
             agent_model_provider=agent_model_provider,
+            agent_model_providers=agent_model_providers,
             agent_turn_lock_factory=AgentTurnLockFactory(
                 settings.telegram_agent_lock_path.parent / "agent_turns"
             ),
@@ -1077,6 +1098,7 @@ def build_application(
             catalyst_agenda=catalyst_agenda_service,
             broker_order_preview=cash_sweep_shadow_service,
             broker_orders=broker_order_service,
+            review_items=review_item_service,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,
@@ -1094,6 +1116,8 @@ def build_application(
             agent_conversations=persistence.agent_conversations,
             agent_handoffs=persistence.agent_handoffs,
             agent_pending_actions=persistence.agent_pending_actions,
+            agent_metrics=AgentConversationMetricsService(persistence.agent_conversations),
+            agent_preferences=persistence.agent_preferences,
         ),
     )
 

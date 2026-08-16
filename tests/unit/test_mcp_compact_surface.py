@@ -120,6 +120,15 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_research_proposal_tool_documents_direct_instrument_attachment() -> None:
+    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+
+    description = tools["research_judgment_propose"].description
+    assert "confirmed watchlist_item create attaches the Instrument directly" in description
+    assert "do not require Shortlist or Select afterward" in description
+
+
+@pytest.mark.asyncio
 async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable() -> None:
     container = _container()
     legacy_case_id = "case_00000000-0000-7000-8000-000000000001"
@@ -459,6 +468,9 @@ async def test_broker_order_manage_keeps_shadow_preview_and_live_write_closed() 
     container.services.broker_order_preview.preview = AsyncMock(
         return_value=_Envelope({"shadow_only": True, "execution_effect": False})
     )
+    container.services.broker_orders.preview = AsyncMock(
+        return_value=_Envelope({"status": "PREVIEWED", "execution_effect": False})
+    )
     registry = create_capability_registry(container)
 
     result = await registry.invoke(
@@ -477,6 +489,29 @@ async def test_broker_order_manage_keeps_shadow_preview_and_live_write_closed() 
     request = container.services.broker_order_preview.preview.await_args.args[0]
     assert request.instrument_id == "etf:US:SGOV"
     assert request.hard_cash_floor == 2000
+
+    exact = await registry.invoke(
+        "broker_order_manage",
+        {
+            "request": {
+                "operation": "preview",
+                "account_ref": "schwab_account_1",
+                "instrument_id": "etf:US:SGOV",
+                "instruction": "BUY",
+                "quantity": 26,
+                "order_type": "LIMIT",
+                "limit_price": "100.56",
+                "idempotency_key": "preview-key",
+            },
+        },
+        confirmation="broker_order_manage",
+    )
+
+    assert exact["data"] == {"status": "PREVIEWED", "execution_effect": False}
+    exact_request = container.services.broker_orders.preview.await_args.args[0]
+    assert exact_request.account_ref == "schwab_account_1"
+    assert exact_request.quantity == 26
+    assert str(exact_request.limit_price) == "100.56"
     assert "broker_order_manage" in MCP_VNEXT_TOOL_NAMES
     assert "broker_order_preview" not in MCP_VNEXT_TOOL_NAMES
 

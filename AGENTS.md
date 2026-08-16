@@ -9,8 +9,9 @@ Korea Exchange quote/technical monitoring,
 accounts, Research Subjects, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
 analysis, plus a manual QuantConnect Free code/result bridge and narrowly
-confirmation-gated Schwab US stock/ETF order writes — **not** an automated backtest
-runner or autonomous trading system.
+confirmation-gated Schwab US stock/ETF order writes. The sole unattended order
+exception is the dedicated installed SGOV cash-sweep scheduler described below —
+this is **not** an automated backtest runner or general autonomous trading system.
 
 Canonical product language is **Research Subject** in English and 标的、研究标的 or
 研究档案 in Chinese, depending on whether the context emphasizes the object or its
@@ -107,12 +108,15 @@ Research Subject title/summary. Research Subject type and primary Instrument are
 Research Subject lifecycle is exactly `DRAFT`, `ACTIVE`, and `ARCHIVED`;
 conviction state belongs to the Thesis.
 Theme, macro, and portfolio-concern Research Subjects may intentionally have no
-primary Instrument. Their confirmed Research WatchlistItems form an Instrument
-Selection candidate pool with `WATCHING`, `SHORTLISTED`, `SELECTED`, and `REJECTED`
-states. Every selected/rejected transition requires a bounded rationale and exactly
-one candidate may be `SELECTED` per Research Subject. Selection never mutates the
-Research Subject identity, creates a position, or executes an order. A selected
-candidate may seed the execution `instrument_id` of a later Trade Plan.
+primary Instrument. The normal attachment flow is exactly Propose Instrument →
+explicit Confirm/Reject/Withdraw. Confirming the create proposal attaches the
+Instrument directly to the Research Subject; callers and Console UI must not require
+a second Shortlist or Select step. Persisted Research WatchlistItem states
+`WATCHING`, `SHORTLISTED`, `SELECTED`, and `REJECTED`, plus `update_status`, remain
+readable for compatibility with older durable records and clients, but are not the
+default user workflow. A later Trade Plan chooses its execution `instrument_id`
+explicitly and does not require a prior `SELECTED` transition. Instrument attachment
+never mutates the Research Subject identity, creates a position, or executes an order.
 
 A Draft/non-tracking Research Subject may contain research artifacts and proposed candidates,
 but it cannot receive an ACTIVE/STRENGTHENED/WEAKENED Thesis or an ACTIVE Trade
@@ -300,6 +304,23 @@ Finding keys. A disputed Finding requires a note. Stale writers remain
 `TRADE_RETRO_REVIEW_VERSION_CONFLICT`; there is no hidden merge. `export` includes
 the latest review and records that review version while retaining the original Run.
 
+The Console-only durable Review Queue materializes Catalyst overdue items, open Trade
+Retro reviews and action items, consecutive Judgment Scorecard gaps, and unresolved
+Agent/Broker states without adding a public MCP tool. Each ReviewItem retains a stable
+source key, first/last seen time, recurrence count, optional due time, status, and an
+optional resolution reference. Human acknowledge/resolve transitions require the
+Console session, expected version, idempotency key, actor, and authorization note;
+resolution requires a bounded note. A successfully observed source disappearance may
+auto-resolve an item. A failed or unavailable source read must never auto-resolve one.
+If a closed source condition disappears and later recurs, the same item reopens with a
+higher occurrence count. The Decision Workbench consumes this queue while the existing
+Research, Monitor, Agenda, Retro, and Scorecard pages remain intact.
+Each occurrence also retains its own opened/last-seen, first-acknowledged, and closure
+timestamps plus MANUAL/AUTO resolution mode. Queue metrics must use occurrence history,
+not lifetime first_seen timestamps or a paginated item list; zero-sample medians/rates
+remain null. Decision Workbench may acknowledge, adjust a due time, or resolve an exact
+ReviewItem through the same Console session/version/idempotency gate.
+
 **Scheduled operational CLI (not a public MCP tool)**
 
 - `uv run trading-partner-post-market-sync` checks the XNYS calendar and runs ten
@@ -308,10 +329,23 @@ the latest review and records that review version while retaining the original R
   receipt per market session, and never executes an order.
 - `uv run trading-partner-sgov-plan preview` explicitly refreshes Schwab and prints
   an immediate all-account Shadow plan. The dedicated launchd scheduler runs once
-  per XNYS session at 15:45 America/New_York, or 15 minutes before an official early
-  close, using a $2,000 hard cash floor plus $200 buffer per account. It persists one
-  idempotent SYSTEM Outbox notification and never calls Codex, an LLM, or an order
-  method. Closed-day and non-due wakes make no Provider request.
+  per phase at 15:45 and 15:55 America/New_York, or 15 and 5 minutes before an
+  official early close, using a $2,000 hard cash floor plus $200 buffer per account.
+  The first phase is preparation-only. The completion phase refreshes again and may
+  submit at most one `SGOV` `BUY LIMIT` `DAY` `NORMAL` order per eligible Schwab
+  account at the current ask. It rechecks zero margin, quote age/spread, existing BUY
+  reserves, and the cash floor immediately before submission. Stable per-session,
+  per-account preview/submit keys prevent duplicate Provider calls; `SUBMITTING` or
+  `UNKNOWN` is never retried and requires reconciliation. Installation of this
+  dedicated scheduler is the durable user authorization and uninstalling it revokes
+  future automatic runs. It cannot sell, cancel, replace, use extended/overnight
+  sessions, or submit another instrument. All other live actions retain the exact
+  current-chat confirmation gate. Each phase emits a SYSTEM Outbox notification and
+  never calls Codex or an LLM. Closed-day and non-due wakes make no Provider request.
+  Retryable account-refresh and quote/sizing reads receive at most three bounded
+  attempts; order submission is never retried after an unknown outcome. A blocked
+  completion notice names the failed stage, attempt count, Provider, typed error,
+  and safe HTTP status when available.
 - `uv run trading-partner-retro` prepares, runs, reads, or exports Trade Retro
   records. `prepare` must run before the period being audited; `run` never refreshes
   a broker and incomplete transaction coverage remains explicit. `weekly` audits the
@@ -367,6 +401,10 @@ status, attempt, and retryability. Console Run details may render those fields b
 must never persist or display request URLs, proxy values, headers, response bodies,
 or exception text. Runs created before migration `0036` remain readable with an
 empty diagnostic list; never infer a missing historical cause.
+Scheduled Monitor quote reads also receive at most three bounded attempts when the
+safe Provider diagnostic explicitly marks the failure retryable. Contract/authentication
+failures are not retried, and a successful retry is disclosed by
+`MONITOR_PROVIDER_READ_RETRIED`.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
 market-close run. INTERVAL alerts remain transition-only. A-share/US/KR post-market
 groups persist their ordinary transition events but enqueue no separate event-linked
@@ -387,9 +425,14 @@ then every rule's state, condition, and bounded human meaning. Repeated values a
 distances remain available in the durable Run instead of being repeated on a phone
 screen; one shared unavailable-fact cause is rendered once. Multiple same-Monitor
 transitions in one run are delivered as one Telegram message without collapsing
-their durable Monitor events. Telegram does not support responsive tables, so the
+their durable Monitor events. Monitor notifications use Telegram Bot API 10.1+
+Rich Messages and a native two-column table for state/severity plus the combined
+condition/meaning; generic/manual notifications remain regular HTML messages. Quiet
+rules are collapsed behind a count while triggered and unavailable rules remain
+visible. Machine rule codes, repeated prices, and repeated distances stay in the
+durable Run rather than widening the phone table. The
 sender places symbol/current price in the first line, followed by the transition
-summary and mobile-first vertical rule lines. Transition alerts and changed
+summary and compact rule table. Transition alerts and changed
 post-market blocks include the prior observed price, price change, and the exact
 Provider source from the run receipt. Price-change percentages are rounded half-up
 and rendered with exactly two decimal places.
@@ -398,6 +441,11 @@ condition/threshold, bounded human meaning, severity, and event state; never red
 the change to a bare `TRIGGERED`/`RECOVERED` label. Historical Outbox formats remain
 readable. A single-transition headline includes its bounded condition; a
 multi-transition headline stays a compact count and details each change below.
+Green means that the prior alarm condition cleared; it is not a bullish signal and
+must never be described as a price or market recovery.
+Provider interruption is rendered as one compact operational card rather than one
+change per affected rule. A later quiet re-evaluation emits a blue data-restored
+card; data restoration and green alarm clearance are different states.
 Prominent red/green Unicode alert bands distinguish a newly triggered or recovered
 level because Telegram HTML cannot set text background colors. Common provenance
 warnings are condensed to a human-readable basis line without hiding typed errors.
@@ -478,11 +526,13 @@ positions, supported active one-leg open orders, transactions, and a read-only q
 used by SGOV Shadow Preview. A separate closed adapter exposes named
 place/status/cancel endpoints for configured REAL accounts and has no generic request
 or plugin CLI runtime dependency. Every place consumes a 30–300 second durable
-preview and exact current-chat user authorization; unknown responses are persisted
-and never retried automatically. LIMIT and STOP_LIMIT BUY/SELL plus protective
+preview and exact current-chat user authorization, except for the closed SGOV-only
+scheduler authorization above; unknown responses are persisted and never retried
+automatically. LIMIT and STOP_LIMIT BUY/SELL plus protective
 MARKET/STOP/TRAILING sell orders are supported; AM/PM/SEAMLESS are LIMIT-only and
 SEAMLESS is not overnight. Margin, overselling, shorts, options/complex orders,
-replacement, unattended execution, and unbounded BUY market/stop/trailing orders are blocked.
+replacement, unattended execution outside that SGOV BUY exception, and unbounded BUY
+market/stop/trailing orders are blocked.
 Moomoo Hot List is an optional `market_data_get(request={"operation":"us_market",...})` component,
 not directional
 sentiment. It uses the shared cross-process OpenD limiter, is cached in 15-minute
@@ -578,7 +628,9 @@ quantity facts remain deterministic-only. Explanations are validated as Chinese.
 The LLM has no mutation/order port;
 evidence IDs and quantity ranges are validated, session-misaligned divergence
 actions are downgraded to WAIT, unchanged qualitative signatures skip calls, and
-only material judgment changes create events/notifications. Never infer a fill or
+only material judgment changes create events/notifications. After primary failover,
+one malformed fallback payload may receive exactly one structure-only retry; a second
+invalid payload remains an explicit failed judgment. Never infer a fill or
 mutate confirmed state from an LLM result.
 
 Phase 2D derives standard indicators through the open-source TA-Lib backend and
@@ -614,7 +666,9 @@ orders, fills, or positions.
 The Shared Agent Runtime is disabled by default and provider-neutral. It persists durable
 conversations, explicit channel bindings, append-only messages, bounded model/tool
 receipts, Pending Actions, cursors, and one-time channel handoffs through migrations
-`0044`–`0046`. Console Chat and the strictly allowlisted Telegram poller are implemented;
+`0044`–`0046`. Migration `0049` adds durable Agent Turn lifecycle records for refresh/
+disconnect recovery; terminal failures persist only bounded safe error codes. Console Chat
+and the strictly allowlisted Telegram poller are implemented;
 Agent broker orders remain unavailable and are not authorized by a research action.
 
 The model sees only private `tp_capability_search`, `tp_read`, and confirmation-preparing
@@ -626,6 +680,72 @@ exact hash, version, expiry, and single-use opaque token. Sync/evaluate, account
 policy, and every broker write remain denied. Exact grouped-operation DTO validation and
 the 27-tool MCP inventory remain unchanged. Conversation memory is continuity context,
 never a source of current prices, positions, fills, or research state.
+
+Capability discovery distinguishes automatic `read` from `prepare_action`; discovering a
+write schema never invokes it. Independent read calls may execute with bounded parallelism,
+while model-order messages/events/receipts remain deterministic. A refreshed Console may
+list a durable `PRESENTED` action but must not persist its raw token or automatically recover
+confirmation authority. Only an explicit user resume may rotate the token under exact
+conversation/channel/principal/expiry/version CAS; the old token becomes invalid and the
+arguments plus expiry remain unchanged. Navigation-only Console context is untrusted and
+must never substitute for a capability read. The default Bailian Agent endpoint publishes
+bounded native Web Search and extractor support; usage plus source URLs must remain explicit,
+and webpages cannot override canonical Trading Partner price, position, level, return, or
+quantity facts. Endpoints without native support remain search-disabled. Agent broker orders
+remain closed unless a later explicit product decision changes that separate gate.
+
+The Console Agent composer links Provider, model, and reasoning-effort selection. Selecting a
+Provider asks the backend to fetch and briefly cache its standard model directory with
+server-owned credentials; the browser receives only bounded text-model IDs and capability
+metadata, never an API key or full endpoint. Catalog failure falls back visibly to the configured
+default model. The runtime revalidates the selected Provider, catalog model, and reasoning effort
+before persisting the user message, so a modified browser request cannot inject an arbitrary
+model name.
+
+## Console heading and control language
+
+Console sections must use one consistent information hierarchy. A card header has **at most two
+text levels** and uses exactly one of these modes: **kicker → title** for a functional section, or
+**title → object subtitle** for an object overview such as `THEME` followed by the specific Theme
+name. Never render kicker, title, subtitle, and description together in one header. The rendered
+header keeps a divider between the heading and the card body.
+
+- **Kicker** names the functional domain, workflow stage, or operating constraint. It is short,
+  uppercase, and must not repeat the title with different capitalization. Examples:
+  `EVENT COVERAGE`, `DECISION WORKFLOW`, `RESEARCH HEALTH`, `APPEND-ONLY EDITING`.
+- **Title** names the stable object or section the user is viewing. Use concise Title Case for
+  ordinary sections. For a Research Subject overview, the subject type is the title (for example,
+  `THEME`) and the specific Research Subject title is the subtitle.
+- **Object subtitle** is reserved for the specific identity beneath an object-type title. It must
+  not be combined with a kicker.
+- **Description** is an optional single, concise intro paragraph below the header divider. It may
+  explain scope, behavior, provenance, or a safety boundary, but is never another header level.
+  Do not use a metric list such as `Next 7D / upcoming / overdue` as a title; render metrics in the
+  card body.
+
+Avoid synonymous pairs such as `TODAY` / `Decision Inbox`, `CATALYST AGENDA` /
+`Catalyst Agenda pulse`, or `RESEARCH SUBJECTS` / `All Research Subjects`. Prefer distinct
+relationships such as `DECISION WORKFLOW` / `Today’s Inbox` and `EVENT COVERAGE` /
+`Catalyst Pulse`; put any further explanation below the divider. A section should make sense from
+its two header levels alone.
+
+Passive labels and interactive controls must also read differently. Statuses use a passive
+dot-plus-text treatment without border, fill, hover, or button-like padding. Tags describe nouns
+or classification values and use the passive tag treatment. Buttons use an action verb, retain an
+obvious border/fill plus hover/focus/disabled states, and must not be styled like tags. Description
+Lists across pages use the shared component and top-rule treatment rather than page-specific
+boxed variants. Primary, destructive, and secondary actions must be spatially and visually
+distinct. When adding or renaming a prominent Console section, update the rendered-HTML regression
+tests so the intended heading relationship cannot silently regress.
+
+Every editable Console field that is required for the current action must show a red leading
+asterisk in its visible label and expose matching native `required` or `aria-required="true"`
+semantics. Conditional requirements show the asterisk only while the condition applies; an
+either/or requirement marks the field group rather than incorrectly marking every member.
+Placeholders, helper text, validation errors, and a `(Required)` suffix never replace the
+asterisk. Optional fields receive no asterisk and do not need an `(Optional)` suffix. Immutable
+disabled metadata is not marked required in edit mode. New or changed forms must extend the
+Console UI-convention regression test so this contract cannot silently regress.
 
 ## Architecture rules
 
@@ -698,7 +818,8 @@ user guides, and historical archives.
 ## Out of scope until later phases
 
 ```text
-local/automated backtest engines, autonomous/unattended order execution
+local/automated backtest engines, autonomous/unattended order execution except the
+closed SGOV BUY cash-sweep scheduler
 automated evidence ingestion, general-purpose/autonomous runtime LLM synthesis
 outside enabled composite Monitor judgment and optional Trade Retro narration
 order replacement, options/complex orders, short selling, Schwab API overnight orders

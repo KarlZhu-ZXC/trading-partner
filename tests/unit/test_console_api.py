@@ -7,8 +7,14 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import create_engine
 
 import interfaces.console.api as console_api
+from application.services.review_item_service import ReviewItemService
+from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
+from domain.review_item.models import ReviewItemProjection
+from infrastructure.persistence.metadata import Base
+from infrastructure.persistence.review_item_repository import SqlAlchemyReviewItemRepository
 from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthFlowState,
     SchwabOAuthFlowStatus,
@@ -38,6 +44,199 @@ def test_console_bff_canonicalizes_legacy_subject_transport_fields() -> None:
         }
     }
 
+
+def test_workflow_attention_projects_overdue_agenda_and_open_retro_only() -> None:
+    items = console_api._workflow_attention_items(
+        agenda={
+            "data": {
+                "items": [
+                    {
+                        "agenda_item_id": "agenda_overdue",
+                        "title": "Earnings",
+                        "limitation_codes": ["AGENDA_OUTCOME_UNVERIFIED"],
+                    },
+                    {
+                        "agenda_item_id": "agenda_current",
+                        "title": "Investor day",
+                        "limitation_codes": [],
+                    },
+                ]
+            }
+        },
+        retro={
+            "data": {
+                "runs": [
+                    {
+                        "run_id": "retro_unreviewed",
+                        "findings": [{"code": "MISSING_PLAN"}],
+                        "latest_review": None,
+                    },
+                    {
+                        "run_id": "retro_resolved",
+                        "findings": [],
+                        "latest_review": {"status": "RESOLVED", "action_items": []},
+                    },
+                ]
+            }
+        },
+    )
+
+    assert [item["key"] for item in items] == [
+        "agenda-overdue-agenda_overdue",
+        "retro-review-retro_unreviewed-global",
+    ]
+    assert items[0]["recommended_action"] == "LINK_OUTCOME_OR_REVISE"
+    assert items[1]["source_type"] == "TRADE_RETRO"
+
+
+def test_workflow_attention_projects_each_open_retro_action_as_stable_item() -> None:
+    items = console_api._workflow_attention_items(
+        agenda={},
+        retro={
+            "data": {
+                "runs": [
+                    {
+                        "run_id": "retro_1",
+                        "findings": [],
+                        "latest_review": {
+                            "status": "ACCEPTED",
+                            "action_items": [
+                                "  Record   the next decision before execution.  ",
+                                "Record the next decision before execution.",
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    assert len(items) == 1
+    assert items[0]["key"].startswith("retro-action-retro_1-")
+    assert items[0]["detail"] == "Record the next decision before execution."
+    assert items[0]["recommended_action"] == "COMPLETE_RETRO_ACTION"
+
+
+def test_workflow_attention_scopes_multi_subject_retro_without_key_collision() -> None:
+    items = console_api._workflow_attention_items(
+        agenda={},
+        retro={
+            "data": {
+                "runs": [
+                    {
+                        "run_id": "retro_1",
+                        "subject_ids": ["case_1", "case_2", "case_1"],
+                        "findings": [],
+                        "latest_review": None,
+                    }
+                ]
+            }
+        },
+    )
+
+    assert {item["key"] for item in items} == {
+        "retro-review-retro_1-case_1",
+        "retro-review-retro_1-case_2",
+    }
+    assert {item["subject_id"] for item in items} == {"case_1", "case_2"}
+    assert console_api._authoritative_review_refs(
+        retro={"data": {"runs": [{"run_id": "retro_1"}]}}
+    ) == frozenset({(ReviewItemSourceType.TRADE_RETRO, "retro_1")})
+
+
+def test_operational_attention_never_presents_unknown_actions_as_retryable() -> None:
+    items = console_api._operational_attention_items(
+        agent_actions=(
+            SimpleNamespace(
+                action_id="agent_action_1",
+                status=SimpleNamespace(value="UNKNOWN"),
+                capability="watchlist_manage",
+                operation="add",
+            ),
+        ),
+        broker_intents=(
+            SimpleNamespace(
+                order_intent_id="order_intent_1",
+                status="CANCEL_REQUESTED",
+                symbol="AAPL",
+                instrument_id="equity:US:AAPL",
+                provider_status="CANCEL_REQUEST_ACCEPTED",
+            ),
+        ),
+    )
+
+    assert [item["key"] for item in items] == [
+        "agent-unresolved-agent_action_1",
+        "broker-unresolved-order_intent_1",
+    ]
+    assert "will not retry automatically" in items[0]["detail"]
+    assert items[1]["recommended_action"] == "RECONCILE_BROKER_ORDER"
+
+    submitting = console_api._operational_attention_items(
+        broker_intents=(
+            SimpleNamespace(
+                order_intent_id="order_intent_2",
+                status="SUBMITTING",
+                symbol="SGOV",
+                instrument_id="etf:US:SGOV",
+                provider_status=None,
+            ),
+        )
+    )[0]
+    assert submitting["severity"] == "ERROR"
+    assert "do not retry" in submitting["detail"]
+    assert "Cancellation" not in submitting["detail"]
+
+
+def test_scorecard_attention_marks_consecutive_gap_as_persistent() -> None:
+    items = console_api._scorecard_attention_items(
+        {
+            "ok": True,
+            "data": {
+                "runs": [
+                    {
+                        "scorecard_id": "scorecard_2",
+                        "subject_id": "case_1",
+                        "thesis_id": "thesis_1",
+                        "thesis_revision_no": 2,
+                        "generated_at": "2026-08-13T09:00:00+00:00",
+                        "dimensions": [
+                            {
+                                "code": "EVIDENCE_RECENCY",
+                                "status": "NOT_EVALUATED",
+                                "result_code": "NO_EXACT_REVISION_EVIDENCE",
+                                "title": "Evidence recency",
+                                "summary": "No exact-revision evidence is available.",
+                            }
+                        ],
+                    },
+                    {
+                        "scorecard_id": "scorecard_1",
+                        "subject_id": "case_1",
+                        "thesis_id": "thesis_1",
+                        "thesis_revision_no": 1,
+                        "generated_at": "2026-08-12T09:00:00+00:00",
+                        "dimensions": [
+                            {
+                                "code": "EVIDENCE_RECENCY",
+                                "status": "NOT_EVALUATED",
+                                "result_code": "NO_EXACT_REVISION_EVIDENCE",
+                                "title": "Evidence recency",
+                                "summary": "No exact-revision evidence is available.",
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+    )
+
+    assert len(items) == 1
+    assert items[0]["key"] == "scorecard-gap-thesis_1-EVIDENCE_RECENCY"
+    assert items[0]["title"].startswith("Persistent Scorecard gap")
+    assert items[0]["subject_id"] == "case_1"
+    assert items[0]["source_ref"] == "thesis_1"
+    assert items[0]["href"].endswith("#scorecard-scorecard_2")
 
 
 class _Container:
@@ -129,7 +328,20 @@ class _AgendaContainer:
         summary_service: _AgendaSummaryService | None = None,
         now: datetime | None = None,
     ) -> None:
-        self.services = SimpleNamespace()
+        self.services = SimpleNamespace(
+            review_items=SimpleNamespace(
+                reconcile=lambda *_args, **_kwargs: (),
+                list_open=lambda **_kwargs: (),
+                list_recent=lambda **_kwargs: (),
+                metrics=lambda **_kwargs: SimpleNamespace(
+                    model_dump=lambda **_dump_kwargs: {
+                        "total_items": 0,
+                        "open_count": 0,
+                        "acknowledged_count": 0,
+                    }
+                ),
+            )
+        )
         self.operations = SimpleNamespace(
             catalyst_agenda_sync=sync_service,
             catalyst_agenda_notifications=summary_service,
@@ -454,9 +666,7 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
         console_api._lifespan(console_api.app),
         httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
-        response = await client.get(
-            "/api/portfolio?transaction_limit=17&coverage_limit=23"
-        )
+        response = await client.get("/api/portfolio?transaction_limit=17&coverage_limit=23")
 
     assert response.status_code == 200
     payload = response.json()
@@ -485,10 +695,7 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
     monkeypatch: Any,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
-    first_page = [
-        {"case_id": "case_001", "title": "First", "status": "active"}
-        for _ in range(200)
-    ]
+    first_page = [{"case_id": "case_001", "title": "First", "status": "active"} for _ in range(200)]
     first_page[0] = {"case_id": "case_001", "title": "First", "status": "active"}
     second_page = [{"case_id": "case_201", "title": "Archived", "status": "archived"}]
 
@@ -558,7 +765,7 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
         "operation": "state",
         "case_id": "case_001",
         "include_archived_theses": True,
-        "include_watchlist": False,
+        "include_watchlist": True,
     }
     assert state_calls[-1]["request"]["case_id"] == "case_201"
 
@@ -657,6 +864,210 @@ async def test_scorecard_console_reads_subjects_and_history_through_compact_capa
             },
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_decision_workbench_loads_one_subject_and_preserves_partial_failures(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        assert confirmation is None
+        compact_request = arguments["request"]
+        calls.append((tool_name, compact_request))
+        if tool_name == "investment_case_read":
+            return {
+                "ok": True,
+                "data": {
+                    "items": [
+                        {
+                            "case_id": "case_001",
+                            "case_type": "company",
+                            "title": "TTWO",
+                            "status": "ACTIVE",
+                        },
+                        {
+                            "case_id": "case_002",
+                            "case_type": "theme",
+                            "title": "AI infrastructure",
+                            "status": "DRAFT",
+                        },
+                    ]
+                },
+            }
+        if tool_name == "monitor_read":
+            raise RuntimeError("monitor dashboard unavailable")
+        if tool_name == "research_judgment_get" and compact_request["operation"] == "state":
+            return {
+                "ok": True,
+                "data": {
+                    "theses": [{"thesis_id": "thesis_001"}],
+                    "current_trade_plan": {
+                        "plan_id": "plan_001",
+                        "instrument_id": "equity:US:TTWO",
+                    },
+                },
+            }
+        if tool_name == "research_judgment_get":
+            return {"ok": True, "data": {"runs": []}}
+        if tool_name == "research_memory_get":
+            return {"ok": True, "data": {"items": []}}
+        assert tool_name == "portfolio_analyze"
+        return {
+            "ok": True,
+            "data": {
+                "runs": [
+                    {
+                        "run_id": "retro_001",
+                        "subject_ids": ["case_001"],
+                        "findings": [{"plan_id": "plan_001"}],
+                        "latest_review": {
+                            "status": "OPEN",
+                            "action_items": ["Check the next entry against the plan."],
+                        },
+                    }
+                ]
+            },
+        }
+
+    container = _AgendaContainer()
+    reconciled: list[ReviewItemProjection] = []
+    container.services.review_items.reconcile = lambda projections, **_kwargs: reconciled.extend(
+        projections
+    )
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get("/api/decision-workbench")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_subject_id"] == "case_001"
+    assert payload["subjects"][0]["subject"]["subject_id"] == "case_001"
+    assert payload["subjects"][0]["state"]["data"]["theses"][0]["thesis_id"] == "thesis_001"
+    assert payload["subjects"][1]["state"] is None
+    assert payload["monitors"]["ok"] is False
+    assert payload["partial_failures"] == ["monitors"]
+    assert (
+        calls.count(
+            (
+                "research_judgment_get",
+                {
+                    "operation": "state",
+                    "case_id": "case_001",
+                    "include_archived_theses": True,
+                    "include_watchlist": False,
+                },
+            )
+        )
+        == 1
+    )
+    assert (
+        "research_memory_get",
+        {
+            "operation": "agenda",
+            "window_days": 90,
+            "include_history": False,
+            "limit": 100,
+            "offset": 0,
+            "filters": {"case_ids": ["case_001"]},
+        },
+    ) in calls
+    assert all(name != "external_state_sync" for name, _request in calls)
+    assert reconciled
+    assert all(item.subject_id == "case_001" for item in reconciled)
+    assert all(item.href.startswith("/retro#retro-retro_001") for item in reconciled)
+
+
+@pytest.mark.asyncio
+async def test_review_item_console_transition_requires_session_and_expected_version(
+    monkeypatch: Any,
+    tmp_path: Any,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'review-items.db'}")
+    Base.metadata.create_all(engine)
+    container = _AgendaContainer(now=datetime(2026, 8, 13, 9, tzinfo=UTC))
+    container.context.id_generator = SimpleNamespace(new=lambda _prefix: "review_item_1")
+    review_service = ReviewItemService(
+        SqlAlchemyReviewItemRepository(engine),
+        container.context.clock,
+        container.context.id_generator,
+    )
+    container.services.review_items = review_service
+    created = review_service.reconcile(
+        (
+            ReviewItemProjection(
+                source_key="scorecard-gap-thesis_1-EVIDENCE_RECENCY",
+                source_type=ReviewItemSourceType.SCORECARD_GAP,
+                source_ref="scorecard_1",
+                subject_id="case_1",
+                title="Persistent Scorecard gap · Evidence recency",
+                detail="No exact-revision evidence is available.",
+                severity=ReviewItemSeverity.ATTENTION,
+                recommended_action="REVIEW_SCORECARD_GAP",
+                href="/scorecards?subject_id=case_1",
+            ),
+        ),
+        observed_source_types=frozenset({ReviewItemSourceType.SCORECARD_GAP}),
+    )[0]
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    body = {
+        "status": "RESOLVED",
+        "expected_version": created.version,
+        "resolution_note": "Added exact-revision evidence and reran the Scorecard.",
+        "resolution_ref": "scorecard_2",
+        "idempotency_key": "console-review-resolve-1",
+        "authorization_note": "User explicitly resolved this ReviewItem in Console.",
+        "confirmation": "review_item_update",
+    }
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post(
+            f"/api/review-items/{created.review_item_id}/transition", json=body
+        )
+        headers = await _console_headers(client)
+        accepted = await client.post(
+            f"/api/review-items/{created.review_item_id}/transition",
+            json=body,
+            headers=headers,
+        )
+        stale = await client.post(
+            f"/api/review-items/{created.review_item_id}/transition",
+            json={**body, "idempotency_key": "console-review-resolve-stale"},
+            headers=headers,
+        )
+
+    assert denied.status_code == 403
+    assert accepted.status_code == 200
+    assert accepted.json()["item"]["status"] == "RESOLVED"
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "REVIEW_ITEM_VERSION_CONFLICT"
 
 
 @pytest.mark.asyncio

@@ -850,6 +850,25 @@ async def test_adjustment_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_unfinalized_adjusted_bar_is_omitted_with_warning() -> None:
+    body = _success_body(adjcloses=[59.25, 59.75, 60.25, 60.75, None])
+    adapter = _adapter(RecordingTransport(body=body))
+
+    result = await adapter.get_bars(
+        _instrument(),
+        start=date(2026, 7, 13),
+        end=date(2026, 7, 17),
+        interval=USBarInterval.ONE_DAY,
+        adjustment=AdjustmentMethod.SPLIT_AND_DIVIDEND_ADJUSTED,
+        as_of=AS_OF,
+    )
+
+    assert len(result.value.bars) == 4
+    assert result.value.bars[-1].timestamp.date() == date(2026, 7, 16)
+    assert "LATEST_ADJUSTED_BAR_UNAVAILABLE" in result.meta.warnings
+
+
+@pytest.mark.asyncio
 async def test_http_status_and_body_never_leaked() -> None:
     secret = b'{"chart":{"result":null,"error":{"description":"SECRET_TOKEN_XYZ"}}}'
     transport = RecordingTransport(body=secret, status_code=500)

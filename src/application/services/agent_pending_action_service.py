@@ -30,11 +30,17 @@ MAX_ACTION_TTL_SECONDS = 30 * 60
 _ACTION_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
     {
         ("investment_case_manage", "update"),
-        ("research_judgment_propose", "research_state"),
-        ("research_judgment_propose", "thesis_revision"),
+        ("research_judgment_confirm", "candidate"),
+        ("research_memory_append", "agenda_item"),
+        ("research_workflow_run", "trade_retro"),
+        ("research_workflow_run", "judgment_scorecard"),
         ("monitor_manage", "create"),
         ("monitor_manage", "update"),
         ("monitor_manage", "resolve_event"),
+        # Console-only Decision Workbench Review Queue transitions remain
+        # confirmation-gated and never become public MCP operations.
+        ("decision_workbench_review_queue", "acknowledge"),
+        ("decision_workbench_review_queue", "resolve"),
         ("watchlist_manage", "add"),
         ("watchlist_manage", "remove"),
     }
@@ -49,9 +55,7 @@ _TERMINAL = frozenset(
     }
 )
 _SUMMARY_URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-_SUMMARY_SECRET = re.compile(
-    r"(?i)(?:api[_-]?key|authorization|token|secret)\s*[:=]\s*[^\s,;]+"
-)
+_SUMMARY_SECRET = re.compile(r"(?i)(?:api[_-]?key|authorization|token|secret)\s*[:=]\s*[^\s,;]+")
 _CONFIRMATION_HIDDEN_FIELDS = frozenset(
     {
         "authorization_note",
@@ -234,11 +238,7 @@ class AgentPendingActionService:
     ) -> AgentPendingAction | None:
         self._repository.expire_due(now=self._clock.now())
         action = self._repository.get_by_token_sha256(_token_digest(token))
-        if (
-            action is None
-            or action.channel is not channel
-            or action.principal != principal
-        ):
+        if action is None or action.channel is not channel or action.principal != principal:
             return None
         return action
 
@@ -311,6 +311,34 @@ class AgentPendingActionService:
                     "Agent selection candidate action is not allowed",
                     code="AGENT_ACTION_NOT_ALLOWED",
                 )
+        if capability == "research_judgment_confirm" and (
+            normalized.get("reviewed_by") != "user"
+            or normalized.get("submitted_via") != "codex_chat"
+            or not normalized.get("authorization_note")
+        ):
+            raise DataContractError(
+                "Agent candidate decision requires exact current-chat user authorization",
+                code="AGENT_ACTION_NOT_ALLOWED",
+            )
+        if capability == "research_memory_append" and (
+            normalized.get("confirmed_by") != "user" or not normalized.get("authorization_note")
+        ):
+            raise DataContractError(
+                "Agent Agenda action requires exact user authorization",
+                code="AGENT_ACTION_NOT_ALLOWED",
+            )
+        if (
+            capability == "research_workflow_run"
+            and operation == "trade_retro"
+            and normalized.get("action") == "review"
+            and (
+                normalized.get("confirmed_by") != "user" or not normalized.get("authorization_note")
+            )
+        ):
+            raise DataContractError(
+                "Agent Trade Retro review requires exact user authorization",
+                code="AGENT_ACTION_NOT_ALLOWED",
+            )
         # Research Subject update is metadata-only by exact DTO construction;
         # no lifecycle or primary-instrument field is accepted by this variant.
         return normalized
@@ -361,6 +389,36 @@ class AgentPendingActionService:
             now=now,
         )
         return PendingActionProposal(action=presented, confirmation_token=token)
+
+    def reissue_confirmation(
+        self,
+        *,
+        action_id: str,
+        conversation_id: str,
+        channel: AgentChannel,
+        principal: str,
+        expected_version: int,
+    ) -> PendingActionProposal:
+        """Issue a fresh one-time confirmation token for one exact action.
+
+        The repository performs the identity/state/expiry checks and a single
+        compare-and-swap update.  No normalized arguments are accepted from
+        the caller, and no operation gateway is invoked here.
+        """
+
+        if type(expected_version) is not int or expected_version < 1:
+            raise DataContractError("expected_version must be a positive integer")
+        token = secrets.token_urlsafe(32)
+        updated = self._repository.reissue_confirmation_token(
+            action_id,
+            conversation_id=conversation_id,
+            channel=channel,
+            principal=principal,
+            expected_version=expected_version,
+            token_sha256=_token_digest(token),
+            now=self._clock.now(),
+        )
+        return PendingActionProposal(action=updated, confirmation_token=token)
 
     def _identity_transition(
         self,
