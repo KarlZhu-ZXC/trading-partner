@@ -37,6 +37,26 @@ export function ErrorNote({ children, role }: { children: ReactNode; role?: stri
   return <div className="inline-error" role={role}>{children}</div>;
 }
 
+/** Shared action row that preserves each owning form's layout class. */
+export function FormActions({ children, className = "form-actions" }: { children: ReactNode; className?: string }) {
+  return <div className={className}>{children}</div>;
+}
+
+/** Reusable label/value/supporting-copy shape for summary and metric grids. */
+export function MetricTile({
+  label,
+  value,
+  detail,
+  valueClassName,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  detail?: ReactNode;
+  valueClassName?: string;
+}) {
+  return <div><span>{label}</span><strong className={valueClassName}>{value}</strong>{detail != null && <small>{detail}</small>}</div>;
+}
+
 type DialogProps = {
   open: boolean;
   title: string;

@@ -13,6 +13,7 @@ import {
   DescriptionList,
   ErrorNote,
   Empty,
+  FormActions,
   FormField,
   HorizontalTabs,
   TextInputDialog,
@@ -254,7 +255,7 @@ function SubjectEditor({
         <Field label="Linked Research Subject IDs"><textarea value={draft.linkedSubjectIds} onChange={(event) => onChange({ ...draft, linkedSubjectIds: event.target.value })} rows={2} placeholder="One case_<uuid7> per line" /></Field>
       </div>
       <ErrorNote role="alert">{error}</ErrorNote>
-      <div className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>{editing ? "Save Research Subject" : "Create Research Subject"}</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></div>
+      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>{editing ? "Save Research Subject" : "Create Research Subject"}</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></FormActions>
     </Card>
   );
 }
@@ -381,7 +382,7 @@ function ThesisEditor({
         {draft.invalidations.length === 0 ? <p className="muted">No invalidation conditions yet.</p> : draft.invalidations.map((item, index) => <div className="research-array-row" key={`invalidation-${index}`}><Field label="Description"><textarea rows={3} value={item.description} onChange={(event) => updateInvalidation(index, "description", event.target.value)} /></Field><Field label="Observable"><textarea rows={3} value={item.observable} onChange={(event) => updateInvalidation(index, "observable", event.target.value)} /></Field><Field label="Severity"><select value={item.severity} onChange={(event) => updateInvalidation(index, "severity", event.target.value)}>{INVALIDATION_SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field><button className="close-button" type="button" onClick={() => onChange({ ...draft, invalidations: draft.invalidations.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}
       </div>
       <ErrorNote role="alert">{error}</ErrorNote>
-      <div className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>Propose Candidate</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></div>
+      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>Propose Candidate</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></FormActions>
     </section>
   );
 }
