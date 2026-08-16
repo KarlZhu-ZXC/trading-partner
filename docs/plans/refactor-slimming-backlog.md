@@ -406,3 +406,85 @@ Commits: b5df749 (F2), 06da3ef (F1), 45edd73 (F3), 08d15d2 (S6a), 39ba5ed (F8).
 Not unified on purpose: the three divergent `stringList` behaviors, the loose
 decision-workbench/retro coercers, agent-api's typed `asRecord`, and
 `_raise_for_http_status` (S6b contract tests pending).
+
+### Completion status (2026-08-16)
+
+| Item | Result | Frozen-boundary check |
+|---|---|---|
+| S1 | Completed for the proven-equivalent coordinator envelopes; differing technical/endpoint payloads stay separate | Focused coordinator/error tests, Ruff, mypy |
+| S2 | Completed with a bounded top-level `composition_root/`; an isolated-wheel failure found and fixed the missing package manifest entry | Architecture tests plus isolated installed-wheel smoke |
+| S3 | Completed; confirmation appliers moved behind a typed collaborator | 42 focused Research lifecycle tests |
+| S4 | Completed; Agent tool dispatch, validation, pending-action handling, receipts, and usage moved out of the turn orchestrator | 61 Agent tests plus 33 architecture tests |
+| S5 | Completed; notification rendering is separate from Monitor evaluation and phone copy no longer repeats price/weekend/data-basis lines | 40 Monitor/notification tests |
+| S6a | Completed | 311 Provider contract tests in Batch 1 |
+| S6b | Intentionally not extracted: the required cross-vendor status mapping equivalence does not exist, so merging these guards would change typed errors/retryability | Safety gate retained; no unsafe abstraction added |
+| S7 | Completed after package/export/entry-point/docs/runtime checks; only the unused application service and its direct service tests were removed | 21 futures tests plus installed-wheel smoke |
+| S8 | Completed for the strict request/redaction primitives; endpoint-specific failure constructors remain separate where envelopes differ | Console API tests, Ruff, mypy |
+| S9 | Completed because recent ownership-conflict evidence justified it; five explicit domain registration modules now own the moved `_spec` declarations | 27 tools; schema 25,615 bytes and wire 35,719 bytes unchanged; 86 MCP tests |
+| S10 | Completed for the demonstrably isomorphic CLI subset, including the remaining futures sync CLI | CLI lifecycle tests plus installed-wheel smoke |
+| S11 | Completed; reference validation moved without merging the distinct Event and Journal ABIs | 27 focused memory tests |
+| S12 | Completed behind the stable `domain.research.models` re-export façade | 206 relevant and 88 compatibility tests |
+| F1–F2, F8 | Completed in Batch 1 | See Batch 1 receipt |
+| F3 | Completed with `FormField`, `ErrorNote`, `FormActions`, `Paginator`, and `MetricTile`; representative duplicate forms/metric grids now consume them | Console build, typecheck, lint, rendered conventions |
+| F4 | Completed with one `EntityBrowser`; Research and Monitors retain independent detail content | 21 rendered tests; build/typecheck/lint |
+| F5 | Completed; Agenda buckets are computed before pagination by the backend and both pages format the same projection | 20 focused Agenda/API/Console tests |
+| F6 | Completed; 27 native dialogs reduced to zero without removing lifecycle, due-evaluation, OAuth, resolution-note, or archive gates | 37 Console tests and dialog convention coverage |
+| F7 | Completed; no utility-class dependency existed, explicit preflight-equivalent reset added, both Tailwind packages and 18 transitive packages removed | Production build, 37 Console tests, typecheck/lint, zero npm audit findings |
+| F9 | Completed with shared stream reducer and `useAgentConversation`; Chat and Agent Rail remain independent shells | Production build, 37 Console tests, typecheck/lint |
+| F10 | KEEP decision confirmed; DeepSeek Provider identity and fallback behavior remain intact | No deletion performed |
+| F11 | Completed; Home is summary/deep-link only and Decision Workbench remains the sole Review Queue action owner | Console rendered tests |
+
+### Batch 2 (2026-08-16) — backend boundaries and large service splits
+
+| Measure | Before | After / interpretation |
+|---|---:|---:|
+| Monitor evaluator main module | 1,620 lines | 808 lines; 898-line renderer owns phone presentation, evaluator semantics stay in place |
+| Thesis revision main module | 1,980 lines | 1,115 lines; 863-line typed applier collaborator |
+| Agent runtime main module | 1,974 lines | 1,495 lines; 182-line receipt and 465-line tool collaborators |
+| Research memory write support | 1,260 lines | 450 lines plus 832-line reference-validation module; distinct validators preserved |
+| Research domain façade | 1,394 lines | 60-line façade plus three bounded modules (521/402/523) |
+| Full Python checkpoint | not rerun per item | 2,345 passed; final wall time recorded below |
+
+Commits: e8e0b21/a14e3fc (S1), c91c4a7/166f998 (S2 and wheel closure),
+920ac55 (S3), 3fa5a61 (S4), 6c51bf0 (S5), 6a9fa20 (S8),
+5d89bee/5a25ee8 (S10), 7c8583e (S11), and 10eecdb (S12).
+
+### Batch 3 (2026-08-16) — Console consolidation and canonical projections
+
+| Measure | Before | After / interpretation |
+|---|---:|---:|
+| Native `window.alert/confirm/prompt` calls | 27 | 0; semantic dialogs/inline errors retain required gates |
+| Research page | 949 lines | 917 lines after shared browser extraction |
+| Monitors page | 631 lines | 611 lines after shared browser extraction |
+| Shared Entity Browser | 0 | 216 lines; one filter/page/hash/responsive implementation |
+| Home Review Queue actions | duplicated summary/actions | summary and deep-link only; actions remain in Decision Workbench |
+| Agenda summary rules | 2 frontend variants | 1 backend-canonical projection |
+
+Commits: 59b5c9a (F5), cc00c95 (F4/F6), d4541ed (F11), and
+4df076d (F3 completion).
+
+### Batch 4 (2026-08-16) — optional cleanups and final release checks
+
+| Measure | Before | After |
+|---|---:|---:|
+| Tailwind direct packages | 2 | 0 |
+| Removed Tailwind transitive packages | 0 | 18 |
+| Native/owned CSS | Tailwind preflight + 1,402 owned lines | explicit reset + 1,408 owned lines |
+| Chat shell | 821 lines | 583 lines (-238) |
+| Agent Rail shell | 1,557 lines | 1,322 lines (-235) |
+| Duplicate `StreamSnapshot` / `EMPTY_STREAM` / `handleStreamEvent` definitions | 2 each | 0 each; shared reducer/hook owns one implementation |
+| Compact registration owner | one 2,127-line module | 1,618-line core plus five explicit registration modules |
+| Public MCP surface | 27 tools / 25,615 schema bytes / 35,719 wire bytes | unchanged exactly |
+| Console full test/build | 37 passed | 37 passed in 5.96s including production build |
+| Console dependency audit | 3 transitive findings after dependency removal exposed stale `nanoid` override | 0 after bounded 3.3.18 override update |
+| Python static checks | — | Ruff clean; mypy clean across 666 source files |
+| Python dependency audit | — | 0 findings |
+| Migration round trip | — | upgrade head → downgrade one → upgrade head passed; data-preservation test passed |
+| Isolated wheel smoke | failed: `composition_root` absent from wheel | passed in 33.02s after manifest fix |
+
+Commits: a9e96d9 (S7), d23b7bd (S9), 3b47d88/f29bf62 (F7 and dependency
+audit), 6ad6afc (F9), and 166f998 (wheel closure).
+
+The final Python suite was run once more after the packaging fix: 2,345 passed
+in 46.55s pytest time / 48.50s wall time. No runtime-speed improvement is
+claimed because the baseline did not use the same final command and environment.
