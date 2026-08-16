@@ -50,6 +50,7 @@ from domain.market.models import MarketBar
 from domain.market.session import infer_session_basic
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USQuote
+from infrastructure.providers.common.adapter_guards import require_as_of
 from infrastructure.system.clock import SystemClock
 
 _NY = ZoneInfo("America/New_York")
@@ -320,15 +321,7 @@ class YahooFinanceAdapter:
             )
 
     def _require_as_of(self, as_of: datetime) -> datetime:
-        require_aware_datetime(as_of, field_name="as_of")
-        now = self._clock.now()
-        require_aware_datetime(now, field_name="clock.now")
-        if as_of > now:
-            raise DataContractError(
-                "as_of must not be in the future relative to clock",
-                details={"field": "as_of", "rule": "not_future"},
-            )
-        return now
+        return require_as_of(as_of=as_of, clock_now=self._clock.now())
 
     def _require_chart_instrument(self, instrument: Instrument) -> str:
         """Return the Yahoo chart symbol for a supported instrument.

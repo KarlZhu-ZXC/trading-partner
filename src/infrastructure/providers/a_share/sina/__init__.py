@@ -29,6 +29,7 @@ from infrastructure.providers.a_share.sina.common import (
 from infrastructure.providers.a_share.sina.daily_flow import SinaDailyFlowMixin
 from infrastructure.providers.a_share.sina.financials import SinaFinancialsMixin
 from infrastructure.providers.a_share.sina.options import SinaOptionsMixin
+from infrastructure.providers.common.adapter_guards import require_as_of
 
 
 class SinaAShareAdapter(SinaDailyFlowMixin, SinaFinancialsMixin, SinaOptionsMixin):
@@ -112,15 +113,7 @@ class SinaAShareAdapter(SinaDailyFlowMixin, SinaFinancialsMixin, SinaOptionsMixi
             )
 
     def _require_as_of(self, as_of: datetime) -> datetime:
-        require_aware_datetime(as_of, field_name="as_of")
-        now = self._clock.now()
-        require_aware_datetime(now, field_name="clock.now")
-        if as_of > now:
-            raise DataContractError(
-                "as_of must not be in the future relative to clock",
-                details={"field": "as_of", "rule": "not_future"},
-            )
-        return now
+        return require_as_of(as_of=as_of, clock_now=self._clock.now())
 
     def _raise_for_http_status(self, status_code: int, *, operation: str) -> None:
         self._client.require_success(status_code, operation=operation)

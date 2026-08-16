@@ -47,6 +47,7 @@ from domain.us_research.models import (
     USFundamentalSnapshot,
     USStatementPeriod,
 )
+from infrastructure.providers.common.adapter_guards import require_as_of
 from infrastructure.providers.us.sec_common import (
     COMPANYFACTS_PREFIX,
     JSON_CONTENT_TYPES,
@@ -317,15 +318,7 @@ class SECCompanyFactsAdapter:
             )
 
     def _require_as_of(self, as_of: datetime) -> datetime:
-        require_aware_datetime(as_of, field_name="as_of")
-        now = self._clock.now()
-        require_aware_datetime(now, field_name="clock.now")
-        if as_of > now:
-            raise DataContractError(
-                "as_of must not be in the future relative to clock",
-                details={"field": "as_of", "rule": "not_future"},
-            )
-        return now
+        return require_as_of(as_of=as_of, clock_now=self._clock.now())
 
     def _require_us_equity(self, instrument: Instrument) -> str:
         if not isinstance(instrument, Instrument):
