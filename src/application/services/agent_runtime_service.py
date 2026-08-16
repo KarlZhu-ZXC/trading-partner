@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import inspect
 import json
 import re
@@ -44,9 +43,15 @@ from application.services.agent_pending_action_service import (
     PendingActionProposal,
     pending_action_wire,
 )
+from application.services.agent_runtime_receipts import (
+    aggregate_latency,
+    aggregate_usage,
+    bounded_tool_text,
+    model_receipt_json,
+)
+from application.services.agent_runtime_tools import AgentRuntimeToolHandler
 from domain.agent.enums import AgentMessageRole, AgentTurnStatus
-from domain.agent.models import AgentMessage, AgentTurn, arguments_digest
-from domain.agent.models import AgentToolReceipt as DurableToolReceipt
+from domain.agent.models import AgentMessage, AgentTurn
 from domain.common.errors import (
     DataContractError,
     PersistenceError,
@@ -138,9 +143,7 @@ class AgentTurnLock(Protocol):
 
 
 AgentTurnEventSink = Callable[[AgentTurnEvent], Awaitable[None] | None]
-_SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._-]+\.png$")
 _SAFE_ARTIFACT_URL = re.compile(r"^/api/agent/artifacts/[A-Za-z0-9._-]+\.png$")
-_SAFE_FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,95}$")
 _SAFE_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _AUTO_COMPLEX_PATTERN = re.compile(
     r"(?:thesis|trade\s*plan|plan|portfolio|multi[- ]?asset|monitor|web|search|research|"
@@ -191,32 +194,6 @@ def _ephemeral_context_message(context: EphemeralContext) -> ModelMessage:
             f"<untrusted_ephemeral_context>{encoded}</untrusted_ephemeral_context>"
         ),
     )
-
-
-def _chart_artifact_url(value: object) -> str | None:
-    """Extract only a persisted PNG basename from a compact chart result."""
-
-    if isinstance(value, Mapping):
-        direct_url = value.get("artifact_url")
-        if isinstance(direct_url, str) and _SAFE_ARTIFACT_URL.fullmatch(direct_url):
-            return direct_url
-        artifact = value.get("chart_artifact")
-        if isinstance(artifact, Mapping):
-            raw_path = artifact.get("path")
-            if isinstance(raw_path, str):
-                basename = raw_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-                if _SAFE_ARTIFACT_NAME.fullmatch(basename):
-                    return f"/api/agent/artifacts/{basename}"
-        for item in value.values():
-            found = _chart_artifact_url(item)
-            if found is not None:
-                return found
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            found = _chart_artifact_url(item)
-            if found is not None:
-                return found
-    return None
 
 
 class AgentRuntimeService:
@@ -280,6 +257,14 @@ class AgentRuntimeService:
                     # Descriptor discovery must fail closed if an adapter does
                     # not accept the injected shape.
                     configure(())
+        self._tool_handler = AgentRuntimeToolHandler(
+            gateway=self._gateway,
+            repository=self._repository,
+            clock=self._clock,
+            id_generator=self._id_generator,
+            search_capabilities=self._search_capabilities,
+            pending_action_gateway=self._pending_action_gateway,
+        )
 
     @staticmethod
     def _configured_reasoning_efforts(
@@ -1169,7 +1154,10 @@ class AgentRuntimeService:
                         role="tool",
                         name=call.name,
                         tool_call_id=call.id,
-                        content=self._bounded_tool_text(payload),
+                        content=bounded_tool_text(
+                            payload,
+                            maximum_bytes=self._max_tool_result_bytes,
+                        ),
                     )
                 )
 
@@ -1312,7 +1300,7 @@ class AgentRuntimeService:
                 ),
                 model=final_response.model,
                 request_id=final_response.request_id,
-                model_receipt_json=self._model_receipt_json(
+                model_receipt_json=model_receipt_json(
                     final_response,
                     model_responses,
                     tool_rounds,
@@ -1347,8 +1335,8 @@ class AgentRuntimeService:
             model_provider,
             selected_model,
         )
-        aggregate_usage = self._aggregate_usage(model_responses)
-        aggregate_latency_ms = self._aggregate_latency(model_responses)
+        aggregate_usage_value = aggregate_usage(model_responses)
+        aggregate_latency_ms = aggregate_latency(model_responses)
         aggregate_urls = tuple(
             dict.fromkeys(url for response in model_responses for url in response.web_source_urls)
         )[:20]
@@ -1368,7 +1356,7 @@ class AgentRuntimeService:
             artifact_urls=tuple(artifact_urls),
             evidence_manifest=evidence_manifest,
             capability_search_audits=tuple(capability_search_audits),
-            usage=aggregate_usage,
+            usage=aggregate_usage_value,
             web_search_used=any(item.web_search_used for item in model_responses),
             web_extractor_used=any(item.web_extractor_used for item in model_responses),
             web_source_urls=aggregate_urls,
@@ -1458,124 +1446,7 @@ class AgentRuntimeService:
         tool_name: str,
         decoded: Mapping[str, Any] | None,
     ) -> dict[str, list[str]]:
-        """Return only safe schema field names, never provider exception text."""
-
-        missing: list[str] = []
-        invalid: list[str] = []
-
-        def add_missing(values: object) -> None:
-            if not isinstance(values, (list, tuple)):
-                return
-            for item in values:
-                if (
-                    isinstance(item, str)
-                    and _SAFE_FIELD_NAME.fullmatch(item)
-                    and item not in missing
-                ):
-                    missing.append(item)
-
-        def add_invalid(values: object) -> None:
-            if not isinstance(values, (list, tuple)):
-                return
-            for item in values:
-                if (
-                    isinstance(item, str)
-                    and _SAFE_FIELD_NAME.fullmatch(item)
-                    and item not in invalid
-                ):
-                    invalid.append(item)
-
-        if not isinstance(decoded, Mapping):
-            return {"missing": missing, "invalid": invalid}
-        if tool_name == "tp_capability_search":
-            add_missing([key for key in ("query",) if key not in decoded])
-            add_invalid([key for key in decoded if key not in {"query", "limit", "mode"}])
-            if "query" in decoded and (
-                not isinstance(decoded.get("query"), str) or not str(decoded.get("query")).strip()
-            ):
-                add_invalid(["query"])
-            if "limit" in decoded and (
-                type(decoded.get("limit")) is not int or not 1 <= int(decoded.get("limit", 0)) <= 8
-            ):
-                add_invalid(["limit"])
-            if "mode" in decoded and decoded.get("mode") not in {
-                "read",
-                "propose",
-                "prepare_action",
-            }:
-                add_invalid(["mode"])
-        elif tool_name in {"tp_read", "tp_propose"}:
-            add_missing([key for key in ("capability", "arguments") if key not in decoded])
-            add_invalid(
-                [key for key in decoded if key not in {"capability", "operation", "arguments"}]
-            )
-            capability = decoded.get("capability")
-            operation = decoded.get("operation")
-            arguments = decoded.get("arguments")
-            if not isinstance(capability, str) or not capability.strip():
-                add_invalid(["capability"])
-            if operation is not None and not isinstance(operation, str):
-                add_invalid(["operation"])
-            if not isinstance(arguments, Mapping):
-                add_invalid(["arguments"])
-            descriptor_getter = getattr(self._gateway, "descriptor", None)
-            descriptor = None
-            if callable(descriptor_getter) and isinstance(capability, str):
-                try:
-                    descriptor = descriptor_getter(
-                        capability,
-                        operation if isinstance(operation, str) else None,
-                    )
-                except (LookupError, PermissionError, TypeError, ValueError):
-                    descriptor = None
-            if descriptor is not None and isinstance(arguments, Mapping):
-                try:
-                    schema = descriptor.arguments_schema
-                except (AttributeError, TypeError, ValueError):
-                    schema = {}
-                if isinstance(schema, Mapping):
-                    properties = schema.get("properties")
-                    required = schema.get("required")
-                    if isinstance(required, list):
-                        add_missing([key for key in required if key not in arguments])
-                    if (
-                        isinstance(properties, Mapping)
-                        and schema.get("additionalProperties") is False
-                    ):
-                        add_invalid([key for key in arguments if key not in properties])
-        elif tool_name == "tp_prepare_action":
-            add_missing(
-                [
-                    key
-                    for key in ("capability", "operation", "arguments", "presented_summary")
-                    if key not in decoded
-                ]
-            )
-            add_invalid(
-                [
-                    key
-                    for key in decoded
-                    if key not in {"capability", "operation", "arguments", "presented_summary"}
-                ]
-            )
-            if (
-                not isinstance(decoded.get("capability"), str)
-                or not str(decoded.get("capability", "")).strip()
-            ):
-                add_invalid(["capability"])
-            if (
-                not isinstance(decoded.get("operation"), str)
-                or not str(decoded.get("operation", "")).strip()
-            ):
-                add_invalid(["operation"])
-            if not isinstance(decoded.get("arguments"), Mapping):
-                add_invalid(["arguments"])
-            summary = decoded.get("presented_summary")
-            if not isinstance(summary, str) or not summary.strip() or len(summary) > 2_000:
-                add_invalid(["presented_summary"])
-        missing.sort()
-        invalid.sort()
-        return {"missing": missing, "invalid": invalid}
+        return self._tool_handler.validation_hint(tool_name=tool_name, decoded=decoded)
 
     async def _handle_tool_call(
         self,
@@ -1587,365 +1458,15 @@ class AgentRuntimeService:
         principal: str,
         capability_search_cache: dict[tuple[str, int, str], object] | None = None,
     ) -> tuple[object, AgentToolReceipt | None, tuple[PendingActionProposal, str] | None]:
-        try:
-            decoded = json.loads(call.arguments)
-        except (TypeError, json.JSONDecodeError):
-            return self._tool_error("AGENT_TOOL_ARGUMENTS_INVALID"), None, None
-        if not isinstance(decoded, dict):
-            return self._tool_error("AGENT_TOOL_ARGUMENTS_INVALID"), None, None
-        if call.name == "tp_capability_search":
-            if capability_search_cache is None:
-                capability_search_cache = {}
-            query = decoded.get("query")
-            limit = decoded.get("limit", 8)
-            mode = decoded.get("mode", "read")
-            hints = self._validation_hint(tool_name=call.name, decoded=decoded)
-            if (
-                not isinstance(query, str)
-                or not query.strip()
-                or type(limit) is not int
-                or mode not in {"read", "propose", "prepare_action"}
-            ):
-                return self._tool_error("AGENT_TOOL_SCHEMA_INVALID", **hints), None, None
-            try:
-                bounded_limit = min(max(limit, 1), 8)
-                cache_key = (" ".join(query.casefold().split()), bounded_limit, mode)
-                cached = capability_search_cache.get(cache_key)
-                if cached is not None:
-                    return cached, None, None
-                descriptors = self._search_capabilities(query, bounded_limit, mode)
-            except TradingPartnerError as exc:
-                return self._tool_error(exc.code), None, None
-            except (LookupError, PermissionError, ValueError):
-                return self._tool_error("AGENT_CAPABILITY_SEARCH_FAILED"), None, None
-            payload: dict[str, object] = {
-                "capabilities": [item.as_dict() for item in descriptors]
-            }
-            audit_method = getattr(self._gateway, "search_audit", None)
-            if callable(audit_method):
-                try:
-                    audit = audit_method(query, bounded_limit, mode=mode)
-                except (LookupError, PermissionError, TypeError, ValueError, TradingPartnerError):
-                    audit = None
-                if isinstance(audit, Mapping):
-                    payload["routing_audit"] = dict(audit)
-            capability_search_cache[cache_key] = payload
-            return payload, None, None
-        if call.name == "tp_prepare_action":
-            if self._pending_action_gateway is None:
-                return (
-                    {
-                        "ok": False,
-                        "status": "DISABLED",
-                        "error": {
-                            "code": "AGENT_ACTIONS_DISABLED",
-                            "message": "当前 Agent 动作未配置；动作未写入、未确认、未执行。",
-                        },
-                    },
-                    None,
-                    None,
-                )
-            capability = decoded.get("capability")
-            operation = decoded.get("operation")
-            arguments = decoded.get("arguments")
-            summary = decoded.get("presented_summary", "")
-            if (
-                not isinstance(capability, str)
-                or not isinstance(operation, str)
-                or not isinstance(arguments, Mapping)
-                or not isinstance(summary, str)
-                or len(summary) > 2_000
-            ):
-                return (
-                    self._tool_error(
-                        "AGENT_TOOL_SCHEMA_INVALID",
-                        **self._validation_hint(tool_name=call.name, decoded=decoded),
-                    ),
-                    None,
-                    None,
-                )
-            try:
-                proposal = self._pending_action_gateway.prepare(
-                    conversation_id=conversation_id,
-                    channel=channel,
-                    principal=principal,
-                    capability=capability,
-                    operation=operation,
-                    arguments=arguments,
-                    presented_summary=summary,
-                )
-            except TradingPartnerError as exc:
-                if exc.code == "AGENT_ACTION_SCHEMA_INVALID":
-                    return (
-                        self._tool_error(
-                            exc.code,
-                            **self._validation_hint(tool_name=call.name, decoded=decoded),
-                        ),
-                        None,
-                        None,
-                    )
-                return self._tool_error(exc.code), None, None
-            return (
-                {
-                    "ok": True,
-                    "status": proposal.action.status.value,
-                    "pending_action": pending_action_wire(proposal.action),
-                },
-                None,
-                (proposal, proposal.confirmation_token),
-            )
-        if call.name not in {"tp_read", "tp_propose"}:
-            return self._tool_error("AGENT_TOOL_UNKNOWN"), None, None
-        capability = decoded.get("capability")
-        operation = decoded.get("operation")
-        arguments = decoded.get("arguments")
-        if (
-            not isinstance(capability, str)
-            or (operation is not None and not isinstance(operation, str))
-            or (call.name == "tp_propose" and not isinstance(operation, str))
-            or not isinstance(arguments, Mapping)
-        ):
-            return (
-                self._tool_error(
-                    "AGENT_TOOL_SCHEMA_INVALID",
-                    **self._validation_hint(tool_name=call.name, decoded=decoded),
-                ),
-                None,
-                None,
-            )
-        try:
-            result = (
-                await self._gateway.propose(capability, operation, arguments)
-                if call.name == "tp_propose" and isinstance(operation, str)
-                else await self._gateway.read(capability, operation, arguments)
-            )
-        except TradingPartnerError as exc:
-            return self._tool_error(exc.code), None, None
-        except (LookupError, PermissionError, ValueError):
-            return (
-                self._tool_error(
-                    "AGENT_TOOL_PROPOSE_DENIED"
-                    if call.name == "tp_propose"
-                    else "AGENT_TOOL_READ_DENIED",
-                    **self._validation_hint(tool_name=call.name, decoded=decoded),
-                ),
-                None,
-                None,
-            )
-        except Exception as exc:  # noqa: BLE001 - classify without exposing provider text
-            if exc.__class__.__name__ == "ToolError":
-                return (
-                    self._tool_error(
-                        "AGENT_TOOL_SCHEMA_INVALID",
-                        **self._validation_hint(tool_name=call.name, decoded=decoded),
-                    ),
-                    None,
-                    None,
-                )
-            return self._tool_error(
-                "AGENT_TOOL_PROPOSE_DENIED"
-                if call.name == "tp_propose"
-                else "AGENT_TOOL_READ_DENIED"
-            ), None, None
-        receipt = result.receipt
-        durable = DurableToolReceipt(
-            receipt_id=self._id_generator.new(EntityIdPrefix.AGENT_TOOL_RECEIPT),
+        return await self._tool_handler.handle(
+            call_name=call.name,
+            call_arguments=call.arguments,
             conversation_id=conversation_id,
             message_id=message_id,
-            capability=capability,
-            operation=operation or "__direct__",
-            arguments_sha256=arguments_digest(dict(arguments)),
-            request_id=receipt.request_id or "unavailable",
-            source_codes=receipt.source_codes,
-            warning_codes=receipt.warning_codes,
-            error_codes=(receipt.error_code,) if receipt.error_code else (),
-            created_at=self._clock.now(),
+            channel=channel,
+            principal=principal,
+            capability_search_cache=capability_search_cache,
         )
-        self._repository.append_tool_receipt(durable)
-        read_payload = cast(dict[str, object], result.as_dict())
-        if call.name == "tp_read" and capability == "technical_render_chart":
-            artifact_url = _chart_artifact_url(result.result)
-            if artifact_url is not None:
-                read_payload["artifact_url"] = artifact_url
-        return read_payload, receipt, None
-
-    def _bounded_tool_text(self, value: object) -> str:
-        encoded = json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        if len(encoded.encode("utf-8")) <= self._max_tool_result_bytes:
-            return encoded
-        return json.dumps(
-            {
-                "ok": False,
-                "error": {
-                    "code": "AGENT_TOOL_RESULT_TOO_LARGE",
-                    "message": "工具结果超过 Agent 上下文上限，请缩小查询范围。",
-                },
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-    @staticmethod
-    def _tool_error(
-        code: str,
-        *,
-        missing: list[str] | None = None,
-        invalid: list[str] | None = None,
-    ) -> dict[str, object]:
-        error: dict[str, object] = {"code": code, "message": "工具调用未执行。"}
-        if missing:
-            error["missing"] = sorted(set(missing))[:32]
-        if invalid:
-            error["invalid"] = sorted(set(invalid))[:32]
-        return {"ok": False, "error": error}
-
-    @staticmethod
-    def _model_receipt_json(
-        response: ModelResponse,
-        responses: list[ModelResponse],
-        tool_rounds: int,
-        tool_trace: list[str],
-        *,
-        artifact_urls: list[str] | None = None,
-        selected_provider_id: str | None = None,
-        selected_model: str | None = None,
-        route_reason: str | None = None,
-        fallback_from: str | None = None,
-        fallback_code: str | None = None,
-        api_style: str | None = None,
-        capability_search_audits: list[dict[str, object]] | None = None,
-        evidence_manifest: str | None = None,
-    ) -> str:
-        usage = AgentRuntimeService._aggregate_usage(responses)
-        latency_ms = AgentRuntimeService._aggregate_latency(responses)
-        value = {
-            "model": response.model,
-            "finish_reason": response.finish_reason,
-            "model_calls": len(responses),
-            "tool_rounds": tool_rounds,
-            "usage": asdict(usage) if usage is not None else None,
-            "web_search_used": any(item.web_search_used for item in responses),
-            "web_extractor_used": any(item.web_extractor_used for item in responses),
-            "web_source_urls": list(
-                dict.fromkeys(url for item in responses for url in item.web_source_urls)
-            )[:20],
-            "request_id": response.request_id,
-            "latency_ms": latency_ms,
-            "model_attempts": [
-                {
-                    "model": item.model,
-                    "finish_reason": item.finish_reason,
-                    "request_id": item.request_id,
-                    "latency_ms": item.latency_ms,
-                    "usage": asdict(item.usage) if item.usage is not None else None,
-                }
-                for item in responses[:8]
-            ],
-            "tool_trace": tool_trace[:32],
-            "artifact_urls": list((artifact_urls or [])[:20]),
-            "selected_provider_id": selected_provider_id,
-            "selected_model": selected_model,
-            "route_reason": route_reason,
-            "fallback_from": fallback_from,
-            "fallback_code": fallback_code,
-            "api_style": api_style,
-            "capability_search_audits": (capability_search_audits or [])[:16],
-            "evidence_manifest": (
-                json.loads(evidence_manifest)
-                if isinstance(evidence_manifest, str)
-                else None
-            ),
-        }
-        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) <= 16_384:
-            return encoded
-
-        # AgentMessage bounds the durable receipt as a whole.  Keep the
-        # evidence manifest auditable, but replace an oversized nested
-        # manifest/audit payload with a digest marker instead of allowing a
-        # successful turn to fail during assistant-message persistence.
-        manifest = value.get("evidence_manifest")
-        if manifest is not None:
-            raw_manifest = json.dumps(
-                manifest,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            value["evidence_manifest"] = {
-                "version": "agent_evidence_v1",
-                "truncated": True,
-                "size_bytes": len(raw_manifest),
-                "sha256": hashlib.sha256(raw_manifest).hexdigest(),
-            }
-        def bounded_list(key: str, limit: int) -> list[Any]:
-            raw = value.get(key)
-            return list(raw[:limit]) if isinstance(raw, list) else []
-
-        value["capability_search_audits"] = bounded_list("capability_search_audits", 4)
-        value["model_attempts"] = bounded_list("model_attempts", 2)
-        value["tool_trace"] = bounded_list("tool_trace", 8)
-        value["web_source_urls"] = bounded_list("web_source_urls", 4)
-        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) <= 16_384:
-            return encoded
-
-        # A final compact projection preserves the fields needed for replay,
-        # routing, and evidence status under the hard persistence cap.
-        compact = {
-            key: value.get(key)
-            for key in (
-                "model",
-                "finish_reason",
-                "model_calls",
-                "tool_rounds",
-                "usage",
-                "web_search_used",
-                "web_extractor_used",
-                "request_id",
-                "latency_ms",
-                "selected_provider_id",
-                "selected_model",
-                "route_reason",
-                "fallback_from",
-                "fallback_code",
-                "api_style",
-                "artifact_urls",
-                "evidence_manifest",
-            )
-        }
-        return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-    @staticmethod
-    def _aggregate_usage(responses: list[ModelResponse]) -> ModelUsage | None:
-        usages = [item.usage for item in responses if item.usage is not None]
-        if not usages:
-            return None
-
-        def total(field: str) -> int | None:
-            values = [getattr(item, field) for item in usages]
-            present = [item for item in values if item is not None]
-            return sum(present) if present else None
-
-        return ModelUsage(
-            input_tokens=total("input_tokens"),
-            output_tokens=total("output_tokens"),
-            total_tokens=total("total_tokens"),
-            web_search_calls=total("web_search_calls"),
-            web_extractor_calls=total("web_extractor_calls"),
-        )
-
-    @staticmethod
-    def _aggregate_latency(responses: list[ModelResponse]) -> int | None:
-        values = [item.latency_ms for item in responses if item.latency_ms is not None]
-        return sum(values) if values else None
 
     async def _maybe_refresh_summary(
         self,
