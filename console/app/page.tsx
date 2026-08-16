@@ -7,6 +7,7 @@ import {
   Card,
   DataBoundary,
   Empty,
+  MetricTile,
   RefreshButton,
   formatBytes,
   formatDate,
@@ -86,10 +87,10 @@ export default function OverviewPage() {
       <DataBoundary loading={result.loading} error={result.error}>
         <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<Link href="/agenda">Open /agenda</Link>}>
           <div className="agenda-summary-grid">
-            <div><span>Upcoming 7 Days</span><strong>{String(agendaCounts.upcoming7d)}</strong></div>
-            <div><span>Upcoming</span><strong>{String(agendaCounts.upcoming)}</strong></div>
-            <div><span>Overdue</span><strong>{String(agendaCounts.overdue)}</strong></div>
-            <div><span>Coverage Gap</span><strong>{String(agendaCounts.coverageGap)}</strong></div>
+            <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
+            <MetricTile label="Upcoming" value={String(agendaCounts.upcoming)} />
+            <MetricTile label="Overdue" value={String(agendaCounts.overdue)} />
+            <MetricTile label="Coverage Gap" value={String(agendaCounts.coverageGap)} />
           </div>
         </Card>
 
@@ -143,12 +144,12 @@ export default function OverviewPage() {
           >
             <div className="quality-center-grid">
               <div className="metric-pairs quality-metrics">
-                <div><span>Account Snapshots</span><strong>{qualityAccounts.length}</strong><small>Latest Durable Versions</small></div>
-                <div><span>Activity Coverage</span><strong>{qualityActivity.length}</strong><small>Latest Receipt per Account</small></div>
-                <div><span>Active Monitors</span><strong>{qualityMonitors.length}</strong><small>Latest Runs, Read Only</small></div>
-                <div><span>Monitor Blind Spots</span><strong className={blindMonitorCount ? "text-amber" : ""}>{blindMonitorCount}</strong><small>Not Run / Unevaluated / Incomplete</small></div>
-                <div><span>24h Provider Fallbacks</span><strong className={recentFallbacks ? "text-amber" : ""}>{recentFallbacks}</strong><small>{qualityRoutes.length} market/category pairs</small></div>
-                <div><span>24h Provider Failures</span><strong className={recentRouteFailures ? "text-amber" : ""}>{recentRouteFailures}</strong><small>Secret-Safe Route Receipts</small></div>
+                <MetricTile label="Account Snapshots" value={qualityAccounts.length} detail="Latest Durable Versions" />
+                <MetricTile label="Activity Coverage" value={qualityActivity.length} detail="Latest Receipt per Account" />
+                <MetricTile label="Active Monitors" value={qualityMonitors.length} detail="Latest Runs, Read Only" />
+                <MetricTile label="Monitor Blind Spots" value={blindMonitorCount} valueClassName={blindMonitorCount ? "text-amber" : ""} detail="Not Run / Unevaluated / Incomplete" />
+                <MetricTile label="24h Provider Fallbacks" value={recentFallbacks} valueClassName={recentFallbacks ? "text-amber" : ""} detail={`${qualityRoutes.length} market/category pairs`} />
+                <MetricTile label="24h Provider Failures" value={recentRouteFailures} valueClassName={recentRouteFailures ? "text-amber" : ""} detail="Secret-Safe Route Receipts" />
               </div>
               <div className="quality-issues">
                 <div className="quality-section-heading">
@@ -264,10 +265,10 @@ export default function OverviewPage() {
 
           <Card className="span-5" kicker="OPERATIONS" title="Local Runtime" subtitle="Database, backups, and notification delivery">
             <div className="metric-pairs">
-              <div><span>Database</span><strong>{formatBytes(maintenance?.database_bytes)}</strong><small>{String(maintenance?.database_filename ?? "—")}</small></div>
-              <div><span>Backups</span><strong>{String(maintenance?.backup_files ?? 0)}</strong><small>Latest {formatDate(maintenance?.latest_backup_at)}</small></div>
-              <div><span>Notifications Pending</span><strong>{String(notifications?.pending ?? 0)}</strong><small>{String(notifications?.provider ?? "Not configured")}</small></div>
-              <div><span>Expired Cache</span><strong>{String(maintenance?.provider_cache_expired ?? 0)}</strong><small>Removed only by explicit command</small></div>
+              <MetricTile label="Database" value={formatBytes(maintenance?.database_bytes)} detail={String(maintenance?.database_filename ?? "—")} />
+              <MetricTile label="Backups" value={String(maintenance?.backup_files ?? 0)} detail={<>Latest {formatDate(maintenance?.latest_backup_at)}</>} />
+              <MetricTile label="Notifications Pending" value={String(notifications?.pending ?? 0)} detail={String(notifications?.provider ?? "Not configured")} />
+              <MetricTile label="Expired Cache" value={String(maintenance?.provider_cache_expired ?? 0)} detail="Removed only by explicit command" />
             </div>
           </Card>
         </div>

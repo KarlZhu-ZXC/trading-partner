@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -171,7 +171,7 @@ export default function OperationsPage() {
             <dl className="detail-list"><div><dt>Tables</dt><dd>{tableCounts.length}</dd></div><div><dt>Provider Cache</dt><dd>{String(maintenance?.provider_cache_total ?? 0)}</dd></div><div><dt>Expired</dt><dd>{String(maintenance?.provider_cache_expired ?? 0)}</dd></div></dl>
           </Card>
           <Card className="span-4" kicker="BACKUPS & ARTIFACTS" title="Data Protection">
-            <div className="metric-pairs single"><div><span>SQLite Backups</span><strong>{String(maintenance?.backup_files ?? 0)}</strong><small>Latest {formatDate(maintenance?.latest_backup_at)}</small></div><div><span>Validation Artifacts</span><strong>{String(maintenance?.validation_artifact_files ?? 0)}</strong><small>{formatBytes(maintenance?.validation_artifact_bytes)}</small></div></div>
+            <div className="metric-pairs single"><MetricTile label="SQLite Backups" value={String(maintenance?.backup_files ?? 0)} detail={<>Latest {formatDate(maintenance?.latest_backup_at)}</>} /><MetricTile label="Validation Artifacts" value={String(maintenance?.validation_artifact_files ?? 0)} detail={formatBytes(maintenance?.validation_artifact_bytes)} /></div>
             <code className="command-block">uv run trading-partner-maintenance backup</code>
           </Card>
           <Card className="span-4" kicker="RETENTION" title="Retention Policy">
