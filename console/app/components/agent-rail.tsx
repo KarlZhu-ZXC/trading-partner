@@ -72,6 +72,7 @@ import {
   AgentMessageCard,
   AgentReceiptCard,
 } from "./agent-message-card";
+import { ConfirmationDialog } from "./ui";
 import {
   AGENT_RAIL_DEFAULT_WIDTH,
   AGENT_RAIL_MAX_VIEWPORT_RATIO,
@@ -220,6 +221,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [archiveConfirmation, setArchiveConfirmation] = useState(false);
   const [handoff, setHandoff] = useState<{ token: string; expiresAt: string } | null>(null);
   const [railWidth, setRailWidth] = useState(AGENT_RAIL_DEFAULT_WIDTH);
   const [focusMode, setFocusMode] = useState(false);
@@ -1079,7 +1081,6 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
 
   async function archiveConversation() {
     if (!selectedConversation || actionBusy) return;
-    if (!window.confirm(`Archive “${initialTitle(selectedConversation)}”?\n\nMessages and receipts remain durable and read-only.`)) return;
     setActionBusy("archive");
     setActionError(null);
     try {
@@ -1248,7 +1249,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               <button
                 className="agent-rail-toolbar-button"
                 disabled={!selectedConversation || actionBusy !== null}
-                onClick={() => void archiveConversation()}
+                onClick={() => setArchiveConfirmation(true)}
                 title="Archive This Session"
                 type="button"
               >
@@ -1541,6 +1542,16 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
           <span>Agent</span>
         </button>
       )}
+      <ConfirmationDialog
+        open={archiveConfirmation}
+        title="Archive Agent Conversation"
+        description={`Archive “${selectedConversation ? initialTitle(selectedConversation) : "this conversation"}”? Messages and receipts remain durable and read-only.`}
+        confirmLabel="Archive Conversation"
+        tone="warning"
+        busy={actionBusy === "archive"}
+        onCancel={() => setArchiveConfirmation(false)}
+        onConfirm={() => { setArchiveConfirmation(false); void archiveConversation(); }}
+      />
     </>
   );
 }

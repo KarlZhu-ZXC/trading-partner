@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
+type ConfirmationState = { title: string; description: string; confirmLabel?: string; tone?: "default" | "warning"; onConfirm: () => void };
 
 export default function OperationsPage() {
   const result = useApi<Dict>("/api/operations");
@@ -13,6 +14,7 @@ export default function OperationsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [actionResult, setActionResult] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null);
   const sync = result.data?.post_market_sync as Dict | undefined;
   const oauthFlow = oauthResult.data?.flow as Dict | undefined;
   const oauth = (oauthResult.data?.token_health as Dict | undefined)
@@ -41,8 +43,7 @@ export default function OperationsPage() {
     return () => window.clearInterval(timer);
   }, [oauthFlowState, oauthResult.refresh]);
 
-  async function runAction(action: string, warning?: string) {
-    if (warning && !window.confirm(warning)) return;
+  async function executeAction(action: string) {
     setBusy(action);
     setActionError(null);
     try {
@@ -60,11 +61,21 @@ export default function OperationsPage() {
     }
   }
 
-  async function startSchwabReauthorization(confirmRetryAfterFailure = false) {
-    const warning = confirmRetryAfterFailure
-      ? "Confirm that the previous Schwab authorization tab is closed. A new OAuth state and browser tab will be created. Continue?"
-      : "A new Schwab authorization tab will open and the project will wait up to five minutes for the local callback. Use only the newly opened tab. Continue?";
-    if (!window.confirm(warning)) return;
+  function runAction(action: string, warning?: string) {
+    if (warning) {
+      setConfirmation({
+        title: "Confirm Operation",
+        description: warning,
+        confirmLabel: "Run Operation",
+        tone: action.includes("prune_apply") ? "warning" : "default",
+        onConfirm: () => { setConfirmation(null); void executeAction(action); },
+      });
+      return;
+    }
+    void executeAction(action);
+  }
+
+  async function executeSchwabReauthorization(confirmRetryAfterFailure = false) {
     const action = confirmRetryAfterFailure
       ? "schwab_oauth_renew_confirmed"
       : "schwab_oauth_renew";
@@ -83,6 +94,18 @@ export default function OperationsPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function startSchwabReauthorization(confirmRetryAfterFailure = false) {
+    const warning = confirmRetryAfterFailure
+      ? "Confirm that the previous Schwab authorization tab is closed. A new OAuth state and browser tab will be created. Continue?"
+      : "A new Schwab authorization tab will open and the project will wait up to five minutes for the local callback. Use only the newly opened tab. Continue?";
+    setConfirmation({
+      title: "Confirm Schwab Reauthorization",
+      description: warning,
+      confirmLabel: "Open Authorization",
+      onConfirm: () => { setConfirmation(null); void executeSchwabReauthorization(confirmRetryAfterFailure); },
+    });
   }
 
   const oauthHealthLabel = oauth?.state === "EXPIRING"
@@ -180,6 +203,15 @@ export default function OperationsPage() {
             {quality?.provider_route_window_truncated === true && <p className="card-note text-amber">The durable read limit was reached; this view is not the complete history.</p>}
           </Card>
         </div>
+        <ConfirmationDialog
+          open={confirmation !== null}
+          title={confirmation?.title ?? "Confirm Operation"}
+          description={confirmation?.description}
+          confirmLabel={confirmation?.confirmLabel}
+          tone={confirmation?.tone}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={() => confirmation?.onConfirm()}
+        />
       </DataBoundary>
     </ConsoleShell>
   );

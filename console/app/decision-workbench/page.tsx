@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate, shortId } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, TextInputDialog, formatDate, shortId } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
@@ -11,6 +11,7 @@ import { useAgentPageContext } from "../lib/agent-page-context";
 type Dict = Record<string, unknown>;
 type SubjectAggregate = { subject?: Dict; state?: Dict };
 type NextStep = { key: string; severity: string; title: string; detail: string; href: string; reviewItem?: Dict };
+type ReviewInput = { kind: "resolution" | "due"; item: Dict; status: "ACKNOWLEDGED" | "RESOLVED" };
 
 function asDict(value: unknown): Dict {
   return value && typeof value === "object" ? value as Dict : {};
@@ -67,6 +68,9 @@ export default function DecisionWorkbenchPage() {
   const [requestedSubjectId, setRequestedSubjectId] = useState("");
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewInput, setReviewInput] = useState<ReviewInput | null>(null);
+  const [reviewInputValue, setReviewInputValue] = useState("");
+  const [reviewInputError, setReviewInputError] = useState<string | null>(null);
   const workbenchApi = useApi<Dict>(
     requestedSubjectId
       ? `/api/decision-workbench?subject_id=${encodeURIComponent(requestedSubjectId)}`
@@ -208,17 +212,15 @@ export default function DecisionWorkbenchPage() {
     nextSteps.unshift({ key: "incomplete-context", severity: "UNAVAILABLE", title: "Decision context is incomplete", detail: `Retry before interpreting missing sections: ${partialFailures.join(", ")}.`, href: "#decision-context-status" });
   }
 
-  async function transitionReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") {
+  function openReviewInput(kind: ReviewInput["kind"], item: Dict, status: ReviewInput["status"]) {
+    setReviewInputValue("");
+    setReviewInputError(null);
+    setReviewInput({ kind, item, status });
+  }
+
+  async function persistReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED", resolutionNote?: string, dueAt?: string) {
     const reviewItemId = text(item.review_item_id, "");
     if (!reviewItemId) return;
-    const resolutionNote = status === "RESOLVED" ? window.prompt("What durable fact or completed action closes this item?")?.trim() : undefined;
-    if (status === "RESOLVED" && !resolutionNote) return;
-    const dueDate = status === "ACKNOWLEDGED" && upper(item.status) === "ACKNOWLEDGED" ? window.prompt("Optional due date (YYYY-MM-DD):")?.trim() : undefined;
-    let dueAt: string | undefined;
-    if (dueDate) {
-      dueAt = endOfDayIsoOrNull(dueDate) ?? undefined;
-      if (!dueAt) { setReviewError("Due date must use YYYY-MM-DD."); return; }
-    }
     setReviewBusy(reviewItemId);
     setReviewError(null);
     try {
@@ -237,6 +239,41 @@ export default function DecisionWorkbenchPage() {
     } finally {
       setReviewBusy(null);
     }
+  }
+
+  function transitionReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") {
+    if (status === "RESOLVED") {
+      openReviewInput("resolution", item, status);
+      return;
+    }
+    if (upper(item.status) === "ACKNOWLEDGED") {
+      openReviewInput("due", item, status);
+      return;
+    }
+    void persistReviewItem(item, status);
+  }
+
+  function submitReviewInput(value: string) {
+    if (!reviewInput) return;
+    const normalized = value.trim();
+    if (reviewInput.kind === "resolution") {
+      if (!normalized) {
+        setReviewInputError("Resolution Note is required.");
+        return;
+      }
+      const { item, status } = reviewInput;
+      setReviewInput(null);
+      void persistReviewItem(item, status, normalized);
+      return;
+    }
+    const dueAt = normalized ? endOfDayIsoOrNull(normalized) : undefined;
+    if (normalized && !dueAt) {
+      setReviewInputError("Due Date must use YYYY-MM-DD.");
+      return;
+    }
+    const { item, status } = reviewInput;
+    setReviewInput(null);
+    void persistReviewItem(item, status, undefined, dueAt ?? undefined);
   }
 
   const loading = workbenchApi.loading;
@@ -291,6 +328,23 @@ export default function DecisionWorkbenchPage() {
           </div>
         </>}
         {partialFailures.length ? <div id="decision-context-status" className="inline-error">Incomplete durable context: {partialFailures.join(", ")}. Available sections remain readable; retry before acting on the missing context.</div> : null}
+        <TextInputDialog
+          open={reviewInput !== null}
+          title={reviewInput?.kind === "resolution" ? "Resolve Review Item" : "Update Review Due Date"}
+          description={reviewInput ? `${reviewInput.kind === "resolution" ? "This closes" : "Update the optional due date for"} “${text(reviewInput.item.title, "this review item")}”.` : undefined}
+          label={reviewInput?.kind === "resolution" ? "Resolution Note" : "Due Date"}
+          value={reviewInputValue}
+          onChange={setReviewInputValue}
+          onSubmit={submitReviewInput}
+          onCancel={() => setReviewInput(null)}
+          required={reviewInput?.kind === "resolution"}
+          inputType={reviewInput?.kind === "due" ? "date" : "text"}
+          multiline={reviewInput?.kind === "resolution"}
+          helperText={reviewInput?.kind === "resolution" ? "Record the durable fact or completed action that closes this item." : "Optional. Leave blank to keep the current due date."}
+          error={reviewInputError}
+          confirmLabel={reviewInput?.kind === "resolution" ? "Resolve Item" : "Save Due Date"}
+          tone={reviewInput?.kind === "resolution" ? "warning" : "default"}
+        />
       </div>
     </DataBoundary>
   </ConsoleShell>;

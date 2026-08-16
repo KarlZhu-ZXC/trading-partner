@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
+import { EntityBrowser } from "../components/entity-browser";
+import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { monitorRunPresentation } from "../lib/monitor-runs";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { MonitorEditor } from "./monitor-editor";
 
 type Dict = Record<string, unknown>;
+type ConfirmationState = { title: string; description: string; confirmLabel?: string; tone?: "default" | "warning"; onConfirm: () => void };
 type MonitorPriceObservation = {
   kind: "available" | "unavailable" | "mixed";
   value: unknown;
@@ -19,6 +20,11 @@ type MonitorPriceObservation = {
 };
 
 const MONITOR_STATUSES = ["ALL", "ACTIVE", "PAUSED", "ARCHIVED"] as const;
+const MONITOR_PAGE_SIZE = {
+  initial: 6,
+  getSize: (width: number) => width <= 700 ? 1 : width <= 1050 ? 4 : 6,
+  target: "viewport" as const,
+};
 const MONITOR_MODULES = [
   { id: "overview", label: "Overview" },
   { id: "rules", label: "Rules" },
@@ -324,13 +330,12 @@ export default function MonitorsPage() {
   const [resolutionDraft, setResolutionDraft] = useState<{ eventId: string; action: "ACKNOWLEDGE" | "RESOLVE"; note: string; idempotencyKey: string } | null>(null);
   const [resolvingEvent, setResolvingEvent] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null);
   const [instrumentFilter, setInstrumentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof MONITOR_STATUSES)[number]>("ACTIVE");
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<MonitorModule>("overview");
-  const [monitorPage, setMonitorPage] = useState(0);
-  const [monitorsPerPage, setMonitorsPerPage] = useState(6);
   useAgentPageContext({
     surface: "monitors",
     selected_monitor_id: selectedMonitorId,
@@ -346,12 +351,9 @@ export default function MonitorsPage() {
   });
   const normalizedInstrumentFilter = instrumentFilter.trim().toLocaleLowerCase();
   const filteredItems = items.filter((item) => monitorMatchesInstrument(item, normalizedInstrumentFilter));
-  const monitorPageCount = Math.max(1, Math.ceil(filteredItems.length / monitorsPerPage));
-  const visibleMonitorItems = filteredItems.slice(monitorPage * monitorsPerPage, (monitorPage + 1) * monitorsPerPage);
   const runItems = listOf<Dict>(runs, "runs");
   const eventItems = listOf<Dict>(events, "events");
   const selectedMonitor = dashboardItems.find((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId) ?? null;
-  const selectedIsFilteredOut = selectedMonitor !== null && !filteredItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId);
   const visibleRuns = selectedMonitorId ? runItems.filter((run) => [
     ...listOf<string>(run, "requested_monitor_ids"),
     ...listOf<string>(run, "selected_monitor_ids"),
@@ -375,59 +377,20 @@ export default function MonitorsPage() {
     setEditingMonitor(null);
   }, []);
 
-  useEffect(() => {
-    const updateMonitorsPerPage = () => {
-      if (window.matchMedia("(max-width: 700px)").matches) setMonitorsPerPage(1);
-      else if (window.matchMedia("(max-width: 1050px)").matches) setMonitorsPerPage(4);
-      else setMonitorsPerPage(6);
-    };
-    updateMonitorsPerPage();
-    window.addEventListener("resize", updateMonitorsPerPage);
-    return () => window.removeEventListener("resize", updateMonitorsPerPage);
-  }, []);
-
-  useEffect(() => {
-    if (dashboardItems.length === 0) {
-      setSelectedMonitorId(null);
-      return;
-    }
-    const hashMonitorId = window.location.hash.match(/^#monitor-(.+)$/)?.[1];
-    if (hashMonitorId && dashboardItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === hashMonitorId)) {
-      setSelectedMonitorId(hashMonitorId);
-      return;
-    }
-    if (!selectedMonitorId || !dashboardItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId)) {
-      setSelectedMonitorId(String((((filteredItems[0] ?? dashboardItems[0]).monitor ?? {}) as Dict).monitor_id ?? ""));
-    }
-  }, [dashboardItems, filteredItems, selectedMonitorId]);
-
-  useEffect(() => {
-    const selectedIndex = filteredItems.findIndex((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId);
-    if (selectedIndex >= 0) {
-      setMonitorPage(Math.floor(selectedIndex / monitorsPerPage));
-      return;
-    }
-    setMonitorPage((current) => Math.min(current, monitorPageCount - 1));
-  }, [filteredItems, monitorPageCount, monitorsPerPage, selectedMonitorId]);
 
   function selectMonitor(monitorId: string) {
     setSelectedMonitorId(monitorId);
     setSelectedRunId(null);
     setActiveModule("overview");
     setEditingMonitor(undefined);
-    const url = new URL(window.location.href);
-    url.hash = monitorAnchorId(monitorId);
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }
 
   function clearMonitorFilters() {
     setInstrumentFilter("");
     setStatusFilter("ALL");
-    setMonitorPage(0);
   }
 
-  async function runDue() {
-    if (!window.confirm("Evaluate currently due Monitors? This may create events and send configured notifications.")) return;
+  async function executeRunDue() {
     setRunning(true);
     setRunError(null);
     try {
@@ -444,10 +407,18 @@ export default function MonitorsPage() {
     }
   }
 
-  async function archiveMonitor(monitor: Dict) {
+  function runDue() {
+    setConfirmation({
+      title: "Evaluate Due Monitors",
+      description: "Evaluate currently due Monitors? This may create events and send configured notifications.",
+      confirmLabel: "Evaluate Due Monitors",
+      onConfirm: () => { setConfirmation(null); void executeRunDue(); },
+    });
+  }
+
+  async function executeArchiveMonitor(monitor: Dict) {
     const monitorId = String(monitor.monitor_id ?? "");
-    const name = String(monitor.name ?? "Untitled Monitor");
-    if (!monitorId || !window.confirm(`Archive “${name}”?\n\nAn ARCHIVED version will be appended. Historical versions, runs, and events will not be deleted.`)) return;
+    if (!monitorId) return;
     setArchivingId(monitorId);
     setRunError(null);
     try {
@@ -469,13 +440,25 @@ export default function MonitorsPage() {
     }
   }
 
-  async function changeMonitorStatus(monitor: Dict, status: "ACTIVE" | "PAUSED") {
+  function archiveMonitor(monitor: Dict) {
     const monitorId = String(monitor.monitor_id ?? "");
+    if (!monitorId) return;
     const name = String(monitor.name ?? "Untitled Monitor");
+    setConfirmation({
+      title: "Archive Monitor",
+      description: `Archive “${name}”? An ARCHIVED version will be appended. Historical versions, runs, and events will not be deleted.`,
+      confirmLabel: "Archive Monitor",
+      tone: "warning",
+      onConfirm: () => { setConfirmation(null); void executeArchiveMonitor(monitor); },
+    });
+  }
+
+  async function executeChangeMonitorStatus(monitor: Dict, status: "ACTIVE" | "PAUSED") {
+    const monitorId = String(monitor.monitor_id ?? "");
+    if (!monitorId) return;
     const action = status === "ACTIVE"
       ? String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "restore and activate" : "reactivate"
       : "pause";
-    if (!monitorId || !window.confirm(`Confirm ${action} for “${name}”?\n\nA new ${status} version will be appended and all history will be preserved.`)) return;
     setLifecycleId(monitorId);
     setRunError(null);
     try {
@@ -497,6 +480,22 @@ export default function MonitorsPage() {
     }
   }
 
+  function changeMonitorStatus(monitor: Dict, status: "ACTIVE" | "PAUSED") {
+    const monitorId = String(monitor.monitor_id ?? "");
+    if (!monitorId) return;
+    const name = String(monitor.name ?? "Untitled Monitor");
+    const action = status === "ACTIVE"
+      ? String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "restore and activate" : "reactivate"
+      : "pause";
+    setConfirmation({
+      title: `${action[0].toUpperCase()}${action.slice(1)} Monitor`,
+      description: `Confirm ${action} for “${name}”? A new ${status} version will be appended and all history will be preserved.`,
+      confirmLabel: `${action[0].toUpperCase()}${action.slice(1)}`,
+      tone: status === "PAUSED" ? "warning" : "default",
+      onConfirm: () => { setConfirmation(null); void executeChangeMonitorStatus(monitor, status); },
+    });
+  }
+
   function beginResolution(eventId: string, action: "ACKNOWLEDGE" | "RESOLVE") {
     setResolutionError(null);
     setResolutionDraft({
@@ -507,15 +506,7 @@ export default function MonitorsPage() {
     });
   }
 
-  async function submitResolution() {
-    if (!resolutionDraft) return;
-    const note = resolutionDraft.note.trim();
-    if (!note) {
-      setResolutionError("Enter a resolution note. It will become part of the immutable audit record.");
-      return;
-    }
-    const actionLabel = resolutionDraft.action === "RESOLVE" ? "resolved" : "acknowledged";
-    if (!window.confirm(`Mark this event as ${actionLabel}?`)) return;
+  async function executeResolution(draft: NonNullable<typeof resolutionDraft>, note: string) {
     setResolvingEvent(true);
     setResolutionError(null);
     try {
@@ -524,11 +515,11 @@ export default function MonitorsPage() {
         arguments: {
           request: {
             operation: "resolve_event",
-            event_id: resolutionDraft.eventId,
-            action: resolutionDraft.action,
+            event_id: draft.eventId,
+            action: draft.action,
             note,
             confirmed_by: "user",
-            idempotency_key: resolutionDraft.idempotencyKey,
+            idempotency_key: draft.idempotencyKey,
           },
         },
         confirmation: "monitor_manage",
@@ -541,6 +532,24 @@ export default function MonitorsPage() {
     } finally {
       setResolvingEvent(false);
     }
+  }
+
+  function submitResolution() {
+    if (!resolutionDraft) return;
+    const note = resolutionDraft.note.trim();
+    if (!note) {
+      setResolutionError("Enter a resolution note. It will become part of the immutable audit record.");
+      return;
+    }
+    const actionLabel = resolutionDraft.action === "RESOLVE" ? "resolved" : "acknowledged";
+    const draft = resolutionDraft;
+    setConfirmation({
+      title: `Confirm Event ${actionLabel[0].toUpperCase()}${actionLabel.slice(1)}`,
+      description: `Mark event “${draft.eventId}” as ${actionLabel}? This appends an immutable Monitor event resolution record.`,
+      confirmLabel: `Confirm ${actionLabel[0].toUpperCase()}${actionLabel.slice(1)}`,
+      tone: actionLabel === "resolved" ? "warning" : "default",
+      onConfirm: () => { setConfirmation(null); void executeResolution(draft, note); },
+    });
   }
 
   const selectedDefinition = (selectedMonitor?.monitor ?? {}) as Dict;
@@ -573,18 +582,36 @@ export default function MonitorsPage() {
             title="Monitor Library"
             action={<div className="monitor-library-actions"><span className="monitor-filter-result" aria-live="polite">{filteredItems.length} / {dashboardItems.length}</span></div>}
           >
-            <div className="monitor-filters">
-              <label className="monitor-filter-search"><span>Target Filter</span><span className="monitor-filter-control"><Search aria-hidden="true" /><input type="search" value={instrumentFilter} onChange={(event) => { setInstrumentFilter(event.target.value); setMonitorPage(0); }} placeholder="TTWO, TSLA, equity:US:TTWO" aria-label="Filter Monitors by Target Symbol" /></span></label>
-              <label className="monitor-filter-status"><span>Status</span><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as (typeof MONITOR_STATUSES)[number]); setMonitorPage(0); }} aria-label="Filter by Monitor Status">{MONITOR_STATUSES.map((status) => <option key={status} value={status}>{status === "ALL" ? "All (Including Archived)" : status}</option>)}</select></label>
-              <button className="monitor-filter-clear" type="button" disabled={!instrumentFilter && statusFilter === "ALL"} onClick={clearMonitorFilters}><X aria-hidden="true" /> Clear Filters</button>
-            </div>
-            {selectedIsFilteredOut && <div className="monitor-filter-notice" role="status"><span>The current Monitor is outside this filter.</span><button type="button" onClick={clearMonitorFilters}>Show Current</button></div>}
-            {dashboardItems.length === 0 ? <Empty>No Monitor definitions yet.</Empty> : filteredItems.length === 0 ? <Empty>No Monitors match the current filters.</Empty> : <div className="monitor-browser">
-              <button className="monitor-browser-arrow" type="button" disabled={monitorPage === 0} onClick={() => setMonitorPage((page) => Math.max(0, page - 1))} aria-label="Show Previous Monitors"><ChevronLeft aria-hidden="true" /></button>
-              <div className="monitor-index-list" style={{ "--monitors-per-page": monitorsPerPage } as CSSProperties} role="listbox" aria-label="Filtered Monitors">{visibleMonitorItems.map((item) => { const monitor = (item.monitor ?? {}) as Dict; const monitorId = String(monitor.monitor_id ?? ""); const ruleStates = listOf<Dict>(item, "rule_states"); const triggered = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED").length; const unavailable = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "NOT_EVALUATED").length; return <button type="button" role="option" aria-selected={selectedMonitorId === monitorId} id={`monitor-index-${monitorId}`} className={`monitor-index-item ${selectedMonitorId === monitorId ? "selected" : ""}`} onClick={() => selectMonitor(monitorId)} key={monitorId}><span className="monitor-index-status"><span className={`monitor-status-dot status-${String(monitor.status ?? "unknown").toLowerCase()}`} aria-hidden="true" />{String(monitor.status ?? "UNKNOWN")}</span><strong>{String(monitor.name ?? "Untitled Monitor")}</strong><small>{shortId(monitor.primary_instrument_id)} · {listOf<Dict>(monitor, "rules").length} rules</small><span className="monitor-index-health">{triggered > 0 ? `${triggered} triggered` : unavailable > 0 ? `${unavailable} unavailable` : "All quiet"}</span></button>; })}</div>
-              <button className="monitor-browser-arrow" type="button" disabled={monitorPage >= monitorPageCount - 1} onClick={() => setMonitorPage((page) => Math.min(monitorPageCount - 1, page + 1))} aria-label="Show Next Monitors"><ChevronRight aria-hidden="true" /></button>
-              <span className="monitor-browser-range" aria-label={`Showing Monitors ${monitorPage * monitorsPerPage + 1} through ${Math.min((monitorPage + 1) * monitorsPerPage, filteredItems.length)} of ${filteredItems.length}`}><strong>{monitorPage * monitorsPerPage + 1}–{Math.min((monitorPage + 1) * monitorsPerPage, filteredItems.length)}</strong><span>/ {filteredItems.length}</span></span>
-            </div>}
+            <EntityBrowser
+              items={dashboardItems}
+              filteredItems={filteredItems}
+              selectedId={selectedMonitorId}
+              getId={(item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "")}
+              onSelect={selectMonitor}
+              onClearSelection={() => setSelectedMonitorId(null)}
+              hashToId={(hash) => hash.match(/^#monitor-(.+)$/)?.[1] ?? null}
+              search={{ value: instrumentFilter, onChange: setInstrumentFilter, label: "Target Filter", placeholder: "TTWO, TSLA, equity:US:TTWO", ariaLabel: "Filter Monitors by Target Symbol" }}
+              status={{ value: statusFilter, onChange: (value) => setStatusFilter(value as (typeof MONITOR_STATUSES)[number]), label: "Status", ariaLabel: "Filter by Monitor Status", options: MONITOR_STATUSES.map((value) => ({ value, label: value === "ALL" ? "All (Including Archived)" : value })) }}
+              onClearFilters={clearMonitorFilters}
+              clearDisabled={!instrumentFilter && statusFilter === "ALL"}
+              filteredNotice={<div className="entity-filter-notice" role="status"><span>The current Monitor is outside this filter.</span><button type="button" onClick={clearMonitorFilters}>Show Current</button></div>}
+              emptyMessage={<Empty>No Monitor definitions yet.</Empty>}
+              noMatchesMessage={<Empty>No Monitors match the current filters.</Empty>}
+              listAriaLabel="Filtered Monitors"
+              previousAriaLabel="Show Previous Monitors"
+              nextAriaLabel="Show Next Monitors"
+              rangeAriaLabel={(start, end, total) => `Showing Monitors ${start} through ${end} of ${total}`}
+              responsivePageSize={MONITOR_PAGE_SIZE}
+              hashKey="monitor"
+              renderItem={(item, isSelected, select) => {
+                const monitor = (item.monitor ?? {}) as Dict;
+                const monitorId = String(monitor.monitor_id ?? "");
+                const ruleStates = listOf<Dict>(item, "rule_states");
+                const triggered = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED").length;
+                const unavailable = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "NOT_EVALUATED").length;
+                return <button type="button" role="option" aria-selected={isSelected} id={`monitor-index-${monitorId}`} className={`monitor-index-item ${isSelected ? "selected" : ""}`} onClick={() => select(monitorId)} key={monitorId}><span className="monitor-index-status"><span className={`monitor-status-dot status-${String(monitor.status ?? "unknown").toLowerCase()}`} aria-hidden="true" />{String(monitor.status ?? "UNKNOWN")}</span><strong>{String(monitor.name ?? "Untitled Monitor")}</strong><small>{shortId(monitor.primary_instrument_id)} · {listOf<Dict>(monitor, "rules").length} rules</small><span className="monitor-index-health">{triggered > 0 ? `${triggered} triggered` : unavailable > 0 ? `${unavailable} unavailable` : "All quiet"}</span></button>;
+              }}
+            />
           </Card>
 
           <main className="monitor-detail" aria-live="polite">
@@ -625,6 +652,16 @@ export default function MonitorsPage() {
             </section>}
           </main>
         </div>
+        <ConfirmationDialog
+          open={confirmation !== null}
+          title={confirmation?.title ?? "Confirm Monitor Action"}
+          description={confirmation?.description}
+          confirmLabel={confirmation?.confirmLabel}
+          tone={confirmation?.tone}
+          busy={running || archivingId !== null || lifecycleId !== null || resolvingEvent}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={() => confirmation?.onConfirm()}
+        />
       </DataBoundary>
     </ConsoleShell>
   );
