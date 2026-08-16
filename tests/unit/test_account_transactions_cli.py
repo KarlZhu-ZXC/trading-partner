@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from domain.common.enums import VendorId
+from interfaces.cli import _lifecycle as lifecycle
 from interfaces.cli import account_transactions as cli
 
 
@@ -42,7 +43,7 @@ async def test_cli_uses_et_day_window_and_both_providers(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     container = _Container()
-    monkeypatch.setattr(cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     code = await cli._run(["--date", "2026-07-21"])
 
@@ -63,7 +64,7 @@ async def test_cli_honors_provider_filter(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     container = _Container()
-    monkeypatch.setattr(cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     code = await cli._run(
         ["--date", "2026-07-21", "--provider", "schwab", "--limit", "25"]
@@ -81,7 +82,7 @@ async def test_cli_supports_bounded_backfill_window(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     container = _Container()
-    monkeypatch.setattr(cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     code = await cli._run(
         ["--start-date", "2026-01-01", "--end-date", "2026-07-31"]

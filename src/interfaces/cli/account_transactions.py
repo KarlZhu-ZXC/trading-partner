@@ -9,8 +9,8 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from application.dto.account_transactions import AccountGetTransactionsInput
-from bootstrap import build_default_application
 from domain.common.enums import VendorId
+from interfaces.cli._lifecycle import application_container
 
 _ET = ZoneInfo("America/New_York")
 
@@ -81,21 +81,17 @@ async def _run(argv: list[str] | None = None) -> int:
         VendorId(value)
         for value in (args.provider or (VendorId.SCHWAB.value, VendorId.MOOMOO.value))
     )
-    container = build_default_application()
-    try:
-        result = await container.services.account_transactions.get_transactions(
-            AccountGetTransactionsInput(
-                providers=providers,
-                start=start,
-                end=end,
-                limit=args.limit,
+    async with application_container() as container:
+            result = await container.services.account_transactions.get_transactions(
+                AccountGetTransactionsInput(
+                    providers=providers,
+                    start=start,
+                    end=end,
+                    limit=args.limit,
+                )
             )
-        )
-        print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
-        return 0 if result.ok else 1
-    finally:
-        await container.aclose()
-
+            print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+            return 0 if result.ok else 1
 
 def main() -> None:
     """Run one normalized transaction refresh and durable query."""

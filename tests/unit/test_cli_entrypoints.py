@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from domain.common.errors import ConfigurationError
+from interfaces.cli import _lifecycle as lifecycle
 from interfaces.cli import (
     agent,
     catalyst_sync,
@@ -198,7 +199,7 @@ async def test_catalyst_sync_status_is_durable_and_closes(
 ) -> None:
     operations = SimpleNamespace(catalyst_agenda_sync=SimpleNamespace(latest=lambda: receipt))
     container = _Container(operations)
-    monkeypatch.setattr(catalyst_sync, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     result = await catalyst_sync._run(SimpleNamespace(command="status"))
 
@@ -237,7 +238,7 @@ async def test_catalyst_sync_routes_sync_notifications_and_flush(
         notifications=SimpleNamespace(flush_pending=flush_pending),
     )
     container = _Container(operations)
-    monkeypatch.setattr(catalyst_sync, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
     args = SimpleNamespace(
         command="sync",
         instrument_ids=["equity:US:NVDA"],
@@ -301,7 +302,7 @@ async def test_catalyst_sync_returns_typed_error_without_notification(
         raise ConfigurationError("missing provider")
 
     container = _Container(SimpleNamespace(catalyst_agenda_sync=SimpleNamespace(sync=fail)))
-    monkeypatch.setattr(catalyst_sync, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
     args = SimpleNamespace(
         command="sync",
         instrument_ids=None,
