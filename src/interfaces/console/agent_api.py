@@ -21,7 +21,7 @@ from typing import Any, Literal, NoReturn, cast
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 from application.dto.agent import (
     EPHEMERAL_CONTEXT_EXCERPT_MAX_CHARS,
@@ -51,6 +51,7 @@ from domain.common.errors import TradingPartnerError
 from interfaces.agent.action_gateway import AgentActionGateway
 from interfaces.agent.capability_gateway import AgentCapabilityGateway
 from interfaces.agent.prompts import build_agent_system_prompt
+from interfaces.console._shared import ConsoleRequestModel
 from interfaces.mcp.tools.compact import CompactCapabilityRegistry
 
 AGENT_OWNER_PRINCIPAL = "local-console"
@@ -58,8 +59,8 @@ AGENT_CHANNEL = AgentChannel.CONSOLE
 _SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._-]+\.png$")
 
 
-class _RequestModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RequestModel(ConsoleRequestModel):
+    pass
 
 
 class CreateConversationRequest(_RequestModel):
