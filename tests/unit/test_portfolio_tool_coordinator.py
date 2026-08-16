@@ -58,6 +58,20 @@ def test_positions_mapping_preserves_account_snapshot_context() -> None:
         limit_price=Decimal("115"),
         submitted_at=_NOW,
     )
+    valuation_only_position = AccountPosition(
+        instrument_id="etf:US:SGOV",
+        side=AccountPositionSide.LONG,
+        quantity=Decimal("3"),
+        sellable_quantity=None,
+        average_cost=Decimal("100"),
+        diluted_cost=None,
+        market_price=None,
+        market_price_at=None,
+        market_value=Decimal("301.66"),
+        unrealized_pnl=Decimal("1.66"),
+        realized_pnl=None,
+        currency="USD",
+    )
     snapshot = AccountSnapshot(
         snapshot_id="snapshot-1",
         account_ref="acct-1",
@@ -70,7 +84,7 @@ def test_positions_mapping_preserves_account_snapshot_context() -> None:
         buying_power=Decimal("450"),
         net_assets=Decimal("740"),
         margin_used=Decimal("20"),
-        positions=(position,),
+        positions=(position, valuation_only_position),
         open_orders=(order,),
         degraded=True,
         warning_codes=("SCHWAB_OPEN_ORDERS_NOT_INGESTED",),
@@ -100,3 +114,10 @@ def test_positions_mapping_preserves_account_snapshot_context() -> None:
     assert account.open_orders[0].provider_order_id == "order-1"
     assert account.degraded is True
     assert account.warning_codes == ("SCHWAB_OPEN_ORDERS_NOT_INGESTED",)
+    assert account.positions[0].snapshot_price == Decimal("120")
+    assert account.positions[0].snapshot_price_basis == "BROKER_REPORTED_PRICE"
+    assert account.positions[1].market_price is None
+    assert account.positions[1].market_price_at is None
+    assert account.positions[1].snapshot_price == Decimal("100.5533")
+    assert account.positions[1].snapshot_price_basis == "BROKER_VALUATION_ONLY"
+    assert account.positions[1].model_dump(mode="json")["snapshot_price"] == "100.5533"

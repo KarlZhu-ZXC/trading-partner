@@ -231,6 +231,7 @@ export function buildConsoleNotices({
   monitorItems,
   runs,
   researchAttention,
+  workflowAttention = [],
   notifications,
   qualityIssues,
   qualityAccounts,
@@ -245,14 +246,22 @@ export function buildConsoleNotices({
   qualityRoutes: Dict[];
   researchAttention: Dict[];
   runs: Dict[];
+  workflowAttention?: Dict[];
 }): ConsoleNoticeGroups {
-  const actionItems: ConsoleNotice[] = researchAttention.map((item) => ({
+  const actionItems: ConsoleNotice[] = workflowAttention.map((item) => ({
+    key: String(item.key ?? `workflow-${String(item.source_ref ?? "unknown")}`),
+    severity: String(item.severity ?? "ATTENTION").toUpperCase(),
+    title: String(item.title ?? "Workflow review required"),
+    detail: String(item.detail ?? "Inspect the linked durable workflow state"),
+    href: String(item.href ?? "/"),
+  }));
+  actionItems.push(...researchAttention.map((item) => ({
     key: `research-${String(item.subject_id)}`,
     severity: "ATTENTION",
     title: `${String(item.title ?? "Research Subject")} · ${String(item.pending_count)} candidates awaiting review`,
     detail: "Confirm, reject, or withdraw the proposed changes",
     href: `/research#subject-${String(item.subject_id)}`,
-  }));
+  })));
   const automaticItems: ConsoleNotice[] = [];
 
   const activeLatestRunByMonitor = new Map<string, string>();

@@ -8,11 +8,13 @@ messages to the configured wire protocol and back again.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 type ModelRole = Literal["system", "user", "assistant", "tool"]
+type ModelReasoningEffort = Literal["low", "medium", "high", "max"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +139,41 @@ class ModelResponse:
         return self.text
 
 
+@dataclass(frozen=True, slots=True)
+class ModelStreamChunk:
+    """One normalized increment from an optional provider streaming port."""
+
+    text_delta: str = ""
+    tool_calls: tuple[ModelToolCall, ...] = ()
+    usage: ModelUsage | None = None
+    model: str | None = None
+    finish_reason: str | None = None
+    web_search_used: bool = False
+    web_extractor_used: bool = False
+    web_source_urls: tuple[str, ...] = ()
+    request_id: str | None = None
+    latency_ms: int | None = None
+    done: bool = False
+    final_response: ModelResponse | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCatalogItem:
+    """One secret-safe model advertised by a configured Provider."""
+
+    id: str
+    reasoning_efforts: tuple[ModelReasoningEffort, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCatalog:
+    """Bounded model directory fetched server-side with Provider credentials."""
+
+    models: tuple[ModelCatalogItem, ...]
+    fetched_at: datetime
+    cached: bool = False
+
+
 # Explicit Agent-prefixed aliases make the boundary discoverable without
 # forcing callers to repeat the longer names in every type annotation.
 AgentModelRequest = ModelRequest
@@ -145,6 +182,9 @@ AgentModelMessage = ModelMessage
 AgentModelToolCall = ModelToolCall
 AgentModelTool = ModelTool
 AgentModelUsage = ModelUsage
+AgentModelStreamChunk = ModelStreamChunk
+AgentModelCatalog = ModelCatalog
+AgentModelCatalogItem = ModelCatalogItem
 
 
 class AgentModelProvider(Protocol):
@@ -156,4 +196,20 @@ class AgentModelProvider(Protocol):
 
     async def aclose(self) -> None:
         """Release owned HTTP resources; injected clients may be no-op."""
+        ...
+
+
+class AgentModelCatalogProvider(Protocol):
+    """Optional extension for Providers which expose a model directory."""
+
+    async def list_models(self, *, force_refresh: bool = False) -> ModelCatalog:
+        """Return only normalized model identifiers and supported effort values."""
+        ...
+
+
+class AgentModelStreamProvider(Protocol):
+    """Optional token streaming extension for an Agent model adapter."""
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamChunk]:
+        """Yield normalized deltas; adapters may omit this port entirely."""
         ...

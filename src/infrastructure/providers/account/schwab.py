@@ -139,10 +139,14 @@ class SchwabPyReadClient:
             raise ProviderAuthenticationError("Schwab OAuth client initialization failed") from None
 
     def account_numbers(self) -> object:
-        return self._get("/trader/v1/accounts/accountNumbers")
+        return self._get("/trader/v1/accounts/accountNumbers", operation="account_numbers")
 
     def accounts_with_positions(self) -> object:
-        return self._get("/trader/v1/accounts", params={"fields": "positions"})
+        return self._get(
+            "/trader/v1/accounts",
+            params={"fields": "positions"},
+            operation="account_snapshot",
+        )
 
     def orders(self, account_hash: str, start: datetime, end: datetime) -> object:
         return self._get(
@@ -152,38 +156,67 @@ class SchwabPyReadClient:
                 "toEnteredTime": end.isoformat(),
                 "maxResults": "3000",
             },
+            operation="orders",
         )
 
     def quote(self, symbol: str) -> object:
         return self._get(
             "/marketdata/v1/quotes",
             params={"symbols": symbol, "fields": "quote,reference"},
+            operation="quote",
         )
 
     def transactions(self, account_hash: str, start: datetime, end: datetime) -> object:
         return self._get(
             f"/trader/v1/accounts/{account_hash}/transactions",
             params={"startDate": start.isoformat(), "endDate": end.isoformat()},
+            operation="transactions",
         )
 
-    def _get(self, path: str, *, params: Mapping[str, str] | None = None) -> object:
+    def _get(
+        self,
+        path: str,
+        *,
+        operation: str,
+        params: Mapping[str, str] | None = None,
+    ) -> object:
+        base_details: dict[str, object] = {
+            "vendor": VendorId.SCHWAB.value,
+            "operation": operation,
+        }
         try:
             response = self._client.session.request(
                 "GET", f"{_BASE_URL}{path}", params=dict(params or {}) or None
             )
         except Exception:
-            raise ProviderUnavailableError("Schwab read request failed") from None
+            raise ProviderUnavailableError(
+                "Schwab read request failed",
+                details={**base_details, "error_type": "transport_failure"},
+            ) from None
         status = int(getattr(response, "status_code", 0))
+        status_details = {
+            **base_details,
+            "error_type": "http_failure",
+            "status_code": status,
+            "status_class": f"{status // 100}xx" if 100 <= status <= 599 else "invalid",
+        }
         if status in {401, 403}:
-            raise ProviderAuthenticationError("Schwab authentication or authorization failed")
+            raise ProviderAuthenticationError(
+                "Schwab authentication or authorization failed", details=status_details
+            )
         if status == 429:
-            raise ProviderRateLimitError("Schwab rate limit exceeded")
+            raise ProviderRateLimitError("Schwab rate limit exceeded", details=status_details)
         if status < 200 or status >= 300:
-            raise ProviderUnavailableError("Schwab read request returned an HTTP failure")
+            raise ProviderUnavailableError(
+                "Schwab read request returned an HTTP failure", details=status_details
+            )
         try:
             return response.json()
         except Exception:
-            raise DataContractError("Schwab response is not valid JSON") from None
+            raise DataContractError(
+                "Schwab response is not valid JSON",
+                details={**base_details, "error_type": "invalid_json"},
+            ) from None
 
 
 class SchwabPyOrderClient:
@@ -758,7 +791,6 @@ class SchwabAccountAdapter:
         snapshots: list[AccountSnapshot] = []
         base_warnings: set[str] = {
             "ACCOUNT_AS_OF_FETCH_TIME",
-            "PRICE_TIME_UNAVAILABLE",
         }
         all_warnings = set(base_warnings)
         for raw in rows:
@@ -789,6 +821,9 @@ class SchwabAccountAdapter:
                     positions.append(self._position(position, instrument_id, long_quantity, False))
                 if short_quantity > 0:
                     positions.append(self._position(position, instrument_id, short_quantity, True))
+            if any(item.market_value is not None for item in positions):
+                warnings.add("BROKER_VALUATION_PRICE_DERIVED")
+                all_warnings.add("BROKER_VALUATION_PRICE_DERIVED")
             balances = _mapping(account.get("currentBalances") or {}, "current balances")
             cash_balance = _decimal(balances.get("cashBalance"))
             if cash_balance is None:

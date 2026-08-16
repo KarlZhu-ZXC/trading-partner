@@ -145,6 +145,20 @@ def build_agent_model_provider(settings: AppSettings) -> AgentModelProvider | No
     )
 
 
+def build_agent_model_providers(settings: AppSettings) -> dict[str, AgentModelProvider]:
+    """Build every configured Console-selectable Agent endpoint."""
+
+    if not settings.agent_enabled and not settings.telegram_agent_enabled:
+        return {}
+    return {
+        model_id: OpenAICompatibleModelProvider(
+            config,
+            proxy_url=settings.provider_proxy_url,
+        )
+        for model_id, config in settings.resolved_agent_llm_configs.items()
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class CompositionOverrides:
     """Deterministic composition-only overrides; never a production mode switch."""
@@ -173,6 +187,7 @@ class RuntimeResources:
     monitor_judgment_fallback_provider: object | None = None
     trade_retro_narrative_provider: object | None = None
     agent_model_provider: AgentModelProvider | None = None
+    agent_model_providers: dict[str, AgentModelProvider] = field(default_factory=dict)
     agent_turn_lock_factory: Callable[[str], ProcessFileLock] | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
@@ -195,6 +210,7 @@ class RuntimeResources:
                 self.monitor_judgment_fallback_provider,
                 self.trade_retro_narrative_provider,
                 self.agent_model_provider,
+                *self.agent_model_providers.values(),
             ):
                 if transport is None or id(transport) in closed:
                     continue

@@ -135,6 +135,11 @@ class IdempotencyConflict(TradingPartnerError):
     default_retryable = False
 
 
+class AgentPreferencesVersionConflict(TradingPartnerError):
+    default_code = "AGENT_PREFERENCES_VERSION_CONFLICT"
+    default_retryable = False
+
+
 class ConfirmerMismatch(TradingPartnerError):
     default_code = "CONFIRMER_MISMATCH"
     default_retryable = False
@@ -224,6 +229,16 @@ class TradeRetroReviewVersionConflict(TradingPartnerError):
 
 class JudgmentScorecardNotFound(TradingPartnerError):
     default_code = "JUDGMENT_SCORECARD_NOT_FOUND"
+    default_retryable = False
+
+
+class ReviewItemNotFound(TradingPartnerError):
+    default_code = "REVIEW_ITEM_NOT_FOUND"
+    default_retryable = False
+
+
+class ReviewItemVersionConflict(TradingPartnerError):
+    default_code = "REVIEW_ITEM_VERSION_CONFLICT"
     default_retryable = False
 
 

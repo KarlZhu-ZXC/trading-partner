@@ -17,6 +17,7 @@ from domain.agent.models import (
     canonical_json,
 )
 from domain.common.errors import DataContractError, IdempotencyConflict, PersistenceError
+from domain.common.time import require_aware_datetime
 from infrastructure.persistence.orm import AgentPendingActionRow
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -286,6 +287,141 @@ class SqlAlchemyAgentPendingActionRepository:
         assert updated is not None
         return updated
 
+    def reissue_confirmation_token(
+        self,
+        action_id: str,
+        *,
+        conversation_id: str,
+        channel: AgentChannel,
+        principal: str,
+        expected_version: int,
+        token_sha256: str,
+        now: datetime,
+    ) -> AgentPendingAction:
+        """Atomically replace the one-time confirmation digest.
+
+        Reissuing a confirmation challenge is deliberately narrower than a
+        normal state transition.  It is only valid for the exact live
+        ``PRESENTED`` action owned by the supplied conversation/channel/
+        principal.  The CAS update touches only the digest, version, and
+        timestamp; arguments, routing, and expiry remain immutable.
+        """
+
+        if _SHA256.fullmatch(token_sha256) is None:
+            raise DataContractError("token_sha256 must be a lowercase SHA-256 digest")
+        if type(expected_version) is not int or expected_version < 1:
+            raise DataContractError("expected_version must be a positive integer")
+        if not isinstance(channel, AgentChannel):
+            raise DataContractError("pending action reissue channel is invalid")
+        timestamp = require_aware_datetime(now, field_name="now")
+
+        current = self.get_pending_action(action_id)
+        if current is None:
+            raise PersistenceError("Agent pending action was not found", retryable=False)
+        if current.conversation_id != conversation_id:
+            raise PersistenceError(
+                "Agent pending action conversation mismatch",
+                details={"action_id": action_id},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_IDENTITY_MISMATCH",
+            )
+        if current.channel is not channel or current.principal != principal:
+            raise PersistenceError(
+                "Agent pending action confirmation identity mismatch",
+                details={"action_id": action_id},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_IDENTITY_MISMATCH",
+            )
+        if current.version != expected_version:
+            raise PersistenceError(
+                "Agent pending action version conflict",
+                details={"action_id": action_id, "expected_version": expected_version},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_VERSION_CONFLICT",
+            )
+        if current.status is not AgentPendingActionStatus.PRESENTED:
+            raise PersistenceError(
+                "Agent pending action cannot reissue confirmation",
+                details={"action_id": action_id, "status": current.status.value},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_STATE_CONFLICT",
+            )
+        if timestamp >= current.expires_at:
+            self._expire_if_current(current, timestamp)
+            raise PersistenceError(
+                "Agent pending action has expired",
+                details={"action_id": action_id},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_EXPIRED",
+            )
+
+        with Session(self._engine) as session:
+            result = session.execute(
+                update(AgentPendingActionRow)
+                .where(
+                    AgentPendingActionRow.action_id == action_id,
+                    AgentPendingActionRow.conversation_id == conversation_id,
+                    AgentPendingActionRow.channel == channel.value,
+                    AgentPendingActionRow.principal == principal,
+                    AgentPendingActionRow.version == expected_version,
+                    AgentPendingActionRow.status == AgentPendingActionStatus.PRESENTED.value,
+                )
+                .values(
+                    token_sha256=token_sha256,
+                    version=expected_version + 1,
+                    updated_at=timestamp.isoformat(),
+                )
+            )
+            cas_succeeded = result.rowcount == 1  # type: ignore[attr-defined]
+            if cas_succeeded:
+                session.commit()
+            else:
+                session.rollback()
+        if not cas_succeeded:
+            latest = self.get_pending_action(action_id)
+            if latest is None:
+                raise PersistenceError("Agent pending action was not found", retryable=False)
+            if latest.conversation_id != conversation_id or (
+                latest.channel is not channel or latest.principal != principal
+            ):
+                raise PersistenceError(
+                    "Agent pending action confirmation identity mismatch",
+                    details={"action_id": action_id},
+                    retryable=False,
+                    code="AGENT_PENDING_ACTION_IDENTITY_MISMATCH",
+                )
+            if latest.version != expected_version:
+                raise PersistenceError(
+                    "Agent pending action version conflict",
+                    details={"action_id": action_id, "expected_version": expected_version},
+                    retryable=False,
+                    code="AGENT_PENDING_ACTION_VERSION_CONFLICT",
+                )
+            if latest.status is not AgentPendingActionStatus.PRESENTED:
+                raise PersistenceError(
+                    "Agent pending action cannot reissue confirmation",
+                    details={"action_id": action_id, "status": latest.status.value},
+                    retryable=False,
+                    code="AGENT_PENDING_ACTION_STATE_CONFLICT",
+                )
+            if latest.expires_at <= timestamp:
+                self._expire_if_current(latest, timestamp)
+                raise PersistenceError(
+                    "Agent pending action has expired",
+                    details={"action_id": action_id},
+                    retryable=False,
+                    code="AGENT_PENDING_ACTION_EXPIRED",
+                )
+            raise PersistenceError(
+                "Agent pending action version conflict",
+                details={"action_id": action_id},
+                retryable=False,
+                code="AGENT_PENDING_ACTION_VERSION_CONFLICT",
+            )
+        updated = self.get_pending_action(action_id)
+        assert updated is not None
+        return updated
+
     def list_pending_actions(
         self,
         conversation_id: str,
@@ -322,6 +458,53 @@ class SqlAlchemyAgentPendingActionRepository:
                 ).limit(bounded_limit)
             )
             return tuple(_pending(row) for row in rows)
+
+    def list_unresolved(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> tuple[AgentPendingAction, ...]:
+        """Return pending actions requiring operator attention without mutation.
+
+        An ``UNKNOWN`` action always remains unresolved.  An ``EXECUTING``
+        action is unresolved only after its durable expiry timestamp has been
+        reached; this read must not call ``expire_due`` or otherwise update the
+        row.  Timestamp filtering and ordering happen in Python so persisted
+        ISO timestamps with different, but valid, offsets retain chronological
+        semantics.
+        """
+        timestamp = require_aware_datetime(now, field_name="now")
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise DataContractError("limit must be an integer in [1,500]")
+        with Session(self._engine) as session:
+            rows = tuple(
+                session.scalars(
+                    select(AgentPendingActionRow).where(
+                        AgentPendingActionRow.status.in_(
+                            (
+                                AgentPendingActionStatus.UNKNOWN.value,
+                                AgentPendingActionStatus.EXECUTING.value,
+                            )
+                        )
+                    )
+                )
+            )
+
+        unresolved = [
+            action
+            for action in (_pending(row) for row in rows)
+            if action.status is AgentPendingActionStatus.UNKNOWN
+            or (
+                action.status is AgentPendingActionStatus.EXECUTING
+                and action.expires_at <= timestamp
+            )
+        ]
+        unresolved.sort(
+            key=lambda action: (action.updated_at, action.created_at, action.action_id),
+            reverse=True,
+        )
+        return tuple(unresolved[:limit])
 
     def _expire_if_current(self, current: AgentPendingAction, timestamp: datetime) -> None:
         with Session(self._engine) as session:

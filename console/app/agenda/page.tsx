@@ -8,7 +8,9 @@ import {
   Card,
   DataBoundary,
   Empty,
+  FieldLabel,
   RefreshButton,
+  RequiredMark,
   formatDate,
   shortId,
 } from "../components/ui";
@@ -708,11 +710,11 @@ export default function CatalystAgendaPage() {
       && !form.event_id.trim()
       && !form.outcome_occurred_at.trim()
     ) {
-      setError("Outcome occurred time is required.");
+      setError("Outcome Occurred time is required.");
       return;
     }
     if (action === "LINK_OUTCOME" && !form.outcome_note.trim()) {
-      setError("Outcome note is required so the transition remains auditable.");
+      setError("Outcome Note is required so the transition remains auditable.");
       return;
     }
     if (action === "CANCEL" && !form.cancellation_reason.trim()) {
@@ -737,8 +739,6 @@ export default function CatalystAgendaPage() {
         }
       }
     }
-    if (!window.confirm(`Confirm Catalyst Agenda ${action.toLowerCase()}?`)) return;
-
     setBusy(action);
     setError(null);
     setMessage(null);
@@ -814,8 +814,6 @@ export default function CatalystAgendaPage() {
       setSyncError("window_days must be between 1 and 180.");
       return;
     }
-    if (!window.confirm("Run Catalyst Agenda provider sync?")) return;
-
     setSyncBusy(true);
     setSyncError(null);
     setSyncMessage(null);
@@ -889,7 +887,7 @@ export default function CatalystAgendaPage() {
   };
 
   return (
-    <ConsoleShell active="agenda" eyebrow="Catalyst schedule and review" title="Catalyst Agenda">
+    <ConsoleShell active="agenda">
       <DataBoundary loading={agendaApi.loading} error={agendaApi.error}>
         <div className="page-actions">
           <RefreshButton onClick={agendaApi.refresh} loading={agendaApi.loading} />
@@ -907,29 +905,30 @@ export default function CatalystAgendaPage() {
         {summaryMessage && <p className="card-note">{summaryMessage}</p>}
         {summaryError && <div className="inline-error">{summaryError}</div>}
         {summaryPreview !== null && (
-          <Card className="span-12" kicker="AGENDA DAILY SUMMARY" title="Daily summary preview">
+          <Card className="span-12" kicker="DELIVERY PREVIEW" title="Daily Agenda Summary" subtitle="Read-only mobile notification preview">
             <p className="agenda-note">Read-only preview from <strong>/api/agenda/summary-preview</strong>.</p>
-            <pre className="agenda-summary-preview" aria-label="Daily summary preview">
+            <pre className="agenda-summary-preview" aria-label="Daily Summary Preview">
               {summaryPreview}
             </pre>
           </Card>
         )}
         {summarySendResult !== null && (
-          <Card className="span-12" kicker="AGENDA DAILY SUMMARY" title="Daily summary queue receipt">
-            <pre className="agenda-summary-preview" aria-label="Daily summary queue receipt">
+          <Card className="span-12" kicker="DELIVERY RECEIPT" title="Queued Agenda Summary" subtitle="Durable result of the latest notification request">
+            <pre className="agenda-summary-preview" aria-label="Daily Summary Queue Receipt">
               {summarySendResult}
             </pre>
           </Card>
         )}
 
-        <Card className="span-12" kicker="AGEND A PROVIDER SYNC" title="Provider sync">
+        <Card className="span-12" kicker="PROVIDER REFRESH" title="Calendar Sync" subtitle="Manually refresh external catalyst dates">
           <p className="agenda-note">
             Explicitly sync provider calendars (manual only). This does not refresh accounts or watchlists.
           </p>
           <div className="agenda-sync-grid">
             <label>
-              <span>Window days</span>
+              <FieldLabel required>Window Days</FieldLabel>
               <input
+                required
                 type="number"
                 min={1}
                 max={180}
@@ -940,7 +939,7 @@ export default function CatalystAgendaPage() {
               />
             </label>
             <label>
-              <span>Instrument IDs (comma/new-line separated)</span>
+              <span>Instrument IDs (Comma/New-Line Separated)</span>
               <textarea
                 rows={2}
                 value={syncPayload.instrumentIds}
@@ -950,7 +949,7 @@ export default function CatalystAgendaPage() {
               />
             </label>
             <label>
-              <span>FRED release IDs (repeatable, comma/new-line separated)</span>
+              <span>FRED Release IDs (Repeatable, Comma/New-Line Separated)</span>
               <textarea
                 rows={2}
                 value={syncPayload.fredReleaseIds}
@@ -968,7 +967,7 @@ export default function CatalystAgendaPage() {
           {syncError && <div className="inline-error">{syncError}</div>}
           {lastSync ? (
             <div className="agenda-sync-receipt">
-              <h3>Last sync receipt</h3>
+              <h3>Last Sync Receipt</h3>
               <div className="agenda-sync-receipt-grid">
                 <div><span>Run</span><strong>{text(lastSync.receipt_id)}</strong></div>
                 <div><span>Status</span><strong>{text(lastSync.status)}</strong></div>
@@ -976,12 +975,12 @@ export default function CatalystAgendaPage() {
                 <div><span>Revised</span><strong>{String(lastSync.revised_count)}</strong></div>
                 <div><span>Unchanged</span><strong>{String(lastSync.unchanged_count)}</strong></div>
                 <div><span>Appended</span><strong>{String(lastSync.appended_count)}</strong></div>
-                <div><span>Date drift</span><strong>{String(lastSync.date_drift_count)}</strong></div>
+                <div><span>Date Drift</span><strong>{String(lastSync.date_drift_count)}</strong></div>
                 <div><span>Failures</span><strong>{String(lastSync.failed_scope_count)}</strong></div>
               </div>
               {syncProviderFailures(lastSync).length > 0 && (
                 <p>
-                  <strong>Provider failures</strong>
+                  <strong>Provider Failures</strong>
                   {" "}
                   <span>{syncProviderFailures(lastSync).join(" ; ")}</span>
                 </p>
@@ -997,20 +996,20 @@ export default function CatalystAgendaPage() {
           ) : null}
         </Card>
 
-        <Card className="span-12" kicker="AGENDA PULSE" title="Next 7D / upcoming / overdue / coverage gap">
+        <Card className="span-12" kicker="SCHEDULE HEALTH" title="Catalyst Pulse" subtitle="Upcoming events, overdue items, and coverage gaps">
           <div className="agenda-summary-grid">
             <div><span>Upcoming 7D</span><strong>{String(summary.upcoming7d)}</strong></div>
             <div><span>Upcoming</span><strong>{String(summary.upcoming)}</strong></div>
             <div><span>Overdue</span><strong>{String(summary.overdue)}</strong></div>
-            <div><span>Coverage gap</span><strong>{String(summary.coverageGap)}</strong></div>
+            <div><span>Coverage Gap</span><strong>{String(summary.coverageGap)}</strong></div>
           </div>
           <div className="agenda-summary-nav">
             <p>Use full manager below: scope/kind/status filters, editable Draft/Revise/Cancel, and version history per durable item.</p>
-            <Link className="text-link" href="#agenda-detail">Jump to manager →</Link>
+            <Link className="text-link" href="#agenda-detail">Jump to Manager →</Link>
           </div>
         </Card>
 
-        <Card id="agenda-detail" className="span-12" kicker="DETERMINISTIC EDITING GUARD" title="Agenda manager">
+        <Card id="agenda-detail" className="span-12" kicker="APPEND-ONLY EDITING" title="Agenda Manager" subtitle="Create, revise, cancel, and close durable catalyst items">
           <p className="agenda-note">
             Mutations are routed through <strong>research_memory_append</strong> and the Agenda operation contract.
             Every action creates an append-only version. Only an explicitly confirmed LINK_OUTCOME may move an UPCOMING item to OCCURRED after its durable Event, Report, or Evidence passes ownership and visibility checks.
@@ -1018,7 +1017,7 @@ export default function CatalystAgendaPage() {
 
           <div className="agenda-toolbar">
             <label>
-              <span>Time bucket</span>
+              <span>Time Bucket</span>
               <select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value as (typeof TIME_FILTERS)[number])}>
                 {TIME_FILTERS.map((item) => <option key={item}>{item}</option>)}
               </select>
@@ -1048,39 +1047,41 @@ export default function CatalystAgendaPage() {
           {formVisible ? (
             <section className="agenda-editor">
             <h3>
-                {action === "CREATE" ? "Create Catalyst Agenda item" : action === "REVISE" ? "Revise Catalyst Agenda item" : action === "LINK_OUTCOME" ? (form.outcome_occurred_at ? "Revise Agenda outcome" : "Link Agenda outcome") : "Cancel Catalyst Agenda item"}
+                {action === "CREATE" ? "Create Catalyst Agenda Item" : action === "REVISE" ? "Revise Catalyst Agenda Item" : action === "LINK_OUTCOME" ? (form.outcome_occurred_at ? "Revise Agenda Outcome" : "Link Agenda Outcome") : "Cancel Catalyst Agenda Item"}
               </h3>
               <div className="agenda-editor-grid">
                 {action === "CREATE" || action === "REVISE" ? (
                   <>
                     <label>
-                      <span>Title</span>
+                      <FieldLabel required={action === "CREATE"}>Title</FieldLabel>
                       <input
+                        required={action === "CREATE"}
                         value={form.title}
                         onChange={(event) => setForm((value) => ({ ...value, title: event.target.value }))}
                         placeholder="e.g., TTWO guidance call"
                       />
                     </label>
                     <label>
-                      <span>Kind</span>
-                      <select value={form.kind} onChange={(event) => setForm((value) => ({ ...value, kind: event.target.value }))}>
+                      <FieldLabel required>Kind</FieldLabel>
+                      <select required value={form.kind} onChange={(event) => setForm((value) => ({ ...value, kind: event.target.value }))}>
                         {KIND_OPTIONS.map((item) => <option key={item}>{item}</option>)}
                       </select>
                     </label>
                     <label>
-                      <span>Date certainty</span>
-                      <select value={form.date_certainty} onChange={(event) => setForm((value) => ({ ...value, date_certainty: event.target.value }))}>
+                      <FieldLabel required>Date Certainty</FieldLabel>
+                      <select required value={form.date_certainty} onChange={(event) => setForm((value) => ({ ...value, date_certainty: event.target.value }))}>
                         {DATE_CERTAINTY_OPTIONS.map((item) => <option key={item}>{item}</option>)}
                       </select>
                     </label>
                     <label>
-                      <span>Timezone</span>
-                      <select value={form.timezone} onChange={(event) => setForm((value) => ({ ...value, timezone: event.target.value }))}>
+                      <FieldLabel required>Timezone</FieldLabel>
+                      <select required value={form.timezone} onChange={(event) => setForm((value) => ({ ...value, timezone: event.target.value }))}>
                         {TIMEZONE_OPTIONS.map((item) => <option key={item}>{item}</option>)}
                       </select>
                     </label>
+                    {!(["MACRO_RELEASE", "POLICY"].includes(form.kind)) && <p className="agenda-field-requirement"><RequiredMark />Research Subject ID or Instrument ID</p>}
                     <label>
-                      <span>Fiscal period</span>
+                      <span>Fiscal Period</span>
                       <input value={form.fiscal_period} onChange={(event) => setForm((value) => ({ ...value, fiscal_period: event.target.value }))} />
                     </label>
                     <label>
@@ -1101,8 +1102,9 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Window start</span>
+                      <FieldLabel required={form.date_certainty !== "UNKNOWN"}>Window Start</FieldLabel>
                       <input
+                        required={form.date_certainty !== "UNKNOWN"}
                         type="datetime-local"
                         value={form.window_start}
                         onChange={(event) => setForm((value) => ({ ...value, window_start: event.target.value }))}
@@ -1110,8 +1112,9 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Window end</span>
+                      <FieldLabel required={form.date_certainty !== "UNKNOWN"}>Window End</FieldLabel>
                       <input
+                        required={form.date_certainty !== "UNKNOWN"}
                         type="datetime-local"
                         value={form.window_end}
                         onChange={(event) => setForm((value) => ({ ...value, window_end: event.target.value }))}
@@ -1119,18 +1122,18 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Source reference</span>
+                      <span>Source Reference</span>
                       <input
                         value={form.source_reference}
                         onChange={(event) => setForm((value) => ({ ...value, source_reference: event.target.value }))}
                       />
                     </label>
                     <label className="agenda-textarea-field">
-                      <span>Expected question</span>
+                      <span>Expected Question</span>
                       <textarea rows={2} value={form.expected_question} onChange={(event) => setForm((value) => ({ ...value, expected_question: event.target.value }))} />
                     </label>
                     <label className="agenda-textarea-field">
-                      <span>Revision note</span>
+                      <span>Revision Note</span>
                       <textarea rows={2} value={form.revision_note} onChange={(event) => setForm((value) => ({ ...value, revision_note: event.target.value }))} />
                     </label>
                     <label>
@@ -1144,16 +1147,17 @@ export default function CatalystAgendaPage() {
                   </>
                 ) : action === "LINK_OUTCOME" ? (
                   <>
+                    <p className="agenda-field-requirement"><RequiredMark />One Durable Research Fact</p>
                     <label>
-                      <span>Agenda item ID</span>
+                      <span>Agenda Item ID</span>
                       <input value={form.agenda_item_id} disabled />
                     </label>
                     <label>
-                      <span>Expected version</span>
+                      <span>Expected Version</span>
                       <input value={form.expected_version} disabled />
                     </label>
                     <label className="agenda-textarea-field">
-                      <span>Choose durable research fact</span>
+                      <span>Choose Durable Research Fact</span>
                       <select
                         defaultValue=""
                         onChange={(event) => applyOutcomeCandidate(event.target.value)}
@@ -1175,7 +1179,7 @@ export default function CatalystAgendaPage() {
                       {candidateApi.error ? <small>Candidate lookup unavailable: {candidateApi.error}</small> : null}
                     </label>
                     <label>
-                      <span>Linked event ID</span>
+                      <span>Linked Event ID</span>
                       <input
                         value={form.event_id}
                         onChange={(event) => setForm((value) => ({ ...value, event_id: event.target.value }))}
@@ -1183,7 +1187,7 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Linked report ID</span>
+                      <span>Linked Report ID</span>
                       <input
                         value={form.report_id}
                         onChange={(event) => setForm((value) => ({ ...value, report_id: event.target.value }))}
@@ -1191,7 +1195,7 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Linked evidence ID</span>
+                      <span>Linked Evidence ID</span>
                       <input
                         value={form.evidence_id}
                         onChange={(event) => setForm((value) => ({ ...value, evidence_id: event.target.value }))}
@@ -1199,16 +1203,16 @@ export default function CatalystAgendaPage() {
                       />
                     </label>
                     <label>
-                      <span>Outcome occurred at</span>
+                      <FieldLabel required={!form.event_id.trim()}>Outcome Occurred At</FieldLabel>
                       <input
                         type="datetime-local"
                         value={form.outcome_occurred_at}
                         onChange={(event) => setForm((value) => ({ ...value, outcome_occurred_at: event.target.value }))}
-                        required
+                        required={!form.event_id.trim()}
                       />
                     </label>
                     <label className="agenda-textarea-field">
-                      <span>Outcome note</span>
+                      <FieldLabel required>Outcome Note</FieldLabel>
                       <textarea
                         rows={3}
                         value={form.outcome_note}
@@ -1221,16 +1225,17 @@ export default function CatalystAgendaPage() {
                 ) : (
                   <>
                     <label>
-                      <span>Agenda item ID</span>
+                      <span>Agenda Item ID</span>
                       <input value={form.agenda_item_id} disabled />
                     </label>
                     <label>
-                      <span>Expected version</span>
+                      <span>Expected Version</span>
                       <input value={form.expected_version} disabled />
                     </label>
                     <label className="agenda-textarea-field">
-                      <span>Cancellation reason</span>
+                      <FieldLabel required>Cancellation Reason</FieldLabel>
                       <textarea
+                        required
                         rows={3}
                         value={form.cancellation_reason}
                         onChange={(event) => setForm((value) => ({ ...value, cancellation_reason: event.target.value }))}
@@ -1241,7 +1246,7 @@ export default function CatalystAgendaPage() {
               </div>
               <div className="agenda-editor-actions">
                 <ActionButton busy={busy === action} onClick={() => { void executeAgendaAction(); }}>
-                  {action === "CREATE" ? "Create" : action === "REVISE" ? "Revise" : action === "LINK_OUTCOME" ? (form.outcome_occurred_at ? "Revise outcome" : "Link outcome") : "Cancel"}
+                  {action === "CREATE" ? "Create" : action === "REVISE" ? "Revise" : action === "LINK_OUTCOME" ? (form.outcome_occurred_at ? "Revise Outcome" : "Link Outcome") : "Cancel"}
                 </ActionButton>
                 <ActionButton tone="warning" onClick={() => setFormVisible(false)}>Dismiss</ActionButton>
               </div>
@@ -1285,7 +1290,7 @@ export default function CatalystAgendaPage() {
                 const versions = historyById[group.agenda_item_id] ?? group.versions;
 
                 return (
-                  <article className="agenda-item" key={group.agenda_item_id}>
+                  <article id={`agenda-${group.agenda_item_id}`} className="agenda-item" key={group.agenda_item_id}>
                     <div className="agenda-item-header">
                       <div>
                         <strong>{text(latest.title, "Untitled Agenda Item")}</strong>
@@ -1304,7 +1309,7 @@ export default function CatalystAgendaPage() {
                       <div><span>Subject / Instrument</span><strong>{shortId(latest.subject_id)} / {shortId(latest.instrument_id)}</strong></div>
                       <div><span>Window / Certainty</span><strong>{windowText}</strong><small>{text(latest.date_certainty, "UNKNOWN")}</small></div>
                       <div><span>Scope</span><strong>{scope}</strong></div>
-                      <div><span>Expected question</span><strong>{text(latest.expected_question, "—")}</strong></div>
+                      <div><span>Expected Question</span><strong>{text(latest.expected_question, "—")}</strong></div>
                       <div><span>Warnings</span><strong>{warnings.length > 0 ? warnings.join(", ") : "None"}</strong></div>
                       <div><span>Limitations</span><strong>{limitations.length > 0 ? limitations.join(", ") : "None"}</strong></div>
                       <div><span>Fiscal / Timezone</span><strong>{text(latest.fiscal_period, "—")} / {text(latest.timezone, "UTC")}</strong></div>
@@ -1314,17 +1319,17 @@ export default function CatalystAgendaPage() {
                     <div className="agenda-item-grid">
                       <div><span>Source</span><strong>{sourceText}</strong></div>
                       <div><span>Status</span><strong>{status}</strong></div>
-                      <div><span>Revision note</span><strong>{text(latest.revision_note, "—")}</strong></div>
-                      <div><span>Source reference</span><strong>{text(latest.source_reference, "—")}</strong></div>
+                      <div><span>Revision Note</span><strong>{text(latest.revision_note, "—")}</strong></div>
+                      <div><span>Source Reference</span><strong>{text(latest.source_reference, "—")}</strong></div>
                     </div>
                     {statusIsOccurred ? (
                       <div className="agenda-item-grid">
-                        <div><span>Outcome occurred</span><strong>{formatDate(latest.outcome_occurred_at)}</strong></div>
-                        <div><span>Outcome note</span><strong>{text(latest.outcome_note, "—")}</strong></div>
-                        <div><span>Linked event ID</span><strong>{linkedEventIds.length > 0 ? linkedEventIds.join(", ") : "—"}</strong></div>
-                        <div><span>Linked report ID</span><strong>{linkedReportIds.length > 0 ? linkedReportIds.join(", ") : "—"}</strong></div>
-                        <div><span>Linked evidence ID</span><strong>{linkedEvidenceIds.length > 0 ? linkedEvidenceIds.join(", ") : "—"}</strong></div>
-                        <div><span>Resolved supporting evidence</span><strong>{resolvedEvidenceIds.length > 0 ? resolvedEvidenceIds.join(", ") : "—"}</strong></div>
+                        <div><span>Outcome Occurred</span><strong>{formatDate(latest.outcome_occurred_at)}</strong></div>
+                        <div><span>Outcome Note</span><strong>{text(latest.outcome_note, "—")}</strong></div>
+                        <div><span>Linked Event ID</span><strong>{linkedEventIds.length > 0 ? linkedEventIds.join(", ") : "—"}</strong></div>
+                        <div><span>Linked Report ID</span><strong>{linkedReportIds.length > 0 ? linkedReportIds.join(", ") : "—"}</strong></div>
+                        <div><span>Linked Evidence ID</span><strong>{linkedEvidenceIds.length > 0 ? linkedEvidenceIds.join(", ") : "—"}</strong></div>
+                        <div><span>Resolved Supporting Evidence</span><strong>{resolvedEvidenceIds.length > 0 ? resolvedEvidenceIds.join(", ") : "—"}</strong></div>
                       </div>
                     ) : null}
 
@@ -1348,7 +1353,7 @@ export default function CatalystAgendaPage() {
                     </div>
 
                     <details className="agenda-versions">
-                      <summary>Version history ({Math.max(versions.length - 1, 0)})</summary>
+                      <summary>Version History ({Math.max(versions.length - 1, 0)})</summary>
                       {versions.length <= 1 ? (
                         <p className="agenda-empty">No additional history versions returned.</p>
                       ) : (
@@ -1368,7 +1373,7 @@ export default function CatalystAgendaPage() {
           )}
           <div className="page-actions">
             <ActionButton disabled={agendaOffset === 0} onClick={() => setAgendaOffset(Math.max(0, agendaOffset - 200))}>Previous 200</ActionButton>
-            <small>{agendaTotal || grouped.length} total · page {Math.floor(agendaOffset / 200) + 1}</small>
+            <small>{agendaTotal || grouped.length} Total · Page {Math.floor(agendaOffset / 200) + 1}</small>
             <ActionButton disabled={!agendaHasMore} onClick={() => setAgendaOffset(agendaOffset + 200)}>Next 200</ActionButton>
           </div>
         </Card>

@@ -103,10 +103,11 @@ Instrument 是客观标的身份；研究档案是围绕它建立的主观、可
 不代表看多、看空、开始长期跟踪或确认 Thesis。
 
 例如研究“A股创新药 ETF 选择”时，应创建没有主 Instrument 的 `theme` Research
-Subject，并通过其 Research WatchlistItems 维护规范 Instrument 候选池。候选状态为
-`WATCHING`、`SHORTLISTED`、`SELECTED`、`REJECTED`；选定或淘汰必须记录理由，
-同一研究档案最多一个 `SELECTED`。所有变更仍走 Propose → 用户显式 Confirm。
-最终选择不会改写研究档案身份，只可作为后续 Trade Plan 的执行 `instrument_id`。
+Subject。添加 Instrument 的标准流程是 Propose Instrument → 用户显式 Confirm；
+确认后直接成为该档案的 Instrument，不再要求 Shortlist 或 Select。后续 Trade Plan
+显式选择自己的执行 `instrument_id`，不会改写研究档案身份。历史数据中的
+`WATCHING`、`SHORTLISTED`、`SELECTED`、`REJECTED` 状态仍可读取，但不是用户必须
+完成的步骤。
 
 研究档案标题必须标识稳定的研究对象或研究问题，摘要用于界定研究范围。加仓、减仓、
 止盈、止损、仓位大小和进出场计划不得复制为研究档案元数据：当前投资判断属于

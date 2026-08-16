@@ -50,6 +50,133 @@ async def test_provider_posts_chat_payload_and_decodes_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_uses_catalog_selected_model_in_wire_payload() -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleModelProvider(_config(), client=client)
+    response = await provider.complete(ModelRequest(model="another/model", messages=()))
+
+    assert captured["payload"]["model"] == "another/model"  # type: ignore[index]
+    assert response.model == "another/model"
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_streams_chat_deltas_without_buffering_full_answer() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        body = (
+            'data: {"id":"req_stream","model":"unit-model",'
+            '"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+            'data: {"id":"req_stream","model":"unit-model",'
+            '"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleModelProvider(_config(), client=client)
+    chunks = [chunk async for chunk in provider.stream(ModelRequest())]
+    assert [chunk.text_delta for chunk in chunks[:2]] == ["Hel", "lo"]
+    assert chunks[-1].done is True
+    assert chunks[0].request_id == "req_stream"
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_keeps_responses_item_and_call_ids_on_one_tool_call() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        body = "".join(
+            (
+                'data: {"type":"response.output_item.added","output_index":0,'
+                '"item":{"type":"function_call","id":"msg_tool_1",'
+                '"call_id":"call_tool_1","name":"tp_read","arguments":""}}\n\n',
+                'data: {"type":"response.function_call_arguments.delta",'
+                '"output_index":0,"item_id":"msg_tool_1",'
+                '"delta":"{\\"capability\\":\\"market_data_get\\"}"}\n\n',
+                'data: {"type":"response.completed","response":{"id":"resp_1",'
+                '"model":"responses-model","status":"completed","output":['
+                '{"type":"function_call","id":"msg_tool_1",'
+                '"call_id":"call_tool_1","name":"tp_read",'
+                '"arguments":"{\\"capability\\":\\"market_data_get\\"}"}]}}\n\n',
+            )
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleModelProvider(
+        _config(api_style="responses", model="responses-model"),
+        client=client,
+    )
+    chunks = [chunk async for chunk in provider.stream(ModelRequest())]
+
+    calls = [call for chunk in chunks for call in chunk.tool_calls]
+    assert [(call.id, call.name) for call in calls] == [
+        ("call_tool_1", "tp_read"),
+        ("call_tool_1", ""),
+    ]
+    assert chunks[-1].final_response is not None
+    assert chunks[-1].final_response.tool_calls[0].id == "call_tool_1"
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_lists_models_with_bounded_cache_and_safe_metadata() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.method == "GET"
+        assert request.url.path == "/v1/models"
+        assert request.headers["authorization"] == "Bearer unit-secret"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "unit-model"},
+                    {
+                        "id": "reasoning/model-v2",
+                        "supported_reasoning_efforts": ["low", "high", "invalid"],
+                    },
+                    {"id": "bad model id"},
+                    {"id": "image-generation-model"},
+                    {"id": "reasoning/model-v2"},
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleModelProvider(_config(), client=client)
+    first = await provider.list_models()
+    second = await provider.list_models()
+
+    assert calls == 1
+    assert [item.id for item in first.models] == ["unit-model", "reasoning/model-v2"]
+    assert first.models[1].reasoning_efforts == ("low", "high")
+    assert first.cached is False
+    assert second.cached is True
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
 async def test_provider_switches_to_responses_without_code_changes() -> None:
     captured: dict[str, object] = {}
 

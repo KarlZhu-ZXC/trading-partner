@@ -99,7 +99,7 @@ export default function OperationsPage() {
         : "A manual start creates exactly one authorization flow.";
 
   return (
-    <ConsoleShell active="operations" eyebrow="No-LLM action center" title="Operations Center">
+    <ConsoleShell active="operations">
       <DataBoundary loading={result.loading} error={result.error}>
         <div className="toolbar"><p>These controls call deterministic local services directly without Codex or an LLM. External sync, notification, and deletion actions require explicit confirmation.</p><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
         <Card className="action-console" kicker="OPERATIONS" title="Common Actions">
@@ -117,7 +117,7 @@ export default function OperationsPage() {
             <dl className="detail-list"><div><dt>Accounts</dt><dd>{String(sync?.portfolio_status ?? "—")}</dd></div><div><dt>Watchlist</dt><dd>{String(sync?.watchlist_status ?? "—")}</dd></div><div><dt>Attempts</dt><dd>{String(sync?.attempt_count ?? 0)}</dd></div><div><dt>Scheduled For</dt><dd>{formatDate(sync?.expected_scheduled_for)}</dd></div></dl>
           </Card>
           <Card className="span-3" kicker="SCHWAB OAUTH" title="Authorization Health">
-            <div className="operation-hero compact"><Badge value={String(oauth?.state ?? "—")} /><strong>{oauthHealthLabel}</strong><span>Reauthorize by {formatDate(oauth?.reauthorization_due_at)}</span></div>
+            <div className="operation-hero compact"><Badge value={String(oauth?.state ?? "—")} /><strong>{oauthHealthLabel}</strong><span>Reauthorize By {formatDate(oauth?.reauthorization_due_at)}</span></div>
             <div className="oauth-control">
               <div><span>Authorization Flow</span><Badge value={oauthConfigured ? oauthFlowState : "NOT CONFIGURED"} /></div>
               <p>{oauthFlowMessage}</p>
@@ -166,7 +166,7 @@ export default function OperationsPage() {
           </Card>
           <Card className="span-6" kicker="SCHEDULER" title="Monitor Schedule & Next Due" action={<Badge value={monitorSchedules.some(({ item }) => item.schedule_health !== "OK") ? "ATTENTION" : "READY"} />}>
             <p className="card-note">This shows definition-level schedule health and next due time. launchd installation remains an explicit local command and page loads never change system configuration.</p>
-            <dl className="detail-list"><div><dt>LaunchAgent plist</dt><dd><Badge value={maintenance?.monitor_scheduler_plist_present ? "INSTALLED" : "MISSING"} /></dd></div><div><dt>launchd loaded</dt><dd><Badge value={maintenance?.monitor_scheduler_loaded === true ? "LOADED" : maintenance?.monitor_scheduler_loaded === false ? "NOT LOADED" : "UNKNOWN"} /></dd></div><div><dt>Last exit</dt><dd>{String(maintenance?.monitor_scheduler_last_exit_code ?? "—")}</dd></div></dl>
+            <dl className="detail-list"><div><dt>LaunchAgent Plist</dt><dd><Badge value={maintenance?.monitor_scheduler_plist_present ? "INSTALLED" : "MISSING"} /></dd></div><div><dt>launchd Loaded</dt><dd><Badge value={maintenance?.monitor_scheduler_loaded === true ? "LOADED" : maintenance?.monitor_scheduler_loaded === false ? "NOT LOADED" : "UNKNOWN"} /></dd></div><div><dt>Last Exit</dt><dd>{String(maintenance?.monitor_scheduler_last_exit_code ?? "—")}</dd></div></dl>
             <div className="operations-detail-list">{monitorSchedules.length === 0 ? <span className="muted">No active Monitors.</span> : monitorSchedules.map(({ monitor, item }) => <div key={String(monitor.monitor_id)}><div><strong>{String(monitor.name ?? "Untitled Monitor")}</strong><small className="mono">{String(monitor.primary_instrument_id ?? "portfolio")}</small></div><div><Badge value={String(item.schedule_health ?? "UNKNOWN")} /><small>Next {formatDate(item.next_due_at)}</small></div></div>)}</div>
             <code className="command-block">uv run trading-partner-monitor-scheduler status</code>
             <code className="command-block">uv run trading-partner-monitor-scheduler install</code>

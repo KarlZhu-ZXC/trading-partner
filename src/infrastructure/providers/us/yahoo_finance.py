@@ -77,6 +77,7 @@ _INTRADAY_QUOTE_UNAVAILABLE_WARNING = "INTRADAY_QUOTE_UNAVAILABLE"
 _MARKET_CLOSED_LATEST_KNOWN_WARNING = "MARKET_CLOSED_LATEST_KNOWN"
 _OVERNIGHT_QUOTE_UNAVAILABLE_WARNING = "OVERNIGHT_QUOTE_UNAVAILABLE"
 _PREVIOUS_CLOSE_RECOVERY_WARNING = "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY"
+_LATEST_ADJUSTED_BAR_UNAVAILABLE_WARNING = "LATEST_ADJUSTED_BAR_UNAVAILABLE"
 
 _INTERVAL_WIRE: Mapping[USBarInterval, str] = {
     USBarInterval.ONE_MINUTE: "1m",
@@ -656,6 +657,7 @@ class YahooFinanceAdapter:
         end: date | None = None,
         timezone: ZoneInfo = _NY,
         session_close: time = _SESSION_CLOSE,
+        warning_codes: list[str] | None = None,
     ) -> list[MarketBar]:
         timestamps = result.get("timestamp")
         if timestamps is None:
@@ -733,6 +735,17 @@ class YahooFinanceAdapter:
             adj_closes = raw_adj
 
         out: list[MarketBar] = []
+        last_complete_price_index = max(
+            (
+                idx
+                for idx in range(n)
+                if all(
+                    value is not None
+                    for value in (opens[idx], highs[idx], lows[idx], closes[idx])
+                )
+            ),
+            default=-1,
+        )
         for idx in range(n):
             open_raw = opens[idx]
             high_raw = highs[idx]
@@ -771,6 +784,15 @@ class YahooFinanceAdapter:
                 assert adj_closes is not None
                 adj_raw = adj_closes[idx]
                 if adj_raw is None:
+                    # Yahoo can publish the newest raw daily OHLCV row before
+                    # its corporate-action-adjusted close is finalized. Do not
+                    # reject the entire historical series or silently treat the
+                    # raw row as adjusted: omit only that terminal row and make
+                    # the loss of the latest bar explicit in Provider metadata.
+                    if idx == last_complete_price_index:
+                        if warning_codes is not None:
+                            warning_codes.append(_LATEST_ADJUSTED_BAR_UNAVAILABLE_WARNING)
+                        continue
                     raise _contract(
                         "Yahoo Finance adjclose missing for bar",
                         operation=operation,
@@ -1286,6 +1308,7 @@ class YahooFinanceAdapter:
             operation="bars",
         )
         result = self._chart_result(payload, operation="bars")
+        parse_warnings: list[str] = []
         bars = self._parse_ohlcv_arrays(
             result,
             operation="bars",
@@ -1296,6 +1319,7 @@ class YahooFinanceAdapter:
             end=end,
             timezone=timezone,
             session_close=session_close,
+            warning_codes=parse_warnings,
         )
         if not bars:
             raise NoMarketData(
@@ -1337,6 +1361,7 @@ class YahooFinanceAdapter:
                 session=session,
                 data_timestamp=bars[-1].timestamp,
                 adjustment=adjustment,
+                additional_warnings=tuple(dict.fromkeys(parse_warnings)),
                 instrument_market=instrument.market,
             ),
         )

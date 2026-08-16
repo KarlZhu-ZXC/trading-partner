@@ -149,6 +149,55 @@ class AgentMessageRow(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class AgentTurnRow(Base):
+    """Durable lifecycle state for one shared Agent model turn."""
+
+    __tablename__ = "agent_turns"
+    __table_args__ = (
+        CheckConstraint(
+            "channel IN ('CONSOLE','TELEGRAM')",
+            name="ck_agent_turns_channel",
+        ),
+        CheckConstraint(
+            "status IN ('RUNNING','WAITING_TOOL','COMPLETED','FAILED','CANCELLED')",
+            name="ck_agent_turns_status",
+        ),
+        CheckConstraint("version >= 1", name="ck_agent_turns_version"),
+        CheckConstraint("updated_at >= started_at", name="ck_agent_turns_updated_at"),
+        CheckConstraint(
+            "completed_at IS NULL OR completed_at >= started_at",
+            name="ck_agent_turns_completed_at",
+        ),
+        Index("ix_agent_turns_conversation_started", "conversation_id", "started_at"),
+        Index("ix_agent_turns_conversation_status", "conversation_id", "status"),
+    )
+
+    turn_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("agent_conversations.conversation_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    user_message_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("agent_messages.message_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    assistant_message_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("agent_messages.message_id", ondelete="RESTRICT"),
+    )
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    model_id: Mapped[str | None] = mapped_column(Text)
+    reasoning_effort: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class AgentToolReceiptRow(Base):
     __tablename__ = "agent_tool_receipts"
     __table_args__ = (

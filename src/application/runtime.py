@@ -30,6 +30,7 @@ from application.services.research_state_query_service import ResearchStateQuery
 from application.services.research_subject_service import ResearchSubjectService
 from application.services.research_timeline_service import ResearchTimelineService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
+from application.services.review_item_service import ReviewItemService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
@@ -75,6 +76,7 @@ class ApplicationServices:
     catalyst_agenda: CatalystAgendaService
     broker_order_preview: CashSweepShadowService
     broker_orders: BrokerOrderService
+    review_items: ReviewItemService
 
 
 @dataclass(frozen=True, slots=True)

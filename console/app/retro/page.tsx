@@ -70,7 +70,6 @@ function RetroRunCard({
       setError("A disputed finding requires a note.");
       return;
     }
-    if (!window.confirm(`Append Trade Retro review revision v${reviewVersion + 1}? The original run remains immutable.`)) return;
     setSaving(true);
     setError(null);
     try {
@@ -110,7 +109,7 @@ function RetroRunCard({
     }
   }
 
-  return <article className="retro-run-card">
+  return <article id={`retro-${runId}`} className="retro-run-card">
     <header>
       <div>
         <strong>{text(run.period_start).slice(0, 10)} → {text(run.period_end).slice(0, 10)}</strong>
@@ -121,12 +120,12 @@ function RetroRunCard({
     <p className="retro-summary-lead">{text(run.summary_markdown, "").split("\n").find((line) => line.trim())}</p>
     <small>{findings.length} finding(s) · generated {formatDate(run.generated_at)} · review v{reviewVersion} · execution_effect=false</small>
     <div className="page-actions">
-      <ActionButton onClick={() => setEditing((value) => !value)}>{editing ? "Close editor" : reviewVersion ? "Edit review" : "Review"}</ActionButton>
+      <ActionButton onClick={() => setEditing((value) => !value)}>{editing ? "Close Editor" : reviewVersion ? "Edit Review" : "Review"}</ActionButton>
       <ActionButton busy={busy === `export${runId}`} onClick={() => { void onExport(runId, reviewVersion); }}>Export to Obsidian</ActionButton>
     </div>
 
     <details className="retro-details">
-      <summary>Full immutable run · findings · transaction references</summary>
+      <summary>Full Immutable Run · Findings · Transaction References</summary>
       <pre>{text(run.summary_markdown, "")}</pre>
       {listOf<string>(run, "warning_codes").length > 0 && <p className="retro-code-list"><strong>Warnings</strong>{listOf<string>(run, "warning_codes").map((item) => <code key={item}>{item}</code>)}</p>}
       {findings.length === 0 ? <Empty>No deterministic findings.</Empty> : <div className="retro-findings">{findings.map((finding) => <article key={text(finding.finding_key)}>
@@ -138,26 +137,26 @@ function RetroRunCard({
     </details>
 
     {editing && <section className="retro-editor">
-      <div className="retro-editor-heading"><div><span>APPEND-ONLY HUMAN REVIEW</span><strong>Review revision v{reviewVersion + 1}</strong></div><small>The generated run is never overwritten.</small></div>
+      <div className="retro-editor-heading"><div><span>APPEND-ONLY HUMAN REVIEW</span><strong>Review Revision v{reviewVersion + 1}</strong></div><small>The generated run is never overwritten.</small></div>
       <div className="retro-editor-grid">
-        <label><span>Review status</span><select value={status} onChange={(event) => setStatus(event.target.value)}>{["OPEN", "ACCEPTED", "DISPUTED", "RESOLVED"].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label className="retro-wide"><span>Correction / review note</span><textarea rows={6} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record what you accept, dispute, or want to correct. This does not rewrite the generated summary." /></label>
-        <label className="retro-wide"><span>Action items · one per line</span><textarea rows={4} value={actions} onChange={(event) => setActions(event.target.value)} placeholder="Review the next entry against the confirmed Trade Plan" /></label>
+        <label><span><b className="required-mark" aria-hidden="true">*</b>Review Status</span><select required value={status} onChange={(event) => setStatus(event.target.value)}>{["OPEN", "ACCEPTED", "DISPUTED", "RESOLVED"].map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label className="retro-wide"><span>Correction / Review Note</span><textarea rows={6} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record what you accept, dispute, or want to correct. This does not rewrite the generated summary." /></label>
+        <label className="retro-wide"><span>Action Items · One per Line</span><textarea rows={4} value={actions} onChange={(event) => setActions(event.target.value)} placeholder="Review the next entry against the confirmed Trade Plan" /></label>
       </div>
-      {findings.length > 0 && <div className="retro-finding-editor"><h3>Finding dispositions</h3>{findings.map((finding) => {
+      {findings.length > 0 && <div className="retro-finding-editor"><h3>Finding Dispositions</h3>{findings.map((finding) => {
         const findingKey = text(finding.finding_key, "");
         const edit = findingEdits[findingKey] ?? { status: "", note: "" };
         return <div key={findingKey} className="retro-finding-edit-row">
           <div><strong>{text(finding.code)}</strong><small>{text(finding.title)}</small></div>
           <select value={edit.status} onChange={(event) => setFinding(findingKey, { status: event.target.value })}><option value="">UNREVIEWED</option>{["ACCEPTED", "DISPUTED", "RESOLVED"].map((item) => <option key={item}>{item}</option>)}</select>
-          <input value={edit.note} onChange={(event) => setFinding(findingKey, { note: event.target.value })} placeholder={edit.status === "DISPUTED" ? "Reason required" : "Optional note"} />
+          <label className="retro-finding-note"><span>{edit.status === "DISPUTED" && <b className="required-mark" aria-hidden="true">*</b>}Finding Note</span><input required={edit.status === "DISPUTED"} value={edit.note} onChange={(event) => setFinding(findingKey, { note: event.target.value })} /></label>
         </div>;
       })}</div>}
       {error && <div className="inline-error">{error}</div>}
-      <div className="retro-editor-actions"><ActionButton busy={saving} onClick={() => { void saveReview(); }}>Confirm append revision</ActionButton><small>Uses expected_version={reviewVersion}; stale tabs are rejected.</small></div>
+      <div className="retro-editor-actions"><ActionButton busy={saving} onClick={() => { void saveReview(); }}>Confirm Append Revision</ActionButton><small>Uses expected_version={reviewVersion}; stale tabs are rejected.</small></div>
     </section>}
 
-    {reviewHistory.length > 0 && <details className="retro-review-history"><summary>Review history · {reviewHistory.length} immutable revision(s)</summary><div>{reviewHistory.map((review) => <article key={text(review.review_id)}><header><strong>v{text(review.version)} · {text(review.status)}</strong><small>{formatDate(review.created_at)} · {text(review.reviewed_by)}</small></header>{text(review.note_markdown, "") && <p>{text(review.note_markdown, "")}</p>}{listOf<string>(review, "action_items").length > 0 && <ul>{listOf<string>(review, "action_items").map((item) => <li key={item}>{item}</li>)}</ul>}</article>)}</div></details>}
+    {reviewHistory.length > 0 && <details className="retro-review-history"><summary>Review History · {reviewHistory.length} Immutable Revision(s)</summary><div>{reviewHistory.map((review) => <article key={text(review.review_id)}><header><strong>v{text(review.version)} · {text(review.status)}</strong><small>{formatDate(review.created_at)} · {text(review.reviewed_by)}</small></header>{text(review.note_markdown, "") && <p>{text(review.note_markdown, "")}</p>}{listOf<string>(review, "action_items").length > 0 && <ul>{listOf<string>(review, "action_items").map((item) => <li key={item}>{item}</li>)}</ul>}</article>)}</div></details>}
   </article>;
 }
 
@@ -200,18 +199,18 @@ export default function TradeRetroPage() {
   }
 
   return (
-    <ConsoleShell active="retro" eyebrow="DURABLE DISCIPLINE REVIEW" title="Trade Retro">
+    <ConsoleShell active="retro">
       <DataBoundary loading={api.loading} error={api.error}>
         <div className="page-actions">
           <RefreshButton loading={api.loading} onClick={api.refresh} />
-          <ActionButton disabled={!nextWindow.start} busy={busy === "prepare"} onClick={() => { void invoke("prepare"); }}>Prepare next week</ActionButton>
-          <ActionButton disabled={!previousWindow.start} busy={busy === "run"} onClick={() => { void invoke("run"); }}>Run previous week</ActionButton>
+          <ActionButton disabled={!nextWindow.start} busy={busy === "prepare"} onClick={() => { void invoke("prepare"); }}>Prepare Next Week</ActionButton>
+          <ActionButton disabled={!previousWindow.start} busy={busy === "run"} onClick={() => { void invoke("run"); }}>Run Previous Week</ActionButton>
         </div>
         {message ? <p className="card-note">{message}</p> : null}
-        <Card kicker="SOURCE OF TRUTH" title="Transaction-versus-plan discipline">
+        <Card kicker="SOURCE OF TRUTH" title="Transaction-Versus-Plan Discipline">
           <p className="card-note">Runs and findings are immutable. Human corrections, dispositions, and action items are editable through append-only review revisions with optimistic version checks; none changes research state, positions, or orders.</p>
         </Card>
-        <Card kicker="IMMUTABLE RUNS · EDITABLE REVIEWS" title="Retro history">
+        <Card kicker="IMMUTABLE RUNS · EDITABLE REVIEWS" title="Retro History">
           {runs.length === 0 ? <Empty>No Trade Retro run has been persisted yet.</Empty> : <div className="retro-run-list">{runs.map((run) => <RetroRunCard key={text(run.run_id)} run={run} busy={busy} onExport={async (runId, version) => invoke("export", runId, version)} onReviewed={api.refresh} />)}</div>}
         </Card>
       </DataBoundary>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -164,6 +165,8 @@ class MonitorEvaluationService:
         fact_resolver: MonitorFactResolver | None = None,
         judgment_service: MonitorJudgmentService | None = None,
         session_calendars: Mapping[Market, MarketSessionCalendar] | None = None,
+        provider_retry_attempts: int = 1,
+        provider_retry_delay_seconds: float = 0.5,
     ) -> None:
         self._repository = repository
         self._a_share = a_share
@@ -174,6 +177,8 @@ class MonitorEvaluationService:
         self._fact_resolver = fact_resolver
         self._judgment_service = judgment_service
         self._session_calendars = dict(session_calendars or {})
+        self._provider_retry_attempts = max(1, min(provider_retry_attempts, 3))
+        self._provider_retry_delay_seconds = max(0.0, provider_retry_delay_seconds)
 
     async def evaluate(self, request: MonitorEvaluateInput) -> MonitorRun:
         started_at = self._clock.now()
@@ -322,6 +327,13 @@ class MonitorEvaluationService:
             deterministic_events = tuple(
                 item for item in monitor_events if item.rule_code != "COMPOSITE_JUDGMENT"
             )
+            data_recovered = tuple(
+                item
+                for item in monitor_observations
+                if item.state is not MonitorRuleStateValue.NOT_EVALUATED
+                and (prior := previous.get(item.rule_code)) is not None
+                and prior.state is MonitorRuleStateValue.NOT_EVALUATED
+            )
             if deterministic_events and request.cadence not in _POST_MARKET_CADENCES:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
@@ -373,6 +385,18 @@ class MonitorEvaluationService:
                         )
                     else:
                         notifications.append(judgment_notification)
+                if data_recovered and request.cadence not in _POST_MARKET_CADENCES:
+                    notifications.append(
+                        _data_recovery_message(
+                            run_id=run_id,
+                            monitor=monitor,
+                            observations=tuple(monitor_observations),
+                            recovered=data_recovered,
+                            data_sources=tuple(dict.fromkeys(monitor_sources)),
+                            id_generator=self._ids,
+                            created_at=self._clock.now(),
+                        )
+                    )
 
         warning_codes = tuple(dict.fromkeys(warnings))
         error_codes = tuple(dict.fromkeys(errors))
@@ -501,31 +525,48 @@ class MonitorEvaluationService:
                 ("DCE_QUOTE_BARS_UNAVAILABLE", "MONITOR_PRICE_UNAVAILABLE"),
             )
         if market in {Market.US, Market.KR, Market.CME, Market.OTC}:
-            market_envelope = await self._market.get_market_snapshot(
-                MarketGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
-            )
+            attempt = 0
+            while True:
+                attempt += 1
+                market_envelope = await self._market.get_market_snapshot(
+                    MarketGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
+                )
+                diagnostics = _diagnostics_from_envelope(market_envelope)
+                if (
+                    market_envelope.ok
+                    or attempt >= self._provider_retry_attempts
+                    or not any(item.retryable for item in diagnostics)
+                ):
+                    break
+                await asyncio.sleep(self._provider_retry_delay_seconds * attempt)
             if market_envelope.ok and market_envelope.data is not None:
                 value, fact_as_of = _extract_price_fact(market_envelope.data)
                 if value is not None and fact_as_of is not None:
+                    warning_codes = [item.code for item in market_envelope.warnings]
+                    if attempt > 1:
+                        warning_codes.append("MONITOR_PROVIDER_READ_RETRIED")
                     return _Fact(
                         value=value,
                         as_of=fact_as_of,
-                        warning_codes=tuple(item.code for item in market_envelope.warnings),
+                        warning_codes=tuple(dict.fromkeys(warning_codes)),
                         error_codes=(),
                         closed_session_last_known=(
                             "CLOSED_SESSION_LAST_KNOWN"
                             in {item.code for item in market_envelope.warnings}
                         ),
                         source_names=tuple(item.name for item in market_envelope.sources),
-                        diagnostics=_diagnostics_from_envelope(market_envelope),
+                        diagnostics=diagnostics,
                     )
+            warning_codes = [item.code for item in market_envelope.warnings]
+            if attempt > 1:
+                warning_codes.append("MONITOR_PROVIDER_READ_RETRIED")
             return _Fact(
                 None,
                 None,
-                tuple(item.code for item in market_envelope.warnings),
+                tuple(dict.fromkeys(warning_codes)),
                 tuple(item.code for item in market_envelope.errors)
                 or ("MONITOR_PRICE_UNAVAILABLE",),
-                diagnostics=_diagnostics_from_envelope(market_envelope),
+                diagnostics=diagnostics,
             )
         return _Fact(None, None, (), ("MONITOR_UNSUPPORTED_MARKET",))
 
@@ -817,6 +858,27 @@ def _notification_messages(
     emoji_override: str | None = None,
 ) -> tuple[NotificationMessage, ...]:
     event_types = {event.event_type for event in events}
+    if events and event_types == {MonitorEventType.NOT_EVALUATED}:
+        return (
+            _data_interruption_message(
+                monitor=monitor,
+                events=events,
+                observations=observations,
+                previous_states=previous_states,
+                data_sources=data_sources,
+                id_generator=id_generator,
+                source_id=source_id,
+                created_at=created_at,
+            ),
+        )
+    unavailable_event_count = sum(
+        item.event_type is MonitorEventType.NOT_EVALUATED for item in events
+    )
+    if unavailable_event_count:
+        events = tuple(
+            item for item in events if item.event_type is not MonitorEventType.NOT_EVALUATED
+        )
+        event_types = {event.event_type for event in events}
     emoji = emoji_override or (
         "🚨"
         if MonitorEventType.TRIGGERED in event_types
@@ -839,6 +901,20 @@ def _notification_messages(
     lines.extend(_notification_price_change_lines(context))
     if data_sources:
         lines.append(f"数据来源：{', '.join(data_sources)}")
+    if unavailable_event_count:
+        lines.append(
+            f"数据状态：部分中断 · {unavailable_event_count} 条规则暂停计算；"
+            "未使用旧值改变其结论"
+        )
+    recovered_count = sum(
+        1
+        for item in observations
+        if item.state is not MonitorRuleStateValue.NOT_EVALUATED
+        and (prior := previous_states.get(item.rule_code)) is not None
+        and prior.state is MonitorRuleStateValue.NOT_EVALUATED
+    )
+    if recovered_count:
+        lines.append(f"数据状态：已恢复并重新计算 {recovered_count} 条规则")
     lines.append("CHANGES")
     lines.extend(
         _format_notification_change(
@@ -849,6 +925,8 @@ def _notification_messages(
     )
     lines.append("RULES")
     for observation in observations:
+        if unavailable_event_count and observation.state is MonitorRuleStateValue.NOT_EVALUATED:
+            continue
         rule = rules_by_code[observation.rule_code]
         lines.append(_format_notification_rule_card(rule, observation))
     error_codes = tuple(
@@ -886,6 +964,9 @@ def _notification_messages(
     if context.instrument_id is not None and context.instrument_id.startswith("future:"):
         lines.append("期货价格并非现货；连续合约存在换月风险。")
     event_label = event_label_override or _notification_event_label(events, rules_by_code)
+    if unavailable_event_count:
+        event_label = f"数据部分中断 · {event_label}"
+        emoji = "⚠️"
     title = _notification_title(
         emoji,
         _notification_event_symbol(events, rules_by_code, context.symbol),
@@ -907,6 +988,104 @@ def _notification_messages(
             body=body,
             created_at=notification_created_at,
         ),
+    )
+
+
+def _data_interruption_message(
+    *,
+    monitor: MonitorDefinition,
+    events: tuple[MonitorEvent, ...],
+    observations: tuple[MonitorRunObservation, ...],
+    previous_states: dict[str, MonitorRuleState],
+    data_sources: tuple[str, ...],
+    id_generator: IdGenerator,
+    source_id: str | None,
+    created_at: datetime | None,
+) -> NotificationMessage:
+    affected = tuple(
+        item for item in observations if item.state is MonitorRuleStateValue.NOT_EVALUATED
+    )
+    context = _notification_price_context(monitor, observations, previous_states)
+    error_codes = tuple(dict.fromkeys(code for item in affected for code in item.error_codes))
+    diagnostics = tuple(
+        dict.fromkeys(
+            (item.provider, item.stage, item.error_code)
+            for observation in affected
+            for item in observation.diagnostics
+        )
+    )
+    lines = [
+        f"监控：{monitor.name}",
+        f"标的：{context.symbol}",
+        "数据状态：中断",
+        f"影响：{len(affected)} 条规则暂停计算；未改变原有触发结论",
+    ]
+    if context.previous_price is not None:
+        lines.extend(
+            (
+                f"上一有效价格：{context.previous_price}",
+                "价格时间："
+                + (
+                    context.previous_price_time.isoformat()
+                    if context.previous_price_time
+                    else "不可用"
+                ),
+            )
+        )
+    if diagnostics:
+        lines.append(
+            "诊断："
+            + "；".join(
+                f"{provider} / {stage} / {code}" for provider, stage, code in diagnostics
+            )
+        )
+    elif error_codes:
+        lines.append("错误：" + ", ".join(error_codes))
+    if data_sources:
+        lines.append(f"已取得的其他来源：{', '.join(data_sources)}")
+    lines.append("处理：等待下一轮自动重试；不会使用旧价格判定这些规则。")
+    first_event = events[0]
+    return NotificationMessage(
+        notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
+        source_type=NotificationSourceType.MONITOR_EVENT,
+        source_id=source_id or first_event.event_id,
+        channel=NotificationChannel.TELEGRAM,
+        title=f"⛔ {context.symbol} · 数据源中断",
+        body="\n".join(lines),
+        created_at=created_at or first_event.created_at,
+    )
+
+
+def _data_recovery_message(
+    *,
+    run_id: str,
+    monitor: MonitorDefinition,
+    observations: tuple[MonitorRunObservation, ...],
+    recovered: tuple[MonitorRunObservation, ...],
+    data_sources: tuple[str, ...],
+    id_generator: IdGenerator,
+    created_at: datetime,
+) -> NotificationMessage:
+    context = _notification_price_context(monitor, observations, {})
+    lines = [
+        f"监控：{monitor.name}",
+        f"标的：{context.symbol}",
+        "数据状态：已恢复",
+        f"结果：{len(recovered)} 条规则已重新计算，当前没有新的价格告警变化",
+        f"当前价格：{context.price}",
+        f"价格时间：{context.price_time}",
+    ]
+    if data_sources:
+        lines.append(f"数据来源：{', '.join(data_sources)}")
+    lines.append("说明：这里只表示数据源恢复，不代表价格上涨或行情转好。")
+    return NotificationMessage(
+        notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
+        source_type=NotificationSourceType.MONITOR_RUN,
+        source_id=run_id,
+        channel=NotificationChannel.TELEGRAM,
+        title=f"🔵 {context.symbol} · 数据恢复",
+        body="\n".join(lines),
+        created_at=created_at,
     )
 
 
@@ -1019,7 +1198,7 @@ def _notification_event_label(
         return f"{len(events)}项变化"
     event_label = {
         MonitorEventType.TRIGGERED: "新触发",
-        MonitorEventType.RECOVERED: "已恢复",
+        MonitorEventType.RECOVERED: "告警解除",
         MonitorEventType.NOT_EVALUATED: "数据不可用",
     }[events[0].event_type]
     rule = (rules_by_code or {}).get(events[0].rule_code)
@@ -1055,12 +1234,15 @@ def _notification_warning_lines(
 
 
 def _rule_meaning(description: str | None) -> str:
-    """Use the first human-readable clause as the compact card meaning."""
+    """Use a readable first clause without the legacy 32-character clipping."""
     if description is None or not description.strip():
         return "未提供规则说明"
     compact = " ".join(description.split())
     first_clause = re.split(r"[。！？!?；;]", compact, maxsplit=1)[0].strip()
-    return _notification_text(first_clause or compact, 32)
+    # Monitor descriptions are already contract-bounded to 500 characters. Keep
+    # a wider final guard for pathological no-punctuation text while allowing a
+    # normal complete meaning to wrap naturally inside Telegram's native table.
+    return _notification_text(first_clause or compact, 160)
 
 
 def _format_notification_rule_card(
@@ -1383,7 +1565,18 @@ def _rule_condition(rule: MonitorRule) -> str:
     if rule.rule_type is MonitorRuleType.RISK_OVERALL_AT_LEAST:
         assert rule.risk_status_threshold is not None
         return f">= {rule.risk_status_threshold.value}"
-    comparator = rule.comparator.value if rule.comparator is not None else "UNKNOWN"
+    comparator = (
+        {
+            "GT": ">",
+            "GTE": "≥",
+            "LT": "<",
+            "LTE": "≤",
+            "EQ": "=",
+            "OCCURRED": "已发生",
+        }.get(rule.comparator.value, rule.comparator.value)
+        if rule.comparator is not None
+        else "未知条件"
+    )
     threshold = (
         str(rule.numeric_threshold)
         if rule.numeric_threshold is not None
@@ -1391,15 +1584,26 @@ def _rule_condition(rule: MonitorRule) -> str:
         if rule.event_after is not None
         else "事件发生"
     )
-    interval = (
-        f"[{rule.technical_interval or '1d'}] "
-        if rule.fact_type is TradePlanFactType.TECHNICAL
-        else ""
-    )
+    interval = ""
+    metric_key = rule.metric_key
+    if rule.fact_type is TradePlanFactType.TECHNICAL:
+        interval = {"1d": "日线 ", "1w": "周线 "}.get(
+            rule.technical_interval or "1d", f"{rule.technical_interval} "
+        )
+        metric_key = {
+            "rsi_14": "RSI14",
+            "mfi_14": "MFI14",
+            "atr_14": "ATR14",
+        }.get(rule.metric_key or "", rule.metric_key)
     recovery = (
         f"；恢复阈值 {rule.recovery_threshold}" if rule.recovery_threshold is not None else ""
     )
-    return f"{interval}{rule.metric_key} {comparator} {threshold}{recovery}"
+    metric = (
+        ""
+        if rule.fact_type is TradePlanFactType.PRICE and rule.metric_key == "last"
+        else f"{metric_key} "
+    )
+    return f"{interval}{metric}{comparator} {threshold}{recovery}"
 
 
 def _format_rule_table(rows: tuple[tuple[str, ...], ...]) -> str:

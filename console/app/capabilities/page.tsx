@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson } from "../components/ui";
+import { ActionButton, Badge, Card, DataBoundary, FieldLabel, RefreshButton, displayJson } from "../components/ui";
 import { postApi, useApi } from "../lib/api";
 
 type Capability = {
@@ -121,7 +121,7 @@ function MarketLens() {
     finally { setRunning(null); }
   }
 
-  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><span>Market</span><select value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Symbol / query</span><input value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><span>Instrument ID</span><input value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div>{error && <div className="inline-error">{error}</div>}{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>Fact receipt</summary><pre>{displayJson(result)}</pre></details>}</Card>;
+  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><FieldLabel required>Market</FieldLabel><select required value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><FieldLabel required>Symbol / Query</FieldLabel><input required value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><FieldLabel required>Instrument ID</FieldLabel><input required value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div>{error && <div className="inline-error">{error}</div>}{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>Fact Receipt</summary><pre>{displayJson(result)}</pre></details>}</Card>;
 }
 
 export default function CapabilitiesPage() {
@@ -177,7 +177,6 @@ export default function CapabilitiesPage() {
       setRunError("Explicit confirmation is required. The backend still enforces its idempotency and user-confirmation checks.");
       return;
     }
-    if (selected.confirmation_required && !window.confirm(`Run ${selected.name}?`)) return;
     setRunning(true);
     setRunError(null);
     try {
@@ -195,7 +194,7 @@ export default function CapabilitiesPage() {
   }
 
   return (
-    <ConsoleShell active="capabilities" eyebrow="Compact MCP surface" title="MCP Capabilities">
+    <ConsoleShell active="capabilities">
       <DataBoundary loading={result.loading} error={result.error}>
         <MarketLens />
         {selected && (
@@ -204,26 +203,26 @@ export default function CapabilitiesPage() {
               <div>
                 <p className="workbench-help">Invoke the same public MCP adapter used by Codex. Required fields are prefilled from the schema; write tools never bypass candidate review, idempotency keys, or actor gates.</p>
                 {selected.operations.length > 0 && <div className="operation-picker">{selected.operations.map((operation) => <button key={operation} type="button" onClick={() => openWorkbench(selected, operation)}>{operation}</button>)}</div>}
-                <label className="editor-label" htmlFor="tool-arguments">Arguments JSON</label>
-                <textarea id="tool-arguments" className="json-editor" spellCheck={false} value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} />
-                {selected.confirmation_required && <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I explicitly request this controlled action and understand that the tool&apos;s own confirmation fields still apply.</span></label>}
+                <label className="editor-label" htmlFor="tool-arguments"><b className="required-mark" aria-hidden="true">*</b>Arguments JSON</label>
+                <textarea required id="tool-arguments" className="json-editor" spellCheck={false} value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} />
+                {selected.confirmation_required && <label className="confirmation-check"><input required type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span><b className="required-mark" aria-hidden="true">*</b>I explicitly request this controlled action and understand that the tool&apos;s own confirmation fields still apply.</span></label>}
                 <div className="workbench-actions"><ActionButton onClick={invoke} busy={running} tone={selected.destructive ? "warning" : "default"}>Run Tool</ActionButton><Badge value={selected.confirmation_required ? "CONFIRM" : selected.effect} /></div>
                 {runError && <div className="inline-error">{runError}</div>}
               </div>
               <div>
-                <div className="result-head"><span>RESULT</span>{runResult !== null && <button type="button" onClick={copyResult}>{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}</button>}</div>
-                <span className="sr-only" aria-live="polite">{copyState === "copied" ? "Result copied" : copyState === "failed" ? "Copy failed" : ""}</span>
+                <div className="result-head"><span>RESULT</span>{runResult !== null && <button type="button" onClick={copyResult}>{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy Failed" : "Copy"}</button>}</div>
+                <span className="sr-only" aria-live="polite">{copyState === "copied" ? "Result Copied" : copyState === "failed" ? "Copy Failed" : ""}</span>
                 {images.length > 0 && <div className="tool-images">{images.map((item, index) => (
                   <img alt={`Technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />
                 ))}</div>}
                 <pre className="result-view">{runResult === null ? "Waiting to run…" : displayJson(runResult)}</pre>
-                <details className="schema-details"><summary>View input schema</summary><pre>{displayJson(selected.input_schema)}</pre></details>
+                <details className="schema-details"><summary>View Input Schema</summary><pre>{displayJson(selected.input_schema)}</pre></details>
               </div>
             </div>
           </Card>
         )}
         <div className="toolbar capability-toolbar">
-          <div className="search-box"><span>⌕</span><input aria-label="Search capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools, operations, or descriptions…" /></div>
+          <div className="search-box"><span>⌕</span><input aria-label="Search Capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools, operations, or descriptions…" /></div>
           <div className="toolbar-count"><strong>{filtered.length}</strong> / {result.data?.count ?? 0} tools</div>
           <RefreshButton onClick={result.refresh} loading={result.loading} />
         </div>
@@ -237,7 +236,7 @@ export default function CapabilitiesPage() {
                     <div className="capability-title"><code>{capability.name}</code><Badge value={capability.confirmation_required ? "CONFIRM" : capability.effect} /></div>
                     <p>{capability.description || "No description."}</p>
                     <div className="operation-pills">
-                      {capability.operations.length ? capability.operations.map((operation) => <button type="button" onClick={() => openWorkbench(capability, operation)} key={operation}>{operation}</button>) : <button type="button" onClick={() => openWorkbench(capability)}>open tool</button>}
+                      {capability.operations.length ? capability.operations.map((operation) => <button type="button" onClick={() => openWorkbench(capability, operation)} key={operation}>{operation}</button>) : <button type="button" onClick={() => openWorkbench(capability)}>Open Tool</button>}
                     </div>
                     <footer><span>{capability.open_world ? "Provider access" : "Local state"}</span><button type="button" onClick={() => openWorkbench(capability)}>Open →</button></footer>
                   </Card>

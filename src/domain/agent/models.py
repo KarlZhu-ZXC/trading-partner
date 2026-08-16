@@ -22,6 +22,7 @@ from domain.agent.enums import (
     AgentConversationStatus,
     AgentMessageRole,
     AgentPendingActionStatus,
+    AgentTurnStatus,
 )
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
@@ -207,6 +208,82 @@ class AgentMessage:
         if self.model_receipt_json is not None:
             _text(self.model_receipt_json, "model_receipt_json", 16_384, allow_blank=True)
         _time(self.created_at, "created_at")
+
+
+_SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9][A-Z0-9_.:-]{0,127}$")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTurn:
+    """Durable lifecycle record for one user message/model execution.
+
+    Only a bounded machine error code is persisted on failure.  Exception
+    messages, response bodies and credentials deliberately have no storage
+    field and are never copied into this record.
+    """
+
+    turn_id: str
+    conversation_id: str
+    user_message_id: str
+    channel: AgentChannel
+    status: AgentTurnStatus
+    started_at: datetime
+    updated_at: datetime
+    assistant_message_id: str | None = None
+    model_id: str | None = None
+    reasoning_effort: str | None = None
+    completed_at: datetime | None = None
+    error_code: str | None = None
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        _text(self.turn_id, "turn_id", 160)
+        _text(self.conversation_id, "conversation_id", 160)
+        _text(self.user_message_id, "user_message_id", 160)
+        if self.assistant_message_id is not None:
+            _text(self.assistant_message_id, "assistant_message_id", 160)
+        _enum(self.channel, AgentChannel, "channel")
+        _enum(self.status, AgentTurnStatus, "status")
+        if self.model_id is not None:
+            _text(self.model_id, "model_id", 256)
+        if self.reasoning_effort is not None and self.reasoning_effort not in {
+            "low",
+            "medium",
+            "high",
+            "max",
+        }:
+            raise DataContractError("reasoning_effort is invalid")
+        if self.error_code is not None and (
+            not isinstance(self.error_code, str)
+            or _SAFE_ERROR_CODE.fullmatch(self.error_code) is None
+        ):
+            raise DataContractError("error_code must be a safe bounded code")
+        _sequence(self.version, "version", minimum=1)
+        _time(self.started_at, "started_at")
+        _time(self.updated_at, "updated_at")
+        if self.updated_at < self.started_at:
+            raise DataContractError("updated_at must not precede started_at")
+        if self.completed_at is not None:
+            _time(self.completed_at, "completed_at")
+            if self.completed_at < self.started_at:
+                raise DataContractError("completed_at must not precede started_at")
+        terminal = self.status in {
+            AgentTurnStatus.COMPLETED,
+            AgentTurnStatus.FAILED,
+            AgentTurnStatus.CANCELLED,
+        }
+        if terminal and self.completed_at is None:
+            raise DataContractError("terminal Agent turns require completed_at")
+        if not terminal and self.completed_at is not None:
+            raise DataContractError("active Agent turns cannot have completed_at")
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {
+            AgentTurnStatus.COMPLETED,
+            AgentTurnStatus.FAILED,
+            AgentTurnStatus.CANCELLED,
+        }
 
 
 @dataclass(frozen=True, slots=True)

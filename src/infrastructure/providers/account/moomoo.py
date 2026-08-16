@@ -103,6 +103,11 @@ def _decimal(value: object) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
+def _nonnegative_decimal(value: object) -> Decimal | None:
+    parsed = _decimal(value)
+    return parsed if parsed is not None and parsed >= 0 else None
+
+
 def _account_ref(raw: object) -> str:
     digest = hashlib.sha256(f"moomoo:{raw}".encode()).hexdigest()[:24]
     return f"moomoo_{digest}"
@@ -390,6 +395,12 @@ class MoomooAccountAdapter:
         info = info_rows[0] if info_rows else {}
         fetched_at = self._clock.now()
         positions = tuple(self._position(row, market_price_at=fetched_at) for row in position_rows)
+        # OpenD exposes the provider ``debtCash`` field under the misleading SDK
+        # name ``interest_charged_amount``. It is the interest-bearing balance
+        # suitable for account-level financing usage. ``initial_margin`` is a
+        # collateral requirement (and documented as futures-only), not borrowed
+        # cash, so it must never populate the canonical ``margin_used`` field.
+        margin_used = _nonnegative_decimal(info.get("interest_charged_amount"))
         return AccountSnapshot(
             snapshot_id=self._ids.new(EntityIdPrefix.SNAPSHOT),
             account_ref=_account_ref(raw_id),
@@ -401,16 +412,25 @@ class MoomooAccountAdapter:
             cash=_decimal(info.get("cash")),
             buying_power=_decimal(info.get("power")),
             net_assets=_decimal(info.get("total_assets")),
-            margin_used=_decimal(info.get("initial_margin")),
+            margin_used=margin_used,
             positions=positions,
             open_orders=tuple(self._order(row) for row in order_rows),
             degraded=True,
-            warning_codes=self._warning_codes(positions),
+            warning_codes=self._warning_codes(
+                positions,
+                margin_usage_available=margin_used is not None,
+            ),
         )
 
     @staticmethod
-    def _warning_codes(positions: Sequence[AccountPosition]) -> tuple[str, ...]:
+    def _warning_codes(
+        positions: Sequence[AccountPosition],
+        *,
+        margin_usage_available: bool,
+    ) -> tuple[str, ...]:
         codes = {"ASSET_TYPE_ASSUMED_EQUITY"}
+        if not margin_usage_available:
+            codes.add("MOOMOO_MARGIN_USAGE_UNAVAILABLE")
         if any(position.market_price is not None for position in positions):
             codes.add("PRICE_TIME_IS_FETCH_TIME")
         if any(

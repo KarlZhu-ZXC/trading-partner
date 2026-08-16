@@ -587,21 +587,21 @@ export function ChatWorkspace() {
   const statusTone = disabledReason ? "attention" : "ready";
 
   return (
-    <section className="chat-workspace" aria-label="Shared Agent Runtime chat">
+    <section className="chat-workspace" aria-label="Shared Agent Runtime Chat">
       <div className={`chat-runtime-banner ${statusTone}`}>
         <div className="chat-runtime-state">
           <span className="pulse-dot" aria-hidden="true" />
           <strong>{statusLabel(status, statusLoading)}</strong>
-          <span>Confirmation-gated Agent Runtime</span>
+          <span>Confirmation-Gated Agent Runtime</span>
         </div>
-        <button className="chat-icon-button" onClick={() => void loadStatus()} type="button" title="Refresh runtime status">
+        <button className="chat-icon-button" onClick={() => void loadStatus()} type="button" title="Refresh Runtime Status">
           <RefreshCw aria-hidden="true" size={15} />
-          <span>Refresh status</span>
+          <span>Refresh Status</span>
         </button>
       </div>
       {disabledReason && (
         <div className="chat-diagnostic" role="status">
-          <strong>Chat unavailable</strong>
+          <strong>Chat Unavailable</strong>
           <span>{disabledReason}</span>
           {status?.diagnostics.map((diagnostic, index) => (
             <small key={`${text(diagnostic.code, "diagnostic")}-${index}`}>
@@ -617,9 +617,9 @@ export function ChatWorkspace() {
           <header className="chat-panel-heading">
             <div>
               <p className="card-kicker">CONVERSATIONS</p>
-              <h2>Agent memory</h2>
+              <h2>Agent Memory</h2>
             </div>
-            <button className="chat-icon-button" disabled={actionBusy === "new"} onClick={() => void newConversation()} type="button" title="New conversation">
+            <button className="chat-icon-button" disabled={actionBusy === "new"} onClick={() => void newConversation()} type="button" title="New Conversation">
               <MessageSquarePlus aria-hidden="true" size={16} />
               <span>New</span>
             </button>
@@ -659,7 +659,7 @@ export function ChatWorkspace() {
               onClick={() => void prepareTelegramHandoff()}
               type="button"
             >
-              Continue in Telegram <span>{actionBusy === "handoff" ? "Preparing…" : "One-time code"}</span>
+              Continue in Telegram <span>{actionBusy === "handoff" ? "Preparing…" : "One-Time Code"}</span>
             </button>
             {handoff && handoff.conversationId === selectedConversation?.conversation_id && (
               <div className="chat-handoff-code" role="status">
@@ -681,7 +681,7 @@ export function ChatWorkspace() {
           <header className="chat-panel-heading chat-transcript-heading">
             <div>
               <p className="card-kicker">CURRENT THREAD</p>
-              <h2>{selectedConversation ? initialTitle(selectedConversation) : "Select a conversation"}</h2>
+              <h2>{selectedConversation ? initialTitle(selectedConversation) : "Select a Conversation"}</h2>
             </div>
             <span className="chat-channel-badge">CONSOLE</span>
           </header>
@@ -708,7 +708,7 @@ export function ChatWorkspace() {
                 )}
                 {selectedStream?.pendingAction ? (
                   <div className="chat-readonly-note">
-                    <strong>Explicit confirmation required</strong>
+                    <strong>Explicit Confirmation Required</strong>
                     <span>{selectedStream.pendingAction.action.presented_summary}</span>
                     <span>{selectedStream.pendingAction.action.capability}.{selectedStream.pendingAction.action.operation}</span>
                     {!!selectedStream.pendingAction.action.confirmation_details.length && (
@@ -726,7 +726,7 @@ export function ChatWorkspace() {
                         disabled={actionBusy !== null}
                         onClick={() => void decidePendingAction("confirm")}
                         type="button"
-                      >Confirm exact action</button>
+                      >Confirm Exact Action</button>
                       <button
                         className="chat-archive-button"
                         disabled={actionBusy !== null}
@@ -736,7 +736,7 @@ export function ChatWorkspace() {
                     </div>
                   </div>
                 ) : selectedStream?.pendingSummary ? (
-                  <div className="chat-readonly-note"><strong>Action status</strong><span>{selectedStream.pendingSummary}</span></div>
+                  <div className="chat-readonly-note"><strong>Action Status</strong><span>{selectedStream.pendingSummary}</span></div>
                 ) : null}
                 {selectedStream?.error && <div className="chat-error" role="alert">{selectedStream.error}</div>}
               </>
@@ -759,7 +759,7 @@ export function ChatWorkspace() {
               <span>Enter to send · Shift+Enter for a new line</span>
               {selectedStreaming ? (
                 <button className="chat-stop-button" onClick={stopWaiting} type="button">
-                  <Square aria-hidden="true" size={13} /> Stop waiting
+                  <Square aria-hidden="true" size={13} /> Stop Waiting
                 </button>
               ) : (
                 <button className="chat-send-button" disabled={!canSend} type="submit">
@@ -774,7 +774,7 @@ export function ChatWorkspace() {
           <header className="chat-panel-heading">
             <div>
               <p className="card-kicker">AUDIT TRAIL</p>
-              <h2>Tool receipts</h2>
+              <h2>Tool Receipts</h2>
             </div>
             <span className="chat-receipt-count">{currentReceipts.length}</span>
           </header>

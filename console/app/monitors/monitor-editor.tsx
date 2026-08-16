@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ActionButton, Badge, displayJson } from "../components/ui";
+import { ActionButton, Badge, FieldLabel, RequiredMark, displayJson } from "../components/ui";
 import { postApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -110,20 +110,24 @@ function fromMonitorRule(value: Dict, primary: string): RuleDraft {
 
 export function MonitorEditor({
   initialMonitor,
+  template,
   onClose,
   onSaved,
   embedded = false,
 }: {
   initialMonitor?: Dict;
+  template?: Dict;
   onClose: () => void;
   onSaved: (receipt: unknown) => void;
   embedded?: boolean;
 }) {
   type ResolverMarket = "US" | "A_SHARE" | "KR";
   const editing = Boolean(initialMonitor);
-  const primaryInitial = String(initialMonitor?.primary_instrument_id ?? "");
-  const sourceRules = Array.isArray(initialMonitor?.rules) ? initialMonitor.rules as Dict[] : [];
-  const [name, setName] = useState(String(initialMonitor?.name ?? ""));
+  const source = initialMonitor ?? template;
+  const primaryInitial = String(source?.primary_instrument_id ?? "");
+  const sourceRules = Array.isArray(source?.rules) ? source.rules as Dict[] : [];
+  const initialCompilePlanConditions = Boolean(template?.compile_trade_plan_conditions);
+  const [name, setName] = useState(String(source?.name ?? ""));
   const [market, setMarket] = useState<ResolverMarket>(
     primaryInitial.includes(":A_SHARE:")
       ? "A_SHARE"
@@ -133,13 +137,16 @@ export function MonitorEditor({
   );
   const [symbolQuery, setSymbolQuery] = useState(primaryInitial.split(":").at(-1) ?? "");
   const [primaryInstrumentId, setPrimaryInstrumentId] = useState(primaryInitial);
-  const [subjectId, setSubjectId] = useState(String(initialMonitor?.subject_id ?? ""));
-  const [cadence, setCadence] = useState(String(initialMonitor?.cadence ?? "US_POST_MARKET"));
-  const [intervalMinutes, setIntervalMinutes] = useState(String(initialMonitor?.interval_minutes ?? 60));
-  const [status, setStatus] = useState(String(initialMonitor?.status ?? "ACTIVE"));
-  const [validUntil, setValidUntil] = useState(asLocalDateTime(initialMonitor?.valid_until));
-  const initialJudgment = (initialMonitor?.judgment_policy ?? {}) as Dict;
-  const [judgmentEnabled, setJudgmentEnabled] = useState(Boolean(initialMonitor?.judgment_policy));
+  const [subjectId, setSubjectId] = useState(String(source?.subject_id ?? ""));
+  const [cadence, setCadence] = useState(String(source?.cadence ?? "US_POST_MARKET"));
+  const [intervalMinutes, setIntervalMinutes] = useState(String(source?.interval_minutes ?? 60));
+  const [status, setStatus] = useState(String(source?.status ?? "ACTIVE"));
+  const [validUntil, setValidUntil] = useState(asLocalDateTime(source?.valid_until));
+  const [tradePlanId, setTradePlanId] = useState(String(source?.trade_plan_id ?? ""));
+  const [tradePlanVersion, setTradePlanVersion] = useState(String(source?.trade_plan_version ?? ""));
+  const [compilePlanConditions, setCompilePlanConditions] = useState(initialCompilePlanConditions);
+  const initialJudgment = (source?.judgment_policy ?? {}) as Dict;
+  const [judgmentEnabled, setJudgmentEnabled] = useState(Boolean(source?.judgment_policy));
   const [judgmentPlaybook, setJudgmentPlaybook] = useState(String(initialJudgment.playbook ?? ""));
   const [judgmentInstruments, setJudgmentInstruments] = useState(
     Array.isArray(initialJudgment.reference_instrument_ids)
@@ -157,7 +164,7 @@ export function MonitorEditor({
     JSON.stringify(initialJudgment.confirmed_state ?? {}, null, 2),
   );
   const [rules, setRules] = useState<RuleDraft[]>(
-    sourceRules.length ? sourceRules.map((rule) => fromMonitorRule(rule, primaryInitial)) : [blankRule(primaryInitial)],
+    sourceRules.length ? sourceRules.map((rule) => fromMonitorRule(rule, primaryInitial)) : initialCompilePlanConditions ? [] : [blankRule(primaryInitial)],
   );
   const [resolving, setResolving] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -237,7 +244,9 @@ export function MonitorEditor({
 
   function validate(): string | null {
     if (!name.trim()) return "Enter a Monitor name.";
-    if (rules.length === 0) return "At least one condition is required.";
+    if (rules.length === 0 && !compilePlanConditions) return "At least one condition is required unless Trade Plan conditions are compiled.";
+    if (Boolean(tradePlanId.trim()) !== Boolean(tradePlanVersion.trim())) return "Trade Plan ID and version are required together.";
+    if (compilePlanConditions && !tradePlanId.trim()) return "Compiling Trade Plan conditions requires a Trade Plan ID and version.";
     for (const [index, rule] of rules.entries()) {
       if (!rule.rule_code.trim()) return `Condition ${index + 1} is missing a rule code.`;
       if (!rule.description.trim()) return `Condition ${index + 1} is missing a human-readable meaning.`;
@@ -268,7 +277,6 @@ export function MonitorEditor({
   async function submit() {
     const validation = validate();
     if (validation) { setError(validation); return; }
-    if (!window.confirm(editing ? "Save a new Monitor version?" : "Create and activate this Monitor?")) return;
     const request: Dict = {
       operation: editing ? "update" : "create",
       name: name.trim(),
@@ -276,6 +284,7 @@ export function MonitorEditor({
       confirmed_by: "user",
       idempotency_key: idempotencyKey,
       rules: normalizedRules(),
+      ...(tradePlanId.trim() ? { trade_plan_id: tradePlanId.trim(), trade_plan_version: Number(tradePlanVersion), compile_trade_plan_conditions: compilePlanConditions } : {}),
       ...(primaryInstrumentId ? { primary_instrument_id: primaryInstrumentId } : {}),
       ...(subjectId.trim() ? { case_id: subjectId.trim() } : {}),
       ...(cadence === "INTERVAL" ? { interval_minutes: Number(intervalMinutes) } : {}),
@@ -319,48 +328,51 @@ export function MonitorEditor({
     <section className={`monitor-editor${embedded ? " monitor-editor-embedded" : ""}`}>
       <header><div><p className="card-kicker">MONITOR BUILDER</p><h2>{editing ? "Edit Monitor" : "New Monitor"}</h2></div><button className="close-button" type="button" onClick={onClose}>Close</button></header>
       <div className="monitor-form-grid">
-        <label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: TTWO key-level monitor" /></label>
-        <label><span>Research Subject ID (optional)</span><input value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder="case_…" /></label>
+        <label><FieldLabel required>Name</FieldLabel><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: TTWO key-level monitor" /></label>
+        <label><span>Research Subject ID (Optional)</span><input value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder="case_…" /></label>
         <div className="instrument-resolver"><label><span>Market</span><select value={market} onChange={(event) => updateMarket(event.target.value as ResolverMarket)}><option value="US">US</option><option value="A_SHARE">A-Share</option><option value="KR">Korea</option></select></label><label><span>Symbol / Name</span><input value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value)} placeholder="TTWO / 600519 / 005930" /></label><ActionButton onClick={resolveInstrument} busy={resolving}>Resolve</ActionButton></div>
         <label><span>Primary Instrument ID</span><input value={primaryInstrumentId} onChange={(event) => setPrimaryInstrumentId(event.target.value)} placeholder="equity:US:TTWO" /><small>Filled after resolution, or enter a canonical ID directly.</small></label>
-        <label><span>Cadence</span><select value={cadence} onChange={(event) => setCadence(event.target.value)}><option value="ON_DEMAND">On Demand</option><option value="INTERVAL">Fixed Interval</option><option value="A_SHARE_POST_MARKET">A-Share Post-Market</option><option value="US_POST_MARKET">US Post-Market</option><option value="KR_POST_MARKET">Korea Post-Market</option></select></label>
-        {cadence === "INTERVAL" && <label><span>Interval Minutes</span><input type="number" min="60" step="60" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>}
-        {editing && <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">ACTIVE</option><option value="PAUSED">PAUSED</option><option value="ARCHIVED">ARCHIVED</option></select></label>}
-        <label><span>Valid Until (optional)</span><input type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
+        <label><span>Trade Plan ID (Optional)</span><input value={tradePlanId} onChange={(event) => setTradePlanId(event.target.value)} placeholder="trade_plan_…" /></label>
+        <label><span>Trade Plan Version</span><input type="number" min="1" step="1" value={tradePlanVersion} onChange={(event) => setTradePlanVersion(event.target.value)} disabled={!tradePlanId.trim()} /></label>
+        <label className="monitor-plan-compile"><span>Plan Conditions</span><span><input type="checkbox" checked={compilePlanConditions} disabled={!tradePlanId.trim()} onChange={(event) => setCompilePlanConditions(event.target.checked)} /> Compile Monitorable Conditions</span><small>Uses the exact confirmed Trade Plan version; manual conditions remain outside the Monitor.</small></label>
+        <label><FieldLabel required>Cadence</FieldLabel><select required value={cadence} onChange={(event) => setCadence(event.target.value)}><option value="ON_DEMAND">On Demand</option><option value="INTERVAL">Fixed Interval</option><option value="A_SHARE_POST_MARKET">A-Share Post-Market</option><option value="US_POST_MARKET">US Post-Market</option><option value="KR_POST_MARKET">Korea Post-Market</option></select></label>
+        {cadence === "INTERVAL" && <label><FieldLabel required>Interval Minutes</FieldLabel><input required type="number" min="60" step="60" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>}
+        {editing && <label><FieldLabel required>Status</FieldLabel><select required value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">ACTIVE</option><option value="PAUSED">PAUSED</option><option value="ARCHIVED">ARCHIVED</option></select></label>}
+        <label><span>Valid Until (Optional)</span><input type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
       </div>
 
       <div className="judgment-editor">
         <label className="judgment-toggle"><input type="checkbox" checked={judgmentEnabled} onChange={(event) => setJudgmentEnabled(event.target.checked)} /><span>Enable Composite LLM Judgment</span></label>
         <p>Deterministic rules remain hard gates. The LLM interprets validated features only and cannot change confirmed positions, phases, or orders.</p>
         {judgmentEnabled && <div className="judgment-editor-grid">
-          <label className="wide"><span>Playbook</span><textarea rows={10} value={judgmentPlaybook} onChange={(event) => setJudgmentPlaybook(event.target.value)} placeholder="Describe cross-instrument relationships, phases, triggers, and notification requirements." /></label>
-          <label><span>Reference Instruments (one Instrument ID per line)</span><textarea rows={7} value={judgmentInstruments} onChange={(event) => setJudgmentInstruments(event.target.value)} placeholder={"commodity_spot:OTC:XAUUSD\netf:US:GDX\netf:US:GLD"} /></label>
-          <label><span>Relative Strength (name | numerator | denominator)</span><textarea rows={7} value={relativePairs} onChange={(event) => setRelativePairs(event.target.value)} placeholder="GDX_GLD | etf:US:GDX | etf:US:GLD" /></label>
-          <label className="wide"><span>User-Confirmed State (JSON)</span><textarea rows={7} value={confirmedState} onChange={(event) => setConfirmedState(event.target.value)} placeholder={'{"confirmed_position":50,"phase_B_remaining":"150-200"}'} /></label>
+          <label className="wide"><FieldLabel required>Playbook</FieldLabel><textarea required rows={10} value={judgmentPlaybook} onChange={(event) => setJudgmentPlaybook(event.target.value)} placeholder="Describe cross-instrument relationships, phases, triggers, and notification requirements." /></label>
+          <label><FieldLabel required>Reference Instruments (One Instrument ID per Line)</FieldLabel><textarea required rows={7} value={judgmentInstruments} onChange={(event) => setJudgmentInstruments(event.target.value)} placeholder={"commodity_spot:OTC:XAUUSD\netf:US:GDX\netf:US:GLD"} /></label>
+          <label><span>Relative Strength (Name | Numerator | Denominator)</span><textarea rows={7} value={relativePairs} onChange={(event) => setRelativePairs(event.target.value)} placeholder="GDX_GLD | etf:US:GDX | etf:US:GLD" /></label>
+          <label className="wide"><FieldLabel required>User-Confirmed State (JSON)</FieldLabel><textarea required rows={7} value={confirmedState} onChange={(event) => setConfirmedState(event.target.value)} placeholder={'{"confirmed_position":50,"phase_B_remaining":"150-200"}'} /></label>
         </div>}
       </div>
 
-      <div className="rules-heading"><div><p className="card-kicker">CONDITIONS</p><h3>Trigger Conditions</h3></div><ActionButton onClick={() => setRules((items) => [...items, blankRule(primaryInstrumentId)])}>Add Condition</ActionButton></div>
+      <div className="rules-heading"><div><p className="card-kicker"><RequiredMark />CONDITIONS</p><h3>Trigger Conditions</h3></div><ActionButton onClick={() => setRules((items) => [...items, blankRule(primaryInstrumentId)])}>Add Condition</ActionButton></div>
       <div className="rule-editor-list">
         {rules.map((rule, index) => (
           <article className="rule-editor" key={`rule-${index}`}>
             <header><strong>Condition {index + 1}</strong><button type="button" onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Delete</button></header>
             <div className="rule-editor-grid">
-              <label><span>Rule Code</span><input value={rule.rule_code} onChange={(event) => updateRule(index, { rule_code: event.target.value.toUpperCase().replaceAll(" ", "_") })} placeholder="TTWO_FIRST_ZONE_FAIL" /><small>Stable machine identity; enter the actual level in the threshold field.</small></label>
-              <label className="rule-description-input"><span>Human Meaning</span><input value={rule.description} onChange={(event) => updateRule(index, { description: event.target.value })} placeholder="Example: First support zone failed" maxLength={500} /></label>
-              <label><span>Type</span><select value={rule.rule_type} onChange={(event) => updateRule(index, { rule_type: event.target.value as RuleType })}><option value="PRICE_ABOVE">Price Above</option><option value="PRICE_BELOW">Price Below</option><option value="FACT_COMPARISON">Fact Comparison</option><option value="RISK_OVERALL_AT_LEAST">Portfolio Risk At Least</option></select></label>
-              <label><span>Severity</span><select value={rule.severity} onChange={(event) => updateRule(index, { severity: event.target.value as RuleDraft["severity"] })}><option value="INFO">INFO</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option></select></label>
-              <label><span>Maximum Fact Age (seconds)</span><input type="number" min="1" value={rule.max_fact_age_seconds} onChange={(event) => updateRule(index, { max_fact_age_seconds: event.target.value })} /></label>
-              {(rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && <><label><span>Instrument</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={primaryInstrumentId || "equity:US:TTWO"} /></label><label><span>Price Threshold</span><input inputMode="decimal" value={rule.price_threshold} onChange={(event) => updateRule(index, { price_threshold: event.target.value })} placeholder="250.00" /></label></>}
-              {rule.rule_type === "RISK_OVERALL_AT_LEAST" && <label><span>Risk Threshold</span><select value={rule.risk_status_threshold} onChange={(event) => updateRule(index, { risk_status_threshold: event.target.value as RuleDraft["risk_status_threshold"] })}><option value="WARN">WARN</option><option value="BREACH">BREACH</option></select></label>}
+              <label><FieldLabel required>Rule Code</FieldLabel><input required value={rule.rule_code} onChange={(event) => updateRule(index, { rule_code: event.target.value.toUpperCase().replaceAll(" ", "_") })} placeholder="TTWO_FIRST_ZONE_FAIL" /><small>Stable machine identity; enter the actual level in the threshold field.</small></label>
+              <label className="rule-description-input"><FieldLabel required>Human Meaning</FieldLabel><input required value={rule.description} onChange={(event) => updateRule(index, { description: event.target.value })} placeholder="Example: First support zone failed" maxLength={500} /></label>
+              <label><FieldLabel required>Type</FieldLabel><select required value={rule.rule_type} onChange={(event) => updateRule(index, { rule_type: event.target.value as RuleType })}><option value="PRICE_ABOVE">Price Above</option><option value="PRICE_BELOW">Price Below</option><option value="FACT_COMPARISON">Fact Comparison</option><option value="RISK_OVERALL_AT_LEAST">Portfolio Risk At Least</option></select></label>
+              <label><FieldLabel required>Severity</FieldLabel><select required value={rule.severity} onChange={(event) => updateRule(index, { severity: event.target.value as RuleDraft["severity"] })}><option value="INFO">INFO</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option></select></label>
+              <label><FieldLabel required>Maximum Fact Age (Seconds)</FieldLabel><input required type="number" min="1" value={rule.max_fact_age_seconds} onChange={(event) => updateRule(index, { max_fact_age_seconds: event.target.value })} /></label>
+              {(rule.rule_type === "PRICE_ABOVE" || rule.rule_type === "PRICE_BELOW") && <><label><FieldLabel required>Instrument</FieldLabel><input required value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={primaryInstrumentId || "equity:US:TTWO"} /></label><label><FieldLabel required>Price Threshold</FieldLabel><input required inputMode="decimal" value={rule.price_threshold} onChange={(event) => updateRule(index, { price_threshold: event.target.value })} placeholder="250.00" /></label></>}
+              {rule.rule_type === "RISK_OVERALL_AT_LEAST" && <label><FieldLabel required>Risk Threshold</FieldLabel><select required value={rule.risk_status_threshold} onChange={(event) => updateRule(index, { risk_status_threshold: event.target.value as RuleDraft["risk_status_threshold"] })}><option value="WARN">WARN</option><option value="BREACH">BREACH</option></select></label>}
               {rule.rule_type === "FACT_COMPARISON" && <>
-                <label><span>Instrument{FACT_CONFIG[rule.fact_type]?.requiresInstrument ? "" : " (optional)"}</span><input value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.requiresInstrument ? (primaryInstrumentId || "equity:US:TTWO") : "This fact type usually does not require an instrument"} /></label>
-                <label><span>Fact Type</span><select value={rule.fact_type} onChange={(event) => updateRule(index, factTypePatch(event.target.value))}>{FACT_TYPES.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-                <label><span>{rule.fact_type === "TECHNICAL" ? "Technical Metric" : "Metric Key"}</span><input list={rule.fact_type === "TECHNICAL" ? "technical-metric-presets" : undefined} value={rule.metric_key} onChange={(event) => updateRule(index, { metric_key: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.placeholder} readOnly={["PRICE", "VOLUME", "PORTFOLIO_RISK"].includes(rule.fact_type)} /><small>{FACT_CONFIG[rule.fact_type]?.help}</small></label>
-                {rule.fact_type === "TECHNICAL" && <label><span>Metric Interval</span><select value={rule.technical_interval} onChange={(event) => updateRule(index, { technical_interval: event.target.value as "1d" | "1w" })}><option value="1d">Daily</option><option value="1w">Weekly</option></select></label>}
-                <label><span>Comparator</span><select value={rule.comparator} onChange={(event) => updateRule(index, { comparator: event.target.value as RuleDraft["comparator"] })} disabled={rule.fact_type === "COMPANY_EVENT"}><option value="GT">&gt;</option><option value="GTE">≥</option><option value="LT">&lt;</option><option value="LTE">≤</option><option value="EQ">=</option><option value="OCCURRED">Occurred</option></select></label>
-                {rule.comparator !== "OCCURRED" && <><label><span>Trigger Threshold</span><input inputMode="decimal" value={rule.numeric_threshold} onChange={(event) => updateRule(index, { numeric_threshold: event.target.value })} /></label><label><span>Recovery Threshold (optional)</span><input inputMode="decimal" value={rule.recovery_threshold} onChange={(event) => updateRule(index, { recovery_threshold: event.target.value })} placeholder={rule.comparator === "LT" || rule.comparator === "LTE" ? "Example: RSI triggers at 30, recovers at 35" : "Example: RSI triggers at 70, recovers at 65"} /><small>Creates a hysteresis band to prevent repeated alerts near the threshold.</small></label></>}
-                <label><span>Event Start (optional)</span><input type="datetime-local" value={rule.event_after} onChange={(event) => updateRule(index, { event_after: event.target.value })} /></label>
+                <label><FieldLabel required={FACT_CONFIG[rule.fact_type]?.requiresInstrument}>Instrument</FieldLabel><input required={FACT_CONFIG[rule.fact_type]?.requiresInstrument} value={rule.instrument_id} onChange={(event) => updateRule(index, { instrument_id: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.requiresInstrument ? (primaryInstrumentId || "equity:US:TTWO") : "This fact type usually does not require an instrument"} /></label>
+                <label><FieldLabel required>Fact Type</FieldLabel><select required value={rule.fact_type} onChange={(event) => updateRule(index, factTypePatch(event.target.value))}>{FACT_TYPES.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+                <label><FieldLabel required>{rule.fact_type === "TECHNICAL" ? "Technical Metric" : "Metric Key"}</FieldLabel><input required list={rule.fact_type === "TECHNICAL" ? "technical-metric-presets" : undefined} value={rule.metric_key} onChange={(event) => updateRule(index, { metric_key: event.target.value })} placeholder={FACT_CONFIG[rule.fact_type]?.placeholder} readOnly={["PRICE", "VOLUME", "PORTFOLIO_RISK"].includes(rule.fact_type)} /><small>{FACT_CONFIG[rule.fact_type]?.help}</small></label>
+                {rule.fact_type === "TECHNICAL" && <label><FieldLabel required>Metric Interval</FieldLabel><select required value={rule.technical_interval} onChange={(event) => updateRule(index, { technical_interval: event.target.value as "1d" | "1w" })}><option value="1d">Daily</option><option value="1w">Weekly</option></select></label>}
+                <label><FieldLabel required>Comparator</FieldLabel><select required value={rule.comparator} onChange={(event) => updateRule(index, { comparator: event.target.value as RuleDraft["comparator"] })} disabled={rule.fact_type === "COMPANY_EVENT"}><option value="GT">&gt;</option><option value="GTE">≥</option><option value="LT">&lt;</option><option value="LTE">≤</option><option value="EQ">=</option><option value="OCCURRED">Occurred</option></select></label>
+                {rule.comparator !== "OCCURRED" && <><label><FieldLabel required>Trigger Threshold</FieldLabel><input required inputMode="decimal" value={rule.numeric_threshold} onChange={(event) => updateRule(index, { numeric_threshold: event.target.value })} /></label><label><span>Recovery Threshold</span><input inputMode="decimal" value={rule.recovery_threshold} onChange={(event) => updateRule(index, { recovery_threshold: event.target.value })} placeholder={rule.comparator === "LT" || rule.comparator === "LTE" ? "Example: RSI triggers at 30, recovers at 35" : "Example: RSI triggers at 70, recovers at 65"} /><small>Creates a hysteresis band to prevent repeated alerts near the threshold.</small></label></>}
+                <label><span>Event Start (Optional)</span><input type="datetime-local" value={rule.event_after} onChange={(event) => updateRule(index, { event_after: event.target.value })} /></label>
               </>}
             </div>
           </article>

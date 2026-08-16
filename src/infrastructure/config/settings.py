@@ -812,6 +812,67 @@ class AppSettings(BaseSettings):
         )
 
     @property
+    def resolved_agent_llm_configs(self) -> dict[str, LLMEndpointConfig]:
+        """Return every explicitly usable Agent endpoint keyed by a stable UI id.
+
+        Generic ``LLM_*`` configuration remains one closed endpoint. During the
+        legacy compatibility window, independently configured Bailian and
+        DeepSeek credentials may both be offered to the Console Agent without
+        changing the shared default selected by ``LLM_PROVIDER``.
+        """
+
+        if self._generic_llm_explicit:
+            config = self.resolved_llm_config
+            return {"default": config} if config is not None else {}
+
+        configs: dict[str, LLMEndpointConfig] = {}
+        if self.bailian_api_key is not None:
+            configs["bailian"] = LLMEndpointConfig(
+                api_style="responses",
+                base_url=self.bailian_base_url,
+                api_key=self.bailian_api_key,
+                model=self.bailian_model,
+                reasoning_mode="effort",
+                reasoning_effort=self.llm_reasoning_effort,
+                native_web_search=(
+                    "responses_web_search"
+                    if self.bailian_web_search_enabled
+                    else "disabled"
+                ),
+                native_web_extractor=(
+                    "responses_web_extractor"
+                    if self.bailian_web_search_enabled
+                    and self.bailian_web_extractor_enabled
+                    else "disabled"
+                ),
+                timeout_seconds=self.llm_timeout_seconds,
+                max_output_tokens=self.llm_max_output_tokens,
+            )
+        if self.deepseek_api_key is not None:
+            configs["deepseek"] = LLMEndpointConfig(
+                api_style="chat_completions",
+                base_url=self.deepseek_base_url,
+                api_key=self.deepseek_api_key,
+                model=self.deepseek_model,
+                reasoning_mode="thinking",
+                reasoning_effort=self.llm_reasoning_effort,
+                native_web_search="disabled",
+                native_web_extractor="disabled",
+                timeout_seconds=self.llm_timeout_seconds,
+                max_output_tokens=self.llm_max_output_tokens,
+            )
+        return configs
+
+    @property
+    def default_agent_llm_id(self) -> str | None:
+        configs = self.resolved_agent_llm_configs
+        if not configs:
+            return None
+        if "default" in configs:
+            return "default"
+        return self.llm_provider if self.llm_provider in configs else next(iter(configs))
+
+    @property
     def resolved_monitor_judgment_fallback_config(self) -> LLMEndpointConfig | None:
         """Resolve the optional Monitor-only fallback endpoint.
 

@@ -105,10 +105,12 @@ company/catalyst flow, `Instrument` is the objective security identity and the
 Research Subject is the durable, subjective research file opened around that Instrument; `Thesis` is one
 current, falsifiable investment judgment inside the file. Theme, macro, and
 portfolio-concern Research Subjects may instead span instruments or have no primary Instrument.
-For those files, Research WatchlistItems also provide an explicitly confirmed
-Instrument Selection pool. Canonical candidates can be watching, shortlisted,
-selected, or rejected; one selected Instrument may feed a later Trade Plan without
-mutating the Research Subject identity.
+For those files, Research WatchlistItems provide explicitly confirmed Instrument
+attachments. The normal flow proposes an Instrument once and attaches it immediately
+after confirmation; it does not require shortlist or selection steps. A later Trade
+Plan chooses its execution Instrument explicitly without mutating the Research
+Subject identity. Historical watching, shortlisted, selected, and rejected states
+remain readable for compatibility.
 A research file owns or links its current judgments,
 append-only revisions, assumptions, invalidation conditions, open questions,
 reports, events, decisions, journals, challenge reviews, and optional WatchlistItem

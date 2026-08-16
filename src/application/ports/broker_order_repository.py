@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from domain.execution.models import BrokerOrderIntent
+from domain.execution.models import BrokerOrderIntent, BrokerOrderIntentStatus
 
 
 class BrokerOrderRepository(Protocol):
@@ -21,7 +21,7 @@ class BrokerOrderRepository(Protocol):
         confirmed_by: str,
         submitted_via: str,
         authorization_note: str,
-    ) -> BrokerOrderIntent: ...
+    ) -> tuple[BrokerOrderIntent, bool]: ...
     def mark_submitted(
         self,
         *,
@@ -39,3 +39,15 @@ class BrokerOrderRepository(Protocol):
     def mark_cancelled(
         self, *, order_intent_id: str, now: datetime
     ) -> BrokerOrderIntent: ...
+    def mark_cancel_requested(
+        self, *, order_intent_id: str, now: datetime
+    ) -> BrokerOrderIntent: ...
+    def record_provider_observation(
+        self,
+        *,
+        order_intent_id: str,
+        provider_status: str,
+        now: datetime,
+        status: BrokerOrderIntentStatus | None = None,
+    ) -> BrokerOrderIntent: ...
+    def list_unresolved(self, limit: int = 100) -> tuple[BrokerOrderIntent, ...]: ...

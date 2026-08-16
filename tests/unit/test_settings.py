@@ -272,6 +272,25 @@ def test_agent_partial_generic_config_does_not_borrow_legacy_values() -> None:
         )
 
 
+def test_agent_model_catalog_exposes_each_configured_legacy_endpoint() -> None:
+    settings = _base_settings(
+        agent_enabled=True,
+        llm_provider="bailian",
+        bailian_api_key="bailian-secret",
+        deepseek_api_key="deepseek-secret",
+    )
+
+    configs = settings.resolved_agent_llm_configs
+
+    assert tuple(configs) == ("bailian", "deepseek")
+    assert configs["bailian"].model == "qwen3.8-max"
+    assert configs["bailian"].native_web_search == "responses_web_search"
+    assert configs["bailian"].native_web_extractor == "responses_web_extractor"
+    assert configs["deepseek"].model == "deepseek-v4-flash"
+    assert configs["deepseek"].native_web_search == "disabled"
+    assert settings.default_agent_llm_id == "bailian"
+
+
 def test_env_example_contains_required_keys() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / ".env.example").read_text(encoding="utf-8")

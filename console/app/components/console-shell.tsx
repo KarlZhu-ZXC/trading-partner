@@ -17,23 +17,42 @@ import {
   PanelRightOpen,
   Radar,
   SlidersHorizontal,
+  LogOut,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { ThemeSwitch } from "./theme-switch";
 import { AgentRail } from "./agent-rail";
+import { GlobalNotifications } from "./global-notifications";
 
-type NavigationItem = { href: string; label: string; key: string; icon: LucideIcon };
+export const CONSOLE_PAGE_LABELS = {
+  overview: "Overview",
+  "decision-workbench": "Workbench",
+  research: "Research",
+  scorecards: "Scorecards",
+  agenda: "Catalyst Agenda",
+  monitors: "Monitors",
+  capabilities: "Capabilities",
+  portfolio: "Portfolio",
+  retro: "Trade Retro",
+  operations: "Operations",
+  chat: "Agent Chat",
+} as const;
+
+type ConsolePageKey = keyof typeof CONSOLE_PAGE_LABELS;
+type NavigationItem = { href: string; key: Exclude<ConsolePageKey, "chat">; icon: LucideIcon };
 
 const navigation: NavigationItem[] = [
-  { href: "/", label: "Overview", icon: LayoutDashboard, key: "overview" },
-  { href: "/research", label: "Research", icon: BookOpenText, key: "research" },
-  { href: "/scorecards", label: "Scorecards", icon: ListChecks, key: "scorecards" },
-  { href: "/agenda", label: "Catalyst Agenda", icon: CalendarCheck, key: "agenda" },
-  { href: "/monitors", label: "Monitors", icon: Radar, key: "monitors" },
-  { href: "/capabilities", label: "Capabilities", icon: Blocks, key: "capabilities" },
-  { href: "/portfolio", label: "Portfolio", icon: BriefcaseBusiness, key: "portfolio" },
-  { href: "/retro", label: "Trade Retro", icon: History, key: "retro" },
-  { href: "/operations", label: "Operations", icon: SlidersHorizontal, key: "operations" },
+  { href: "/", icon: LayoutDashboard, key: "overview" },
+  { href: "/decision-workbench", icon: Workflow, key: "decision-workbench" },
+  { href: "/research", icon: BookOpenText, key: "research" },
+  { href: "/scorecards", icon: ListChecks, key: "scorecards" },
+  { href: "/agenda", icon: CalendarCheck, key: "agenda" },
+  { href: "/monitors", icon: Radar, key: "monitors" },
+  { href: "/capabilities", icon: Blocks, key: "capabilities" },
+  { href: "/portfolio", icon: BriefcaseBusiness, key: "portfolio" },
+  { href: "/retro", icon: History, key: "retro" },
+  { href: "/operations", icon: SlidersHorizontal, key: "operations" },
 ];
 
 const SIDEBAR_STORAGE_KEY = "trading-partner-sidebar-collapsed";
@@ -41,18 +60,24 @@ const AGENT_RAIL_STORAGE_KEY = "trading-partner-agent-rail-collapsed";
 
 export function ConsoleShell({
   active,
-  title,
-  eyebrow,
   children,
+  pageActions,
 }: {
-  active: string;
-  title: string;
-  eyebrow: string;
+  active: ConsolePageKey;
   children: ReactNode;
+  pageActions?: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [agentRailCollapsed, setAgentRailCollapsed] = useState(false);
   const [overlayViewport, setOverlayViewport] = useState(false);
+  const [lanMode, setLanMode] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/lan-auth", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload: { enabled?: unknown }) => setLanMode(payload.enabled === true))
+      .catch(() => setLanMode(false));
+  }, []);
 
   useEffect(() => {
     try {
@@ -160,11 +185,16 @@ export function ConsoleShell({
 
   const overlayOpen = overlayViewport && (!collapsed || !agentRailCollapsed);
 
+  async function signOutLanSession() {
+    await fetch("/api/lan-auth", { method: "DELETE" });
+    window.location.assign("/lan-login");
+  }
+
   return (
     <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}${agentRailCollapsed ? " agent-rail-collapsed" : ""}`}>
       <aside className="sidebar" id="console-navigation-panel">
         <div className="sidebar-header">
-          <Link className="brand" href="/" aria-label="Trading Partner console home">
+          <Link className="brand" href="/" aria-label="Trading Partner Console Home">
             <img
               alt=""
               className="brand-logo"
@@ -174,49 +204,46 @@ export function ConsoleShell({
             />
             <span className="brand-copy">
               <strong>Trading Partner</strong>
-              <small>LOCAL CONTROL ROOM</small>
+              <small>LOCAL HUB</small>
             </span>
           </Link>
-          <button
-            aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-            aria-expanded={!collapsed}
-            className="sidebar-toggle"
-            onClick={toggleSidebar}
-            type="button"
-          >
-            {collapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
-          </button>
         </div>
-        <nav className="nav-list" aria-label="Console navigation">
+        <nav className="nav-list" aria-label="Console Navigation">
           {navigation.map((item) => {
             const Icon = item.icon;
+            const label = CONSOLE_PAGE_LABELS[item.key];
             return (
               <Link
-                aria-label={item.label}
+                aria-label={label}
                 className={item.key === active ? "nav-item active" : "nav-item"}
-                data-label={item.label}
+                data-label={label}
                 href={item.href}
                 key={item.key}
               >
                 <Icon aria-hidden="true" className="nav-icon" strokeWidth={1.7} />
-                <span className="nav-label">{item.label}</span>
+                <span className="nav-label">{label}</span>
               </Link>
             );
           })}
         </nav>
         <div className="sidebar-bottom">
-          <ThemeSwitch />
+          {lanMode ? (
+            <button className="lan-sign-out" onClick={signOutLanSession} type="button">
+              <LogOut aria-hidden="true" />
+              <span className="theme-switch-label">Sign Out LAN Session</span>
+            </button>
+          ) : null}
           <div className="sidebar-foot">
             <span className="pulse-dot" />
             <div className="sidebar-foot-copy">
-              <strong>Loopback only</strong>
-              <small>127.0.0.1 · gated actions</small>
+              <strong>{lanMode ? "Trusted LAN" : "Loopback only"}</strong>
+              <small>{lanMode ? "AUTHENTICATED · API LOCAL" : "127.0.0.1 · GATED ACTIONS"}</small>
             </div>
           </div>
         </div>
       </aside>
       <button
-        aria-label="Close open side panel"
+        aria-label="Close Open Side Panel"
         className={`workspace-pane-backdrop${overlayOpen ? " visible" : ""}`}
         onClick={() => {
           applySidebarCollapsed(true);
@@ -226,7 +253,8 @@ export function ConsoleShell({
         type="button"
       />
       <main className="main-content">
-        <header className="page-header">
+        <GlobalNotifications />
+        <header className="global-header">
           <button
             aria-controls="console-navigation-panel"
             aria-expanded={!collapsed}
@@ -238,18 +266,15 @@ export function ConsoleShell({
           >
             {collapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
           </button>
-          <div className="page-heading">
-            <p className="eyebrow">{eyebrow}</p>
-            <h1>{title}</h1>
-          </div>
-          <div className="page-header-actions">
+          <div className="global-header-actions">
             <div className="environment-chip">
-              <span className="pulse-dot" /> DEVELOPMENT
+              <span className="pulse-dot" /> {lanMode ? "LAN SESSION" : "DEVELOPMENT"}
             </div>
+            <ThemeSwitch />
             <button
               aria-controls="console-agent-panel"
               aria-expanded={!agentRailCollapsed}
-              aria-label={agentRailCollapsed ? "Open Agent panel" : "Close Agent panel"}
+              aria-label={agentRailCollapsed ? "Open Agent Panel" : "Close Agent Panel"}
               className={`workspace-pane-toggle right${agentRailCollapsed ? " collapsed" : ""}`}
               onClick={toggleAgentRail}
               title={`${agentRailCollapsed ? "Open" : "Close"} Agent · ⌘⇧A`}
@@ -259,9 +284,17 @@ export function ConsoleShell({
             </button>
           </div>
         </header>
+        <header className="page-header">
+          <div className="page-heading"><h1>{CONSOLE_PAGE_LABELS[active]}</h1></div>
+          {pageActions ? <div className="page-level-actions">{pageActions}</div> : null}
+        </header>
         {children}
       </main>
-      <AgentRail collapsed={agentRailCollapsed} onCollapsedChange={applyAgentRailCollapsed} />
+      <AgentRail
+        collapsed={agentRailCollapsed}
+        onCollapsedChange={applyAgentRailCollapsed}
+        overlayViewport={overlayViewport}
+      />
     </div>
   );
 }

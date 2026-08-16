@@ -1,15 +1,15 @@
-"""Transport-neutral read-only Agent tool gateway port.
+"""Transport-neutral bounded Agent tool gateway port.
 
-The Agent runtime only knows this small contract.  It does not receive the
-27-tool MCP inventory and never gets a database/provider handle.  Concrete
-gateways live at the interface boundary and reuse the compact registry's exact
-Pydantic operation validation.
+The Agent runtime only knows this small contract. It does not receive the
+27-tool MCP inventory and never gets a database/provider handle. Concrete
+gateways expose reads and explicitly non-effective proposals while reusing the
+compact registry's exact Pydantic operation validation.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -25,6 +25,10 @@ class AgentToolDescriptor:
     confirmation_required: bool
     auto_allowed: bool
     direct: bool = False
+    # Deterministic routing metadata is intentionally bounded and contains no
+    # raw query text.  Console/Telegram adapters may persist it alongside a
+    # capability-search receipt without changing the public MCP surface.
+    routing: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def capability_name(self) -> str:
@@ -72,6 +76,7 @@ class AgentToolDescriptor:
             "confirmation_required": self.confirmation_required,
             "auto_allowed": self.auto_allowed,
             "direct": self.direct,
+            "routing": deepcopy(dict(self.routing)),
         }
 
 
@@ -151,6 +156,14 @@ class AgentToolGateway(Protocol):
         arguments: Mapping[str, Any],
     ) -> AgentToolResult:
         """Validate and execute one Agent-A-allowed operation."""
+
+    async def propose(
+        self,
+        capability: str,
+        operation: str,
+        arguments: Mapping[str, Any],
+    ) -> AgentToolResult:
+        """Validate and create one non-effective domain proposal."""
 
 
 __all__ = [

@@ -6,7 +6,6 @@ import html
 import logging
 import re
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -61,17 +60,26 @@ class TelegramNotificationAdapter:
             await self._client.aclose()
 
     async def send(self, notification: NotificationOutboxEntry) -> NotificationSendReceipt:
-        payload: dict[str, object] = {
-            "chat_id": self._chat_id,
-            "text": _render_notification_html(notification),
-            "parse_mode": "HTML",
-            "disable_notification": False,
+        is_monitor = notification.source_type in {
+            NotificationSourceType.MONITOR_EVENT,
+            NotificationSourceType.MONITOR_RUN,
         }
+        rendered = _render_notification_html(notification)
+        payload: dict[str, object] = {"chat_id": self._chat_id, "disable_notification": False}
+        if is_monitor:
+            payload["rich_message"] = {
+                "html": rendered,
+                "skip_entity_detection": True,
+            }
+            method = "sendRichMessage"
+        else:
+            payload.update({"text": rendered, "parse_mode": "HTML"})
+            method = "sendMessage"
         if self._message_thread_id is not None:
             payload["message_thread_id"] = self._message_thread_id
         # Telegram requires the bot token in this path. Never expose this URL in
         # logs, exceptions, receipts, or generic HttpRequest representations.
-        endpoint = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+        endpoint = f"https://api.telegram.org/bot{self._bot_token}/{method}"
         return await self._post(endpoint, json=payload)
 
     async def _post(
@@ -156,7 +164,7 @@ def _render_notification_html(notification: NotificationOutboxEntry) -> str:
 
 
 def _format_notification_html(title: str, body: str) -> str:
-    """Render a mobile-first Telegram rule card; Telegram has no table markup."""
+    """Render a mobile-first Telegram Rich Message with a native rule table."""
     lines = body.splitlines()
     if lines and lines[0] == "POST_MARKET_SUMMARY":
         return _format_post_market_summary_html(title, lines)
@@ -184,7 +192,6 @@ def _format_notification_html(title: str, body: str) -> str:
     judgment_lines = lines[judgment_index + 1 :] if judgment_index is not None else []
     if not rows:
         return render_plain_text_html(title, body)
-    compact_cards = any(len(row) >= 7 and not row[0] for row in rows)
 
     display_price = price
     if display_price in {None, "不可用", "N/A", "—"} and previous_valid_price is not None:
@@ -198,33 +205,31 @@ def _format_notification_html(title: str, body: str) -> str:
         formatted for line in changes if (formatted := _format_change(line)) is not None
     )
     if formatted_changes:
-        sections.append(
-            _change_banner(changes)
-            + "\n"
-            + "\n".join(formatted_changes)
-            + "\n"
-            + _change_footer(changes)
-        )
+        sections.append(_change_banner(changes) + "\n" + "\n".join(formatted_changes))
 
     price_lines: list[str] = []
-    # New compact messages already put the price in the first line. Keep the
-    # legacy duplicate for historical outbox bodies whose tests/users expect it.
-    if display_price is not None and not compact_cards:
-        price_lines.append(f"💰 <b>当前价格：{html.escape(display_price)}</b>")
     if price_basis is not None:
         price_lines.append(f"⚠️ 价格口径：{html.escape(price_basis)}")
+    observation_meta: list[str] = []
     if price_time is not None:
-        price_lines.append(f"🕒 价格时间：{html.escape(_format_price_time(price_time))}")
+        observation_meta.append(f"🕒 {html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        price_lines.append(f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>")
+        observation_meta.append(
+            f"📡 <b>{html.escape(_display_source_names(data_source))}</b>"
+        )
+    if observation_meta:
+        price_lines.append(" · ".join(observation_meta))
+    comparison_meta: list[str] = []
     if previous_price is not None:
-        price_lines.append(f"↩️ 上次价格：{html.escape(previous_price)}")
+        comparison_meta.append(f"↩️ 上次 {html.escape(previous_price)}")
     if price_change is not None:
-        price_lines.append(f"📈 较上次：<b>{html.escape(price_change)}</b>")
+        comparison_meta.append(f"较上次 <b>{html.escape(price_change)}</b>")
+    if comparison_meta:
+        price_lines.append(" · ".join(comparison_meta))
     if price_lines:
         sections.append("\n".join(price_lines))
 
-    sections.append("<b>全部监控规则</b>\n\n" + _format_rule_cards(rows))
+    sections.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
     if notes:
         sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
     if judgment_lines:
@@ -317,27 +322,29 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     parts = [f"<b>{html.escape(heading)}</b>"]
     if name and name != symbol and len(name) <= 48:
         parts.append(f"<i>{html.escape(name)}</i>")
+    observation_meta: list[str] = []
     if price_time is not None:
-        parts.append(f"🕒 {html.escape(_format_price_time(price_time))}")
+        observation_meta.append(f"🕒 {html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        parts.append(f"📡 数据来源：<b>{html.escape(_display_source_names(data_source))}</b>")
+        observation_meta.append(
+            f"📡 <b>{html.escape(_display_source_names(data_source))}</b>"
+        )
+    if observation_meta:
+        parts.append(" · ".join(observation_meta))
     if price_basis is not None:
         parts.append(f"⚠️ {html.escape(price_basis)}")
+    comparison_meta: list[str] = []
     if previous_price is not None:
-        parts.append(f"↩️ 上次价格：{html.escape(previous_price)}")
+        comparison_meta.append(f"↩️ 上次 {html.escape(previous_price)}")
     if price_change is not None:
-        parts.append(f"📈 较上次：<b>{html.escape(price_change)}</b>")
+        comparison_meta.append(f"较上次 <b>{html.escape(price_change)}</b>")
+    if comparison_meta:
+        parts.append(" · ".join(comparison_meta))
     formatted_changes = tuple(
         formatted for line in changes if (formatted := _format_change(line)) is not None
     )
     if formatted_changes:
-        parts.append(
-            _change_banner(changes)
-            + "\n"
-            + "\n".join(formatted_changes)
-            + "\n"
-            + _change_footer(changes)
-        )
+        parts.append(_change_banner(changes) + "\n" + "\n".join(formatted_changes))
     for note in notes:
         if note not in {price_basis}:
             parts.append(f"<i>{html.escape(note)}</i>")
@@ -346,7 +353,7 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
             "⚠️ <b>复合判断状态</b>\n"
             + "\n".join(html.escape(line) for line in judgment_lines if line.strip())
         )
-    parts.append(_format_rule_cards(rows))
+    parts.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
     return "\n".join(parts)
 
 
@@ -377,6 +384,7 @@ def _parse_rule_rows(
             (
                 "数据提示：",
                 "数据原因：",
+                "数据状态：",
                 "运行错误：",
                 "口径：",
                 "期货价格",
@@ -436,20 +444,14 @@ def _change_event(line: str) -> str | None:
 
 def _change_banner(changes: list[str]) -> str:
     event_types = {event for line in changes if (event := _change_event(line)) is not None}
-    if "TRIGGERED" in event_types:
-        return "🟥🟥🟥 <b>新触发点位</b> 🟥🟥🟥\n<b>状态较上次发生变化</b>"
-    if "RECOVERED" in event_types:
-        return "🟩🟩🟩 <b>触发点位已恢复</b> 🟩🟩🟩\n<b>状态较上次发生变化</b>"
-    return "🟨🟨🟨 <b>监控状态变化</b> 🟨🟨🟨"
-
-
-def _change_footer(changes: list[str]) -> str:
-    event_types = {event for line in changes if (event := _change_event(line)) is not None}
-    if "TRIGGERED" in event_types:
-        return "🟥🟥🟥🟥🟥🟥🟥🟥🟥"
-    if "RECOVERED" in event_types:
-        return "🟩🟩🟩🟩🟩🟩🟩🟩🟩"
-    return "🟨🟨🟨🟨🟨🟨🟨🟨🟨"
+    if event_types == {"TRIGGERED"}:
+        return "🟥 <b>新告警触发</b> · 状态较上次发生变化"
+    if event_types == {"RECOVERED"}:
+        return (
+            "🟩 <b>告警已解除</b> · 状态较上次发生变化\n"
+            "原触发条件当前已不成立；不代表价格上涨或行情转好。"
+        )
+    return f"🟨 <b>监控状态变化 · {len(changes)} 项</b>"
 
 
 def _display_source_names(value: str) -> str:
@@ -464,37 +466,76 @@ def _display_source_names(value: str) -> str:
 
 def _format_rule_cards(
     rows: tuple[tuple[str, ...], ...],
+    *,
+    symbol: str | None = None,
 ) -> str:
-    cards: list[str] = []
+    attention = tuple(row for row in rows if row[4] not in {"QUIET", "RECOVERED"})
+    quiet = tuple(row for row in rows if row[4] in {"QUIET", "RECOVERED"})
+    sections: list[str] = []
+    if attention:
+        sections.append(
+            f"<b>需关注 · {len(attention)} 项</b>" + _format_rule_table(attention, symbol=symbol)
+        )
+    else:
+        sections.append("✅ <b>当前无触发或数据异常规则</b>")
+    if quiet:
+        sections.append(
+            f"<details><summary>⚪ 未触发 · {len(quiet)} 项</summary>"
+            f"{_format_rule_table(quiet, symbol=symbol)}</details>"
+        )
+    return "\n".join(sections)
+
+
+def _format_rule_table(
+    rows: tuple[tuple[str, ...], ...],
+    *,
+    symbol: str | None,
+) -> str:
+    table_rows = ["<table bordered striped>", "<tr><th>状态</th><th>规则与含义</th></tr>"]
     for row in rows:
-        rule, condition, value, distance, state, level = row[:6]
+        _rule, condition, _value, _distance, state, level = row[:6]
         meaning = row[6] if len(row) >= 7 else None
-        header = (
-            f"{_state_emoji(state)} <b>{html.escape(condition)}</b> · <b>{html.escape(state)}</b>"
-        )
+        state_cell = f"{_state_emoji(state)} <b>{html.escape(_compact_state_label(state))}</b>"
         if level != "INFO":
-            header += f" · {html.escape(level)}"
-        if not rule and meaning is not None:
-            header = (
-                f"{_state_emoji(state)} <b>{html.escape(condition)}</b>"
-                f" · <b>{html.escape(_state_label(state))}</b>"
-            )
-            if level != "INFO":
-                header += f" · {html.escape(level)}"
-            cards.append(f"{header}\n含义：{html.escape(meaning)}")
-            continue
-        cards.append(
-            "\n".join(
-                (
-                    header,
-                    f"当前 <code>{html.escape(value)}</code>"
-                    f" · {html.escape(_distance_label(condition, distance, state))}",
-                    f"规则：<code>{html.escape(rule)}</code>",
-                    *(() if meaning is None else (f"含义：{html.escape(meaning)}",)),
-                )
-            )
+            state_cell += f" · {html.escape(_short_severity(level))}"
+        display_meaning = _deduplicate_rule_meaning(
+            meaning or "未提供规则说明",
+            condition=condition,
+            symbol=symbol,
         )
-    return "\n\n".join(cards)
+        rule_cell = f"<b>{html.escape(condition)}</b> · {html.escape(display_meaning)}"
+        table_rows.append(
+            "<tr>"
+            f"<td>{state_cell}</td>"
+            f"<td>{rule_cell}</td>"
+            "</tr>"
+        )
+    table_rows.append("</table>")
+    return "".join(table_rows)
+
+
+def _deduplicate_rule_meaning(
+    meaning: str,
+    *,
+    condition: str,
+    symbol: str | None,
+) -> str:
+    """Drop a repeated same-symbol condition prefix from the human meaning."""
+    if symbol is None or not symbol.strip():
+        return meaning
+    for separator in ("：", ":"):
+        prefix, found, remainder = meaning.partition(separator)
+        if not found or not remainder.strip():
+            continue
+        normalized_prefix = "".join(prefix.upper().split())
+        normalized_symbol = "".join(symbol.upper().split())
+        normalized_condition = "".join(condition.upper().split())
+        if (
+            normalized_prefix.startswith(normalized_symbol)
+            and normalized_condition in normalized_prefix
+        ):
+            return remainder.strip()
+    return meaning
 
 
 def _headline_with_price(title: str, price: str | None) -> str:
@@ -534,32 +575,6 @@ def _format_price_time(value: str) -> str:
     return f"{parsed:%Y-%m-%d %H:%M} UTC{sign}{hours:02d}:{minutes:02d}"
 
 
-def _distance_label(condition: str, distance: str, state: str) -> str:
-    if distance == "不可用":
-        return "距阈值：不可用"
-    try:
-        delta = Decimal(distance)
-    except InvalidOperation:
-        return f"距阈值：{distance}"
-    comparator = condition.split(maxsplit=1)[0] if condition else ""
-    magnitude = _format_decimal(abs(delta))
-    if state == "TRIGGERED":
-        if comparator.startswith(">"):
-            return f"已高于阈值 {magnitude}"
-        if comparator.startswith("<"):
-            return f"已低于阈值 {magnitude}"
-    if comparator.startswith(">") and delta < 0:
-        return f"距触发 {magnitude}"
-    if comparator.startswith("<") and delta > 0:
-        return f"距触发 {magnitude}"
-    return f"距阈值：{_format_decimal(delta)}"
-
-
-def _format_decimal(value: Decimal) -> str:
-    rendered = format(value, "f")
-    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
-
-
 def _state_emoji(state: str) -> str:
     return {
         "TRIGGERED": "🔴",
@@ -573,13 +588,27 @@ def _state_label(state: str) -> str:
     return {
         "TRIGGERED": "已触发",
         "NOT_EVALUATED": "数据不可用",
-        "RECOVERED": "已恢复",
+        "RECOVERED": "告警解除",
+        "QUIET": "未触发",
+    }.get(state, state)
+
+
+def _compact_state_label(state: str) -> str:
+    return {
+        "TRIGGERED": "触发",
+        "NOT_EVALUATED": "不可用",
+        "RECOVERED": "解除",
         "QUIET": "未触发",
     }.get(state, state)
 
 
 def _short_severity(value: str) -> str:
-    return {"MEDIUM": "M", "HIGH": "H"}.get(value.strip(), value.strip())
+    return {
+        "M": "中",
+        "MEDIUM": "中",
+        "H": "高",
+        "HIGH": "高",
+    }.get(value.strip(), value.strip())
 
 
 def _prefixed_value(lines: list[str], prefix: str) -> str | None:

@@ -1105,7 +1105,6 @@ def test_theme_subject_instrument_selection_candidate_lifecycle(harness) -> None
             action="create",
             instrument_id="etf:A_SHARE:159992",
             display_name="创新药 ETF",
-            thesis_hint="比较指数覆盖、流动性和跟踪质量",
         ),
         confirmation_mode=ConfirmationMode.STRICT_REVIEW,
         proposed_by="codex",
@@ -1120,6 +1119,7 @@ def test_theme_subject_instrument_selection_candidate_lifecycle(harness) -> None
         assert item.instrument_id == "etf:A_SHARE:159992"
         assert item.market.value == "A_SHARE"
         assert item.symbol == "159992"
+        assert item.thesis_hint == ""
 
     selected = thesis.propose_state_update(
         subject_id=subject_id,

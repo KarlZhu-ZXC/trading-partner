@@ -1,6 +1,6 @@
 # Shared Agent Runtime 实施计划
 
-状态：**Agent-A/B/C/D 已完成；Agent-E 按决策延后一版且默认关闭**
+状态：**Agent-A/B/C/D 与 2026-08 reliability hardening 已完成；Agent-E 按决策延后一版且默认关闭**
 范围：一个 Agent Core，同时服务本地 Console 与 Telegram；Codex 继续通过 MCP
 使用 Trading Partner，不受本计划影响。
 
@@ -81,17 +81,22 @@ LLM_MAX_OUTPUT_TOKENS=8000
 
 ## 4. 模型看到的工具面
 
-Agent 不直接加载 27 个公共 MCP schema。模型初始只看到三个稳定工具：
+Agent 不直接加载 27 个公共 MCP schema。模型初始只看到四个稳定工具：
 
 | Agent tool | 作用 | 自动执行 |
 |---|---|---|
 | `tp_capability_search` | 按问题检索能力、operation 和所需 schema | 是 |
 | `tp_read` | 调用一个已发现的只读/Provider-read 能力 | 是 |
+| `tp_propose` | 创建 Thesis、Trade Plan 或研究候选；不使其生效 | 是，仅创建候选 |
 | `tp_prepare_action` | 固化一个需要确认的动作，不执行 | 否 |
 
-`tp_capability_search` 按需返回一个或少量精确 schema；`tp_read` 再由现有 Pydantic
+`tp_capability_search` 按需返回一个或少量精确 schema；`tp_read` / `tp_propose` 再由现有 Pydantic
 闭合 DTO 完整校验。这样模型上下文不会再次膨胀为 27 个大 schema，同时应用层仍是
 最终权限和数据契约的裁判。
+
+Proposal 本身就是未生效候选，因此不再先生成一层 Pending Action。候选的
+Confirm / Reject / Withdraw 仍是独立、显式的人类决策；其他有效写入继续使用
+`tp_prepare_action`。
 
 第一阶段自动允许：
 
@@ -103,7 +108,8 @@ Agent 不直接加载 27 个公共 MCP schema。模型初始只看到三个稳�
 以下永远不能由模型一步执行：
 
 - upstream sync；
-- Research Subject/Thesis/Trade Plan/Monitor/Watchlist/Retro 写入；
+- Research Subject/Monitor/Watchlist/Retro 有效写入，以及 Thesis/Trade Plan 的最终确认；
+- Thesis、Trade Plan 与 Instrument-selection 的未生效 Candidate 只能通过 `tp_propose` 创建；
 - Candidate confirm/reject/withdraw；
 - broker order preview 后的 submit/cancel；
 - 任何未来新增的 destructive/open-world write。
@@ -224,6 +230,10 @@ Agent 是所有 Console 工作台页面共用的右侧栏，不是需要离开�
 - 图表：复用 `chart_artifact.display_markdown` 对应的本地 artifact；
 - 每条回答可跳转到 Research、Monitor、Portfolio、Retro 等正式页面；
 - 明确标注模型/endpoint capability，但不显示 API key 或完整敏感 URL。
+- 输入栏按 `Provider → 模型 → 思考强度` 三级联动：选择 Provider 后由后端使用该
+  Provider 的已配置凭据读取标准 `/models` 目录并短时缓存，只投影有界文本模型 ID；浏览器
+  不接触 API key 或 endpoint。目录失败时保留配置默认模型并明确提示降级。每轮提交仍由后端
+  校验 Provider、目录模型和该端点支持的思考强度，不能靠修改浏览器请求注入任意模型名。
 
 Backend 使用 SSE：`message_started`、`tool_started`、`tool_finished`、`text_delta`、
 `pending_action`、`completed`、`failed`。若某端点不支持 token streaming，仍通过同一
@@ -332,7 +342,9 @@ chat/user 无法调用工具或确认 gateway；通知 Outbox 与聊天共存。
 ### Agent-D：确认式研究写入
 
 - [x] operation-level policy、Pending Action、Console/Telegram 确认；
-- [x] 首批支持 Research Subject metadata、Candidate、Thesis proposal、Monitor/Watchlist；
+- [x] Research Subject metadata、Monitor/Watchlist 等有效写入使用 Pending Action；
+- [x] Thesis、Trade Plan 与 Instrument-selection Candidate 使用 `tp_propose` 单层 Proposal，
+  最终 Candidate decision 仍需用户明确确认；
 - [x] 每项仍服从现有 expected-version/idempotency/actor contract。
 
 验收：模型不能直接写；参数变化、过期、跨 channel 或重复确认全部拒绝。
@@ -401,3 +413,42 @@ build、wheel smoke、Gitleaks。新增测试应替换重复 schema 测试，不
 1. Agent-E 是否与 Agent-D 同一个 release，还是延后一版（推荐延后一版）；
 2. Console 与 Telegram 是否默认独立会话、按需 handoff（推荐），还是默认共享一个
    永久会话。
+
+## 16. 2026-08 Agent reliability hardening（已完成）
+
+在不增加公开 MCP 工具、保持真实订单关闭的前提下，本轮补齐；默认 Bailian 端点继续启用
+有界原生 Web Search/正文抽取并保留使用回执与来源 URL，不支持该能力的端点保持关闭：
+
+- capability search 明确区分 `read` 与 `prepare_action`；写 schema 只来自 Pending Action
+  allowlist，发现 schema 不等于执行写入；
+- 同一模型响应中的独立 `tp_read` 最多四路并行，搜索、动作准备及混合批次仍串行；工具消息、
+  SSE event 与 receipt 保持模型调用顺序；
+- schema 失败只返回安全的 missing/invalid field hint，不复制异常、URL、header 或 secret；
+- Monitor runs/dashboard、Portfolio exposure、Research timeline/search 使用保留 envelope、来源、
+  freshness、warnings/errors 的专用有界压缩；
+- migration `0049_agent_turns` 增加 durable Turn 生命周期：`RUNNING`、`WAITING_TOOL`、
+  `COMPLETED`、`FAILED`、`CANCELLED`。Console 刷新后可显示并轮询服务端回合；失败只持久化
+  bounded error code；
+- Console 可重新读取仍为 `PRESENTED` 的 Pending Action。原始确认 token 从不持久化；只有
+  用户点击 `Resume confirmation` 才执行 identity/expiry/expected-version CAS 并换发一次性
+  token，旧 token 立即失效，动作参数与 expiry 不变；
+- Agent Rail 的 ephemeral context 现在包含路由 hash 与页面注册的 navigation-only context
+  （Research Subject、Monitor、Portfolio tab、Decision Workbench Subject）；仍不复制屏幕上的
+  持仓、账户或研究正文；
+- Agent Rail 支持 `Provider → 模型 → 思考强度` 三级联动；模型目录由后端凭据代拉、缓存并
+  过滤非文本模型，具体模型与思考强度在运行时再次校验，目录失败时安全降级到配置默认模型；
+- 回复使用安全 React 结构化渲染，支持标题、列表、代码、表格、外部链接与 durable entity
+  deep link，不使用 `dangerouslySetInnerHTML`；右侧栏也可显式生成 Telegram handoff 与归档会话；
+- `evals/agent-behavior.v1.json` 固化 14 个 Agent 专属回归场景，持续约束 durable-first、
+  provenance、Pending Action、断线恢复、缺数、prompt injection、带来源的 Web Search 和真实订单拒绝。
+
+## 17. 2026-08 Agent 17 项成熟度收口（已完成）
+
+唯一逐项清单见 [`agent-17-improvements.md`](agent-17-improvements.md)。本轮在既有 A–D 与
+reliability hardening 上补齐 durable cancel/reconnect/retry/restart recovery、Console/Telegram
+supervisor、可审计路由、更多 operation compactor、程序化 evidence guard、typed 页面对象、
+Console-only Review Queue Agent gateway、消息级操作与鉴权图表、版本化非事实偏好、两种协议
+真 token streaming、Auto read-only failover，以及真实 Runtime 驱动的 14-case 行为门禁。
+
+Provider 支持时 Web Search 继续默认启用且无用户 opt-in toggle；Agent-E 真实订单仍不在这
+17 项范围内并保持关闭。公开 MCP surface 仍精确为 27 个。

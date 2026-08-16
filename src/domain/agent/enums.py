@@ -30,9 +30,26 @@ class AgentPendingActionStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class AgentTurnStatus(StrEnum):
+    """Durable lifecycle for one model turn.
+
+    ``WAITING_TOOL`` means the model has requested one or more bounded tools
+    and the runtime is still processing that tool round.  ``CANCELLED`` is
+    modelled for forward compatibility; the current runtime does not cancel
+    an upstream request when a transport disconnects.
+    """
+
+    RUNNING = "RUNNING"
+    WAITING_TOOL = "WAITING_TOOL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
 # Short aliases are useful at the interface boundary while the longer names
 # make the ownership of these vocabularies explicit in type annotations.
 ConversationStatus = AgentConversationStatus
 Channel = AgentChannel
 MessageRole = AgentMessageRole
 PendingActionStatus = AgentPendingActionStatus
+TurnStatus = AgentTurnStatus

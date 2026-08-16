@@ -13,9 +13,10 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 ## Invariants
 
 1. **Research and execution remain separate.** The current repository has one narrow,
-   confirmation-gated Schwab single-leg US stock/ETF order surface. It has no
-   replacement, options/complex orders, short selling, unattended execution, or
-   autonomous position mutation.
+   confirmation-gated Schwab single-leg US stock/ETF order surface. Its sole
+   unattended exception is the installed SGOV BUY LIMIT/DAY/NORMAL cash-sweep
+   scheduler; there is no replacement, options/complex orders, short selling, other
+   unattended execution, or autonomous position mutation.
 2. **Facts remain attributable.** Price, account, financial, and event facts carry
    source, time, basis, freshness, warnings, and typed errors.
 3. **Missing data is not a value.** Unavailable or stale facts become degraded,
@@ -87,7 +88,13 @@ The authoritative detail is the
 
 ### R1 — Reliability and evidence quality
 
-This is continuous work rather than a feature phase:
+This is now the active product phase. New capability breadth is frozen while the
+existing product is consolidated around stability, usability, and cross-feature
+decision-loop closure. The implementation sequence and measurable acceptance
+criteria live in the
+[Reliability, Usability, and Decision-Loop plan](../plans/reliability-usability-and-closure-plan.md).
+
+Continuous requirements remain:
 
 - preserve exact Provider failure stages and retry/admission diagnostics;
 - improve data coverage receipts before adding more derived conclusions;

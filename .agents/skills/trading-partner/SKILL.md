@@ -1,6 +1,6 @@
 ---
 name: trading-partner
-description: "Use Trading Partner MCP for verified investment facts, research files and judgments, accounts, portfolio/risk, monitoring, watchlists, workflows, and confirmation-gated Schwab US stock/ETF orders. Use for A-share, US, KR, futures, OTC commodity, or durable portfolio/research requests. Public surface: mcp_vnext_shadow."
+description: "Use Trading Partner MCP for verified investment facts, research, portfolio/risk, monitoring, workflows, confirmation-gated Schwab orders, and the closed SGOV scheduler exception. Public surface: mcp_vnext_shadow."
 ---
 
 # Trading Partner
@@ -69,6 +69,10 @@ must retain their token/perpetual/CFD identity and basis warnings.
   holds conditional execution intent. Do not merge these concepts.
 - Candidate decisions use Propose → explicit Confirm/Reject/Withdraw. Never choose
   the outcome autonomously.
+- To attach an Instrument to a Research Subject, propose one `watchlist_item` create
+  and ask for the explicit decision. Confirmation attaches it directly; do not add
+  Shortlist, Select, or another status-transition step. Legacy Instrument Selection
+  statuses may appear in durable reads but are not a user task to complete.
 - When the user explicitly decides in the current chat, relay exactly
   `reviewed_by="user"`, `submitted_via="codex_chat"`, and a bounded
   `authorization_note`. Ambiguous target/action requires clarification.
@@ -87,6 +91,9 @@ must retain their token/perpetual/CFD identity and basis warnings.
 - A Trade Plan or research confirmation never authorizes an order.
 - Live Schwab submit/cancel requires an exact unexpired preview and explicit
   current-chat authorization for that action. Unknown submit outcomes are not retried.
+- The installed operational SGOV scheduler is the sole persistent exception: SGOV
+  BUY LIMIT/DAY/NORMAL only, with reserve and quote guards. It does not authorize an
+  MCP/Agent order, another symbol, sell, cancel, replace, or overnight session.
 
 ## Output discipline
 
@@ -104,5 +111,5 @@ command = "uv"
 args = ["run", "trading-partner-mcp"]
 ```
 
-Unattended trading, options/complex orders, short selling, order replacement, and
-autonomous confirmation remain out of scope.
+Other unattended trading, options/complex orders, short selling, order replacement,
+and autonomous confirmation remain out of scope.

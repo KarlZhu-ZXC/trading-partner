@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -16,6 +17,7 @@ from domain.agent.enums import (
     AgentConversationStatus,
     AgentMessageRole,
     AgentPendingActionStatus,
+    AgentTurnStatus,
 )
 from domain.agent.models import (
     AgentChannelBinding,
@@ -24,6 +26,7 @@ from domain.agent.models import (
     AgentMessage,
     AgentPendingAction,
     AgentToolReceipt,
+    AgentTurn,
 )
 from domain.common.errors import DataContractError, IdempotencyConflict, PersistenceError
 from domain.common.ids import EntityIdPrefix
@@ -36,8 +39,11 @@ from infrastructure.persistence.orm import (
     AgentConversationRow,
     AgentMessageRow,
     AgentToolReceiptRow,
+    AgentTurnRow,
 )
 from infrastructure.system.id_generator import Uuid7IdGenerator
+
+_SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9][A-Z0-9_.:-]{0,127}$")
 
 
 def _now(value: datetime | None) -> datetime:
@@ -90,6 +96,26 @@ def _message(row: AgentMessageRow) -> AgentMessage:
         request_id=row.request_id,
         model_receipt_json=row.model_receipt_json,
         created_at=datetime.fromisoformat(row.created_at),
+    )
+
+
+def _turn(row: AgentTurnRow) -> AgentTurn:
+    return AgentTurn(
+        turn_id=row.turn_id,
+        conversation_id=row.conversation_id,
+        user_message_id=row.user_message_id,
+        assistant_message_id=row.assistant_message_id,
+        channel=AgentChannel(row.channel),
+        status=AgentTurnStatus(row.status),
+        error_code=row.error_code,
+        model_id=row.model_id,
+        reasoning_effort=row.reasoning_effort,
+        started_at=datetime.fromisoformat(row.started_at),
+        updated_at=datetime.fromisoformat(row.updated_at),
+        completed_at=(
+            datetime.fromisoformat(row.completed_at) if row.completed_at is not None else None
+        ),
+        version=row.version,
     )
 
 
@@ -515,6 +541,136 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
             raise IdempotencyConflict("Agent tool receipt id was reused") from exc
 
     append_receipt = append_tool_receipt
+
+    def create_turn(self, value: AgentTurn) -> AgentTurn:
+        """Insert one RUNNING turn, replaying an identical turn id safely."""
+
+        row = AgentTurnRow(
+            turn_id=value.turn_id,
+            conversation_id=value.conversation_id,
+            user_message_id=value.user_message_id,
+            assistant_message_id=value.assistant_message_id,
+            channel=value.channel.value,
+            status=value.status.value,
+            error_code=value.error_code,
+            model_id=value.model_id,
+            reasoning_effort=value.reasoning_effort,
+            started_at=value.started_at.isoformat(),
+            updated_at=value.updated_at.isoformat(),
+            completed_at=value.completed_at.isoformat() if value.completed_at else None,
+            version=value.version,
+        )
+        try:
+            with Session(self._engine, expire_on_commit=False) as session, session.begin():
+                session.add(row)
+            return value
+        except IntegrityError as exc:
+            existing = self.get_turn(value.turn_id)
+            if existing is not None and existing == value:
+                return existing
+            raise IdempotencyConflict("Agent turn id was reused") from exc
+
+    def get_turn(self, turn_id: str) -> AgentTurn | None:
+        with Session(self._engine) as session:
+            row = session.get(AgentTurnRow, turn_id)
+            return None if row is None else _turn(row)
+
+    def latest_turn(self, conversation_id: str) -> AgentTurn | None:
+        with Session(self._engine) as session:
+            row = session.scalars(
+                select(AgentTurnRow)
+                .where(AgentTurnRow.conversation_id == conversation_id)
+                .order_by(AgentTurnRow.started_at.desc(), AgentTurnRow.turn_id.desc())
+                .limit(1)
+            ).first()
+            return None if row is None else _turn(row)
+
+    get_latest_turn = latest_turn
+
+    def list_turns(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        newest_first: bool = True,
+    ) -> tuple[AgentTurn, ...]:
+        bounded_limit = _limit(limit)
+        with Session(self._engine) as session:
+            order = AgentTurnRow.started_at.desc() if newest_first else AgentTurnRow.started_at
+            tie_breaker = AgentTurnRow.turn_id.desc() if newest_first else AgentTurnRow.turn_id
+            rows = session.scalars(
+                select(AgentTurnRow)
+                .where(AgentTurnRow.conversation_id == conversation_id)
+                .order_by(order, tie_breaker)
+                .limit(bounded_limit)
+            )
+            return tuple(_turn(row) for row in rows)
+
+    def update_turn(
+        self,
+        turn_id: str,
+        *,
+        status: AgentTurnStatus,
+        expected_version: int,
+        assistant_message_id: str | None = None,
+        error_code: str | None = None,
+        completed_at: datetime | None = None,
+        now: datetime | None = None,
+    ) -> AgentTurn:
+        """CAS update of lifecycle state; exception text is never persisted."""
+
+        if not isinstance(status, AgentTurnStatus):
+            raise DataContractError("status is invalid")
+        if type(expected_version) is not int or expected_version < 1:
+            raise DataContractError("expected_version must be positive")
+        if assistant_message_id is not None and not assistant_message_id.strip():
+            raise DataContractError("assistant_message_id must not be blank")
+        if error_code is not None and (
+            not isinstance(error_code, str) or _SAFE_ERROR_CODE.fullmatch(error_code) is None
+        ):
+            raise DataContractError("error_code must be text or null")
+        timestamp = _now(now)
+        terminal = status in {
+            AgentTurnStatus.COMPLETED,
+            AgentTurnStatus.FAILED,
+            AgentTurnStatus.CANCELLED,
+        }
+        if terminal and completed_at is None:
+            completed_at = timestamp
+        if not terminal and completed_at is not None:
+            raise DataContractError("active Agent turns cannot have completed_at")
+        completed_value = completed_at.isoformat() if completed_at is not None else None
+        with Session(self._engine) as session:
+            result = session.execute(
+                update(AgentTurnRow)
+                .where(
+                    AgentTurnRow.turn_id == turn_id,
+                    AgentTurnRow.version == expected_version,
+                )
+                .values(
+                    status=status.value,
+                    assistant_message_id=assistant_message_id,
+                    error_code=error_code,
+                    completed_at=completed_value,
+                    updated_at=timestamp.isoformat(),
+                    version=AgentTurnRow.version + 1,
+                )
+            )
+            if result.rowcount != 1:  # type: ignore[attr-defined]
+                session.rollback()
+                raise PersistenceError(
+                    "Agent turn version conflict",
+                    details={"turn_id": turn_id},
+                    retryable=False,
+                    code="AGENT_TURN_VERSION_CONFLICT",
+                )
+            session.commit()
+        value = self.get_turn(turn_id)
+        if value is None:
+            raise PersistenceError("Agent turn was not found", retryable=False)
+        return value
+
+    cas_update_turn = update_turn
 
     def get_tool_receipt(self, receipt_id: str) -> AgentToolReceipt | None:
         with Session(self._engine) as session:

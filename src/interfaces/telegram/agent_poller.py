@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import shlex
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,7 +24,9 @@ from application.ports.agent_conversation_repository import AgentConversationRep
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.services.agent_context_service import AgentContextService
+from application.services.agent_conversation_metrics import AgentConversationMetricsService
 from application.services.agent_handoff_service import AgentHandoffService
+from application.services.agent_preferences_service import AgentPreferencesService
 from application.services.agent_runtime_service import AgentRuntimeService
 from domain.agent.enums import (
     AgentChannel,
@@ -196,6 +199,8 @@ class TelegramAgentPoller:
         clock: Clock,
         id_generator: IdGenerator,
         action_gateway: TelegramActionGateway | None = None,
+        preferences_service: AgentPreferencesService | None = None,
+        metrics_service: AgentConversationMetricsService | None = None,
         authorized_user_id: str | None = None,
         poll_timeout_seconds: int = _DEFAULT_POLL_TIMEOUT_SECONDS,
         cursor_key: str = TELEGRAM_AGENT_CURSOR_KEY,
@@ -218,6 +223,8 @@ class TelegramAgentPoller:
         self._client = client
         self._authorized_chat_id = normalized_chat_id
         self._action_gateway = action_gateway
+        self._preferences = preferences_service
+        self._metrics = metrics_service or AgentConversationMetricsService(repository)
         self._authorized_user_id = normalized_user_id
         self._pending_action_users: dict[str, str] = {}
         self._clock = clock
@@ -320,7 +327,7 @@ class TelegramAgentPoller:
                 text,
                 (
                     "命令：/new、/context、/continue <接续码>、/portfolio、"
-                    "/watchlist、/monitors、/help。"
+                    "/watchlist、/monitors、/preferences、/help。"
                 ),
             )
             return True
@@ -334,19 +341,16 @@ class TelegramAgentPoller:
             )
             return True
         if command == "/context":
-            messages = self._repository.list_messages(conversation.conversation_id, limit=500)
-            receipt_count = len(
-                self._repository.list_tool_receipts(
-                    conversation.conversation_id,
-                    limit=500,
-                )
+            reply = self._context_reply(conversation)
+            await self._persist_and_send_command(
+                conversation.conversation_id,
+                external_ref,
+                text,
+                reply,
             )
-            reply = (
-                f"当前会话：{conversation.title}\n"
-                f"消息数：{len(messages)}\n"
-                f"摘要覆盖序号：{conversation.summary_through_sequence}\n"
-                f"工具回执：{receipt_count}"
-            )
+            return True
+        if command == "/preferences":
+            reply = self._preferences_reply(argument, update.user_id)
             await self._persist_and_send_command(
                 conversation.conversation_id,
                 external_ref,
@@ -384,6 +388,92 @@ class TelegramAgentPoller:
             self._remember_pending_user(token, update.user_id)
             await self._send_pending_action_card(token, pending)
         return True
+
+    def _context_reply(self, conversation: Any) -> str:
+        metrics = self._metrics.aggregate(conversation.conversation_id)
+        statuses = ", ".join(
+            f"{key}={value}" for key, value in metrics.turn_statuses.items() if value
+        ) or "none"
+        api_styles = ", ".join(metrics.api_styles) or "unknown"
+        truncation = "\n采样：已截断至最近 500 条。" if metrics.truncated else ""
+        warning = (
+            f"\n异常回执：{metrics.malformed_receipt_count} 条（已忽略）"
+            if metrics.malformed_receipt_count
+            else ""
+        )
+        return (
+            f"当前会话：{conversation.title}\n"
+            f"模型调用：{metrics.model_calls}\n"
+            f"Token：输入 {metrics.input_tokens} / 输出 {metrics.output_tokens} / "
+            f"总计 {metrics.total_tokens}\n"
+            f"Web Search：{metrics.web_search_calls}（使用回合 {metrics.web_search_used_turns}）\n"
+            f"Extractor：{metrics.web_extractor_calls}"
+            f"（使用回合 {metrics.web_extractor_used_turns}）\n"
+            f"延迟：{metrics.latency_ms} ms\n"
+            f"API style：{api_styles}\n"
+            f"回合状态：{statuses}{truncation}{warning}"
+        )
+
+    def _preferences_reply(self, argument: str | None, user_id: str | None) -> str:
+        owner = TELEGRAM_AGENT_OWNER_PRINCIPAL
+        if argument is None:
+            value = self._preferences.get(owner) if self._preferences is not None else None
+            if value is None:
+                return (
+                    "当前偏好尚未持久化（使用默认值）：语言 zh-CN；密度 standard；"
+                    "风险表达 balanced；默认图表 否；后台网页上下文 是。"
+                )
+            return (
+                "当前 Agent 偏好：\n"
+                f"语言：{value.language.value}\n"
+                f"密度：{value.response_density.value}\n"
+                f"来源：{', '.join(value.preferred_source_codes) or '未指定'}\n"
+                f"风险表达：{value.risk_style.value}\n"
+                f"默认图表：{'是' if value.default_chart else '否'}\n"
+                f"后台网页上下文：{'是' if value.web_background else '否'}\n"
+                f"版本：{value.version}"
+            )
+        if not argument.casefold().startswith("set "):
+            return (
+                "用法：/preferences 或 /preferences set key=value ... "
+                "version=N idempotency_key=... authorization_note=..."
+            )
+        if self._preferences is None:
+            return "偏好持久化当前不可用。"
+        try:
+            tokens = shlex.split(argument[4:])
+            values: dict[str, object] = {}
+            expected_version: int | None = None
+            idempotency_key: str | None = None
+            authorization_note: str | None = None
+            for token in tokens:
+                key, separator, raw = token.partition("=")
+                if not separator or not key or not raw:
+                    raise ValueError
+                if key == "version":
+                    expected_version = int(raw)
+                elif key == "idempotency_key":
+                    idempotency_key = raw
+                elif key == "authorization_note":
+                    authorization_note = raw
+                else:
+                    values[key] = raw
+            if expected_version is None or idempotency_key is None or authorization_note is None:
+                return "写入必须显式提供 version、idempotency_key 和 authorization_note。"
+            for key in ("default_chart",):
+                if key in values:
+                    values[key] = _parse_bool(str(values[key]))
+            updated = self._preferences.update(
+                owner,
+                values,
+                expected_version=expected_version,
+                actor=f"telegram:{user_id or self._authorized_chat_id}",
+                idempotency_key=idempotency_key,
+                authorization_note=authorization_note,
+            )
+            return f"偏好已保存，版本 {updated.version}。"
+        except (ValueError, TypeError, DataContractError):
+            return "偏好写入失败：字段、版本或显式授权参数无效。"
 
     async def _run_runtime_turn(
         self,
@@ -788,6 +878,15 @@ def _command(text: str) -> tuple[str, str | None]:
     first, separator, rest = text.partition(" ")
     command = first.split("@", 1)[0].lower()
     return command, rest.strip() if separator and rest.strip() else None
+
+
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on", "是"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "否"}:
+        return False
+    raise ValueError("boolean preference is invalid")
 
 
 __all__ = [

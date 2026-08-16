@@ -93,9 +93,7 @@ class TradeRetroService:
     ) -> ToolEnvelope[TradeRetroPlanSnapshotDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         try:
-            existing = self._repository.get_plan_snapshot_by_idempotency_key(
-                idempotency_key
-            )
+            existing = self._repository.get_plan_snapshot_by_idempotency_key(idempotency_key)
             if existing is not None:
                 if existing.period_start != start or existing.period_end != end:
                     raise IdempotencyConflict(
@@ -136,9 +134,7 @@ class TradeRetroService:
                                 instrument_id=plan.instrument_id,
                                 status=plan.status.value,
                                 stop_price=(
-                                    str(plan.stop_price)
-                                    if plan.stop_price is not None
-                                    else None
+                                    str(plan.stop_price) if plan.stop_price is not None else None
                                 ),
                                 max_position_percent=str(plan.max_position_percent),
                                 condition_codes=tuple(
@@ -167,11 +163,7 @@ class TradeRetroService:
                 idempotency_key=idempotency_key,
             )
             self._repository.append_plan_snapshot(value)
-            warnings = (
-                ("PLAN_SNAPSHOT_CAPTURED_AFTER_PERIOD_START",)
-                if captured_at > start
-                else ()
-            )
+            warnings = ("PLAN_SNAPSHOT_CAPTURED_AFTER_PERIOD_START",) if captured_at > start else ()
             return self._success(
                 request_id,
                 captured_at,
@@ -248,14 +240,10 @@ class TradeRetroService:
                                                 else None
                                             ),
                                             "price": (
-                                                str(item.price)
-                                                if item.price is not None
-                                                else None
+                                                str(item.price) if item.price is not None else None
                                             ),
                                             "fees": (
-                                                str(item.fees)
-                                                if item.fees is not None
-                                                else None
+                                                str(item.fees) if item.fees is not None else None
                                             ),
                                             "currency": item.currency,
                                             "occurred_at": item.occurred_at.isoformat(),
@@ -330,9 +318,7 @@ class TradeRetroService:
                     generated_at=generated_at,
                     summary_markdown=summary_markdown,
                 ):
-                    raise IdempotencyConflict(
-                        "Trade Retro import idempotency key was reused"
-                    )
+                    raise IdempotencyConflict("Trade Retro import idempotency key was reused")
                 return self._success(
                     request_id,
                     existing.generated_at,
@@ -369,9 +355,7 @@ class TradeRetroService:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, generated_at, exc)
 
-    def history(
-        self, request: TradeRetroHistoryInput
-    ) -> ToolEnvelope[TradeRetroHistoryDTO]:
+    def history(self, request: TradeRetroHistoryInput) -> ToolEnvelope[TradeRetroHistoryDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         as_of = self._clock.now()
         try:
@@ -380,29 +364,45 @@ class TradeRetroService:
             else:
                 run = self._repository.get_run(request.run_id)
                 runs = () if run is None else (run,)
+            snapshots = self._repository.get_plan_snapshots(
+                tuple(
+                    dict.fromkeys(
+                        item.plan_snapshot_id for item in runs if item.plan_snapshot_id is not None
+                    )
+                )
+            )
+            reviews = self._repository.list_reviews_for_runs(tuple(item.run_id for item in runs))
             return self._success(
                 request_id,
                 as_of,
-                TradeRetroHistoryDTO(runs=tuple(self._run_dto(item) for item in runs)),
+                TradeRetroHistoryDTO(
+                    runs=tuple(
+                        self._run_dto(
+                            item,
+                            snapshot=(
+                                snapshots.get(item.plan_snapshot_id)
+                                if item.plan_snapshot_id is not None
+                                else None
+                            ),
+                            snapshot_loaded=True,
+                            reviews=reviews.get(item.run_id, ()),
+                        )
+                        for item in runs
+                    )
+                ),
                 (),
             )
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, as_of, exc)
 
-    def review(
-        self, request: TradeRetroReviewInput
-    ) -> ToolEnvelope[TradeRetroReviewRevisionDTO]:
+    def review(self, request: TradeRetroReviewInput) -> ToolEnvelope[TradeRetroReviewRevisionDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         as_of = self._clock.now()
         try:
-            existing = self._repository.get_review_by_idempotency_key(
-                request.idempotency_key
-            )
+            existing = self._repository.get_review_by_idempotency_key(request.idempotency_key)
             if existing is not None:
                 if not self._same_review_request(existing, request):
-                    raise IdempotencyConflict(
-                        "Trade Retro review idempotency key was reused"
-                    )
+                    raise IdempotencyConflict("Trade Retro review idempotency key was reused")
                 return self._success(
                     request_id,
                     existing.created_at,
@@ -477,9 +477,7 @@ class TradeRetroService:
             existing = self._repository.get_export_by_idempotency_key(idempotency_key)
             if existing is not None:
                 if existing.run_id != run_id:
-                    raise IdempotencyConflict(
-                        "Trade Retro export idempotency key was reused"
-                    )
+                    raise IdempotencyConflict("Trade Retro export idempotency key was reused")
                 return self._success(
                     request_id,
                     existing.exported_at,
@@ -724,10 +722,25 @@ class TradeRetroService:
                 )
         return tuple(findings)
 
-    def _run_dto(self, run: TradeRetroRun) -> TradeRetroRunDTO:
+    def _run_dto(
+        self,
+        run: TradeRetroRun,
+        *,
+        snapshot: TradeRetroPlanSnapshot | None = None,
+        snapshot_loaded: bool = False,
+        reviews: tuple[TradeRetroReviewRevision, ...] | None = None,
+    ) -> TradeRetroRunDTO:
+        if not snapshot_loaded and run.plan_snapshot_id is not None:
+            snapshot = self._repository.get_plan_snapshot(run.plan_snapshot_id)
+        subject_ids = (
+            tuple(dict.fromkeys(item.subject_id for item in snapshot.entries))
+            if snapshot is not None
+            else ()
+        )
         return TradeRetroRunDTO.from_domain(
             run,
-            reviews=self._repository.list_reviews(run.run_id),
+            reviews=(reviews if reviews is not None else self._repository.list_reviews(run.run_id)),
+            subject_ids=subject_ids,
         )
 
     @staticmethod
@@ -763,16 +776,13 @@ class TradeRetroService:
         plan: TradeRetroPlanEntry,
     ) -> bool:
         expected = (
-            _BUY_DECISIONS
-            if transaction.side is AccountTransactionSide.BUY
-            else _SELL_DECISIONS
+            _BUY_DECISIONS if transaction.side is AccountTransactionSide.BUY else _SELL_DECISIONS
         )
         return any(
             decision_type in expected
             and datetime.fromisoformat(decided_at) <= transaction.occurred_at
             and (
-                primary_instrument_id is None
-                or primary_instrument_id == transaction.instrument_id
+                primary_instrument_id is None or primary_instrument_id == transaction.instrument_id
             )
             for _decision_id, decision_type, decided_at, primary_instrument_id in (
                 plan.decision_records
@@ -836,9 +846,7 @@ class TradeRetroService:
             ),
         )
 
-    def _failure[T](
-        self, request_id: str, as_of: datetime, exc: BaseException
-    ) -> ToolEnvelope[T]:
+    def _failure[T](self, request_id: str, as_of: datetime, exc: BaseException) -> ToolEnvelope[T]:
         error = (
             to_error_info(exc, self._redactor)
             if isinstance(exc, TradingPartnerError)

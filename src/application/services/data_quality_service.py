@@ -445,7 +445,10 @@ class DataQualityService:
                     detail="One or more positions lack a persisted market value.",
                 )
             )
-        if timestamped < total:
+        price_uncovered = sum(
+            item.market_price_at is None and item.market_value is None for item in positions
+        )
+        if price_uncovered:
             issues.append(
                 DataQualityIssueDTO(
                     code="ACCOUNT_PRICE_TIME_INCOMPLETE",
@@ -453,7 +456,10 @@ class DataQualityService:
                     scope="account_snapshot",
                     subject_ref=snapshot.account_ref,
                     observed_at=snapshot.fetched_at,
-                    detail="One or more positions lack an auditable market-price timestamp.",
+                    detail=(
+                        "One or more positions lack both an auditable market-price timestamp "
+                        "and a broker valuation usable for Snapshot Price."
+                    ),
                 )
             )
         if snapshot.net_assets is None:

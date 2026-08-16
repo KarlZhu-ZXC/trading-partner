@@ -630,11 +630,44 @@ def test_unavailable_judgment_notification_uses_chinese_operational_status() -> 
     )
 
     assert notification.title == "🧭 XAUUSD · 判断不可用"
-    assert "市场：复合判断暂时不可用" in notification.body
+    assert "市场：未生成新的模型判断" in notification.body
     assert "错误码：MONITOR_JUDGMENT_UNAVAILABLE" in notification.body
     assert "未定义" not in notification.body
     assert "UNKNOWN" not in notification.body
     assert "建议数量0" not in notification.body
+
+
+def test_fallback_contract_failure_notification_explains_call_path() -> None:
+    ids = MagicMock()
+    ids.new.return_value = "monitor_notification_fallback_failed"
+    service = MonitorJudgmentService(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), ids
+    )
+    created_at = datetime.now(UTC)
+    judgment = SimpleNamespace(
+        status="FAILED",
+        conclusion=None,
+        provider="bailian",
+        model="deepseek-v4-flash-0731",
+        warning_codes=(
+            "MONITOR_JUDGMENT_FALLBACK_USED",
+            "PRIMARY_PROVIDER_TIMEOUT_ERROR",
+        ),
+        error_codes=("DATA_CONTRACT_ERROR",),
+        created_at=created_at,
+    )
+
+    notification = service._failure_notification(  # noqa: SLF001
+        SimpleNamespace(
+            name="黄金监控", primary_instrument_id="commodity_spot:OTC:XAUUSD"
+        ),
+        judgment,
+        SimpleNamespace(event_id="monitor_event_fallback_failed"),
+    )
+
+    assert "失败模型：bailian / deepseek-v4-flash-0731" in notification.body
+    assert "主模型失败（PROVIDER_TIMEOUT_ERROR），已尝试 fallback" in notification.body
+    assert "模型输出结构校验；未采用不合规结果" in notification.body
 
 
 @pytest.mark.asyncio
@@ -783,3 +816,70 @@ async def test_bailian_failure_falls_back_to_bailian_deepseek_flash(
     assert "MONITOR_JUDGMENT_FALLBACK_USED" in result.judgment.warning_codes
     assert f"PRIMARY_{primary_code}" in result.judgment.warning_codes
     fallback.judge.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fallback_contract_failure_gets_one_bounded_retry() -> None:
+    primary = MagicMock(
+        provider_name="bailian", model="qwen3.8-max", reasoning_effort="high"
+    )
+    primary.judge = AsyncMock(side_effect=ProviderTimeoutError("primary timed out"))
+    valid = MonitorJudgmentResponse(
+        urgency="WATCH",
+        phase="A",
+        market_state="盘前报价可用。",
+        divergence="NONE",
+        conclusion="WAIT",
+        quantity_min=0,
+        quantity_max=0,
+        summary="等待确认。",
+        evidence_feature_ids=("sessions_aligned",),
+        next_trigger="等待下一轮。",
+        invalidation="确定性行情不可用时失效。",
+        reasoning_effort_used="high",
+    )
+    fallback = MagicMock(
+        provider_name="bailian",
+        model="deepseek-v4-flash-0731",
+        reasoning_effort="high",
+    )
+    fallback.judge = AsyncMock(
+        side_effect=(DataContractError("invalid structured output"), valid)
+    )
+    repository = MagicMock()
+    repository.latest_judgment.return_value = None
+    repository.list_judgments.return_value = ()
+    clock = MagicMock()
+    clock.now.return_value = datetime.now(UTC)
+    ids = MagicMock()
+    ids.new.return_value = "monitor_judgment_fallback_retry"
+    service = MonitorJudgmentService(
+        repository, MagicMock(), primary, clock, ids, fallback
+    )
+    service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=(
+            {"sessions_aligned": True, "warning_codes": ()},
+            ("sessions_aligned",),
+            "feature-signature",
+        )
+    )
+    monitor = SimpleNamespace(
+        monitor_id="monitor_gold_retry",
+        version=1,
+        judgment_policy=SimpleNamespace(
+            playbook="等待确认。",
+            confirmed_state_json="{}",
+            prompt_version="v1",
+        ),
+    )
+
+    result = await service.evaluate(
+        run_id="monitor_run_fallback_retry",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+
+    assert result is not None and result.judgment.status == "SUCCEEDED"
+    assert "MONITOR_JUDGMENT_FALLBACK_CONTRACT_RETRIED" in result.judgment.warning_codes
+    assert fallback.judge.await_count == 2

@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from domain.agent.enums import AgentChannel
+from domain.agent.enums import AgentChannel, AgentTurnStatus
 from domain.agent.models import (
     AgentChannelBinding,
     AgentChannelCursor,
     AgentConversation,
     AgentMessage,
     AgentToolReceipt,
+    AgentTurn,
 )
 
 
@@ -73,6 +74,46 @@ class AgentConversationRepository(Protocol):
     ) -> AgentMessage | None: ...
 
     def append_tool_receipt(self, value: AgentToolReceipt) -> AgentToolReceipt: ...
+
+    def create_turn(self, value: AgentTurn) -> AgentTurn: ...
+
+    def get_turn(self, turn_id: str) -> AgentTurn | None: ...
+
+    def latest_turn(self, conversation_id: str) -> AgentTurn | None: ...
+
+    def get_latest_turn(self, conversation_id: str) -> AgentTurn | None: ...
+
+    def list_turns(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        newest_first: bool = True,
+    ) -> tuple[AgentTurn, ...]: ...
+
+    def update_turn(
+        self,
+        turn_id: str,
+        *,
+        status: AgentTurnStatus,
+        expected_version: int,
+        assistant_message_id: str | None = None,
+        error_code: str | None = None,
+        completed_at: datetime | None = None,
+        now: datetime | None = None,
+    ) -> AgentTurn: ...
+
+    def cas_update_turn(
+        self,
+        turn_id: str,
+        *,
+        status: AgentTurnStatus,
+        expected_version: int,
+        assistant_message_id: str | None = None,
+        error_code: str | None = None,
+        completed_at: datetime | None = None,
+        now: datetime | None = None,
+    ) -> AgentTurn: ...
 
     def get_tool_receipt(self, receipt_id: str) -> AgentToolReceipt | None: ...
 

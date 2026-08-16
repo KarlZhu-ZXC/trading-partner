@@ -62,6 +62,7 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | OTC Monitor sessions | Dukascopy XAUUSD/XAGUSD/light-oil intervals skip known closures; weekend XAUUSD uses Binance PAXG/USDC, light oil uses Hyperliquid XYZ CL/USDC, and optional IG Weekend Gold is a final gold fallback; all are current-only labelled proxies |
 | Weekend Provider diagnosis | Retryable weekend-reference calls use three bounded attempts; failed proxy/primary hops are persisted as secret-safe structured diagnostics and rendered in the Console Run drill-down |
 | Margin-account risk checks | A negative cash balance is retained as a signed cash ratio and evaluated as a policy breach instead of failing the complete risk result with `DATA_CONTRACT_ERROR` |
+| Moomoo margin usage | Securities-account financing usage maps OpenD `debtCash` (SDK `interest_charged_amount`), never the `initial_margin` collateral requirement; legacy snapshots expose unavailable rather than replaying a false breach |
 | Yahoo extended-hours quotes | A recovered pre/post-market last price clears unsupported regular-session range/volume fields and emits `EXTENDED_HOURS_SESSION_RANGE_UNAVAILABLE` |
 | Technical interval input | MCP schemas advertise `1d`/`1w`; common daily/weekly aliases normalize at the DTO boundary instead of failing conversational calls |
 | Schwab OAuth status | `next_action` follows current token health; only the successful `renew` command asks for one account-sync retry |

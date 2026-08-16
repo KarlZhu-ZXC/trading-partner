@@ -77,7 +77,24 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
     ) -> dict[str, Any]:
         """Create a short-lived, single-use exact Schwab order preview."""
         try:
-            request = BrokerOrderIntentPreviewInput.model_validate(locals())
+            request = BrokerOrderIntentPreviewInput.model_validate(
+                {
+                    "account_ref": account_ref,
+                    "instrument_id": instrument_id,
+                    "instruction": instruction,
+                    "quantity": quantity,
+                    "order_type": order_type,
+                    "session": session,
+                    "duration": duration,
+                    "limit_price": limit_price,
+                    "stop_price": stop_price,
+                    "trail_offset": trail_offset,
+                    "trail_type": trail_type,
+                    "limit_offset": limit_offset,
+                    "idempotency_key": idempotency_key,
+                    "preview_ttl_seconds": preview_ttl_seconds,
+                }
+            )
             return (await container.services.broker_orders.preview(request)).model_dump(mode="json")
         except ValidationError:
             raise
@@ -93,7 +110,15 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
     ) -> dict[str, Any]:
         """Submit exactly one unexpired preview after explicit user confirmation."""
         try:
-            request = BrokerOrderSubmitInput.model_validate(locals())
+            request = BrokerOrderSubmitInput.model_validate(
+                {
+                    "order_intent_id": order_intent_id,
+                    "idempotency_key": idempotency_key,
+                    "confirmed_by": confirmed_by,
+                    "submitted_via": submitted_via,
+                    "authorization_note": authorization_note,
+                }
+            )
             return (await container.services.broker_orders.submit(request)).model_dump(mode="json")
         except ValidationError:
             raise
@@ -106,7 +131,12 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
     ) -> dict[str, Any]:
         """Read one durable order receipt and optionally refresh its Schwab status."""
         try:
-            request = BrokerOrderStatusInput.model_validate(locals())
+            request = BrokerOrderStatusInput.model_validate(
+                {
+                    "order_intent_id": order_intent_id,
+                    "refresh_provider": refresh_provider,
+                }
+            )
             return (await container.services.broker_orders.status(request)).model_dump(mode="json")
         except ValidationError:
             raise
@@ -122,7 +152,15 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
     ) -> dict[str, Any]:
         """Request cancellation of one exact submitted order after user confirmation."""
         try:
-            request = BrokerOrderCancelInput.model_validate(locals())
+            request = BrokerOrderCancelInput.model_validate(
+                {
+                    "order_intent_id": order_intent_id,
+                    "idempotency_key": idempotency_key,
+                    "confirmed_by": confirmed_by,
+                    "submitted_via": submitted_via,
+                    "authorization_note": authorization_note,
+                }
+            )
             return (await container.services.broker_orders.cancel(request)).model_dump(mode="json")
         except ValidationError:
             raise

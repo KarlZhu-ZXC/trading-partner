@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Trading Partner · Local Control Room",
+  title: "Trading Partner · Local Hub",
   description: "Trading Partner local operations, investment research, and shared Agent console.",
 };
 
@@ -25,6 +25,10 @@ const appearanceInitScript = `
   try {
     var agentRailCollapsed = overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") === "true";
     document.documentElement.classList.toggle("agent-rail-collapsed", agentRailCollapsed);
+    var storedAgentRailWidth = Number(localStorage.getItem("trading-partner-agent-rail-width"));
+    if (Number.isFinite(storedAgentRailWidth) && storedAgentRailWidth >= 320 && storedAgentRailWidth <= 720) {
+      document.documentElement.style.setProperty("--agent-rail-user-width", storedAgentRailWidth + "px");
+    }
   } catch (_) {
     document.documentElement.classList.remove("agent-rail-collapsed");
   }

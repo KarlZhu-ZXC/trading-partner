@@ -29,9 +29,86 @@ npm run dev
 需先读取 `GET /api/session`，再把返回的令牌放入
 `X-Trading-Partner-Console-Token` 请求头；只读 GET 不需要该请求头。
 
+### Console 与 Agent 本机 supervisor
+
+需要让 Console API（回环 `127.0.0.1:8765`）和 Next production 前端由 macOS
+launchd 管理时，使用共享 Agent CLI。安装前会检查或安全执行 `console` 的 production
+build；两个 job 均设置 `RunAtLoad`、`KeepAlive` 和短 `ThrottleInterval`，日志只写到
+`data/logs/`，plist 为 owner-only。命令不会杀宽泛进程，也不会把环境变量或密钥写入状态：
+
+```bash
+uv run trading-partner-agent console install
+uv run trading-partner-agent console status
+uv run trading-partner-agent console restart
+uv run trading-partner-agent console uninstall
+
+# 同时管理 Console 与已配置的 Telegram Agent
+uv run trading-partner-agent all install
+uv run trading-partner-agent all status
+```
+
+`status` 只报告 `installed`、`loaded`、`running`、`pid`、`start_time` 和
+`last_exit`。`restart` 明确使用 `launchctl kickstart -k`。Telegram 的持久偏好通过
+`/preferences` 读取；写入必须显式携带 `version`、`idempotency_key` 和
+`authorization_note`，且仅允许语言、回答密度、来源代码、风险风格和默认图表等
+presentation 字段。Web Search 在 Provider 支持时默认开启，不提供偏好开关。Console
+对应接口为：
+
+```text
+GET  /api/agent/preferences
+PUT  /api/agent/preferences
+POST /api/agent/preferences/reset
+GET  /api/agent/preferences/history?limit=100
+GET  /api/agent/conversations/{conversation_id}/metrics
+```
+
+偏好会以明确标注的 presentation-only system context 注入 Agent，不得被模型当作事实、
+记忆、授权或交易意图。Metrics 只从 durable `model_receipt_json` 与 turns 汇总，最多采样
+500 条；超限时返回 `truncated=true`，畸形 receipt 被忽略并计入 warning。
+
+行为门禁使用真实 Agent runtime 的确定性 fake fixtures，覆盖 14 个 catalog case：
+
+```bash
+uv run trading-partner-agent eval
+```
+
+默认不访问网络、不调用券商，也不放开订单；回执包含每个 case 的 pass/fail、tool trace、
+逐场景行为断言、schema repair 结果、失败原因和关键 prompt/runtime/capability 源码
+fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执行；`--live` 当前 fail closed，
+不会意外联网或调用 LLM。
+
+### 受保护的局域网访问（可选）
+
+需要从同一可信局域网中的手机或另一台电脑访问时，后端仍保持在
+`127.0.0.1:8765`，只把 Next.js 前端绑定到 `0.0.0.0:3000`。前端通过同源代理访问后端，
+浏览器不能直接连接数据 API；所有页面和代理接口先验证 HttpOnly、SameSite 会话 Cookie。
+
+先按上文在终端一启动后端。终端二用至少 16 个字符的密码启动 LAN 模式：
+
+```bash
+cd console
+read -rs "TRADING_PARTNER_CONSOLE_LAN_PASSWORD?LAN password: " && echo
+export TRADING_PARTNER_CONSOLE_LAN_PASSWORD
+npm run dev:lan
+```
+
+启动信息会列出可用的 `http://<Mac局域网地址>:3000`。其他设备打开该地址后先进入登录页；
+登录会话有效 12 小时，也可从左下角主动退出。可用
+`TRADING_PARTNER_CONSOLE_LAN_PORT` 改用其他 1024–65535 端口。
+
+这个模式面向可信家庭/办公局域网，使用普通 HTTP，不适合公网、访客 Wi-Fi、端口映射或
+云服务器。密码不要写入 URL、`NEXT_PUBLIC_*`、Git 或聊天记录。使用结束后按 `Ctrl-C`
+停止前端并执行 `unset TRADING_PARTNER_CONSOLE_LAN_PASSWORD`。需要跨不可信网络访问时，
+应另行使用带 TLS 和设备身份的私有网络方案。
+
 页面包括：总览、全部
-研究档案/Thesis、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、27 个 MCP 能力、持久化账户、
+研究档案/Thesis、Decision Workbench、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、27 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
+
+总览 Review Queue 是内部持久化决策闭环，不增加公开 MCP 工具。Acknowledge 可选填期限；
+Resolve 必须填写关闭依据并可记录 resolution ref。每次写入带 Console session、expected
+version、idempotency key 和用户授权说明。只有成功完成的 durable source projection 才能
+触发自动关闭；Provider/数据库读取失败只显示降级，不得解释为问题已消失。
 
 Research 页面使用研究标的索引和单个研究档案工作区：默认包含已归档研究档案，并展示所选研究标的的
 Thesis、当前版本、假设、失效条件、开放问题、Trade Plan 与待审候选。读取只通过现有
@@ -147,21 +224,28 @@ enqueue 必须带 `title`、幂等键、`user`/`external_agent` 确认者和授�
 JSON 回执不会回显正文或授权说明，也不会产生订单或其他交易状态效果。
 内部确定性生产者使用封闭的 `SYSTEM` source；`MANUAL` 仅用于显式授权的调用者写入。
 
-Schwab SGOV Shadow 计划也属于 operational capability，不增加 MCP 工具：
+Schwab SGOV 自动现金管理属于 operational capability，不增加 MCP 工具：
 
 ```bash
 # 立即刷新 Schwab 并在终端显示所有账户的购买计划表（不通知）
 uv run trading-partner-sgov-plan preview
 
-# 安装/检查每天的 token-free launchd 调度
+# 安装即持久授权；检查 SGOV-only launchd 自动买入调度
 uv run trading-partner-sgov-plan-scheduler install
 uv run trading-partner-sgov-plan-scheduler status
+
+# 撤销后续自动买入授权
+uv run trading-partner-sgov-plan-scheduler uninstall
 ```
 
-普通交易日的实际到期时间是 15:45 America/New_York；官方提前收盘日使用收盘前 15 分钟。
-launchd 每小时 `:45` 只做一次本地到期判断，休市日和其他时段不访问 Schwab。到期后只刷新
-Schwab、读取 SGOV bid/ask、按每账户 `$2,000 + $200 + active BUY reserve` 计算整股计划，
-并通过 SYSTEM Outbox 发送一条移动端纵向摘要。该流程不会调用 Codex/LLM，也没有下单方法。
+普通交易日 15:45 America/New_York 只做准备检查；15:55 再刷新并自动提交合格账户的
+`SGOV BUY LIMIT · DAY · NORMAL`，官方提前收盘日分别使用收盘前 15 和 5 分钟。
+launchd 每小时 `:45` 与 `:55` 只做本地到期判断，休市日和其他时段不访问 Schwab。
+每账户按 `$2,000 + $200 + active BUY reserve` 保留现金，且提交前再次检查 margin、
+现金、bid/ask、30 秒报价年龄和 `$0.02` 最大价差。每账户/交易日使用稳定的 preview/
+submit 幂等键；`SUBMITTING`/`UNKNOWN` 不会自动重试。完成结果通过 SYSTEM Outbox
+发送，回执延长至收盘后 24 小时；不调用 Codex/LLM。此授权不包含卖出、撤单、改单、
+其他标的或盘前盘后/overnight 订单，其他实盘动作继续逐单确认。
 
 ## 数据维护
 

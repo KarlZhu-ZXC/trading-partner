@@ -7,8 +7,10 @@
   },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
+    "dev:lan": "node scripts/start-lan.mjs dev",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
+    "start:lan": "node scripts/start-lan.mjs start",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

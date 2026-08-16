@@ -374,7 +374,6 @@ def test_research_state_update_requires_case_for_non_watchlist() -> None:
                 "market": "US",
                 "symbol": "NVDA",
                 "display_name": "NVIDIA",
-                "thesis_hint": "Observe earnings",
                 "triggers": ["EPS miss"],
             },
             "confirmation_mode": "normal",
@@ -385,7 +384,16 @@ def test_research_state_update_requires_case_for_non_watchlist() -> None:
     )
     assert wl.case_id is None
     assert wl.payload.kind == "watchlist_item"
+    assert wl.payload.thesis_hint is None
     assert wl.confirmation_mode is ConfirmationMode.NORMAL
+
+
+def test_research_state_schema_documents_direct_instrument_attachment() -> None:
+    schema = str(ResearchStateUpdateInput.model_json_schema())
+
+    assert "Use create for the normal Instrument attachment flow" in schema
+    assert "Legacy Instrument Selection transition" in schema
+    assert "Canonical Instrument proposed for attachment" in schema
 
 
 def test_thesis_revision_propose_payload_closed() -> None:

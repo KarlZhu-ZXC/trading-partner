@@ -198,7 +198,13 @@ class WatchlistCandidatePayload(BaseModel):
     )
 
     kind: Literal["watchlist_item"] = "watchlist_item"
-    action: Literal["create", "update_status"]
+    action: Literal["create", "update_status"] = Field(
+        description=(
+            "Use create for the normal Instrument attachment flow. After explicit "
+            "confirmation it is attached directly to the Research Subject. "
+            "update_status is retained only for legacy Instrument Selection records."
+        )
+    )
     item_id: str | None = None
     market: Market | None = None
     symbol: str | None = Field(default=None, max_length=32)
@@ -207,7 +213,7 @@ class WatchlistCandidatePayload(BaseModel):
         default=None,
         max_length=160,
         description=(
-            "Canonical candidate Instrument for selection inside a Research Subject. "
+            "Canonical Instrument proposed for attachment to a Research Subject. "
             "When supplied, market and symbol are derived and may be omitted."
         ),
     )
@@ -219,7 +225,10 @@ class WatchlistCandidatePayload(BaseModel):
         serialization_alias="case_id",
     )
     expires_at: datetime | None = None
-    new_status: WatchlistItemStatus | None = None
+    new_status: WatchlistItemStatus | None = Field(
+        default=None,
+        description="Legacy Instrument Selection transition; omit for normal attachment.",
+    )
     promoted_to_subject_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("promoted_to_subject_id", "promoted_to_case_id"),
@@ -230,7 +239,10 @@ class WatchlistCandidatePayload(BaseModel):
         default=None,
         min_length=1,
         max_length=4000,
-        description="Required durable rationale when selecting or rejecting a candidate.",
+        description=(
+            "Compatibility-only rationale required when changing a legacy Instrument "
+            "Selection record to selected or rejected."
+        ),
     )
 
     @field_validator("instrument_id")
@@ -265,8 +277,6 @@ class WatchlistCandidatePayload(BaseModel):
                     raise ValueError("symbol must match instrument_id")
             if self.display_name is None or not self.display_name.strip():
                 raise ValueError("create watchlist_item requires display_name")
-            if self.thesis_hint is None or not self.thesis_hint.strip():
-                raise ValueError("create watchlist_item requires thesis_hint")
             if self.item_id is not None:
                 raise ValueError("create watchlist_item must not set item_id")
             if self.new_status is not None:

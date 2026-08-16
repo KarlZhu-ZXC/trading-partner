@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
+import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
+import { ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { monitorRunPresentation } from "../lib/monitor-runs";
+import { useAgentPageContext } from "../lib/agent-page-context";
 import { MonitorEditor } from "./monitor-editor";
 
 type Dict = Record<string, unknown>;
@@ -17,6 +19,13 @@ type MonitorPriceObservation = {
 };
 
 const MONITOR_STATUSES = ["ALL", "ACTIVE", "PAUSED", "ARCHIVED"] as const;
+const MONITOR_MODULES = [
+  { id: "overview", label: "Overview" },
+  { id: "rules", label: "Rules" },
+  { id: "runs", label: "Runs" },
+  { id: "events", label: "Events" },
+] as const;
+type MonitorModule = (typeof MONITOR_MODULES)[number]["id"];
 
 function compactMonitorRule(rule: Dict): Dict {
   const allowed = [
@@ -158,7 +167,7 @@ function CompositeJudgmentCard({ judgment }: { judgment: Dict }) {
     <section className={`monitor-judgment-card ${urgency.toLowerCase()}`}>
       <header className="monitor-judgment-header">
         <div>
-          <span className="monitor-judgment-kicker">Composite judgment</span>
+          <span className="monitor-judgment-kicker">Composite Judgment</span>
           <strong>{conclusion}</strong>
         </div>
         <div className="monitor-judgment-header-meta">
@@ -168,19 +177,19 @@ function CompositeJudgmentCard({ judgment }: { judgment: Dict }) {
       </header>
 
       <div className="monitor-judgment-current">
-        <span>Current read</span>
+        <span>Current Read</span>
         <p>{String(judgment.market_state ?? judgment.summary ?? "No current judgment summary.")}</p>
       </div>
 
       <dl className="monitor-judgment-metrics">
         <div><dt>Phase</dt><dd>{String(judgment.phase ?? "—")}</dd></div>
         <div><dt>Divergence</dt><dd>{String(judgment.divergence ?? "—")}</dd></div>
-        <div><dt>Suggested change</dt><dd>{judgmentQuantityLabel(judgment)}</dd></div>
+        <div><dt>Suggested Change</dt><dd>{judgmentQuantityLabel(judgment)}</dd></div>
       </dl>
 
       <div className="monitor-judgment-callouts">
         <section className="next">
-          <span>Next trigger</span>
+          <span>Next Trigger</span>
           <p>{String(judgment.next_trigger ?? "No next trigger supplied.")}</p>
         </section>
         <section className="invalid">
@@ -191,13 +200,13 @@ function CompositeJudgmentCard({ judgment }: { judgment: Dict }) {
 
       {(evidence.length > 0 || sources.length > 0 || warnings.length > 0 || errors.length > 0) && (
         <details className="monitor-judgment-evidence">
-          <summary>Evidence & diagnostics · {evidence.length + sources.length + warnings.length + errors.length}</summary>
+          <summary>Evidence & Diagnostics · {evidence.length + sources.length + warnings.length + errors.length}</summary>
           {evidence.length > 0 && <div className="monitor-judgment-features">
-            <span>Deterministic features</span>
+            <span>Deterministic Features</span>
             <ul>{evidence.map((feature) => <li key={feature} title={feature}>{judgmentFeatureLabel(feature)}</li>)}</ul>
           </div>}
           {sources.length > 0 && <div className="monitor-judgment-sources">
-            <span>Web sources</span>
+            <span>Web Sources</span>
             {sources.map((url) => <a href={url} key={url} rel="noreferrer" target="_blank">{url}</a>)}
           </div>}
           {warnings.length > 0 && <small className="warn">Warnings · {warnings.join(" · ")}</small>}
@@ -309,6 +318,7 @@ export default function MonitorsPage() {
   const [runReceipt, setRunReceipt] = useState<unknown>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Dict | null | undefined>(undefined);
+  const [newMonitorTemplate, setNewMonitorTemplate] = useState<Dict | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [lifecycleId, setLifecycleId] = useState<string | null>(null);
   const [resolutionDraft, setResolutionDraft] = useState<{ eventId: string; action: "ACKNOWLEDGE" | "RESOLVE"; note: string; idempotencyKey: string } | null>(null);
@@ -317,6 +327,15 @@ export default function MonitorsPage() {
   const [instrumentFilter, setInstrumentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof MONITOR_STATUSES)[number]>("ACTIVE");
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [activeModule, setActiveModule] = useState<MonitorModule>("overview");
+  const [monitorPage, setMonitorPage] = useState(0);
+  const [monitorsPerPage, setMonitorsPerPage] = useState(6);
+  useAgentPageContext({
+    surface: "monitors",
+    selected_monitor_id: selectedMonitorId,
+    selected_run_id: selectedRunId,
+  });
   const dashboard = envelopeData<Dict>((result.data?.dashboard as Dict | undefined));
   const runs = envelopeData<Dict>((result.data?.runs as Dict | undefined));
   const events = envelopeData<Dict>((result.data?.events as Dict | undefined));
@@ -327,9 +346,12 @@ export default function MonitorsPage() {
   });
   const normalizedInstrumentFilter = instrumentFilter.trim().toLocaleLowerCase();
   const filteredItems = items.filter((item) => monitorMatchesInstrument(item, normalizedInstrumentFilter));
+  const monitorPageCount = Math.max(1, Math.ceil(filteredItems.length / monitorsPerPage));
+  const visibleMonitorItems = filteredItems.slice(monitorPage * monitorsPerPage, (monitorPage + 1) * monitorsPerPage);
   const runItems = listOf<Dict>(runs, "runs");
   const eventItems = listOf<Dict>(events, "events");
-  const selectedMonitor = items.find((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId) ?? null;
+  const selectedMonitor = dashboardItems.find((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId) ?? null;
+  const selectedIsFilteredOut = selectedMonitor !== null && !filteredItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId);
   const visibleRuns = selectedMonitorId ? runItems.filter((run) => [
     ...listOf<string>(run, "requested_monitor_ids"),
     ...listOf<string>(run, "selected_monitor_ids"),
@@ -338,15 +360,71 @@ export default function MonitorsPage() {
   const visibleEvents = selectedMonitorId ? eventItems.filter((event) => String(event.monitor_id ?? "") === selectedMonitorId) : eventItems;
 
   useEffect(() => {
-    if (items.length === 0 || !window.location.hash) return;
-    const targetId = decodeURIComponent(window.location.hash.slice(1));
-    const target = document.getElementById(targetId);
-    if (!target) return;
-    window.scrollTo({
-      top: target.getBoundingClientRect().top + window.scrollY - 24,
-      behavior: "smooth",
+    const params = new URLSearchParams(window.location.search);
+    const tradePlanId = params.get("trade_plan_id");
+    const tradePlanVersion = params.get("trade_plan_version");
+    if (!tradePlanId || !tradePlanVersion) return;
+    setNewMonitorTemplate({
+      name: "Trade Plan Monitor",
+      trade_plan_id: tradePlanId,
+      trade_plan_version: Number(tradePlanVersion),
+      compile_trade_plan_conditions: true,
+      subject_id: params.get("subject_id") ?? "",
+      primary_instrument_id: params.get("instrument_id") ?? "",
     });
-  }, [items.length]);
+    setEditingMonitor(null);
+  }, []);
+
+  useEffect(() => {
+    const updateMonitorsPerPage = () => {
+      if (window.matchMedia("(max-width: 700px)").matches) setMonitorsPerPage(1);
+      else if (window.matchMedia("(max-width: 1050px)").matches) setMonitorsPerPage(4);
+      else setMonitorsPerPage(6);
+    };
+    updateMonitorsPerPage();
+    window.addEventListener("resize", updateMonitorsPerPage);
+    return () => window.removeEventListener("resize", updateMonitorsPerPage);
+  }, []);
+
+  useEffect(() => {
+    if (dashboardItems.length === 0) {
+      setSelectedMonitorId(null);
+      return;
+    }
+    const hashMonitorId = window.location.hash.match(/^#monitor-(.+)$/)?.[1];
+    if (hashMonitorId && dashboardItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === hashMonitorId)) {
+      setSelectedMonitorId(hashMonitorId);
+      return;
+    }
+    if (!selectedMonitorId || !dashboardItems.some((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId)) {
+      setSelectedMonitorId(String((((filteredItems[0] ?? dashboardItems[0]).monitor ?? {}) as Dict).monitor_id ?? ""));
+    }
+  }, [dashboardItems, filteredItems, selectedMonitorId]);
+
+  useEffect(() => {
+    const selectedIndex = filteredItems.findIndex((item) => String(((item.monitor ?? {}) as Dict).monitor_id ?? "") === selectedMonitorId);
+    if (selectedIndex >= 0) {
+      setMonitorPage(Math.floor(selectedIndex / monitorsPerPage));
+      return;
+    }
+    setMonitorPage((current) => Math.min(current, monitorPageCount - 1));
+  }, [filteredItems, monitorPageCount, monitorsPerPage, selectedMonitorId]);
+
+  function selectMonitor(monitorId: string) {
+    setSelectedMonitorId(monitorId);
+    setSelectedRunId(null);
+    setActiveModule("overview");
+    setEditingMonitor(undefined);
+    const url = new URL(window.location.href);
+    url.hash = monitorAnchorId(monitorId);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function clearMonitorFilters() {
+    setInstrumentFilter("");
+    setStatusFilter("ALL");
+    setMonitorPage(0);
+  }
 
   async function runDue() {
     if (!window.confirm("Evaluate currently due Monitors? This may create events and send configured notifications.")) return;
@@ -465,203 +543,87 @@ export default function MonitorsPage() {
     }
   }
 
+  const selectedDefinition = (selectedMonitor?.monitor ?? {}) as Dict;
+  const selectedRules = listOf<Dict>(selectedDefinition, "rules");
+  const selectedStates = listOf<Dict>(selectedMonitor ?? {}, "rule_states");
+  const selectedStatesByCode = new Map(selectedStates.map((state) => [String(state.rule_code), state]));
+  const selectedLatestRun = (selectedMonitor?.latest_run ?? {}) as Dict;
+  const selectedJudgment = (selectedMonitor?.latest_judgment ?? {}) as Dict;
+  const selectedPrice = selectedMonitor ? monitorPriceObservation(selectedDefinition, selectedRules, selectedLatestRun, selectedStates) : null;
+  const selectedTriggeredCount = selectedStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED").length;
+  const selectedUnavailableCount = selectedStates.filter((state) => String(state.state ?? "").toUpperCase() === "NOT_EVALUATED").length;
+  const editingSelected = editingMonitor !== null && editingMonitor !== undefined && String(editingMonitor.monitor_id) === String(selectedDefinition.monitor_id);
+
   return (
-    <ConsoleShell active="monitors" eyebrow="Deterministic monitoring" title="Monitor Runs & Events">
+    <ConsoleShell active="monitors">
       <DataBoundary loading={result.loading} error={result.error}>
         <div className="toolbar">
-          <p>Inspect durable definitions, the latest state of every rule, immutable run observations, and transition events.</p>
-          <div className="toolbar-actions"><ActionButton onClick={() => setEditingMonitor(null)}>New Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>Run Due Monitors</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
+          <p>Select one durable Monitor, then inspect its current state, rules, immutable runs, and transition events.</p>
+          <div className="toolbar-actions"><ActionButton onClick={() => { setNewMonitorTemplate(null); setEditingMonitor(null); }}>New Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>Run Due Monitors</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
         </div>
         {runError && <div className="inline-error">{runError}</div>}
         {resolutionError && <div className="inline-error" role="alert">{resolutionError}</div>}
-        {runReceipt !== null && <details className="run-receipt"><summary>View run receipt</summary><pre>{displayJson(runReceipt)}</pre></details>}
-        {editingMonitor === null && <MonitorEditor onClose={() => setEditingMonitor(undefined)} onSaved={(saved) => { setRunReceipt(saved); setEditingMonitor(undefined); result.refresh(); }} />}
-        <Card
-          className="monitor-list-panel"
-          kicker="MONITOR DEFINITIONS"
-          title="Monitor List"
-          action={(
-            <div className="monitor-header-tools">
-              <label className="monitor-status-filter">
-                <span>Status</span>
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as (typeof MONITOR_STATUSES)[number])} aria-label="Filter by Monitor status">
-                  {MONITOR_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
-                </select>
-              </label>
-              <label className="monitor-search-box">
-                <span>Target Filter</span>
-                <input
-                  type="search"
-                  value={instrumentFilter}
-                  onChange={(event) => setInstrumentFilter(event.target.value)}
-                  placeholder="TTWO, TSLA, equity:US:TTWO"
-                  aria-label="Filter Monitors by target symbol"
-                />
-              </label>
-              <span className="monitor-filter-result" aria-live="polite">{filteredItems.length} / {items.length}</span>
+        {runReceipt !== null && <details className="run-receipt"><summary>View Run Receipt</summary><pre>{displayJson(runReceipt)}</pre></details>}
+        {editingMonitor === null && <MonitorEditor template={newMonitorTemplate ?? undefined} onClose={() => { setEditingMonitor(undefined); setNewMonitorTemplate(null); window.history.replaceState(null, "", "/monitors"); }} onSaved={(saved) => { setRunReceipt(saved); setEditingMonitor(undefined); setNewMonitorTemplate(null); window.history.replaceState(null, "", "/monitors"); result.refresh(); }} />}
+
+        <div className="monitor-workbench">
+          <Card
+            className="monitor-list-panel monitor-library-card"
+            kicker="MONITOR DEFINITIONS"
+            title="Monitor Library"
+            action={<div className="monitor-library-actions"><span className="monitor-filter-result" aria-live="polite">{filteredItems.length} / {dashboardItems.length}</span></div>}
+          >
+            <div className="monitor-filters">
+              <label className="monitor-filter-search"><span>Target Filter</span><span className="monitor-filter-control"><Search aria-hidden="true" /><input type="search" value={instrumentFilter} onChange={(event) => { setInstrumentFilter(event.target.value); setMonitorPage(0); }} placeholder="TTWO, TSLA, equity:US:TTWO" aria-label="Filter Monitors by Target Symbol" /></span></label>
+              <label className="monitor-filter-status"><span>Status</span><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as (typeof MONITOR_STATUSES)[number]); setMonitorPage(0); }} aria-label="Filter by Monitor Status">{MONITOR_STATUSES.map((status) => <option key={status} value={status}>{status === "ALL" ? "All (Including Archived)" : status}</option>)}</select></label>
+              <button className="monitor-filter-clear" type="button" disabled={!instrumentFilter && statusFilter === "ALL"} onClick={clearMonitorFilters}><X aria-hidden="true" /> Clear Filters</button>
             </div>
-          )}
-        >
-          <div className="monitor-list">
-          {items.length === 0 ? <Empty>No Monitor definitions yet.</Empty> : filteredItems.length === 0 ? <Empty>No Monitors match this target.</Empty> : filteredItems.map((item) => {
-            const monitor = (item.monitor ?? {}) as Dict;
-            const rules = listOf<Dict>(monitor, "rules");
-            const states = listOf<Dict>(item, "rule_states");
-            const statesByCode = new Map(states.map((state) => [String(state.rule_code), state]));
-            const latest = (item.latest_run ?? {}) as Dict;
-            const latestJudgment = (item.latest_judgment ?? {}) as Dict;
-            const priceObservation = monitorPriceObservation(monitor, rules, latest, states);
-            const isEditing = editingMonitor !== null
-              && editingMonitor !== undefined
-              && String(editingMonitor.monitor_id) === String(monitor.monitor_id);
-            return (
-              <section className="monitor-card" id={monitorAnchorId(monitor.monitor_id)} key={String(monitor.monitor_id)}>
-                <MonitorFlipSurface
-                  flipped={isEditing}
-                  front={(
-                    <>
-                <div className="monitor-title-row">
-                  <div className="symbol-tile large">{shortId(monitor.primary_instrument_id)}</div>
-                  <div className="monitor-copy">
-                    <h2>{String(monitor.name ?? "Untitled Monitor")}</h2>
-                    <span className="mono">{String(monitor.monitor_id)} · v{String(monitor.version ?? "—")}</span>
-                  </div>
-                  <div className="monitor-title-actions">
-                    <button type="button" className={selectedMonitorId === String(monitor.monitor_id) ? "selected" : ""} onClick={() => setSelectedMonitorId((current) => current === String(monitor.monitor_id) ? null : String(monitor.monitor_id))}>{selectedMonitorId === String(monitor.monitor_id) ? "Close Details" : "Run Details"}</button>
-                    <button type="button" onClick={() => setEditingMonitor(monitor)}>Edit</button>
-                    {String(monitor.status ?? "").toUpperCase() === "ACTIVE" ? <button type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "PAUSED"); }}>{lifecycleId === String(monitor.monitor_id) ? "Working…" : "Pause"}</button> : <button className="restore-text" type="button" disabled={lifecycleId === String(monitor.monitor_id)} onClick={() => { void changeMonitorStatus(monitor, "ACTIVE"); }}>{lifecycleId === String(monitor.monitor_id) ? "Working…" : String(monitor.status ?? "").toUpperCase() === "ARCHIVED" ? "Restore & Activate" : "Activate"}</button>}
-                    {String(monitor.status ?? "").toUpperCase() !== "ARCHIVED" && <button className="monitor-delete-button" type="button" disabled={archivingId === String(monitor.monitor_id)} onClick={() => { void archiveMonitor(monitor); }}>{archivingId === String(monitor.monitor_id) ? "Archiving…" : "Archive"}</button>}
-                    <Badge value={String(monitor.status ?? "—")} />
-                  </div>
-                </div>
-                <div className="monitor-runtime-strip">
-                  {priceObservation && (
-                    <section className={`monitor-price-observation ${priceObservation.kind}`} aria-label="Latest run price">
-                      <div className="monitor-price-value">
-                        <span>Latest Price</span>
-                        <strong>{priceObservation.kind === "available" ? formatDecimal(priceObservation.value, 4) : "—"}</strong>
-                      </div>
-                      <div className="monitor-price-time">
-                        <span>{priceObservation.kind === "mixed" ? "Observation State" : "Fact Time"}</span>
-                        <strong>{priceObservation.kind === "mixed" ? "Multiple price observations" : formatDate(priceObservation.factAsOf)}</strong>
-                        <small>
-                          {priceObservation.kind === "unavailable"
-                            ? "No usable price"
-                            : priceObservation.kind === "mixed"
-                              ? "Inspect individual price rules"
-                              : priceObservation.extendedHours
-                                ? "Pre/Post Market"
-                                : "Close Observation"}
-                        </small>
-                      </div>
-                    </section>
-                  )}
-                  <div className="monitor-facts">
-                    <span>Cadence <strong>{String(monitor.cadence ?? "—")}</strong></span>
-                    <span>Created <strong>{formatDate(item.monitor_created_at ?? monitor.created_at)}</strong></span>
-                    <span>Last Edited <strong>{formatDate(item.monitor_updated_at ?? monitor.created_at)}</strong></span>
-                    <span>Latest Run <strong>{formatDate(latest.completed_at)}</strong></span>
-                    <span>Rules <strong>{rules.length}</strong></span>
-                    <span>Events <strong>{String(latest.events_created ?? 0)}</strong></span>
-                  </div>
-                </div>
-                {latestJudgment.judgment_id && <CompositeJudgmentCard judgment={latestJudgment} />}
-                <div className="rule-grid">
-                  {rules.map((rule) => {
-                    const state = statesByCode.get(String(rule.rule_code)) ?? { rule_code: rule.rule_code, state: "NOT_EVALUATED" };
-                    const showIndividualObservation = !isPriceRule(rule) || priceObservation?.kind === "mixed";
-                    return (
-                      <article className={`rule-card ${String(state.state ?? "").toLowerCase()}`} key={String(state.rule_code)}>
-                        <div className="rule-card-head">
-                          <span className="mono">{String(state.rule_code)}</span>
-                          <div className="rule-card-meta">
-                            <span className={`rule-state ${String(state.state ?? "").toLowerCase()}`}>{String(state.state ?? "—")}</span>
-                            <span className={`rule-severity ${String(rule.severity ?? "").toLowerCase()}`}>{String(rule.severity ?? "—")}</span>
-                          </div>
-                        </div>
-                        <strong className="rule-description">{String(rule.description ?? "Legacy version has no human-readable meaning")}</strong>
-                        <small className="rule-condition">{ruleCondition(rule)}</small>
-                        {showIndividualObservation && <span className="rule-observed">Current {String(state.observed_value ?? "N/A")}</span>}
-                        {showIndividualObservation && <time>{formatDate(state.fact_as_of)}</time>}
-                      </article>
-                    );
-                  })}
-                </div>
-                    </>
-                  )}
-                  back={(
-                    <MonitorEditor
-                      embedded
-                      initialMonitor={monitor}
-                      onClose={() => setEditingMonitor(undefined)}
-                      onSaved={(saved) => {
-                        setRunReceipt(saved);
-                        setEditingMonitor(undefined);
-                        result.refresh();
-                      }}
-                    />
-                  )}
-                />
-              </section>
-            );
-          })}
-          </div>
-        </Card>
-        <div className="monitor-detail-heading">
-          <div><p className="card-kicker">RUN & EVENT DRILL-DOWN</p><h2>{selectedMonitor ? `${shortId(((selectedMonitor.monitor ?? {}) as Dict).primary_instrument_id)} · ${String(((selectedMonitor.monitor ?? {}) as Dict).name ?? "Monitor")}` : "All Monitors"}</h2></div>
-          {selectedMonitorId && <button className="close-button" type="button" onClick={() => setSelectedMonitorId(null)}>Clear Filter</button>}
-        </div>
-        <div className="two-column monitor-drilldown">
-          <Card kicker="IMMUTABLE OBSERVATIONS" title={`Recent Runs · ${visibleRuns.length}`}>
-            {visibleRuns.length === 0 ? <Empty>No runs match the current filter.</Empty> : (
-              <div className="timeline-list">
-                {visibleRuns.slice(0, 20).map((run) => {
-                    const identity = monitorRunPresentation(run, dashboardItems);
-                    const observations = listOf<Dict>(run, "observations").filter((observation) => !selectedMonitorId || String(observation.monitor_id ?? "") === selectedMonitorId);
-                    const warningCodes = listOf<string>(run, "warning_codes");
-                    const errorCodes = listOf<string>(run, "error_codes");
-                  return (
-                    <article className="monitor-run-detail-row" key={String(run.run_id)}>
-                      <i className={`timeline-dot ${String(run.status ?? "").toLowerCase()}`} />
-                      <div className="run-identity">
-                        {identity.targets.length === 1 ? <Link className="monitor-run-link" href={`#${monitorAnchorId(identity.targets[0].monitorId)}`}>{identity.symbolLabel} · {identity.nameLabel}</Link> : <strong>{identity.symbolLabel} · {identity.nameLabel}</strong>}
-                        <span>{String(run.cadence ?? "MANUAL")} · {formatDate(run.completed_at)} · {String(run.rules_evaluated ?? 0)} rules</span>
-                        <details className="run-error-drilldown"><summary>Run receipt · {String(run.run_id)}</summary><div className="run-code-groups">{warningCodes.length > 0 && <div><strong>Warnings</strong><span>{warningCodes.join(" · ")}</span></div>}{errorCodes.length > 0 && <div><strong>Errors</strong><span>{errorCodes.join(" · ")}</span></div>}{warningCodes.length === 0 && errorCodes.length === 0 && <span>No run-level warning or error codes.</span>}</div><div className="run-observations">{observations.map((observation) => <div key={`${String(observation.monitor_id)}-${String(observation.rule_code)}`}><header><strong>{String(observation.rule_code)}</strong><Badge value={String(observation.state ?? "—")} /></header><span>{String(observation.message ?? "")}</span><small>Fact {formatDate(observation.fact_as_of)} · observed {String(observation.observed_value ?? "N/A")} · threshold {String(observation.threshold_value ?? "N/A")}</small>{listOf<string>(observation, "warning_codes").length > 0 && <code>{listOf<string>(observation, "warning_codes").join(" · ")}</code>}{listOf<string>(observation, "error_codes").length > 0 && <code className="text-red">{listOf<string>(observation, "error_codes").join(" · ")}</code>}{listOf<Dict>(observation, "diagnostics").map((diagnostic, index) => <section className="provider-diagnostic" key={`${String(diagnostic.provider)}-${String(diagnostic.stage)}-${index}`}><header><strong>{String(diagnostic.provider).toUpperCase()}</strong><span>{diagnosticStage(diagnostic.stage)}</span></header><dl><div><dt>Failure</dt><dd>{String(diagnostic.error_code)}</dd></div><div><dt>Type</dt><dd>{String(diagnostic.error_type ?? "unknown")}</dd></div><div><dt>Status</dt><dd>{diagnosticStatus(diagnostic)}</dd></div><div><dt>Attempts</dt><dd>{String(diagnostic.attempt_count)}</dd></div><div><dt>Retryable</dt><dd>{diagnostic.retryable ? "Yes" : "No"}</dd></div></dl></section>)}</div>)}</div></details>
-                      </div>
-                      <Badge value={String(run.status ?? "—")} />
-                    </article>
-                  );
-                })}
-              </div>
-            )}
+            {selectedIsFilteredOut && <div className="monitor-filter-notice" role="status"><span>The current Monitor is outside this filter.</span><button type="button" onClick={clearMonitorFilters}>Show Current</button></div>}
+            {dashboardItems.length === 0 ? <Empty>No Monitor definitions yet.</Empty> : filteredItems.length === 0 ? <Empty>No Monitors match the current filters.</Empty> : <div className="monitor-browser">
+              <button className="monitor-browser-arrow" type="button" disabled={monitorPage === 0} onClick={() => setMonitorPage((page) => Math.max(0, page - 1))} aria-label="Show Previous Monitors"><ChevronLeft aria-hidden="true" /></button>
+              <div className="monitor-index-list" style={{ "--monitors-per-page": monitorsPerPage } as CSSProperties} role="listbox" aria-label="Filtered Monitors">{visibleMonitorItems.map((item) => { const monitor = (item.monitor ?? {}) as Dict; const monitorId = String(monitor.monitor_id ?? ""); const ruleStates = listOf<Dict>(item, "rule_states"); const triggered = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED").length; const unavailable = ruleStates.filter((state) => String(state.state ?? "").toUpperCase() === "NOT_EVALUATED").length; return <button type="button" role="option" aria-selected={selectedMonitorId === monitorId} id={`monitor-index-${monitorId}`} className={`monitor-index-item ${selectedMonitorId === monitorId ? "selected" : ""}`} onClick={() => selectMonitor(monitorId)} key={monitorId}><span className="monitor-index-status"><span className={`monitor-status-dot status-${String(monitor.status ?? "unknown").toLowerCase()}`} aria-hidden="true" />{String(monitor.status ?? "UNKNOWN")}</span><strong>{String(monitor.name ?? "Untitled Monitor")}</strong><small>{shortId(monitor.primary_instrument_id)} · {listOf<Dict>(monitor, "rules").length} rules</small><span className="monitor-index-health">{triggered > 0 ? `${triggered} triggered` : unavailable > 0 ? `${unavailable} unavailable` : "All quiet"}</span></button>; })}</div>
+              <button className="monitor-browser-arrow" type="button" disabled={monitorPage >= monitorPageCount - 1} onClick={() => setMonitorPage((page) => Math.min(monitorPageCount - 1, page + 1))} aria-label="Show Next Monitors"><ChevronRight aria-hidden="true" /></button>
+              <span className="monitor-browser-range" aria-label={`Showing Monitors ${monitorPage * monitorsPerPage + 1} through ${Math.min((monitorPage + 1) * monitorsPerPage, filteredItems.length)} of ${filteredItems.length}`}><strong>{monitorPage * monitorsPerPage + 1}–{Math.min((monitorPage + 1) * monitorsPerPage, filteredItems.length)}</strong><span>/ {filteredItems.length}</span></span>
+            </div>}
           </Card>
-          <Card kicker="STATE TRANSITIONS" title={`Event Stream · ${visibleEvents.length}`}>
-            {visibleEvents.length === 0 ? <Empty>No transition events match the current filter.</Empty> : (
-              <div className="timeline-list">
-                {visibleEvents.slice(0, 20).map((event) => (
-                  <article key={String(event.event_id)}>
-                    <i className={`timeline-dot ${String(event.event_type ?? "").toLowerCase()}`} />
-                    <div className="event-copy">
-                      <strong>{String(event.rule_code ?? "Monitor event")}</strong>
-                      <span>{formatDate(event.created_at)} · {String(event.severity ?? "—")} · {String(event.observed_value ?? "N/A")} / {String(event.threshold_value ?? "N/A")}</span>
-                      <small>{String(event.message ?? "")}</small>
-                      {event.latest_resolution ? (
-                        <small className="event-resolution">Handled: {String((event.latest_resolution as Dict).action ?? "—")} · {String((event.latest_resolution as Dict).note ?? "")}</small>
-                      ) : resolutionDraft?.eventId === String(event.event_id) ? (
-                        <div className="event-resolution-editor">
-                          <label><span>Resolution Note</span><input autoFocus value={resolutionDraft.note} onChange={(change) => setResolutionDraft({ ...resolutionDraft, note: change.target.value })} placeholder="Record the judgment, follow-up action, or resolution reason" /></label>
-                          <div><ActionButton onClick={submitResolution} busy={resolvingEvent}>{resolutionDraft.action === "RESOLVE" ? "Confirm Resolution" : "Confirm Acknowledgement"}</ActionButton><button type="button" onClick={() => setResolutionDraft(null)}>Cancel</button></div>
-                        </div>
-                      ) : (
-                        <div className="event-actions"><button type="button" onClick={() => beginResolution(String(event.event_id), "ACKNOWLEDGE")}>Acknowledge</button><button type="button" onClick={() => beginResolution(String(event.event_id), "RESOLVE")}>Resolve</button></div>
-                      )}
+
+          <main className="monitor-detail" aria-live="polite">
+            {!selectedMonitor ? <Empty>Select a Monitor above.</Empty> : <section className="monitor-card monitor-workspace-card" id={monitorAnchorId(selectedDefinition.monitor_id)}>
+              <MonitorFlipSurface
+                flipped={editingSelected}
+                front={<div className="monitor-workspace-front">
+                  <div className="monitor-title-row">
+                    <div className="symbol-tile large">{shortId(selectedDefinition.primary_instrument_id)}</div>
+                    <div className="monitor-copy"><h2>{String(selectedDefinition.name ?? "Untitled Monitor")}</h2><span className="mono">{String(selectedDefinition.monitor_id)} · v{String(selectedDefinition.version ?? "—")}</span></div>
+                    <div className="monitor-title-actions">
+                      <button type="button" onClick={() => setEditingMonitor(selectedDefinition)}>Edit</button>
+                      {String(selectedDefinition.status ?? "").toUpperCase() === "ACTIVE" ? <button type="button" disabled={lifecycleId === String(selectedDefinition.monitor_id)} onClick={() => { void changeMonitorStatus(selectedDefinition, "PAUSED"); }}>{lifecycleId === String(selectedDefinition.monitor_id) ? "Working…" : "Pause"}</button> : <button className="restore-text" type="button" disabled={lifecycleId === String(selectedDefinition.monitor_id)} onClick={() => { void changeMonitorStatus(selectedDefinition, "ACTIVE"); }}>{lifecycleId === String(selectedDefinition.monitor_id) ? "Working…" : String(selectedDefinition.status ?? "").toUpperCase() === "ARCHIVED" ? "Restore & Activate" : "Activate"}</button>}
+                      {String(selectedDefinition.status ?? "").toUpperCase() !== "ARCHIVED" && <button className="monitor-delete-button" type="button" disabled={archivingId === String(selectedDefinition.monitor_id)} onClick={() => { void archiveMonitor(selectedDefinition); }}>{archivingId === String(selectedDefinition.monitor_id) ? "Archiving…" : "Archive"}</button>}
+                      <Badge value={String(selectedDefinition.status ?? "—")} />
                     </div>
-                    <Badge value={String(event.event_type ?? "—")} />
-                  </article>
-                ))}
-              </div>
-            )}
-          </Card>
+                  </div>
+
+                  <HorizontalTabs className="monitor-section-nav" items={MONITOR_MODULES} value={activeModule} onChange={setActiveModule} ariaLabel="Monitor modules" idPrefix="monitor-tab" panelIdPrefix="monitor-panel" />
+
+                  <section id="monitor-panel-overview" className="monitor-module-panel" role="tabpanel" aria-labelledby="monitor-tab-overview" hidden={activeModule !== "overview"}>
+                    <div className="monitor-runtime-strip">
+                      {selectedPrice && <section className={`monitor-price-observation ${selectedPrice.kind}`} aria-label="Latest Run Price"><div className="monitor-price-value"><span>Latest Price</span><strong>{selectedPrice.kind === "available" ? formatDecimal(selectedPrice.value, 4) : "—"}</strong></div><div className="monitor-price-time"><span>{selectedPrice.kind === "mixed" ? "Observation State" : "Fact Time"}</span><strong>{selectedPrice.kind === "mixed" ? "Multiple price observations" : formatDate(selectedPrice.factAsOf)}</strong><small>{selectedPrice.kind === "unavailable" ? "No usable price" : selectedPrice.kind === "mixed" ? "Inspect individual price rules" : selectedPrice.extendedHours ? "Pre/Post Market" : "Close Observation"}</small></div></section>}
+                      <div className="monitor-facts"><span>Cadence <strong>{String(selectedDefinition.cadence ?? "—")}</strong></span><span>Created <strong>{formatDate(selectedMonitor.monitor_created_at ?? selectedDefinition.created_at)}</strong></span><span>Last Edited <strong>{formatDate(selectedMonitor.monitor_updated_at ?? selectedDefinition.created_at)}</strong></span><span>Latest Run <strong>{formatDate(selectedLatestRun.completed_at)}</strong></span></div>
+                    </div>
+                    <div className="monitor-overview-metrics"><div><span>Rules</span><strong>{selectedRules.length}</strong><small>Durable Definition</small></div><div><span>Triggered</span><strong>{selectedTriggeredCount}</strong><small>Latest Known State</small></div><div><span>Unavailable</span><strong>{selectedUnavailableCount}</strong><small>Needs Data Review</small></div><div><span>Events</span><strong>{visibleEvents.length}</strong><small>Transition History</small></div></div>
+                    {selectedJudgment.judgment_id ? <CompositeJudgmentCard judgment={selectedJudgment} /> : <div className="monitor-overview-empty"><strong>No Composite Judgment</strong><span>Deterministic rule states remain available in the Rules module.</span></div>}
+                  </section>
+
+                  <section id="monitor-panel-rules" className="monitor-module-panel" role="tabpanel" aria-labelledby="monitor-tab-rules" hidden={activeModule !== "rules"}><div className="rule-grid">{selectedRules.map((rule) => { const state = selectedStatesByCode.get(String(rule.rule_code)) ?? { rule_code: rule.rule_code, state: "NOT_EVALUATED" }; const showIndividualObservation = !isPriceRule(rule) || selectedPrice?.kind === "mixed"; return <article className={`rule-card ${String(state.state ?? "").toLowerCase()}`} key={String(state.rule_code)}><div className="rule-card-head"><span className="mono">{String(state.rule_code)}</span><div className="rule-card-meta"><span className={`rule-state ${String(state.state ?? "").toLowerCase()}`}>{String(state.state ?? "—")}</span><span className={`rule-severity ${String(rule.severity ?? "").toLowerCase()}`}>{String(rule.severity ?? "—")}</span></div></div><strong className="rule-description">{String(rule.description ?? "Legacy version has no human-readable meaning")}</strong><small className="rule-condition">{ruleCondition(rule)}</small>{showIndividualObservation && <span className="rule-observed">Current {String(state.observed_value ?? "N/A")}</span>}{showIndividualObservation && <time>{formatDate(state.fact_as_of)}</time>}</article>; })}</div></section>
+
+                  <section id="monitor-panel-runs" className="monitor-module-panel" role="tabpanel" aria-labelledby="monitor-tab-runs" hidden={activeModule !== "runs"}><Card kicker="IMMUTABLE OBSERVATIONS" title={`Recent Runs · ${visibleRuns.length}`}>{visibleRuns.length === 0 ? <Empty>No runs match this Monitor.</Empty> : <div className="timeline-list">{visibleRuns.slice(0, 20).map((run) => { const identity = monitorRunPresentation(run, dashboardItems); const observations = listOf<Dict>(run, "observations").filter((observation) => String(observation.monitor_id ?? "") === selectedMonitorId); const warningCodes = listOf<string>(run, "warning_codes"); const errorCodes = listOf<string>(run, "error_codes"); return <article className="monitor-run-detail-row" key={String(run.run_id)}><i className={`timeline-dot ${String(run.status ?? "").toLowerCase()}`} /><div className="run-identity">{identity.targets.length === 1 ? <Link className="monitor-run-link" href={`#${monitorAnchorId(identity.targets[0].monitorId)}`} onClick={() => selectMonitor(identity.targets[0].monitorId)}>{identity.symbolLabel} · {identity.nameLabel}</Link> : <strong>{identity.symbolLabel} · {identity.nameLabel}</strong>}<span>{String(run.cadence ?? "MANUAL")} · {formatDate(run.completed_at)} · {String(run.rules_evaluated ?? 0)} rules</span><details className="run-error-drilldown" onToggle={(event) => { const runId = String(run.run_id ?? ""); if (event.currentTarget.open) setSelectedRunId(runId || null); else setSelectedRunId((current) => current === runId ? null : current); }}><summary>Run Receipt · {String(run.run_id)}</summary><div className="run-code-groups">{warningCodes.length > 0 && <div><strong>Warnings</strong><span>{warningCodes.join(" · ")}</span></div>}{errorCodes.length > 0 && <div><strong>Errors</strong><span>{errorCodes.join(" · ")}</span></div>}{warningCodes.length === 0 && errorCodes.length === 0 && <span>No run-level warning or error codes.</span>}</div><div className="run-observations">{observations.map((observation) => <div key={`${String(observation.monitor_id)}-${String(observation.rule_code)}`}><header><strong>{String(observation.rule_code)}</strong><Badge value={String(observation.state ?? "—")} /></header><span>{String(observation.message ?? "")}</span><small>Fact {formatDate(observation.fact_as_of)} · observed {String(observation.observed_value ?? "N/A")} · threshold {String(observation.threshold_value ?? "N/A")}</small>{listOf<string>(observation, "warning_codes").length > 0 && <code>{listOf<string>(observation, "warning_codes").join(" · ")}</code>}{listOf<string>(observation, "error_codes").length > 0 && <code className="text-red">{listOf<string>(observation, "error_codes").join(" · ")}</code>}{listOf<Dict>(observation, "diagnostics").map((diagnostic, index) => <section className="provider-diagnostic" key={`${String(diagnostic.provider)}-${String(diagnostic.stage)}-${index}`}><header><strong>{String(diagnostic.provider).toUpperCase()}</strong><span>{diagnosticStage(diagnostic.stage)}</span></header><dl><div><dt>Failure</dt><dd>{String(diagnostic.error_code)}</dd></div><div><dt>Type</dt><dd>{String(diagnostic.error_type ?? "unknown")}</dd></div><div><dt>Status</dt><dd>{diagnosticStatus(diagnostic)}</dd></div><div><dt>Attempts</dt><dd>{String(diagnostic.attempt_count)}</dd></div><div><dt>Retryable</dt><dd>{diagnostic.retryable ? "Yes" : "No"}</dd></div></dl></section>)}</div>)}</div></details></div><Badge value={String(run.status ?? "—")} /></article>; })}</div>}</Card></section>
+
+                  <section id="monitor-panel-events" className="monitor-module-panel" role="tabpanel" aria-labelledby="monitor-tab-events" hidden={activeModule !== "events"}><Card kicker="STATE TRANSITIONS" title={`Event Stream · ${visibleEvents.length}`}>{visibleEvents.length === 0 ? <Empty>No transition events match this Monitor.</Empty> : <div className="timeline-list">{visibleEvents.slice(0, 20).map((event) => <article key={String(event.event_id)}><i className={`timeline-dot ${String(event.event_type ?? "").toLowerCase()}`} /><div className="event-copy"><strong>{String(event.rule_code ?? "Monitor event")}</strong><span>{formatDate(event.created_at)} · {String(event.severity ?? "—")} · {String(event.observed_value ?? "N/A")} / {String(event.threshold_value ?? "N/A")}</span><small>{String(event.message ?? "")}</small>{event.latest_resolution ? <small className="event-resolution">Handled: {String((event.latest_resolution as Dict).action ?? "—")} · {String((event.latest_resolution as Dict).note ?? "")}</small> : resolutionDraft?.eventId === String(event.event_id) ? <div className="event-resolution-editor"><label><span><b className="required-mark" aria-hidden="true">*</b>Resolution Note</span><input required autoFocus value={resolutionDraft.note} onChange={(change) => setResolutionDraft({ ...resolutionDraft, note: change.target.value })} placeholder="Record the judgment, follow-up action, or resolution reason" /></label><div><ActionButton onClick={submitResolution} busy={resolvingEvent}>{resolutionDraft.action === "RESOLVE" ? "Confirm Resolution" : "Confirm Acknowledgement"}</ActionButton><button type="button" onClick={() => setResolutionDraft(null)}>Cancel</button></div></div> : <div className="event-actions"><button type="button" onClick={() => beginResolution(String(event.event_id), "ACKNOWLEDGE")}>Acknowledge</button><button type="button" onClick={() => beginResolution(String(event.event_id), "RESOLVE")}>Resolve</button></div>}</div><Badge value={String(event.event_type ?? "—")} /></article>)}</div>}</Card></section>
+                </div>}
+                back={<MonitorEditor embedded initialMonitor={selectedDefinition} onClose={() => setEditingMonitor(undefined)} onSaved={(saved) => { setRunReceipt(saved); setEditingMonitor(undefined); result.refresh(); }} />}
+              />
+            </section>}
+          </main>
         </div>
       </DataBoundary>
     </ConsoleShell>

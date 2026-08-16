@@ -70,14 +70,16 @@ Watchlist Hub Store
 = durable database groups, memberships, lifecycle, sync state, mutation receipts
 
 Research WatchlistItem
-= thesis hint, triggers, status, expiry, and Research Subject association
+= Instrument identity, optional research context, legacy status, expiry, and Research Subject association
 ```
 
 The existing Phase 1 `WatchlistItem` remains separate from the external Watchlist
-Hub. It is research metadata and also owns the confirmed Instrument Selection
-candidate lifecycle (`WATCHING` / `SHORTLISTED` / `SELECTED` / `REJECTED`), not an
-external membership row. An external add does not fabricate a thesis hint. An
-external remove never archives/deletes a Research WatchlistItem or Research Subject.
+Hub. It is research metadata for a confirmed Instrument attachment, not an external
+membership row. Propose → Confirm attaches it directly; Shortlist and Select are not
+required user steps. The stored `WATCHING` / `SHORTLISTED` / `SELECTED` / `REJECTED`
+lifecycle remains readable for compatibility. An external add does not fabricate a
+thesis hint. An external remove never archives/deletes a Research WatchlistItem or
+Research Subject.
 
 ## 3. Source selection
 
@@ -619,12 +621,19 @@ in the durable Run rather than being repeated on a phone screen. A shared
 `NOT_EVALUATED` cause is shown once. Multiple transitions for one Monitor in one
 run are batched into one Telegram message; the underlying events remain separate
 and auditable.
-Telegram does not support responsive tables, so the sender uses a price-first
-headline and mobile-first vertical rule lines. Transition alerts and changed
+Monitor notifications use Telegram Bot API 10.1+ Rich Messages and a native
+two-column table for state/severity plus the combined condition/meaning. Quiet rules
+are collapsed behind a count; triggered and unavailable rules remain visible.
+Machine rule codes and repeated values/distances remain in the durable Run instead
+of widening the phone table. Generic and manual notifications remain regular HTML
+messages. The sender uses a price-first headline followed by the compact rule table.
+Transition alerts and changed
 post-market blocks include the prior observed price, price change, and exact Provider
 source from the run receipt; percentages are rounded half-up to exactly two decimals. They
 show a prominent red/green Unicode alert band when a monitored level newly triggers
-or recovers, followed by every changed rule's exact condition/threshold, bounded
+or its prior alarm condition clears. Green means alarm clearance, never a bullish
+signal or price/market recovery. The band is followed by every changed rule's exact
+condition/threshold, bounded
 human meaning, severity, and transition state; a generic `TRIGGERED` label is not
 enough. A single-transition headline also includes its bounded condition; multiple
 transitions retain a count headline and list their points below. Historical Outbox

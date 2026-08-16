@@ -11,6 +11,7 @@ from application.ports.agent_model_provider import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    ModelStreamChunk,
     ModelTool,
     ModelToolCall,
     ModelUsage,
@@ -208,6 +209,99 @@ class ResponsesCodec:
             ),
         )
 
+    @staticmethod
+    def decode_stream_event(
+        payload: Mapping[str, Any],
+        *,
+        event_name: str | None = None,
+    ) -> ModelStreamChunk:
+        """Decode one Responses API SSE event without replaying full text."""
+
+        kind = event_name or payload.get("type")
+        if not isinstance(kind, str):
+            kind = ""
+        request_id = next(
+            (
+                payload.get(key)
+                for key in ("id", "response_id", "request_id")
+                if isinstance(payload.get(key), str) and payload.get(key)
+            ),
+            None,
+        )
+        model = payload.get("model") if isinstance(payload.get("model"), str) else None
+        if kind.endswith("output_text.delta"):
+            delta = payload.get("delta", "")
+            if not isinstance(delta, str):
+                raise DataContractError("LLM Responses stream text delta is invalid")
+            return ModelStreamChunk(text_delta=delta, model=model, request_id=request_id)
+        if kind.endswith("function_call_arguments.delta"):
+            delta = payload.get("delta", "")
+            if not isinstance(delta, str):
+                raise DataContractError("LLM Responses stream function delta is invalid")
+            call_id = payload.get("call_id", payload.get("item_id", "call_0"))
+            name = payload.get("name", "")
+            if not isinstance(call_id, str) or not isinstance(name, str):
+                raise DataContractError("LLM Responses stream function identity is invalid")
+            return ModelStreamChunk(
+                tool_calls=(ModelToolCall(id=call_id, name=name, arguments=delta),),
+                model=model,
+                request_id=request_id,
+            )
+        if kind.endswith("output_item.added"):
+            item = payload.get("item")
+            if isinstance(item, Mapping) and item.get("type") in {"function_call", "tool_call"}:
+                call_id = item.get("call_id", item.get("id", "call_0"))
+                name = item.get("name", "")
+                arguments = item.get("arguments", "")
+                if not all(isinstance(value, str) for value in (call_id, name, arguments)):
+                    raise DataContractError("LLM Responses stream function item is invalid")
+                return ModelStreamChunk(
+                    tool_calls=(
+                        ModelToolCall(id=call_id, name=name, arguments=arguments),
+                    ),
+                    model=model,
+                    request_id=request_id,
+                )
+            return ModelStreamChunk(model=model, request_id=request_id)
+        if kind.endswith("response.completed") or kind in {"completed", "response.done"}:
+            response = payload.get("response")
+            if isinstance(response, Mapping):
+                return ModelStreamChunk(
+                    model=model,
+                    request_id=request_id,
+                    done=True,
+                    final_response=ResponsesCodec.decode(response),
+                )
+            return ModelStreamChunk(
+                model=model,
+                request_id=request_id,
+                usage=_usage(payload.get("usage")),
+                done=True,
+            )
+        # Responses emits lifecycle variants such as
+        # ``response.web_search_call.in_progress`` and
+        # ``response.web_search_call.completed``; retain the web usage/source
+        # marker for all of them rather than only the bare item event.
+        if "web_search_call" in kind:
+            return ModelStreamChunk(
+                web_search_used=True,
+                web_source_urls=_stream_sources(payload),
+                model=model,
+                request_id=request_id,
+            )
+        if "web_extractor_call" in kind:
+            return ModelStreamChunk(
+                web_extractor_used=True,
+                web_source_urls=_stream_sources(payload),
+                model=model,
+                request_id=request_id,
+            )
+        return ModelStreamChunk(
+            usage=_usage(payload.get("usage")),
+            model=model,
+            request_id=request_id,
+        )
+
 
 def _append_message_text(
     item: Mapping[str, Any], text_parts: list[str], source_urls: list[str]
@@ -268,6 +362,12 @@ def _append_sources(item: Mapping[str, Any], urls: list[str]) -> None:
         safe = _safe_url(url)
         if safe is not None and safe not in urls and len(urls) < MAX_WEB_SOURCE_URLS:
             urls.append(safe)
+
+
+def _stream_sources(item: Mapping[str, Any]) -> tuple[str, ...]:
+    urls: list[str] = []
+    _append_sources(item, urls)
+    return tuple(urls[:MAX_WEB_SOURCE_URLS])
 
 
 def _safe_url(url: str) -> str | None:
