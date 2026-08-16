@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ActionButton,
@@ -15,7 +15,8 @@ import {
   shortId,
 } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
-import { API_BASE, envelopeData, listOf, postApi, useApi } from "../lib/api";
+import { authenticatedFetch, envelopeData, listOf, postApi, useApi } from "../lib/api";
+import { unwrapAgendaSync } from "../lib/agenda-receipt.mjs";
 
 type Dict = Record<string, unknown>;
 type AgendaAction = "CREATE" | "REVISE" | "CANCEL" | "LINK_OUTCOME";
@@ -198,76 +199,6 @@ function unwrap(payload: unknown): Dict {
   const data = envelopeData<Dict>(source);
   if (data && Object.keys(data).length > 0) return data;
   return source;
-}
-
-function unwrapAgendaSync(payload: unknown): AgendaSyncReceipt | null {
-  const source = asDict(payload);
-  const data = asDict(source.data);
-  const result = asDict(source.result);
-
-  const receipt: AgendaSyncReceipt = {
-    receipt_id: text(source.receipt_id, text(data.receipt_id, text(result.receipt_id))),
-    status: text(source.status, text(data.status, text(result.status))),
-    as_of: text(source.as_of, text(data.as_of, text(result.as_of))),
-    window_start: text(source.window_start, text(data.window_start, text(result.window_start))),
-    window_end: text(source.window_end, text(data.window_end, text(result.window_end))),
-    scope_count: asInt(
-      source.scope_count ?? data.scope_count ?? result.scope_count,
-      0,
-    ),
-    eligible_instrument_count: asInt(
-      source.eligible_instrument_count ?? data.eligible_instrument_count ?? result.eligible_instrument_count,
-      0,
-    ),
-    succeeded_scope_count: asInt(
-      source.succeeded_scope_count ?? data.succeeded_scope_count ?? result.succeeded_scope_count,
-      0,
-    ),
-    failed_scope_count: asInt(
-      source.failed_scope_count ?? data.failed_scope_count ?? result.failed_scope_count,
-      0,
-    ),
-    candidate_count: asInt(
-      source.candidate_count ?? data.candidate_count ?? result.candidate_count,
-      0,
-    ),
-    appended_count: asInt(
-      source.appended_count ?? data.appended_count ?? result.appended_count,
-      0,
-    ),
-    revised_count: asInt(
-      source.revised_count ?? data.revised_count ?? result.revised_count,
-      0,
-    ),
-    date_drift_count: asInt(
-      source.date_drift_count ?? data.date_drift_count ?? result.date_drift_count,
-      0,
-    ),
-    unchanged_count: asInt(
-      source.unchanged_count ?? data.unchanged_count ?? result.unchanged_count,
-      0,
-    ),
-    provider_results: listOf<AgendaSyncProviderResult>(
-      source,
-      "provider_results",
-    ),
-    limitation_codes: listOf<string>(
-      source.limitation_codes ?? data.limitation_codes ?? result.limitation_codes,
-      "a",
-    ),
-    started_at: text(source.started_at, text(data.started_at, text(result.started_at))),
-    completed_at: text(source.completed_at, text(data.completed_at, text(result.completed_at))),
-    schema_version: asInt(
-      source.schema_version ?? data.schema_version ?? result.schema_version,
-      0,
-    ),
-    execution_effect: Boolean(
-      source.execution_effect ?? data.execution_effect ?? result.execution_effect,
-    ),
-  };
-
-  if (!receipt.receipt_id) return null;
-  return receipt;
 }
 
 function extractItems(payload: unknown): Dict[] {
@@ -512,13 +443,21 @@ export default function CatalystAgendaPage() {
   const [lastSync, setLastSync] = useState<AgendaSyncReceipt | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, Dict[]>>({});
   const [historyLoading, setHistoryLoading] = useState<string | null>(null);
+  const historyRequestSeq = useRef(0);
 
   const [timeFilter, setTimeFilter] = useState<(typeof TIME_FILTERS)[number]>("ALL");
   const [kindFilter, setKindFilter] = useState("ALL");
   const [scopeFilter, setScopeFilter] = useState<(typeof SCOPE_OPTIONS)[number]>("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
-  const nowMs = Date.now();
+  // Minute-granular clock so overdue buckets stay fresh without defeating
+  // the grouped/filtered memos on every render.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const agendaPayload = unwrap(agendaApi.data);
   const agendaPage = unwrap(asDict(agendaApi.data).agenda);
   const agendaHasMore = agendaPage.has_more === true;
@@ -526,11 +465,23 @@ export default function CatalystAgendaPage() {
   const grouped = useMemo(() => groupByAgendaId(agendaPayload, nowMs), [agendaPayload, nowMs]);
   const summary = useMemo(() => parseSummary(agendaPayload), [agendaPayload]);
   const subjects = useMemo(() => extractSubjects(agendaApi.data), [agendaApi.data]);
+  // Debounce the outcome-candidate scope so typing in the subject/instrument
+  // fields does not issue one request per keystroke.
+  const [candidateScope, setCandidateScope] = useState({ subjectId: "", instrumentId: "" });
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setCandidateScope({
+        subjectId: form.subject_id.trim(),
+        instrumentId: form.instrument_id.trim(),
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [form.subject_id, form.instrument_id]);
   const candidateQuery = new URLSearchParams({ limit: action === "LINK_OUTCOME" ? "50" : "1" });
-  if (action === "LINK_OUTCOME" && form.subject_id.trim()) {
-    candidateQuery.set("subject_id", form.subject_id.trim());
-  } else if (action === "LINK_OUTCOME" && form.instrument_id.trim()) {
-    candidateQuery.set("instrument_id", form.instrument_id.trim());
+  if (action === "LINK_OUTCOME" && candidateScope.subjectId) {
+    candidateQuery.set("subject_id", candidateScope.subjectId);
+  } else if (action === "LINK_OUTCOME" && candidateScope.instrumentId) {
+    candidateQuery.set("instrument_id", candidateScope.instrumentId);
   }
   const candidateApi = useApi<Dict>(`/api/agenda/outcome-candidates?${candidateQuery.toString()}`);
   const outcomeCandidates = useMemo(
@@ -781,7 +732,7 @@ export default function CatalystAgendaPage() {
     setSummaryMessage(null);
     setSummarySendResult(null);
     try {
-      const response = await fetch(`${API_BASE}/api/agenda/summary-preview`);
+      const response = await authenticatedFetch("/api/agenda/summary-preview");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.text();
       setSummaryPreview(parseSummaryPreviewBody(body));
@@ -840,6 +791,8 @@ export default function CatalystAgendaPage() {
   }
 
   async function loadVersionHistory(agendaItemId: string) {
+    const requestSeq = historyRequestSeq.current + 1;
+    historyRequestSeq.current = requestSeq;
     setHistoryLoading(agendaItemId);
     setError(null);
     try {
@@ -850,8 +803,9 @@ export default function CatalystAgendaPage() {
         limit: "200",
         offset: "0",
       });
-      const response = await fetch(`${API_BASE}/api/agenda?${query.toString()}`);
+      const response = await authenticatedFetch(`/api/agenda?${query.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (requestSeq !== historyRequestSeq.current) return;
       const payload = (await response.json()) as Dict;
       setHistoryById((current) => ({
         ...current,

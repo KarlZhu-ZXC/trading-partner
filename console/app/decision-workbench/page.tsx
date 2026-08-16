@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate, shortId } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
+import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
 import { useAgentPageContext } from "../lib/agent-page-context";
 
 type Dict = Record<string, unknown>;
@@ -213,8 +214,11 @@ export default function DecisionWorkbenchPage() {
     const resolutionNote = status === "RESOLVED" ? window.prompt("What durable fact or completed action closes this item?")?.trim() : undefined;
     if (status === "RESOLVED" && !resolutionNote) return;
     const dueDate = status === "ACKNOWLEDGED" && upper(item.status) === "ACKNOWLEDGED" ? window.prompt("Optional due date (YYYY-MM-DD):")?.trim() : undefined;
-    const dueAt = dueDate ? new Date(`${dueDate}T23:59:59`).toISOString() : undefined;
-    if (dueAt && Number.isNaN(Date.parse(dueAt))) { setReviewError("Due date must use YYYY-MM-DD."); return; }
+    let dueAt: string | undefined;
+    if (dueDate) {
+      dueAt = endOfDayIsoOrNull(dueDate) ?? undefined;
+      if (!dueAt) { setReviewError("Due date must use YYYY-MM-DD."); return; }
+    }
     setReviewBusy(reviewItemId);
     setReviewError(null);
     try {
