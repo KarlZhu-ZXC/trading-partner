@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 export function RequiredMark() {
   return <b className="required-mark" aria-hidden="true">*</b>;
@@ -35,6 +35,164 @@ export function FormField({
 export function ErrorNote({ children, role }: { children: ReactNode; role?: string }) {
   if (!children) return null;
   return <div className="inline-error" role={role}>{children}</div>;
+}
+
+type DialogProps = {
+  open: boolean;
+  title: string;
+  description?: ReactNode;
+  children?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  busy?: boolean;
+  tone?: "default" | "warning";
+  onConfirm: () => void;
+  onCancel: () => void;
+};
+
+/**
+ * Small, keyboard-accessible confirmation surface used for actions with an
+ * external or destructive effect.  Keeping this in the shared UI layer makes
+ * the confirmation gate visible in the DOM instead of hiding it in a browser
+ * native prompt.
+ */
+export function ConfirmationDialog({
+  open,
+  title,
+  description,
+  children,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  busy = false,
+  tone = "default",
+  onConfirm,
+  onCancel,
+}: DialogProps) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCancelRef = useRef(onCancel);
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onCancelRef.current();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previous?.focus?.();
+    };
+  }, [busy, open]);
+
+  if (!open) return null;
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
+      >
+        <header className="dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          <button className="dialog-close" type="button" onClick={onCancel} disabled={busy} aria-label="Close Dialog">×</button>
+        </header>
+        {description && <p id={descriptionId} className="dialog-description">{description}</p>}
+        {children}
+        <div className="dialog-actions">
+          <button className="dialog-cancel" type="button" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
+          <button className={`action-button ${tone}`} type="button" onClick={onConfirm} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type TextInputDialogProps = Omit<DialogProps, "children" | "onConfirm"> & {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: (value: string) => void;
+  required?: boolean;
+  inputType?: "text" | "date";
+  multiline?: boolean;
+  placeholder?: string;
+  helperText?: string;
+  error?: string | null;
+};
+
+/** A labelled required/optional input dialog for the few flows that need user text. */
+export function TextInputDialog({
+  open,
+  title,
+  description,
+  label,
+  value,
+  onChange,
+  onSubmit,
+  onCancel,
+  required = false,
+  inputType = "text",
+  multiline = false,
+  placeholder,
+  helperText,
+  error,
+  confirmLabel = "Submit",
+  cancelLabel = "Cancel",
+  busy = false,
+  tone = "default",
+}: TextInputDialogProps) {
+  const labelId = useId();
+  const [localError, setLocalError] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) setLocalError(null);
+  }, [open]);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalized = value.trim();
+    if (required && !normalized) {
+      setLocalError(`${label} is required.`);
+      return;
+    }
+    setLocalError(null);
+    onSubmit(normalized);
+  }
+
+  return (
+    <ConfirmationDialog
+      open={open}
+      title={title}
+      description={description}
+      confirmLabel={confirmLabel}
+      cancelLabel={cancelLabel}
+      busy={busy}
+      tone={tone}
+      onConfirm={() => {
+        const form = document.getElementById(labelId)?.closest("form") as HTMLFormElement | null;
+        form?.requestSubmit();
+      }}
+      onCancel={onCancel}
+    >
+      <form className="dialog-form" onSubmit={submit}>
+        <label htmlFor={labelId}><span>{required && <b className="required-mark" aria-hidden="true">*</b>}{label}</span>
+          {multiline ? <textarea id={labelId} required={required} aria-required={required || undefined} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} rows={5} autoFocus /> : <input id={labelId} required={required} aria-required={required || undefined} type={inputType} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus />}
+        </label>
+        {helperText && <small className="dialog-helper">{helperText}</small>}
+        <ErrorNote role="alert">{error ?? localError}</ErrorNote>
+      </form>
+    </ConfirmationDialog>
+  );
 }
 
 /** Offset pager for durable list endpoints (fixed page size, explicit
