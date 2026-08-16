@@ -34,6 +34,7 @@ from application.dto.us_market import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import FRESHNESS_ORDER
 from application.services.commodity_spot_service import CommoditySpotService
 from application.services.futures_curve_service import FuturesCurveService
 from application.services.instrument_access_service import InstrumentAccessService
@@ -77,13 +78,6 @@ _BASIS_NOT_COMPARABLE = WarningInfo(
     message="Spot and futures legs are not comparable under the disclosed gate.",
     details={},
 )
-_FRESHNESS_ORDER = {
-    Freshness.FRESH: 0,
-    Freshness.DELAYED: 1,
-    Freshness.STALE: 2,
-    Freshness.UNKNOWN: 3,
-}
-
 
 def _parse_offer_side(raw: str | None) -> OfferSide:
     if raw is None:
@@ -220,7 +214,7 @@ class MarketToolCoordinator:
             fetched_at=max(result.fetched_at for result in results),
             freshness=max(
                 (result.freshness for result in results),
-                key=lambda value: _FRESHNESS_ORDER[value],
+                key=lambda value: FRESHNESS_ORDER[value],
             ),
             sources=sources,
             data=MarketBatchQuotesDTO(

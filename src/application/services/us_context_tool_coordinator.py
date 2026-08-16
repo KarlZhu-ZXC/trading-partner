@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from application.dto.error_mapper import to_error_info, to_error_info_from_exception
-from application.dto.provider_routing import ProviderResultMeta, RouterExecutionResult
-from application.dto.tool_envelope import SourceReference, ToolEnvelope, WarningInfo
+from application.dto.provider_routing import RouterExecutionResult
+from application.dto.tool_envelope import ToolEnvelope
 from application.dto.us_context import (
     MarketGetLiveNewsInput,
     USGetMacroContextInput,
@@ -20,6 +19,12 @@ from application.dto.us_context import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import (
+    begin_request,
+    exception_envelope,
+    router_failure_envelope,
+    success_envelope,
+)
 from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_context_services import (
     USMacroService,
@@ -27,16 +32,7 @@ from application.services.us_context_services import (
     USPredictionMarketService,
     USSentimentService,
 )
-from domain.common.enums import Freshness, Market, SourceRole
-from domain.common.errors import DataContractError, TradingPartnerError
-from domain.common.ids import EntityIdPrefix
-
-_FRESHNESS_ORDER = {
-    Freshness.FRESH: 0,
-    Freshness.DELAYED: 1,
-    Freshness.STALE: 2,
-    Freshness.UNKNOWN: 3,
-}
+from domain.common.enums import Market
 
 
 class USContextToolCoordinator:
@@ -153,11 +149,7 @@ class USContextToolCoordinator:
             return self._exception(request_id, as_of, exc)
 
     def _begin(self, requested: datetime | None) -> tuple[str, datetime]:
-        now = self._clock.now()
-        as_of = requested or now
-        if as_of > now:
-            raise DataContractError("as_of must not be in the future")
-        return self._ids.new(EntityIdPrefix.REQ), as_of
+        return begin_request(requested, clock=self._clock, ids=self._ids)
 
     def _success[T](
         self,
@@ -168,48 +160,15 @@ class USContextToolCoordinator:
         *,
         extra_codes: tuple[str, ...] = (),
     ) -> ToolEnvelope[T]:
-        metas = tuple(result.meta for result in results if result.meta is not None)
-        warnings = self._warnings(results, metas, extra_codes)
-        fetched_at = max((meta.fetched_at for meta in metas), default=self._clock.now())
-        freshness = max(
-            (meta.freshness for meta in metas),
-            key=lambda value: _FRESHNESS_ORDER[value],
-            default=Freshness.UNKNOWN,
-        )
-        sources = tuple(
-            SourceReference(
-                name=meta.vendor.value,
-                role=meta.role,
-                url=None,
-                retrieved_at=meta.fetched_at,
-                data_delay_seconds=meta.data_delay_seconds,
-            )
-            for meta in dict.fromkeys(metas)
-        )
-        return ToolEnvelope.success(
+        return success_envelope(
             request_id=request_id,
-            market=Market.US,
             as_of=as_of,
-            fetched_at=fetched_at,
-            freshness=freshness,
-            sources=sources,
             data=data,
-            degraded=bool(warnings),
-            warnings=warnings,
-        )
-
-    @staticmethod
-    def _warnings(
-        results: tuple[RouterExecutionResult[object], ...],
-        metas: tuple[ProviderResultMeta, ...],
-        extra_codes: tuple[str, ...],
-    ) -> tuple[WarningInfo, ...]:
-        codes = [warning.code for result in results for warning in result.warnings]
-        codes.extend(extra_codes)
-        codes.extend("FALLBACK_US_SOURCE" for meta in metas if meta.role is SourceRole.FALLBACK)
-        return tuple(
-            WarningInfo(code=code, message="US context data warning.", details={})
-            for code in dict.fromkeys(codes)
+            results=results,
+            clock=self._clock,
+            market=Market.US,
+            extra_codes=extra_codes,
+            warning_message="US context data warning.",
         )
 
     def _router_failure[T](
@@ -218,44 +177,23 @@ class USContextToolCoordinator:
         as_of: datetime,
         result: RouterExecutionResult[object],
     ) -> ToolEnvelope[T]:
-        error = result.error
-        mapped = (
-            to_error_info(error, self._redactor)
-            if isinstance(error, TradingPartnerError)
-            else to_error_info_from_exception(
-                error or RuntimeError("router failure"), self._redactor
-            )
-        )
-        return ToolEnvelope.failure(
+        return router_failure_envelope(
             request_id=request_id,
-            market=Market.US,
             as_of=as_of,
-            fetched_at=self._clock.now(),
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=[mapped],
-            degraded=True,
-            warnings=result.warnings,
-            data=None,
+            result=result,
+            clock=self._clock,
+            redactor=self._redactor,
+            market=Market.US,
         )
 
     def _exception[T](
         self, request_id: str, as_of: datetime, exc: BaseException
     ) -> ToolEnvelope[T]:
-        mapped = (
-            to_error_info(exc, self._redactor)
-            if isinstance(exc, TradingPartnerError)
-            else to_error_info_from_exception(exc, self._redactor)
-        )
-        return ToolEnvelope.failure(
+        return exception_envelope(
             request_id=request_id,
-            market=Market.US,
             as_of=as_of,
-            fetched_at=self._clock.now(),
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=[mapped],
-            degraded=True,
-            warnings=(),
-            data=None,
+            exc=exc,
+            clock=self._clock,
+            redactor=self._redactor,
+            market=Market.US,
         )

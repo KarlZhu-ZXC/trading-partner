@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-from application.dto.error_mapper import to_error_info, to_error_info_from_exception
 from application.dto.monitoring import (
     MonitorArchiveInput,
     MonitorCreateInput,
@@ -29,10 +28,10 @@ from application.dto.tool_envelope import SourceReference, ToolEnvelope, Warning
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import exception_envelope
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_service import MonitorService
 from domain.common.enums import Freshness, SourceRole
-from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 
 
@@ -145,20 +144,13 @@ class MonitorToolCoordinator:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, now, exc)
 
-    def _failure[T](self, request_id: str, as_of: datetime, exc: BaseException) -> ToolEnvelope[T]:
-        error = (
-            to_error_info(exc, self._redactor)
-            if isinstance(exc, TradingPartnerError)
-            else to_error_info_from_exception(exc, self._redactor)
-        )
-        return ToolEnvelope.failure(
+    def _failure[T](
+        self, request_id: str, as_of: datetime, exc: BaseException
+    ) -> ToolEnvelope[T]:
+        return exception_envelope(
             request_id=request_id,
-            market=None,
             as_of=as_of,
-            fetched_at=self._clock.now(),
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=(error,),
-            degraded=True,
-            data=None,
+            exc=exc,
+            clock=self._clock,
+            redactor=self._redactor,
         )
