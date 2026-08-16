@@ -28,6 +28,7 @@ import {
   parsePendingAction,
   streamAgentMessage,
 } from "../lib/agent-api";
+import { asRecord, textStrict as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 
@@ -54,16 +55,6 @@ const EMPTY_STREAM: StreamSnapshot = {
   pendingAction: null,
   error: null,
 };
-
-function asRecord(value: unknown): Dict {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Dict)
-    : {};
-}
-
-function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" && value.trim() ? value : fallback;
-}
 
 function displayDate(value: string | null | undefined): string {
   if (!value) return "—";

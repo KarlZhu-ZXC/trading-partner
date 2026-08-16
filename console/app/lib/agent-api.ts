@@ -2,6 +2,7 @@
 
 import { authenticatedFetch } from "./api";
 import { getAgentPageContext } from "./agent-page-context";
+import { textStrict as text } from "./coerce";
 
 /**
  * The Agent API is deliberately kept in one module.  The backend is allowed
@@ -281,10 +282,6 @@ function unwrap(value: unknown): AgentRecord {
   const result = asRecord(source.result);
   if (Object.keys(result).length > 0) return result;
   return source;
-}
-
-function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" && value.trim() ? value : fallback;
 }
 
 function firstBoolean(...values: unknown[]): boolean | undefined {

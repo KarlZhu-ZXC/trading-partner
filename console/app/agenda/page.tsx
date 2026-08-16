@@ -17,6 +17,7 @@ import {
 import { ConsoleShell } from "../components/console-shell";
 import { authenticatedFetch, envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { unwrapAgendaSync } from "../lib/agenda-receipt.mjs";
+import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 type AgendaAction = "CREATE" | "REVISE" | "CANCEL" | "LINK_OUTCOME";
@@ -133,13 +134,6 @@ const EMPTY_FORM: AgendaItemForm = {
 
 function asDict(value: unknown): Dict {
   return value !== null && typeof value === "object" ? (value as Dict) : {};
-}
-
-function text(value: unknown, fallback = "—"): string {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value !== "string") return fallback;
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : fallback;
 }
 
 function splitIdentifierList(value: string): string[] {

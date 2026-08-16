@@ -19,6 +19,7 @@ import {
 } from "../components/ui";
 import { listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
+import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 type Tab = "holdings" | "activity" | "performance" | "risk";
@@ -93,12 +94,6 @@ function data<T extends Dict = Dict>(value: unknown): T | null {
   return envelope(value).data && typeof envelope(value).data === "object"
     ? envelope(value).data as T
     : null;
-}
-
-function text(value: unknown, fallback = "—"): string {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value !== "string") return fallback;
-  return value.trim() || fallback;
 }
 
 function stringList(value: unknown): string[] {

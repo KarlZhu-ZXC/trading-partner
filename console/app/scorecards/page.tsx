@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge, Card, DataBoundary, Empty, RefreshButton } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
+import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 
@@ -48,14 +49,6 @@ function unwrapEnvelope(value: unknown): Dict {
   if (Object.keys(nested).length > 0) return nested;
   const nestedResult = asDict(source.result);
   return Object.keys(nestedResult).length > 0 ? nestedResult : source;
-}
-
-function text(value: unknown, fallback = "—"): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? String(value)
-    : typeof value === "string" && value.trim()
-      ? value.trim()
-      : fallback;
 }
 
 function id(value: unknown): string {
