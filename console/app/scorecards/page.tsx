@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Card, DataBoundary, Empty, RefreshButton } from "../components/ui";
+import { ErrorNote, Paginator, Badge, Card, DataBoundary, Empty, RefreshButton } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
 import { textDash as text } from "../lib/coerce";
@@ -373,7 +373,7 @@ export default function JudgmentScorecardsPage() {
             {busy === "generate" ? "Working..." : "Generate Scorecard"}
           </button>
         </div>
-        {error ? <div className="inline-error">{error}</div> : null}
+        <ErrorNote>{error}</ErrorNote>
         {message ? <p className="card-note">{message}</p> : null}
         <Card kicker="SCORECARD RUNS · READ-ONLY EVIDENCE" title="Judgment Scorecards">
           <div className="scorecards-controls">
@@ -427,11 +427,13 @@ export default function JudgmentScorecardsPage() {
                 ))}
               </div>
             )}
-          <div className="page-actions">
-            <button className="action-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset(Math.max(0, historyOffset - 50))} type="button">Previous 50</button>
-            <small>{scorecardTotal} Total · Showing {allScorecards.length === 0 ? 0 : historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>
-            <button className="action-button" disabled={!scorecardHasMore} onClick={() => setHistoryOffset(historyOffset + 50)} type="button">Next 50</button>
-          </div>
+          <Paginator
+            step={50}
+            offset={historyOffset}
+            hasMore={scorecardHasMore}
+            onOffsetChange={setHistoryOffset}
+            summary={<small>{scorecardTotal} Total · Showing {allScorecards.length === 0 ? 0 : historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>}
+          />
         </Card>
       </DataBoundary>
     </ConsoleShell>

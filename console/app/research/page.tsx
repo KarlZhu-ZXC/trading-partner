@@ -11,6 +11,7 @@ import {
   DataBoundary,
   DescriptionList,
   Empty,
+  FormField,
   HorizontalTabs,
   displayJson,
   formatDate,
@@ -181,8 +182,8 @@ function splitList(value: string): string[] {
   return value.split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
 }
 
-function Field({ label, children, className = "", required = false }: { label: string; children: ReactNode; className?: string; required?: boolean }) {
-  return <label className={`research-field ${className}`}><span>{required && <b className="required-mark" aria-hidden="true">*</b>}{label}</span>{children}</label>;
+function Field(props: { label: string; children: ReactNode; className?: string; required?: boolean }) {
+  return <FormField {...props} className={`research-field ${props.className ?? ""}`} />;
 }
 
 type InstrumentSuggestion = { instrument_id: string; symbol: string; name: string; market: string; asset_type: string; exchange?: string };

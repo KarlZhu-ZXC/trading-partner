@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  ErrorNote,
+  Paginator,
   ActionButton,
   Badge,
   Card,
@@ -851,7 +853,7 @@ export default function CatalystAgendaPage() {
         {message && <p className="card-note">{message}</p>}
         {syncMessage && <p className="card-note">{syncMessage}</p>}
         {summaryMessage && <p className="card-note">{summaryMessage}</p>}
-        {summaryError && <div className="inline-error">{summaryError}</div>}
+        <ErrorNote>{summaryError}</ErrorNote>
         {summaryPreview !== null && (
           <Card className="span-12" kicker="DELIVERY PREVIEW" title="Daily Agenda Summary" subtitle="Read-only mobile notification preview">
             <p className="agenda-note">Read-only preview from <strong>/api/agenda/summary-preview</strong>.</p>
@@ -912,7 +914,7 @@ export default function CatalystAgendaPage() {
               Sync Provider Calendars
             </ActionButton>
           </div>
-          {syncError && <div className="inline-error">{syncError}</div>}
+          <ErrorNote>{syncError}</ErrorNote>
           {lastSync ? (
             <div className="agenda-sync-receipt">
               <h3>Last Sync Receipt</h3>
@@ -990,7 +992,7 @@ export default function CatalystAgendaPage() {
             </label>
           </div>
 
-          {error && <div className="inline-error">{error}</div>}
+          <ErrorNote>{error}</ErrorNote>
 
           {formVisible ? (
             <section className="agenda-editor">
@@ -1319,11 +1321,13 @@ export default function CatalystAgendaPage() {
               })}
             </div>
           )}
-          <div className="page-actions">
-            <ActionButton disabled={agendaOffset === 0} onClick={() => setAgendaOffset(Math.max(0, agendaOffset - 200))}>Previous 200</ActionButton>
-            <small>{agendaTotal || grouped.length} Total · Page {Math.floor(agendaOffset / 200) + 1}</small>
-            <ActionButton disabled={!agendaHasMore} onClick={() => setAgendaOffset(agendaOffset + 200)}>Next 200</ActionButton>
-          </div>
+          <Paginator
+            step={200}
+            offset={agendaOffset}
+            hasMore={agendaHasMore}
+            onOffsetChange={setAgendaOffset}
+            summary={<small>{agendaTotal || grouped.length} Total · Page {Math.floor(agendaOffset / 200) + 1}</small>}
+          />
         </Card>
       </DataBoundary>
     </ConsoleShell>

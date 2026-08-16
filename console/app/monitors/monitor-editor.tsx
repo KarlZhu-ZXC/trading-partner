@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ActionButton, Badge, FieldLabel, RequiredMark, displayJson } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, FieldLabel, RequiredMark, displayJson } from "../components/ui";
 import { postApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -379,7 +379,7 @@ export function MonitorEditor({
         ))}
       </div>
       <datalist id="technical-metric-presets">{TECHNICAL_METRICS.map((metric) => <option value={metric} key={metric} />)}</datalist>
-      {error && <div className="inline-error">{error}</div>}
+      <ErrorNote>{error}</ErrorNote>
       {receipt !== null && <div className="save-success"><Badge value="SUCCEEDED" /> Monitor saved.</div>}
       <footer><span>Saving creates an immutable version and never changes a Thesis, position, or order.</span><div><button className="close-button" type="button" onClick={onClose}>Cancel</button><ActionButton onClick={submit} busy={saving}>{editing ? "Save New Version" : "Create Monitor"}</ActionButton></div></footer>
     </section>

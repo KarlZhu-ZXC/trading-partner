@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate, shortId } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate, shortId } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
@@ -256,7 +256,7 @@ export default function DecisionWorkbenchPage() {
             <div className="decision-subject-meta"><Badge value={upper(subject.status)} /><strong>{shortId(subject.primary_instrument_id)}</strong><small className="mono">{subjectId}</small></div>
           </section>
 
-          <Card className="decision-next-card" kicker="NEXT DECISION" title="Closure Queue" action={<div className="page-actions"><Badge value={partialFailures.length ? "INCOMPLETE" : nextSteps.length ? `${nextSteps.length} ITEMS` : "READY"} /><Link href="/#review-queue">All durable items →</Link></div>}><StepList items={nextSteps} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} />{reviewError ? <div className="inline-error">{reviewError}</div> : null}</Card>
+          <Card className="decision-next-card" kicker="NEXT DECISION" title="Closure Queue" action={<div className="page-actions"><Badge value={partialFailures.length ? "INCOMPLETE" : nextSteps.length ? `${nextSteps.length} ITEMS` : "READY"} /><Link href="/#review-queue">All durable items →</Link></div>}><StepList items={nextSteps} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} /><ErrorNote>{reviewError}</ErrorNote></Card>
 
           <div className="decision-stage-grid">
             <Card kicker="1 · JUDGMENT" title="Thesis & Questions" action={<Link href={`/research#subject-${subjectId}`}>Open Research →</Link>}>

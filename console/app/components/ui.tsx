@@ -8,6 +8,59 @@ export function FieldLabel({ children, required = false }: { children: ReactNode
   return <span>{required && <RequiredMark />}{children}</span>;
 }
 
+/** Labeled form control matching the Console label convention: the wrapper
+ * is the accessibility label, the span carries the visible text plus the
+ * required mark. */
+export function FormField({
+  label,
+  required = false,
+  children,
+  className,
+}: {
+  label: ReactNode;
+  required?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <label className={className}>
+      <span>{required && <RequiredMark />}{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** Renders nothing when the message is empty, so callers can pass state
+ * directly instead of conditional JSX. */
+export function ErrorNote({ children, role }: { children: ReactNode; role?: string }) {
+  if (!children) return null;
+  return <div className="inline-error" role={role}>{children}</div>;
+}
+
+/** Offset pager for durable list endpoints (fixed page size, explicit
+ * Previous/Next, caller-owned summary text between the buttons). */
+export function Paginator({
+  step,
+  offset,
+  hasMore,
+  onOffsetChange,
+  summary,
+}: {
+  step: number;
+  offset: number;
+  hasMore: boolean;
+  onOffsetChange: (offset: number) => void;
+  summary?: ReactNode;
+}) {
+  return (
+    <div className="page-actions">
+      <ActionButton disabled={offset === 0} onClick={() => onOffsetChange(Math.max(0, offset - step))}>{`Previous ${step}`}</ActionButton>
+      {summary}
+      <ActionButton disabled={!hasMore} onClick={() => onOffsetChange(offset + step)}>{`Next ${step}`}</ActionButton>
+    </div>
+  );
+}
+
 export type HorizontalTabItem<T extends string> = {
   id: T;
   label: ReactNode;
