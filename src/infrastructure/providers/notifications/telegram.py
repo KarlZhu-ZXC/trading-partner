@@ -209,29 +209,23 @@ def _format_notification_html(title: str, body: str) -> str:
 
     price_lines: list[str] = []
     if price_basis is not None:
-        price_lines.append(f"⚠️ 价格口径：{html.escape(price_basis)}")
-    observation_meta: list[str] = []
+        price_lines.append(f"📐 <b>价格口径</b>：{html.escape(price_basis)}")
     if price_time is not None:
-        observation_meta.append(f"🕒 {html.escape(_format_price_time(price_time))}")
+        price_lines.append(f"🕒 <b>价格时间</b>：{html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        observation_meta.append(
-            f"📡 <b>{html.escape(_display_source_names(data_source))}</b>"
+        price_lines.append(
+            f"📡 <b>数据来源</b>：{html.escape(_display_source_names(data_source))}"
         )
-    if observation_meta:
-        price_lines.append(" · ".join(observation_meta))
-    comparison_meta: list[str] = []
     if previous_price is not None:
-        comparison_meta.append(f"↩️ 上次 {html.escape(previous_price)}")
+        price_lines.append(f"↩️ <b>上次价格</b>：{html.escape(previous_price)}")
     if price_change is not None:
-        comparison_meta.append(f"较上次 <b>{html.escape(price_change)}</b>")
-    if comparison_meta:
-        price_lines.append(" · ".join(comparison_meta))
+        price_lines.append(f"📊 <b>价格变化</b>：{html.escape(price_change)}")
     if price_lines:
         sections.append("\n".join(price_lines))
 
     sections.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
     if notes:
-        sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
+        sections.append("\n".join(_format_notification_note(note) for note in notes))
     if judgment_lines:
         sections.append(
             "🧭 <b>复合判断</b>\n"
@@ -280,7 +274,7 @@ def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
             sections.append(rendered)
         index = end_index + 1
     if notes:
-        sections.append("\n".join(f"<i>{html.escape(note)}</i>" for note in notes))
+        sections.append("\n".join(_format_notification_note(note) for note in notes))
     return "\n\n".join(sections)
 
 
@@ -322,24 +316,18 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     parts = [f"<b>{html.escape(heading)}</b>"]
     if name and name != symbol and len(name) <= 48:
         parts.append(f"<i>{html.escape(name)}</i>")
-    observation_meta: list[str] = []
     if price_time is not None:
-        observation_meta.append(f"🕒 {html.escape(_format_price_time(price_time))}")
+        parts.append(f"🕒 <b>价格时间</b>：{html.escape(_format_price_time(price_time))}")
     if data_source is not None:
-        observation_meta.append(
-            f"📡 <b>{html.escape(_display_source_names(data_source))}</b>"
+        parts.append(
+            f"📡 <b>数据来源</b>：{html.escape(_display_source_names(data_source))}"
         )
-    if observation_meta:
-        parts.append(" · ".join(observation_meta))
     if price_basis is not None:
-        parts.append(f"⚠️ {html.escape(price_basis)}")
-    comparison_meta: list[str] = []
+        parts.append(f"📐 <b>价格口径</b>：{html.escape(price_basis)}")
     if previous_price is not None:
-        comparison_meta.append(f"↩️ 上次 {html.escape(previous_price)}")
+        parts.append(f"↩️ <b>上次价格</b>：{html.escape(previous_price)}")
     if price_change is not None:
-        comparison_meta.append(f"较上次 <b>{html.escape(price_change)}</b>")
-    if comparison_meta:
-        parts.append(" · ".join(comparison_meta))
+        parts.append(f"📊 <b>价格变化</b>：{html.escape(price_change)}")
     formatted_changes = tuple(
         formatted for line in changes if (formatted := _format_change(line)) is not None
     )
@@ -347,7 +335,7 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         parts.append(_change_banner(changes) + "\n" + "\n".join(formatted_changes))
     for note in notes:
         if note not in {price_basis}:
-            parts.append(f"<i>{html.escape(note)}</i>")
+            parts.append(_format_notification_note(note))
     if judgment_lines:
         parts.append(
             "⚠️ <b>复合判断状态</b>\n"
@@ -355,6 +343,25 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         )
     parts.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
     return "\n".join(parts)
+
+
+def _format_notification_note(note: str) -> str:
+    labels = (
+        ("数据原因：", "⛔", "数据原因"),
+        ("运行错误：", "⛔", "运行错误"),
+        ("数据状态：", "ℹ️", "数据状态"),
+        ("数据提示：", "ℹ️", "数据提示"),
+        ("价格口径：", "📐", "价格口径"),
+        ("周末口径：", "📐", "周末口径"),
+        ("口径：", "📐", "价格口径"),
+    )
+    for prefix, icon, label in labels:
+        if note.startswith(prefix):
+            return (
+                f"{icon} <b>{label}</b>："
+                f"{html.escape(note.removeprefix(prefix).strip())}"
+            )
+    return f"<i>{html.escape(note)}</i>"
 
 
 def _parse_rule_rows(

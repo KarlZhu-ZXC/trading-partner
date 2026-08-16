@@ -335,6 +335,9 @@ class NotificationService:
                 body=(
                     "通知样式预览（非真实监控事件）\n"
                     "当前价格：4044.9\n"
+                    "价格口径：Binance PAXG/USDC 代币化黄金现货周末代理；"
+                    "不是 XAUUSD 或 LBMA 基准价，存在代币、场所、流动性及 USDC 基差，"
+                    "时间为抓取时间\n"
                     "价格时间：2026-08-01T15:53:36+00:00\n"
                     "上次价格：4046.57\n"
                     "价格变化：-1.67 (-0.04%)\n"
@@ -351,11 +354,7 @@ class NotificationService:
                     "< 4080  4044.9  -35.1   TRIGGERED  MEDIUM\n"
                     "XAU_SUPPORT_FAIL_4024               "
                     "< 4024  4044.9  20.9    QUIET      MEDIUM\n"
-                    "XAU_WEEKLY_STRUCTURE_FAIL_3914      < 3914  4044.9  130.9   QUIET      HIGH\n"
-                    "数据提示：PAXG_USDC_WEEKEND_PROXY, "
-                    "WEEKEND_PROXY_NOT_XAUUSD_SPOT\n"
-                    "周末口径：Binance PAXG/USDC 仅作为 XAUUSD 周末波动代理；"
-                    "它是代币化黄金现货，不是 XAUUSD 或 LBMA 基准价。"
+                    "XAU_WEEKLY_STRUCTURE_FAIL_3914      < 3914  4044.9  130.9   QUIET      HIGH"
                 ),
                 status=NotificationStatus.PENDING,
                 attempt_count=0,
