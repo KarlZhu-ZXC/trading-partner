@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from application import __version__
 from application.dto.catalyst_agenda_sync import (
@@ -28,6 +28,7 @@ from bootstrap import ApplicationContainer, build_default_application
 from domain.common.errors import TradingPartnerError
 from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
 from domain.review_item.models import ReviewItemProjection
+from interfaces.console._shared import ConsoleRequestModel, failure_payload
 from interfaces.console.agent_api import build_agent_runtime_state
 from interfaces.console.agent_api import router as agent_router
 from interfaces.console.catalog import capability_catalog
@@ -126,8 +127,8 @@ def _registry(request: Request) -> CompactCapabilityRegistry:
     return cast(CompactCapabilityRegistry, request.app.state.capability_registry)
 
 
-class _RequestModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RequestModel(ConsoleRequestModel):
+    pass
 
 
 class ToolInvokeRequest(_RequestModel):
@@ -504,13 +505,7 @@ async def trade_retro(request: Request) -> dict[str, Any]:
 def _console_failure(request: Request, error: Exception, code: str) -> dict[str, Any]:
     """Represent one failed console capability without hiding other aggregates."""
 
-    return {
-        "ok": False,
-        "data": None,
-        "warnings": [],
-        "errors": [{"code": code, "message": _sanitized_error(request, error)}],
-        "degraded": True,
-    }
+    return failure_payload(code, _sanitized_error(request, error))
 
 
 def _workflow_attention_items(
@@ -1009,18 +1004,9 @@ def _research_state_failure(request: Request, error: Exception) -> dict[str, Any
     same secret redactor used by the other console endpoints.
     """
 
-    return {
-        "ok": False,
-        "data": None,
-        "warnings": [],
-        "errors": [
-            {
-                "code": "CONSOLE_RESEARCH_STATE_READ_FAILED",
-                "message": _sanitized_error(request, error),
-            }
-        ],
-        "degraded": True,
-    }
+    return failure_payload(
+        "CONSOLE_RESEARCH_STATE_READ_FAILED", _sanitized_error(request, error)
+    )
 
 
 def _canonical_subject_transport(value: Any) -> Any:
