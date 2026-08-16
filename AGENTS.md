@@ -755,7 +755,11 @@ Console UI-convention regression test so this contract cannot silently regress.
 1. Domain never imports MCP, SQLAlchemy, Alembic, Pydantic Settings, or providers.
 2. Application never imports infrastructure or interfaces.
 3. Interfaces only adapt protocols / validate inputs / convert to DTOs.
-4. Only `src/bootstrap.py` connects application services to infrastructure.
+4. Only `src/bootstrap.py` and the sanctioned `src/composition_root/` package
+   connect application services to infrastructure. `bootstrap.py` stays the
+   public façade (`ApplicationContainer`, `build_application`); bounded graph
+   builders under `composition_root/` may import both layers and are enforced
+   by the architecture boundary tests.
    `infrastructure/composition/` may build infrastructure-only bundles but must
    never import `application.services`.
    Application-only service/context bundles live in `application/runtime.py`;
@@ -772,7 +776,8 @@ Console UI-convention regression test so this contract cannot silently regress.
 
 ```text
 src/
-├── bootstrap.py
+├── bootstrap.py          # composition-root façade
+├── composition_root/     # bounded app+infra graph builders (with bootstrap.py)
 ├── application/
 ├── domain/
 ├── infrastructure/       # composition/, persistence/orm/, providers/, config/

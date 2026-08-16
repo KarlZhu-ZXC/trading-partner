@@ -158,10 +158,12 @@ def test_interfaces_do_not_import_infrastructure() -> None:
 
 
 def test_only_bootstrap_is_composition_root() -> None:
-    """Only bootstrap may import application services and infrastructure providers."""
+    """Only bootstrap.py and the composition_root package may wire app+infra."""
     violations: list[str] = []
     bootstrap = SRC / "bootstrap.py"
+    composition_root = SRC / "composition_root"
     assert bootstrap.is_file()
+    assert composition_root.is_dir()
 
     for path in _iter_py_files(SRC):
         if path == bootstrap:
@@ -187,6 +189,10 @@ def test_only_bootstrap_is_composition_root() -> None:
                 if _is_module(imp, "application.services"):
                     violations.append(f"{path}: infrastructure imports application services")
             continue
+        if path.is_relative_to(composition_root):
+            # The sanctioned top-level composition-root package may construct
+            # bounded graphs from both layers, exactly like bootstrap.py.
+            continue
         # other modules under src (should only be bootstrap.py at top level)
         if has_app and has_infra and path.name != "bootstrap.py":
             violations.append(f"{path}: non-bootstrap composition of app+infra")
@@ -204,11 +210,15 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
 
     bootstrap = SRC / "bootstrap.py"
     # Optional account, notification, weekend-reference, and bounded Monitor-LLM
-    # wiring remains explicit in the sole composition root. Keep a tight ceiling;
-    # 1,150 includes explicit Scorecard, Catalyst Agenda, isolated live-order,
-    # Shared Agent model/repository wiring, and the cross-process Agent turn-lock
-    # factory without forcing interfaces to import infrastructure.
-    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 1_160
+    # wiring remains explicit in the composition root. bootstrap.py keeps a
+    # tight ceiling now that the market-facts graph lives in composition_root/;
+    # each composition_root builder stays bounded so graphs cannot collapse
+    # back into one module.
+    assert len(bootstrap.read_text(encoding="utf-8").splitlines()) <= 900
+    for builder in (SRC / "composition_root").glob("*.py"):
+        if builder.name == "__init__.py":
+            continue
+        assert len(builder.read_text(encoding="utf-8").splitlines()) <= 400, builder
     assert set(ApplicationContainer.__dataclass_fields__) == {
         "settings",
         "context",
@@ -624,6 +634,10 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
     for forbidden in FORBIDDEN_PUBLIC_TOOL_NAMES | RETIRED_PUBLIC_TOOL_NAMES:
         assert f'name="{forbidden}"' not in adapter_text
     bootstrap = (PROJECT_ROOT / "src" / "bootstrap.py").read_text(encoding="utf-8")
+    composition_root_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((SRC / "composition_root").glob("*.py"))
+    )
     for field in (
         "research_archive_service",
         "research_search_service",
@@ -632,7 +646,7 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
         "decision_record_service",
         "us_tool_coordinator",
     ):
-        assert field in bootstrap
+        assert field in bootstrap + composition_root_text
     persistence_composition = (
         LAYER_ROOTS["infrastructure"] / "composition" / "persistence.py"
     ).read_text(encoding="utf-8")
@@ -747,6 +761,7 @@ CACHE_DIR_NAMES = frozenset({"__pycache__", ".mypy_cache", ".ruff_cache", ".pyte
 ALLOWED_SRC_TOP_LEVEL = frozenset(
     {
         "bootstrap.py",
+        "composition_root",
         "application",
         "domain",
         "infrastructure",
