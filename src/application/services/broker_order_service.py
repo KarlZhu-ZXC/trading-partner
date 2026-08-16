@@ -206,7 +206,7 @@ class BrokerOrderService:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         now = self._clock.now()
         try:
-            claimed = self._repository.claim_submit(
+            claimed, acquired = self._repository.claim_submit(
                 order_intent_id=request.order_intent_id,
                 now=now,
                 submit_idempotency_key=request.idempotency_key,
@@ -226,9 +226,12 @@ class BrokerOrderService:
                     degraded=True,
                     warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
                 )
-            if claimed.status is not BrokerOrderIntentStatus.SUBMITTING:
+            if claimed.status is not BrokerOrderIntentStatus.SUBMITTING or not acquired:
+                # `acquired=False` marks an idempotent replay of a submit that
+                # another call already claimed; sending again could duplicate
+                # the broker order, so the replay stays a conflict.
                 raise BrokerOrderStateConflict(
-                    "Broker order submit cannot be replayed from this state",
+                    "Broker order submit was already claimed and will not be sent again",
                     details={"status": claimed.status.value},
                 )
             account = await self._provider.get_account_state(
@@ -348,6 +351,14 @@ class BrokerOrderService:
             )
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, now, exc)
+
+    def list_unresolved(self, *, limit: int = 100) -> tuple[BrokerOrderIntentDTO, ...]:
+        """Read durable order intents that require operator reconciliation."""
+
+        return tuple(
+            BrokerOrderIntentDTO.from_domain(value)
+            for value in self._repository.list_unresolved(limit=limit)
+        )
 
     async def cancel(self, request: BrokerOrderCancelInput) -> ToolEnvelope[BrokerOrderIntentDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
