@@ -14,6 +14,7 @@ from application.dto.broker_execution import (
 from application.dto.portfolio import AccountGetSnapshotInput
 from application.ports.clock import Clock
 from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
+from application.services.broker_order_service import BrokerOrderService
 from application.services.cash_sweep_shadow_service import CashSweepShadowService
 from application.services.notification_service import NotificationService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
@@ -33,6 +34,7 @@ class SgovShadowPlanService:
         calendar: MarketSessionCalendar,
         portfolio: PortfolioToolCoordinator,
         preview: CashSweepShadowService,
+        broker_orders: BrokerOrderService | None = None,
         notifications: NotificationService,
         clock: Clock,
         hard_cash_floor: Decimal = Decimal("2000"),
@@ -44,6 +46,7 @@ class SgovShadowPlanService:
         self._calendar = calendar
         self._portfolio = portfolio
         self._preview = preview
+        self._broker_orders = broker_orders
         self._notifications = notifications
         self._clock = clock
         self._hard_cash_floor = hard_cash_floor
