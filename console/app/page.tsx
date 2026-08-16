@@ -1,11 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { ConsoleShell } from "./components/console-shell";
 import {
-  ErrorNote,
-  ActionButton,
   Badge,
   Card,
   DataBoundary,
@@ -16,10 +13,9 @@ import {
   monitorAnchorId,
   shortId,
 } from "./components/ui";
-import { envelopeData, listOf, postApi, useApi } from "./lib/api";
+import { envelopeData, listOf, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
 import { agendaSummaryFromPayload } from "./lib/agenda-presentation";
-import { endOfDayIsoOrNull } from "./lib/review-due-date.mjs";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
@@ -34,8 +30,6 @@ function durationLabel(value: unknown): string {
 
 export default function OverviewPage() {
   const result = useApi<Dict>("/api/overview");
-  const [reviewBusy, setReviewBusy] = useState<string | null>(null);
-  const [reviewError, setReviewError] = useState<string | null>(null);
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
   const monitorItems = listOf<Dict>(monitorData, "items");
@@ -71,13 +65,9 @@ export default function OverviewPage() {
   ).size;
   const researchAttention = listOf<Dict>(result.data, "research_attention");
   const workflowAttention = listOf<Dict>(result.data, "workflow_attention");
-  const reviewItems = listOf<Dict>(result.data, "review_items");
   const reviewMetrics = (result.data?.review_item_metrics ?? {}) as Dict;
   const unresolvedReviewCount = Number(reviewMetrics.open_count ?? 0)
     + Number(reviewMetrics.acknowledged_count ?? 0);
-  const closedReviewItems = listOf<Dict>(result.data, "review_item_history").filter((item) =>
-    ["RESOLVED", "AUTO_RESOLVED"].includes(String(item.status))
-  );
   const notices = buildConsoleNotices({
     monitorItems,
     runs,
@@ -90,44 +80,6 @@ export default function OverviewPage() {
     qualityRoutes,
   });
   const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
-
-  async function transitionReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") {
-    const reviewItemId = String(item.review_item_id ?? "");
-    if (!reviewItemId) return;
-    const resolutionNote = status === "RESOLVED"
-      ? window.prompt("What durable fact or completed action closes this review item?")?.trim()
-      : undefined;
-    if (status === "RESOLVED" && !resolutionNote) return;
-    const dueDate = status === "ACKNOWLEDGED" && String(item.status) === "ACKNOWLEDGED"
-      ? window.prompt("Optional due date (YYYY-MM-DD):")?.trim()
-      : undefined;
-    let dueAt: string | undefined;
-    if (dueDate) {
-      dueAt = endOfDayIsoOrNull(dueDate) ?? undefined;
-      if (!dueAt) {
-        setReviewError("Due date must use YYYY-MM-DD.");
-        return;
-      }
-    }
-    setReviewBusy(reviewItemId);
-    setReviewError(null);
-    try {
-      await postApi<Dict>(`/api/review-items/${encodeURIComponent(reviewItemId)}/transition`, {
-        status,
-        expected_version: Number(item.version),
-        resolution_note: resolutionNote,
-        due_at: dueAt,
-        idempotency_key: `console-review-${reviewItemId}-${status.toLowerCase()}-${crypto.randomUUID()}`,
-        authorization_note: `User explicitly selected ${status.toLowerCase()} in the Console Decision Inbox.`,
-        confirmation: "review_item_update",
-      });
-      result.refresh();
-    } catch (cause) {
-      setReviewError(cause instanceof Error ? cause.message : "Review item update failed");
-    } finally {
-      setReviewBusy(null);
-    }
-  }
 
   return (
     <ConsoleShell active="overview">
@@ -171,7 +123,7 @@ export default function OverviewPage() {
               </div>
             ) : null}
           </Card>
-          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue" subtitle="Items awaiting acknowledgment, scheduling, or resolution" action={<Badge value={`${unresolvedReviewCount} UNRESOLVED`} />}>
+          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue Summary" subtitle="Lifecycle metrics from the Decision Workbench" action={<Link className="text-link" href="/decision-workbench">Open Decision Workbench →</Link>}>
             <div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
               <span>Open<strong>{String(Number(reviewMetrics.open_count ?? 0) + Number(reviewMetrics.acknowledged_count ?? 0))}</strong></span>
               <span>Overdue<strong>{String(reviewMetrics.overdue_count ?? 0)}</strong></span>
@@ -180,9 +132,7 @@ export default function OverviewPage() {
               <span>Median Close<strong>{durationLabel(reviewMetrics.median_open_to_close_seconds)}</strong><small>n={String(reviewMetrics.closure_sample_size ?? 0)}</small></span>
               <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
             </div>
-            {reviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Unresolved ReviewItems</strong><small>Recovered source conditions are closed automatically; human resolutions retain their receipt.</small></div></div> : <div className="review-item-list">{reviewItems.slice(0, 20).map((item) => <article className="review-item-row" key={String(item.review_item_id)}><Link href={String(item.href ?? "/")}><Badge value={String(item.severity ?? "ATTENTION")} /><div><strong>{String(item.title ?? "Review required")}</strong><span>{String(item.detail ?? "Inspect the durable source.")}</span><small>{String(item.status)} · seen {formatDate(item.first_seen_at)} → {formatDate(item.last_seen_at)} · occurrence {String(item.occurrence_count)}{item.due_at ? ` · due ${formatDate(item.due_at)}` : ""}</small></div></Link><div className="review-item-actions"><ActionButton busy={reviewBusy === item.review_item_id} onClick={() => { void transitionReviewItem(item, "ACKNOWLEDGED"); }}>{String(item.status) === "ACKNOWLEDGED" ? "Update Due" : "Acknowledge"}</ActionButton><ActionButton busy={reviewBusy === item.review_item_id} tone="warning" onClick={() => { void transitionReviewItem(item, "RESOLVED"); }}>Resolve</ActionButton></div></article>)}</div>}
-            <ErrorNote>{reviewError}</ErrorNote>
-            {closedReviewItems.length > 0 ? <details className="review-item-history"><summary>Recently Closed · {closedReviewItems.length}</summary><div>{closedReviewItems.slice(0, 12).map((item) => <article key={String(item.review_item_id)}><div><Badge value={String(item.status)} /><strong>{String(item.title)}</strong></div><span>{String(item.resolution_note ?? "The durable source no longer reports this issue.")}</span><small>{formatDate(item.resolved_at)} · occurrence {String(item.occurrence_count)}{item.resolution_ref ? ` · ${String(item.resolution_ref)}` : ""}</small></article>)}</div></details> : null}
+            <div className="attention-clear"><span aria-hidden="true">{unresolvedReviewCount === 0 ? "✓" : "→"}</span><div><strong>{unresolvedReviewCount === 0 ? "No Unresolved Review Items" : `${unresolvedReviewCount} Items Need Review`}</strong><small>Acknowledge, schedule, and resolve items in the Decision Workbench so the Home page stays a concise overview.</small></div></div>
           </Card>
           <Card
             className="span-12"
