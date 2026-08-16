@@ -379,3 +379,30 @@ Use progressive verification per coherent item, not per keystroke: focused tests
 during implementation, then `ruff`, `mypy`, full `pytest`, and Console `npm test`
 once before closing each batch. A large split gets its own full checkpoint and must
 not be bundled with another large split.
+
+## Batch receipts
+
+### Batch 1 (2026-08-16) — F2, F1, F3, S6a, F8
+
+Baseline → after (focused measurements; full-suite wall times come from CI
+because the local full pytest run was declined in this session):
+
+| Measure | Before | After |
+|---|---:|---:|
+| `src` LOC | 170,656 | 170,590 |
+| `console/app` LOC | 11,302 | 11,341 |
+| `globals.css` lines | 1,459 | 1,401 (95 dead selectors removed) |
+| `text()` coercion definitions | 9 | 2 shared + 2 loose variants kept |
+| agent `asRecord` definitions | 3 | 1 shared (+1 typed in agent-api) |
+| `_require_as_of` byte-identical bodies | 14 | 1 shared |
+| hand-rolled inline-error blocks | 22 | 19 via `ErrorNote` (5 composite-class sites remain) |
+| hand-rolled paginators | 2 | 1 shared `Paginator` |
+| Provider contract tests | 311 pass | 311 pass |
+| Console `npm test` (build + 36 tests) | 36 pass | 36 pass, ~7s wall |
+| `ruff` / `mypy src` | clean | clean (649 files) |
+| Public MCP tools | 27 | 27 (unchanged, boundary test) |
+
+Commits: b5df749 (F2), 06da3ef (F1), 45edd73 (F3), 08d15d2 (S6a), 39ba5ed (F8).
+Not unified on purpose: the three divergent `stringList` behaviors, the loose
+decision-workbench/retro coercers, agent-api's typed `asRecord`, and
+`_raise_for_http_status` (S6b contract tests pending).
