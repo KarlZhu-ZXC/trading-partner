@@ -40,3 +40,7 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 /outputs/
 /work/
+
+# local builds and tool caches
+/dist/
+/.mypy_cache/

@@ -8,7 +8,10 @@ import {
   verifyLanSession,
 } from "../../../lib/lan-auth";
 
-const LOOPBACK_ORIGIN = "http://127.0.0.1:8765";
+// The Console server runs on the project-owned loopback API by default; the
+// origin stays overridable so alternative local ports do not need an edit.
+const LOOPBACK_ORIGIN =
+  process.env.TRADING_PARTNER_CONSOLE_BACKEND ?? "http://127.0.0.1:8765";
 const SAFE_SEGMENT = /^[A-Za-z0-9._~-]+$/u;
 const REQUEST_HEADERS = ["accept", "content-type", "x-trading-partner-console-token"];
 const RESPONSE_HEADERS = ["cache-control", "content-type", "x-accel-buffering"];
