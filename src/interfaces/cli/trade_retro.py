@@ -12,7 +12,7 @@ from typing import Any
 from application.dto.tool_envelope import ToolEnvelope
 from application.dto.trade_retro import TradeRetroHistoryInput
 from application.services.trade_retro_schedule import trade_retro_weekly_windows
-from bootstrap import build_default_application
+from interfaces.cli._lifecycle import application_container
 
 
 def _period(start: str | None, end: str | None) -> tuple[datetime, datetime]:
@@ -108,97 +108,93 @@ async def run(argv: list[str] | None = None) -> int:
     weekly.add_argument("--export-obsidian", action="store_true")
     args = parser.parse_args(argv)
 
-    container = build_default_application()
-    try:
-        envelope: ToolEnvelope[Any]
-        if args.command == "history":
-            envelope = container.services.trade_retro.history(
-                TradeRetroHistoryInput(run_id=args.run_id, limit=args.limit)
-            )
-        elif args.command == "export":
-            envelope = container.services.trade_retro.export(
-                run_id=args.run_id,
-                idempotency_key=args.idempotency_key,
-            )
-        elif args.command == "import-markdown":
-            start_at, end_at = _period(args.start, args.end)
-            path = Path(args.path).expanduser().resolve(strict=True)
-            envelope = container.services.trade_retro.import_legacy_markdown(
-                start=start_at,
-                end=end_at,
-                generated_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
-                summary_markdown=_markdown_section(path),
-                idempotency_key=args.idempotency_key,
-            )
-        elif args.command == "weekly":
-            review_start, review_end, prepare_start, prepare_end = _weekly_windows()
-            run_key = _week_key("retro-run", review_start)
-            run_envelope = await container.services.trade_retro.run(
-                start=review_start,
-                end=review_end,
-                idempotency_key=run_key,
-                use_llm=not args.no_llm,
-            )
-            export_envelope = None
-            if args.export_obsidian and run_envelope.ok and run_envelope.data is not None:
-                export_envelope = container.services.trade_retro.export(
-                    run_id=run_envelope.data.run_id,
-                    idempotency_key=f"{run_key}-obsidian",
+    async with application_container() as container:
+            envelope: ToolEnvelope[Any]
+            if args.command == "history":
+                envelope = container.services.trade_retro.history(
+                    TradeRetroHistoryInput(run_id=args.run_id, limit=args.limit)
                 )
-            prepare_envelope = container.services.trade_retro.prepare(
-                start=prepare_start,
-                end=prepare_end,
-                idempotency_key=_week_key("retro-plan", prepare_start),
-            )
-            ok = run_envelope.ok and prepare_envelope.ok and (
-                export_envelope is None or export_envelope.ok
-            )
-            print(
-                json.dumps(
-                    {
-                        "ok": ok,
-                        "run": run_envelope.model_dump(mode="json"),
-                        "export": (
-                            export_envelope.model_dump(mode="json")
-                            if export_envelope is not None
-                            else None
-                        ),
-                        "prepare": prepare_envelope.model_dump(mode="json"),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-            )
-            return 0 if ok else 1
-        else:
-            start_at, end_at = _period(args.start, args.end)
-            if args.command == "prepare":
-                envelope = container.services.trade_retro.prepare(
-                    start=start_at,
-                    end=end_at,
+            elif args.command == "export":
+                envelope = container.services.trade_retro.export(
+                    run_id=args.run_id,
                     idempotency_key=args.idempotency_key,
                 )
-            else:
-                envelope = await container.services.trade_retro.run(
+            elif args.command == "import-markdown":
+                start_at, end_at = _period(args.start, args.end)
+                path = Path(args.path).expanduser().resolve(strict=True)
+                envelope = container.services.trade_retro.import_legacy_markdown(
                     start=start_at,
                     end=end_at,
+                    generated_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
+                    summary_markdown=_markdown_section(path),
                     idempotency_key=args.idempotency_key,
+                )
+            elif args.command == "weekly":
+                review_start, review_end, prepare_start, prepare_end = _weekly_windows()
+                run_key = _week_key("retro-run", review_start)
+                run_envelope = await container.services.trade_retro.run(
+                    start=review_start,
+                    end=review_end,
+                    idempotency_key=run_key,
                     use_llm=not args.no_llm,
                 )
-                if envelope.ok and args.export_obsidian and envelope.data is not None:
+                export_envelope = None
+                if args.export_obsidian and run_envelope.ok and run_envelope.data is not None:
                     export_envelope = container.services.trade_retro.export(
-                        run_id=envelope.data.run_id,
-                        idempotency_key=f"{args.idempotency_key}-obsidian",
+                        run_id=run_envelope.data.run_id,
+                        idempotency_key=f"{run_key}-obsidian",
                     )
-                    payload = envelope.model_dump(mode="json")
-                    payload["export"] = export_envelope.model_dump(mode="json")
-                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-                    return 0 if export_envelope.ok else 1
-        print(json.dumps(envelope.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
-        return 0 if envelope.ok else 1
-    finally:
-        await container.aclose()
-
+                prepare_envelope = container.services.trade_retro.prepare(
+                    start=prepare_start,
+                    end=prepare_end,
+                    idempotency_key=_week_key("retro-plan", prepare_start),
+                )
+                ok = run_envelope.ok and prepare_envelope.ok and (
+                    export_envelope is None or export_envelope.ok
+                )
+                print(
+                    json.dumps(
+                        {
+                            "ok": ok,
+                            "run": run_envelope.model_dump(mode="json"),
+                            "export": (
+                                export_envelope.model_dump(mode="json")
+                                if export_envelope is not None
+                                else None
+                            ),
+                            "prepare": prepare_envelope.model_dump(mode="json"),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+                return 0 if ok else 1
+            else:
+                start_at, end_at = _period(args.start, args.end)
+                if args.command == "prepare":
+                    envelope = container.services.trade_retro.prepare(
+                        start=start_at,
+                        end=end_at,
+                        idempotency_key=args.idempotency_key,
+                    )
+                else:
+                    envelope = await container.services.trade_retro.run(
+                        start=start_at,
+                        end=end_at,
+                        idempotency_key=args.idempotency_key,
+                        use_llm=not args.no_llm,
+                    )
+                    if envelope.ok and args.export_obsidian and envelope.data is not None:
+                        export_envelope = container.services.trade_retro.export(
+                            run_id=envelope.data.run_id,
+                            idempotency_key=f"{args.idempotency_key}-obsidian",
+                        )
+                        payload = envelope.model_dump(mode="json")
+                        payload["export"] = export_envelope.model_dump(mode="json")
+                        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                        return 0 if export_envelope.ok else 1
+            print(json.dumps(envelope.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+            return 0 if envelope.ok else 1
 
 def main() -> None:
     raise SystemExit(asyncio.run(run()))

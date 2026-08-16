@@ -9,66 +9,68 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from application.dto.catalyst_agenda_sync import CatalystAgendaSyncInput
-from bootstrap import build_default_application
 from domain.common.errors import TradingPartnerError
+from interfaces.cli._lifecycle import application_container
 
 
 async def _run(args: argparse.Namespace) -> int:
-    container = build_default_application()
-    try:
-        if args.command == "status":
-            receipt = container.operations.catalyst_agenda_sync.latest()
+    async with application_container() as container:
+        try:
+            if args.command == "status":
+                receipt = container.operations.catalyst_agenda_sync.latest()
+                print(
+                    json.dumps(
+                        {
+                            "ok": receipt is not None,
+                            "receipt": receipt.model_dump(mode="json") if receipt else None,
+                            "error_codes": (
+                                []
+                                if receipt
+                                else ["CATALYST_AGENDA_SYNC_RECEIPT_MISSING"]
+                            ),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+                return 0 if receipt is not None else 2
+            request = CatalystAgendaSyncInput(
+                instrument_ids=tuple(args.instrument_ids or ()),
+                fred_release_ids=tuple(args.fred_release_ids or ()),
+                window_days=args.window_days,
+                as_of=args.as_of,
+                idempotency_key=args.idempotency_key,
+            )
+            receipt = await container.operations.catalyst_agenda_sync.sync(request)
+            payload: dict[str, object] = receipt.model_dump(mode="json")
+            if args.notify:
+                notification_batch = (
+                    await container.operations.catalyst_agenda_notifications.enqueue_batch(
+                        window_days=min(args.window_days, 30),
+                        additional_limitations=receipt.limitation_codes,
+                    )
+                )
+                payload["notifications"] = notification_batch.model_dump(mode="json")
+            if args.flush:
+                delivery = await container.operations.notifications.flush_pending()
+                payload["delivery"] = delivery.model_dump(mode="json")
             print(
                 json.dumps(
-                    {
-                        "ok": receipt is not None,
-                        "receipt": receipt.model_dump(mode="json") if receipt else None,
-                        "error_codes": [] if receipt else ["CATALYST_AGENDA_SYNC_RECEIPT_MISSING"],
-                    },
+                    {"ok": receipt.status != "FAILED", **payload},
                     ensure_ascii=False,
                     sort_keys=True,
                 )
             )
-            return 0 if receipt is not None else 2
-        request = CatalystAgendaSyncInput(
-            instrument_ids=tuple(args.instrument_ids or ()),
-            fred_release_ids=tuple(args.fred_release_ids or ()),
-            window_days=args.window_days,
-            as_of=args.as_of,
-            idempotency_key=args.idempotency_key,
-        )
-        receipt = await container.operations.catalyst_agenda_sync.sync(request)
-        payload: dict[str, object] = receipt.model_dump(mode="json")
-        if args.notify:
-            notification_batch = (
-                await container.operations.catalyst_agenda_notifications.enqueue_batch(
-                    window_days=min(args.window_days, 30),
-                    additional_limitations=receipt.limitation_codes,
+            return 0 if receipt.status != "FAILED" else 1
+        except TradingPartnerError as exc:
+            print(
+                json.dumps(
+                    {"ok": False, "error_codes": [exc.code], "execution_effect": False},
+                    ensure_ascii=False,
+                    sort_keys=True,
                 )
             )
-            payload["notifications"] = notification_batch.model_dump(mode="json")
-        if args.flush:
-            delivery = await container.operations.notifications.flush_pending()
-            payload["delivery"] = delivery.model_dump(mode="json")
-        print(
-            json.dumps(
-                {"ok": receipt.status != "FAILED", **payload},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-        return 0 if receipt.status != "FAILED" else 1
-    except TradingPartnerError as exc:
-        print(
-            json.dumps(
-                {"ok": False, "error_codes": [exc.code], "execution_effect": False},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-        return 1
-    finally:
-        await container.aclose()
+            return 1
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -29,6 +29,7 @@ from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.trade_retro_repository import SqlAlchemyTradeRetroRepository
 from infrastructure.system.redactor import DefaultSecretRedactor
+from interfaces.cli import _lifecycle as lifecycle
 from interfaces.cli import trade_retro as trade_retro_cli
 from interfaces.cli.trade_retro import _markdown_section, _weekly_windows
 
@@ -121,7 +122,7 @@ async def test_trade_retro_cli_routes_primary_commands(
 ) -> None:
     service = _CliRetroService()
     container = _CliContainer(service)
-    monkeypatch.setattr(trade_retro_cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     assert await trade_retro_cli.run(argv) == 0
     assert service.calls[0][0] == expected
@@ -138,7 +139,7 @@ async def test_trade_retro_weekly_runs_exports_and_prepares_next_window(
 ) -> None:
     service = _CliRetroService()
     container = _CliContainer(service)
-    monkeypatch.setattr(trade_retro_cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
     monkeypatch.setattr(
         trade_retro_cli,
         "_weekly_windows",
@@ -166,7 +167,7 @@ async def test_trade_retro_import_markdown_routes_bounded_section(
     path.write_text("# Week\n\n## 2. Retro\nlegacy\n", encoding="utf-8")
     service = _CliRetroService()
     container = _CliContainer(service)
-    monkeypatch.setattr(trade_retro_cli, "build_default_application", lambda: container)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
 
     result = await trade_retro_cli.run(
         [
