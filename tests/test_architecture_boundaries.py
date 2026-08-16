@@ -10,6 +10,7 @@ SRC = PROJECT_ROOT / "src"
 
 FORBIDDEN_DOMAIN_MODULES = {
     "mcp",
+    "fastmcp",
     "sqlalchemy",
     "alembic",
     "pydantic_settings",
@@ -45,8 +46,15 @@ def _imports(path: Path) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 found.append(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            found.append(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                found.append(node.module)
+            else:
+                # `from . import X` / `from .. import X` carry no module string;
+                # record the imported names so layer/framework checks still
+                # apply instead of silently skipping relative imports.
+                for alias in node.names:
+                    found.append(alias.name)
     return found
 
 
@@ -135,7 +143,7 @@ def test_application_does_not_import_infrastructure_or_interfaces() -> None:
                 violations.append(f"{path}: imports interfaces ({imp})")
             if _is_module(imp, "bootstrap"):
                 violations.append(f"{path}: imports bootstrap ({imp})")
-            if _top_level(imp) in {"mcp", "sqlalchemy", "alembic", "pydantic_settings"}:
+            if _top_level(imp) in {"mcp", "fastmcp", "sqlalchemy", "alembic", "pydantic_settings"}:
                 violations.append(f"{path}: imports framework {imp}")
     assert not violations, "Application boundary violations:\n" + "\n".join(violations)
 
@@ -211,7 +219,7 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     }
 
     composition_root = LAYER_ROOTS["infrastructure"] / "composition"
-    for path in composition_root.glob("*.py"):
+    for path in composition_root.rglob("*.py"):
         assert all(not _is_module(imp, "application.services") for imp in _imports(path)), path
 
     persistence_root = LAYER_ROOTS["infrastructure"] / "persistence"

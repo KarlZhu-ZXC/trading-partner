@@ -119,7 +119,9 @@ def run(argv: Sequence[str] | None = None) -> int:
                     period_start, period_end = _month_window(args.month)
                 except argparse.ArgumentTypeError as exc:
                     parser = _parser()
-                    parser.error(str(exc))
+                    parser.error(
+                        container.context.secret_redactor.redact_text(str(exc))
+                    )
                 result = service.compare_schwab_realized_gain_loss(
                     relative_path=args.realized_csv,
                     durable_account_ref=args.account_ref,
