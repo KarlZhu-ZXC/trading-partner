@@ -2,10 +2,15 @@
 
 > Created: 2026-08-16
 > Scope: structural slimming, duplication removal, and consolidation work for
-> the post-v0.6.x feature pause. Nothing here changes a public contract: the
-> 27-tool MCP surface, confirmation gates, and append-only semantics stay as
-> they are. Each item records evidence, expected benefit, and the regression
-> tests that must move with it.
+> the post-v0.6.x feature pause. The 27-tool MCP surface, confirmation gates,
+> append-only semantics, Provider error taxonomy, and canonical market-data
+> fields stay frozen. Some items may change internal module layout, Console
+> presentation, or documented configuration; those changes need their own
+> compatibility check rather than being called contract-free.
+>
+> Reviewed and revised: 2026-08-16. This version corrects the composition-root
+> direction, retains the actively used DeepSeek Provider, separates Provider
+> guard risks, and adds measurable acceptance criteria.
 
 ## Part A — Deferred defect follow-ups
 
@@ -14,9 +19,24 @@ are folded into the slimming work below and should be executed one by one:
 
 | ID | Item | Folded into |
 |---|---|---|
-| D1 | Merge `console/app/chat/chat-workspace.tsx` into the Agent Rail implementation instead of maintaining two diverging copies | F9 |
-| D2 | Replace the ~28 `window.confirm` / `alert` / `prompt` call sites with real form and confirmation components so required fields stop bypassing the red-asterisk contract | F6 |
-| D3 | Remove the unused Tailwind dependency (`globals.css` imports it for preflight only; every rule is handwritten) or explicitly justify keeping the reset | F7 |
+| D1 | Extract one shared Agent conversation/controller implementation; keep Chat and Agent Rail as thin shells instead of making either shell own the other | F9 |
+| D2 | Classify native dialogs into validation, required input, and destructive confirmation; replace each class with the correct accessible component without weakening a gate | F6 |
+| D3 | Determine whether Tailwind supplies anything beyond reset/preflight; remove it only after proving no generated utility is required, otherwise document the dependency | F7 |
+
+## Non-negotiable refactor rules
+
+- No item may change the public MCP tool count, grouped request shape, schema
+  semantics, confirmation authorization, or append-only state transitions.
+- Canonical Provider adapter fields, typed errors, retryability, freshness, and
+  warning codes are behavior. Similar-looking helpers are not duplicates when
+  those outputs differ.
+- Application code must not import Infrastructure or Interfaces. Composition
+  remains a top-level concern; moving wiring must not create an Application-layer
+  service locator.
+- A line-count reduction is not sufficient. Every item must reduce a named form
+  of duplication or improve a named boundary while keeping focused behavior tests.
+- Do not preserve dead identifiers solely because a source-text test asserts them.
+  Replace brittle source assertions with rendered behavior or exported-helper tests.
 
 ## Part B — Backend slimming
 
@@ -46,13 +66,24 @@ risk), then generalize.
 
 `tests/test_architecture_boundaries.py:211` caps `bootstrap.py` at 1,160 lines
 and it is at 1,159. `build_application` spans ~:289–1123 constructing ~90
-services inline. Infrastructure assembly already lives in
-`infrastructure/composition/` (1,019 lines); the remaining application-service
-wiring should move to an application-side bundle module
-(`application/runtime.py` already exists as the sanctioned home). This
-requires extending the composition-root whitelist in
-`test_architecture_boundaries.py:152-190` — one deliberate test edit, not a
-quiet bypass.
+services inline. `application/runtime.py` is **not** a sanctioned home for
+construction: it intentionally contains application-only bundles and must not
+import Infrastructure.
+
+Split the top-level composition root into a small explicit package such as
+`composition_root/` or `bootstrap_parts/`. Those modules may construct bounded
+graphs (research, market data, monitoring, Agent, operations) and return typed
+bundles to `bootstrap.py`; they must not become globally reachable service
+locators. `bootstrap.py` remains the public import façade for
+`ApplicationContainer`, `build_application`, and `build_default_application`.
+
+The boundary test may be changed once to recognize that exact top-level
+composition-root package. It must continue to reject Infrastructure imports
+from `application/` and Application-service imports from
+`infrastructure/composition/`. AGENTS.md architecture rule 4 ("Only
+`src/bootstrap.py` connects application services to infrastructure") must be
+rewritten in the same change to name the sanctioned composition-root package —
+otherwise the guide and the code contradict each other.
 
 ### S3–S5. Split the three largest services along their natural seams
 
@@ -62,53 +93,89 @@ quiet bypass.
 | `agent_runtime_service.py` | 1,974 | Tool-call handling + receipts/usage (:1580-1974, ~400 lines) → own module; `_run_turn` (:903-1417, 515 lines) needs internal sectioning first | ~1,500 + module |
 | `monitor_evaluation_service.py` | 1,620 | Notification rendering (`_NotificationPriceContext` :112-155, summary messages :1290-1620, ~400 lines) is independent of rule evaluation | ~1,250 + module |
 
-These are physical moves only. The Propose→Confirm state machine
+These are behavior-preserving extractions, not blind file moves. The Thesis
+appliers currently depend on `_id_generator`, `_touch_subject`, and relationship
+validation; extract a typed internal collaborator rather than passing a large
+unstructured dependency bag. Agent extraction should begin with pure validation,
+receipt, and usage helpers before moving tool dispatch. Monitor notification
+rendering is already largely module-level and is the cleanest first split.
+
+The Propose→Confirm state machine
 (`thesis_revision_service.py:394-1149`) and `_transition_event`
 (`monitor_evaluation_service.py:708-1289`) carry frozen product semantics and
-must not be restructured, only relocated.
+must not be behaviorally restructured.
 
-### S6. Provider guard helpers duplicated across 24 adapters (~400–600 lines)
+### S6. Provider guard helpers — extract only proven-identical behavior
 
 HTTP retry/rate limiting is already centralized (`providers/common/retry.py`
 consumed by `router_engine.py`) — no adapter hand-rolls that. The duplication
 is per-adapter guards: `_require_as_of` verbatim in `us/sec_edgar.py:664-673`
 and `us/yahoo_finance.py:322-331`; `_raise_for_http_status` re-implemented per
 vendor (`yahoo_finance.py:425`, `cross_asset/cme_public_client.py:227`, …).
-Extract a `providers/common/adapter_guards.py` mixin with parameterized vendor
-messages, following the existing `sec_common.py:132` and
-`eastmoney/capital.py:56` mixin precedents. `account/schwab.py` is excluded
-(schwab-py SDK transport, not HttpTransport).
+Split the work:
 
-### S7. Delete `continuous_series_service.py` (349 lines) — confirm first
+- **S6a (early batch)**: byte-equivalent, stateless guards such as
+  `_require_as_of` only, as plain functions in
+  `providers/common/adapter_guards.py`. These raise the same typed error with
+  the same details for the same input, so the extraction cannot change Router
+  fallback or Monitor retry behavior.
+- **S6b (late, contract-tested)**: a status-helper extraction requires a
+  per-Provider mapping table and contract tests proving identical outputs for
+  authentication, rate limit, timeout, 4xx, and 5xx responses. Do not merge
+  `_raise_for_http_status` before that evidence exists: vendor status mapping,
+  typed error code, retryability, and safe diagnostic fields (CME marks
+  401/403 `retryable=False`; Yahoo reports `status_class` on 429) affect
+  Router fallback and Monitor retry behavior.
+
+`account/schwab.py` remains excluded (schwab-py SDK transport, not
+HttpTransport).
+
+S6a is deliberately small (~20–60 net lines) but zero-behavior-risk and belongs
+in the early low-risk batch; S6b stays gated behind its contract tests.
+
+### S7. Retire the unreferenced continuous-series application service — decision gate
 
 The only reference outside the file itself is its own test
 (`tests/unit/test_futures_services.py:12,162,176`); bootstrap and every CLI go
 through `container.operations.futures_contracts` instead
-(`interfaces/cli/futures_sync.py:21,43`). Confirm it is not a reserved Phase 3A
-capability, then delete service + dead tests together.
+(`interfaces/cli/futures_sync.py:21,43`). Before deletion, check package exports,
+entry points, docs, migration history, and runtime import tracing in addition to
+static references. Delete only the unused application service and its service
+tests. Keep `ContinuousSeriesDefinition`, repository rows/ports, and Provider
+support while formal CME continuous identities remain part of the data model.
 
 ### S8. Console `api.py` (1,839/24 routes) and `agent_api.py` (1,767/23 routes) helpers (~100–150 lines)
 
 Both define their own `_RequestModel` base (`api.py:129` vs `agent_api.py:61`),
-three isomorphic failure-envelope constructors (`api.py` `_sanitized_error:193`,
+three similar failure-envelope constructors (`api.py` `_sanitized_error:193`,
 `_console_failure:504`, `_research_state_failure:1003`), and diagnostic
 builders (`agent_api.py:257,602`). They already import from each other
-(`api.py:31-32`), so a shared `interfaces/console/_shared.py` has no boundary
-cost.
+(`api.py:31-32`), so a shared `interfaces/console/_shared.py` has no layer cost.
+Extract `_RequestModel` and secret-safe primitive helpers first. Merge failure
+constructors only after tests compare status code, envelope shape, retryability,
+and redaction; similar structure does not imply identical endpoint semantics.
 
-### S9. `interfaces/mcp/tools/compact.py` per-domain registration (~200–250 lines)
+### S9. Split `compact.py` registration by domain; keep explicit `_spec` declarations
 
 Lines 1611-2127 register ~87 `_spec(...)` variants at ~7 lines each. The schema
 minimization machine (:558-1274) is the mechanism that keeps the 27-tool
-surface small — do not touch it. The registration tail can become table-driven
-so variant ownership per tool is auditable at a glance.
+surface small — do not touch it. Move registration groups into bounded
+`compact_registration_*` modules while keeping explicit `_spec(...)`
+declarations and the same deterministic order. Do not replace them with a
+highly dynamic table or reflection layer: that would reduce visible lines while
+making schema ownership, type hints, and diffs harder to audit. This is line-count
+neutral in aggregate and should be done only if it materially reduces ownership
+conflicts in `compact.py`.
 
 ### S10. CLI lifecycle boilerplate (~200–300 lines)
 
 13 CLI modules call `build_default_application()`; 11 repeat the
 lock-acquire / `finally: await container.aclose()` pattern; 24 argparse
-constructions. A tiny `run_cli(async fn)` helper removes ~10-15 lines per
-module. Keep `monitor_notifications.py` as the public alias entry point.
+constructions. Introduce a small interface-layer lifecycle helper for the truly
+isomorphic subset. It must preserve lock scope, exit codes, cancellation, exception
+translation, and exactly-once `aclose()`. Do not force CLIs with different lock or
+signal semantics through one callback shape. Keep `monitor_notifications.py` as
+the public alias entry point.
 
 ### S11–S12. Structural splits (line count neutral)
 
@@ -132,8 +199,10 @@ decision-workbench/retro). `asDict` 10×, string-list helpers 7×, envelope
 unwrapping 7×. Migrate families A and B to shared exports; leave the two loose
 variants in place (decision-workbench numbers would change display if unified).
 `idempotencyKey` has ≥6 formats — verify backend tolerance before unifying.
-rendered-html tests read page sources directly; keep asserted identifiers in
-place when moving functions.
+Where `rendered-html.test.mjs` asserts a page-local helper name, replace that
+assertion with rendered output, an exported-helper unit test, or an exact request
+contract assertion. Do not keep duplicate helpers or compatibility aliases solely
+for a source-text test.
 
 ### F2. Dead CSS + duplicate selectors (~115–135 lines)
 
@@ -164,27 +233,45 @@ selection, and page-clamp effects (research:827-884 vs monitors:378-427), with
 parallel CSS (`.monitor-filter-*` vs `.research-filter-*`, etc.). Extract
 `components/entity-browser.tsx` with shared `.entity-*` styles.
 
-### F5. Unify the two agenda-metric implementations
+### F5. Make Agenda summary semantics canonical at the backend
 
 `app/page.tsx:25-43` (`agendaSummary`) and `app/agenda/page.tsx:204-351`
 compute the same upcoming/overdue/coverage metrics with different rules (home
-uses `limitation_codes` for overdue, agenda uses `window_end`). Extract
-`lib/agenda-presentation.ts` and pick one rule set deliberately.
+uses `limitation_codes` for overdue, agenda uses `window_end`). Do not choose a
+new frontend rule. The Application Agenda service already owns point-in-time
+overdue semantics and emits `AGENDA_OUTCOME_UNVERIFIED`; extend the Console DTO
+with canonical bucket/count fields or a shared server projection. Both pages then
+render those fields. A frontend `agenda-presentation.ts` may format labels only.
 
-### F6. Confirmation components (deferred item D2)
+### F6. Replace native dialogs by semantic class (deferred item D2)
 
-~28 native dialog sites (research alerts ×10, monitors:430/450/478/518,
+~29 native dialog sites at review time (research validation/archives, Monitor
+execution/lifecycle/events,
 operations:45/67, home:116/120, decision-workbench:214/216, agent-rail:1091).
 Required resolution notes and due dates collected via `window.prompt` bypass
 the red-asterisk/`aria-required` contract that the UI-convention test can only
-enforce on DOM forms.
+enforce on DOM forms. Treat them separately:
 
-### F7. Remove Tailwind (deferred item D3)
+1. validation `alert` → inline `ErrorNote` attached to the relevant form;
+2. required/optional input `prompt` → accessible form or dialog with label,
+   Required Mark when applicable, validation, Cancel, and explicit Submit;
+3. destructive/external-effect `confirm` → reusable Confirmation Dialog that
+   states the exact target and effect.
+
+Do not remove confirmation for live orders, OAuth, Monitor due evaluation,
+Monitor/Research Subject archive or lifecycle changes. Do not reintroduce the
+duplicate non-destructive confirmations already removed from proposal and append
+flows.
+
+### F7. Audit and conditionally remove Tailwind (deferred item D3)
 
 `globals.css:1` is the only Tailwind touch; removing the import changes the
-preflight reset, so verify visually (or via a rendered-DOM snapshot) that
-handwritten rules do not depend on it, then drop `tailwindcss` +
-`@tailwindcss/postcss` from `package.json`.
+preflight reset and may remove generated utilities. First inventory rendered
+class names against handwritten selectors and compare production CSS. If no
+Tailwind utility is required, add the minimal explicit reset relied on by the
+Console, verify desktop/mobile screenshots and interactive controls, then drop
+`tailwindcss` + `@tailwindcss/postcss` from `package.json`. Otherwise keep it and
+record exactly which reset or utility behavior is still required.
 
 ### F8. Merge `agent-api.ts` transport with `lib/api.ts` (~60 lines)
 
@@ -192,12 +279,12 @@ Only the transport/error layer: move the richer `responseError`
 (agent-api:428-443) into `api.ts`, share `getJson`/`sendJson`. Keep agent
 defensive parsing and SSE consumption separate.
 
-## Part D — Feature-level consolidation candidates (need a product decision)
+## Part D — Feature-level consolidation decisions
 
 | ID | Candidate | Evidence | Note |
 |---|---|---|---|
-| F9 | Chat page vs Agent Rail: two entry shells over one agent surface | chat-workspace 830 lines vs agent-rail 1,555 with diverged `StreamSnapshot` types and stale "read-only milestone" copy (chat:345) | Merge to one implementation (shared `agent-stream` lib + `useAgentConversation` hook, ~350–450 lines), keep both shells thin |
-| F10 | DeepSeek LLM provider retention | selectable via `LLM_PROVIDER`, Bailian is the default | If unused in practice, retire to cut an adapter + tests; requires owner confirmation |
+| F9 | Chat page vs Agent Rail: two entry shells over one agent surface | chat-workspace 830 lines vs agent-rail 1,555 with diverged `StreamSnapshot` types and stale "read-only milestone" copy (chat:345) | Extract shared `agent-stream` primitives and `useAgentConversation`; keep route and rail shells thin, with neither importing the other |
+| F10 | DeepSeek LLM Provider | Actively configured as a selectable Provider and Monitor fallback; current tests cover `deepseek-v4-flash` and `deepseek-v4-flash-0731` | **KEEP. Remove this deletion candidate.** Consolidate only protocol-neutral OpenAI-compatible transport code; retain Provider identity, settings, reasoning limits, fallback receipts, and tests |
 | F11 | Home "Attention Queue" vs Decision Workbench Review Queue | home renders attention notices while the workbench owns acknowledge/resolve | Layered by design; evaluate whether the home summary should just deep-link instead of re-rendering its own queue view |
 
 ## Explicitly out of scope (do not "fix")
@@ -205,32 +292,90 @@ defensive parsing and SSE consumption separate.
 - Merging public MCP tools or altering the compact schema minimization
   machine (`compact.py:558-1274`) — frozen 27-tool contract.
 - Merging Reddit and Moomoo sentiment — deliberately source-separated.
-- Weakening append-only / Propose→Confirm / expected-version gates — only
-  physical relocation is allowed (S3–S5).
+- Weakening append-only / Propose→Confirm / expected-version gates. S3–S5 may
+  introduce typed internal collaborators, but behavior and authorization remain frozen.
 - Deleting StockTwits enum/DB values or legacy Instrument Selection fields —
   readable-only wire compatibility; migration cost exceeds benefit.
 - Renaming the `trading-partner-monitor-notifications` CLI alias — public
   entry-point contract.
 - Moving `account/schwab.py` onto HttpTransport — schwab-py SDK owns the
   protocol.
+- Removing Bailian or DeepSeek Provider identities, fallback receipts, or
+  configured reasoning limits as part of a generic transport cleanup.
 
 ## Suggested execution order
 
-1. **Low risk, immediate relief**: S6 (provider guards), F1 (coerce), F2 (dead
-   CSS), S8 (console helpers), S10 (CLI helper).
-2. **Shared foundations**: S1 (coordinator base), F3 (form components), F5,
-   F8.
-3. **Big splits** (one per session, full checkpoint after each): S3, S4, S5,
-   S2 (bootstrap + architecture-test whitelist), F4 (EntityBrowser).
-4. **Decision-gated**: S7 (dead service), F9 (agent surface merge = D1), F6
-   (= D2), F7 (= D3), F10, F11.
+0. **Baseline and ownership map**: record current tracked LOC, duplicate counts,
+   focused/full test counts and wall time, Console build time, MCP tool count and
+   schema bytes. Freeze the exact files owned by each item.
+1. **Low risk, immediate relief**: F2 (dead CSS), F1 (coerce families), F3
+   (small form primitives), S6a (byte-identical stateless provider guards),
+   and F8 (transport primitives only).
+2. **Small backend foundations**: S1 first on `us_context` + `us_research`; S8
+   `_RequestModel`/redaction primitives; S10 only for the demonstrably isomorphic
+   CLI subset.
+3. **Composition pressure first**: corrected S2, preserving a top-level-only
+   composition root and the public `bootstrap.py` façade.
+4. **Large behavior-preserving splits, one checkpoint each**: S5 Monitor
+   notification rendering, S3 Thesis applier collaborator, S4 Agent pure helpers
+   then tool dispatcher, S11, S12, and F4.
+5. **Canonical behavior consolidation**: F5 backend Agenda projection; F6 by
+   dialog class; F9 shared Agent controller; F11 product decision.
+6. **Medium/high-risk optional cleanup**: S6b status-mapping extraction after
+   its contract tests exist, F7 after visual/reset verification, S7 after
+   explicit capability decision, and S9 only if ownership-conflict data
+   justifies the split.
+
+F10 is not an execution item; DeepSeek is retained.
 
 ## Verification protocol
 
-- Every item that moves code referenced by `console/tests/rendered-html.test.mjs`
-  (it reads page sources and asserts identifiers/class names) must update the
-  affected assertions in the same change.
-- S2 adjusts `tests/test_architecture_boundaries.py` deliberately; no other
-  item may touch boundary tests except to add coverage.
-- Follow the repo's progressive verification: exact test node per edit, one
-  full `ruff`/`mypy`/`pytest` + console `npm test` checkpoint per batch.
+### Per-batch measurement record
+
+Full-suite runs follow the repository's progressive-verification policy:
+focused tests per item, one broad checkpoint per batch — never a full run per
+item. Each completed **batch** appends a receipt containing:
+
+| Measure | Before | After | Required interpretation |
+|---|---:|---:|---|
+| Tracked LOC in owned files | exact | exact | Report net reduction and moved lines separately |
+| Named duplicate blocks | exact count | exact count | State the detection method; zero is not assumed |
+| Focused tests | count | count | Per item; report added, removed, and net test count |
+| Full Python suite | count + wall time | count + wall time | Once per batch checkpoint, compared with the Phase-0 baseline |
+| Console test/build | count + wall time | count + wall time | Once per batch when the batch touched frontend/shared API |
+| Public MCP surface | tool count + schema bytes | same metrics | Must remain 27 tools; schema drift needs review |
+
+Small items (for example F2 dead CSS) record only the first three rows. Do not
+claim a speed improvement without before/after wall-clock measurements from the
+same command and environment.
+
+### Test routing
+
+- S1: coordinator unit tests plus MCP envelope/error contracts.
+- S2: architecture boundaries, bootstrap/container tests, CLI initialization,
+  isolated wheel smoke, then full Python.
+- S3: candidate proposal/confirmation, Research state conflicts, and Research MCP
+  lifecycle integration.
+- S4: Agent runtime, capability gateway, pending actions, behavior evaluation, and
+  Console/Telegram Agent integration.
+- S5: Monitor evaluation, transition, diagnostics, notification rendering, and
+  Telegram contracts.
+- S6: exact affected Provider contracts plus Router/fallback/retry tests; test every
+  preserved typed error class before adding another vendor.
+- S7: futures service/domain/repository/Provider tests, tool schema tests, and wheel
+  smoke. Static “no imports” is necessary but not sufficient.
+- S8: Console API and Agent API focused tests, redaction assertions, then Console
+  production build.
+- S9: MCP compact-surface/schema tests and an exact before/after schema inventory.
+- S10: each migrated CLI's focused test, lock/close failure path, and wheel smoke.
+- F1–F9/F11: Console rendered behavior, accessibility/UI-convention tests, and
+  production build; F5 also runs Catalyst Agenda service/API tests.
+
+When `rendered-html.test.mjs` reads source text, update it in the same item to assert
+user-visible output, request contracts, or exported helper behavior. Do not keep a
+page-local identifier just to satisfy the test.
+
+Use progressive verification per coherent item, not per keystroke: focused tests
+during implementation, then `ruff`, `mypy`, full `pytest`, and Console `npm test`
+once before closing each batch. A large split gets its own full checkpoint and must
+not be bundled with another large split.
