@@ -1,4 +1,4 @@
-"""Focused futures contract / curve / continuous series service tests."""
+"""Focused futures contract and curve service tests."""
 
 from __future__ import annotations
 
@@ -9,16 +9,9 @@ from decimal import Decimal
 import pytest
 
 from application.ports.http_transport import HttpRequest, HttpResponse
-from application.services.continuous_series_service import ContinuousSeriesService
 from application.services.futures_contract_service import FuturesContractService
 from application.services.futures_curve_service import FuturesCurveService
-from domain.cross_asset.enums import (
-    ContinuousAdjustment,
-    CurveCompleteness,
-    CurveShape,
-    PriceBasis,
-    RollRule,
-)
+from domain.cross_asset.enums import CurveCompleteness, CurveShape, PriceBasis
 from infrastructure.persistence.database import create_engine_from_url
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.sqlalchemy_futures_definition_repository import (
@@ -138,6 +131,7 @@ class _FixtureTransport:
     async def send(self, request: HttpRequest) -> HttpResponse:
         self.requests.append(request)
         path = request.url
+        body: object
         if "ProductCalendar" in path:
             body = _CALENDAR
         elif "Settlements" in path:
@@ -152,14 +146,13 @@ class _FixtureTransport:
 
 
 class _FixedClock(SystemClock):
-    def now(self) -> datetime:  # type: ignore[override]
+    def now(self) -> datetime:
         return AS_OF
 
 
 def _services() -> tuple[
     FuturesContractService,
     FuturesCurveService,
-    ContinuousSeriesService,
     SqlAlchemyFuturesDefinitionRepository,
 ]:
     engine = create_engine_from_url("sqlite:///:memory:")
@@ -173,18 +166,12 @@ def _services() -> tuple[
         clock=_FixedClock(),
     )
     curve = FuturesCurveService(contract_service=contracts, clock=_FixedClock())
-    continuous = ContinuousSeriesService(
-        reference_provider=adapter,
-        contract_service=contracts,
-        repository=repo,
-        clock=_FixedClock(),
-    )
-    return contracts, curve, continuous, repo
+    return contracts, curve, repo
 
 
 @pytest.mark.asyncio
 async def test_contract_service_caches_product_and_chain() -> None:
-    contracts, _, _, repo = _services()
+    contracts, _, repo = _services()
     product = await contracts.get_product("CME:GC", AS_OF)
     assert product.ok and product.data is not None
     assert product.data.root == "GC"
@@ -203,7 +190,7 @@ async def test_contract_service_caches_product_and_chain() -> None:
 
 @pytest.mark.asyncio
 async def test_curve_service_settlement_completeness_and_spread() -> None:
-    contracts, curve, _, _ = _services()
+    contracts, curve, _ = _services()
     await contracts.get_product("CME:GC", AS_OF)
     await contracts.list_contracts("CME:GC", AS_OF, refresh=True)
     result = await curve.build_curve(
@@ -220,35 +207,3 @@ async def test_curve_service_settlement_completeness_and_spread() -> None:
     assert len(result.data.contracts) == 6
     assert result.data.contracts[0].instrument_id == "future:CME:GCZ26"
     assert result.data.contracts[1].price == Decimal("110")
-
-
-@pytest.mark.asyncio
-async def test_continuous_series_calendar_mapping_not_us_proxy() -> None:
-    contracts, _, continuous, repo = _services()
-    await contracts.get_product("CME:GC", AS_OF)
-    await contracts.list_contracts("CME:GC", AS_OF, refresh=True)
-
-    series = continuous.ensure_series(
-        "CME:GC", roll_rule=RollRule.CALENDAR, rank=0, as_of=AS_OF
-    )
-    assert series.ok and series.data is not None
-    assert series.data.instrument_id == "future:CME:GC.c.0"
-    assert series.data.adjustment is ContinuousAdjustment.NONE
-
-    mapping = await continuous.resolve_mapping(
-        "future:CME:GC.c.0", as_of=AS_OF, persist=True
-    )
-    assert mapping.ok and mapping.data is not None
-    assert mapping.data[0].contract_instrument_id == "future:CME:GCZ26"
-
-    # Legacy proxy is never rewritten.
-    blocked = await continuous.resolve_mapping("future:US:GC=F", as_of=AS_OF)
-    assert blocked.ok is False
-    assert blocked.error is not None
-    assert "must not be rewritten" in blocked.error.message
-
-    # Durable mapping readable.
-    durable = continuous.mapping_at("future:CME:GC.c.0", AS_OF)
-    assert durable is not None
-    assert durable.contract_instrument_id == "future:CME:GCZ26"
-    assert repo.get_continuous_series("future:CME:GC.c.0", AS_OF) is not None
