@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConsoleShell } from "./components/console-shell";
 import {
+  ErrorNote,
   ActionButton,
   Badge,
   Card,
@@ -199,7 +200,7 @@ export default function OverviewPage() {
               <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
             </div>
             {reviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Unresolved ReviewItems</strong><small>Recovered source conditions are closed automatically; human resolutions retain their receipt.</small></div></div> : <div className="review-item-list">{reviewItems.slice(0, 20).map((item) => <article className="review-item-row" key={String(item.review_item_id)}><Link href={String(item.href ?? "/")}><Badge value={String(item.severity ?? "ATTENTION")} /><div><strong>{String(item.title ?? "Review required")}</strong><span>{String(item.detail ?? "Inspect the durable source.")}</span><small>{String(item.status)} · seen {formatDate(item.first_seen_at)} → {formatDate(item.last_seen_at)} · occurrence {String(item.occurrence_count)}{item.due_at ? ` · due ${formatDate(item.due_at)}` : ""}</small></div></Link><div className="review-item-actions"><ActionButton busy={reviewBusy === item.review_item_id} onClick={() => { void transitionReviewItem(item, "ACKNOWLEDGED"); }}>{String(item.status) === "ACKNOWLEDGED" ? "Update Due" : "Acknowledge"}</ActionButton><ActionButton busy={reviewBusy === item.review_item_id} tone="warning" onClick={() => { void transitionReviewItem(item, "RESOLVED"); }}>Resolve</ActionButton></div></article>)}</div>}
-            {reviewError ? <div className="inline-error">{reviewError}</div> : null}
+            <ErrorNote>{reviewError}</ErrorNote>
             {closedReviewItems.length > 0 ? <details className="review-item-history"><summary>Recently Closed · {closedReviewItems.length}</summary><div>{closedReviewItems.slice(0, 12).map((item) => <article key={String(item.review_item_id)}><div><Badge value={String(item.status)} /><strong>{String(item.title)}</strong></div><span>{String(item.resolution_note ?? "The durable source no longer reports this issue.")}</span><small>{formatDate(item.resolved_at)} · occurrence {String(item.occurrence_count)}{item.resolution_ref ? ` · ${String(item.resolution_ref)}` : ""}</small></article>)}</div></details> : null}
           </Card>
           <Card

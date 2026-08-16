@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -108,7 +108,7 @@ export default function OperationsPage() {
             <div><strong>Notifications</strong><span>The test sends a real Telegram message; flush processes only due Outbox entries.</span><div><ActionButton onClick={() => runAction("notification_test", "Send a test message to the configured Telegram destination?")} busy={busy === "notification_test"}>Send Test Message</ActionButton><ActionButton onClick={() => runAction("notification_flush")} busy={busy === "notification_flush"}>Send Pending Notifications</ActionButton></div></div>
             <div><strong>Data Protection</strong><span>Backups are owner-only; cache pruning can be previewed before applying.</span><div><ActionButton onClick={() => runAction("database_backup")} busy={busy === "database_backup"}>Create Database Backup</ActionButton><ActionButton onClick={() => runAction("cache_prune_preview")} busy={busy === "cache_prune_preview"}>Preview 30-Day Cache Prune</ActionButton><ActionButton tone="warning" onClick={() => runAction("cache_prune_apply", "This deletes expired Provider/Reddit cache older than 30 days. Research, Monitor, and account history are unaffected. Continue?")} busy={busy === "cache_prune_apply"}>Apply Cache Prune</ActionButton></div></div>
           </div>
-          {actionError && <div className="inline-error">{actionError}</div>}
+          <ErrorNote>{actionError}</ErrorNote>
           {actionResult !== null && <div className="action-result"><div className="result-head"><span>Latest Operation Receipt</span><button type="button" onClick={() => setActionResult(null)}>Clear</button></div><pre>{displayJson(actionResult)}</pre></div>}
         </Card>
         <div className="dashboard-grid">

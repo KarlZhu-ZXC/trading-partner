@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate } from "../components/ui";
 import { listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -152,7 +152,7 @@ function RetroRunCard({
           <label className="retro-finding-note"><span>{edit.status === "DISPUTED" && <b className="required-mark" aria-hidden="true">*</b>}Finding Note</span><input required={edit.status === "DISPUTED"} value={edit.note} onChange={(event) => setFinding(findingKey, { note: event.target.value })} /></label>
         </div>;
       })}</div>}
-      {error && <div className="inline-error">{error}</div>}
+      <ErrorNote>{error}</ErrorNote>
       <div className="retro-editor-actions"><ActionButton busy={saving} onClick={() => { void saveReview(); }}>Confirm Append Revision</ActionButton><small>Uses expected_version={reviewVersion}; stale tabs are rejected.</small></div>
     </section>}
 

@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { monitorRunPresentation } from "../lib/monitor-runs";
 import { useAgentPageContext } from "../lib/agent-page-context";
@@ -561,8 +561,8 @@ export default function MonitorsPage() {
           <p>Select one durable Monitor, then inspect its current state, rules, immutable runs, and transition events.</p>
           <div className="toolbar-actions"><ActionButton onClick={() => { setNewMonitorTemplate(null); setEditingMonitor(null); }}>New Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>Run Due Monitors</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
         </div>
-        {runError && <div className="inline-error">{runError}</div>}
-        {resolutionError && <div className="inline-error" role="alert">{resolutionError}</div>}
+        <ErrorNote>{runError}</ErrorNote>
+        <ErrorNote role="alert">{resolutionError}</ErrorNote>
         {runReceipt !== null && <details className="run-receipt"><summary>View Run Receipt</summary><pre>{displayJson(runReceipt)}</pre></details>}
         {editingMonitor === null && <MonitorEditor template={newMonitorTemplate ?? undefined} onClose={() => { setEditingMonitor(undefined); setNewMonitorTemplate(null); window.history.replaceState(null, "", "/monitors"); }} onSaved={(saved) => { setRunReceipt(saved); setEditingMonitor(undefined); setNewMonitorTemplate(null); window.history.replaceState(null, "", "/monitors"); result.refresh(); }} />}
 
