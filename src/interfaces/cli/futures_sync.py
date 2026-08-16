@@ -7,15 +7,14 @@ import asyncio
 import json
 from datetime import UTC, date, datetime
 
-from bootstrap import build_default_application
+from interfaces.cli._lifecycle import application_container
 
 _DEFAULT_PRODUCTS = ("CME:GC", "CME:MGC", "CME:SI", "CME:HG", "CME:PL", "CME:PA", "DCE:LH")
 
 
 async def _run(products: tuple[str, ...], trade_date: date) -> int:
-    container = build_default_application()
     outcomes: list[dict[str, object]] = []
-    try:
+    async with application_container() as container:
         as_of = datetime.now(UTC)
         for product_key in products:
             chain = await container.operations.futures_contracts.list_contracts(
@@ -75,8 +74,6 @@ async def _run(products: tuple[str, ...], trade_date: date) -> int:
             )
         )
         return 0 if ok else 1
-    finally:
-        await container.aclose()
 
 
 def main() -> None:
