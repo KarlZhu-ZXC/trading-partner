@@ -39,7 +39,6 @@ import {
   AgentProviderModelCatalog,
   AgentReceipt,
   AgentStatus,
-  AgentStreamEvent,
   AgentTurn,
   AgentConversationMetrics,
   archiveAgentConversation,
@@ -57,13 +56,8 @@ import {
   fetchAgentReceipts,
   fetchAgentStatus,
   fetchAgentTurns,
-  parsePendingAction,
-  parseReceipt,
   reissueAgentPendingAction,
-  reconnectAgentTurnStream,
   resetAgentPreferences,
-  retryAgentTurnStream,
-  streamAgentMessage,
   updateAgentPreferences,
 } from "../lib/agent-api";
 import { AgentMessageContent } from "./agent-message-content";
@@ -79,52 +73,19 @@ import {
   AGENT_RAIL_MAX_WIDTH,
   AGENT_RAIL_MIN_WIDTH,
 } from "../lib/agent-rail-layout.mjs";
-import { asRecord, textStrict as text } from "../lib/coerce";
-
-type Dict = Record<string, unknown>;
+import { mergeAgentReceipts } from "../lib/agent-stream";
+import { useAgentConversation } from "../lib/use-agent-conversation";
 const AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-provider-id";
 const LEGACY_AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-model-id";
 const AGENT_MODEL_STORAGE_KEY = "trading-partner-agent-model-name";
 const AGENT_REASONING_STORAGE_KEY = "trading-partner-agent-reasoning-effort";
 const AGENT_RAIL_WIDTH_STORAGE_KEY = "trading-partner-agent-rail-width";
 
-type StreamSnapshot = {
-  turnId: string | null;
-  phase: "waiting" | "tool" | "streaming" | "complete";
-  draft: string;
-  receipts: AgentReceipt[];
-  pendingSummary: string | null;
-  pendingAction: { action: AgentPendingAction; token: string } | null;
-  error: string | null;
-  sourceUrls: string[];
-  artifactUrls: string[];
-};
-
-const EMPTY_STREAM: StreamSnapshot = {
-  turnId: null,
-  phase: "waiting",
-  draft: "",
-  receipts: [],
-  pendingSummary: null,
-  pendingAction: null,
-  error: null,
-  sourceUrls: [],
-  artifactUrls: [],
-};
-
 type AgentRailProps = {
   collapsed: boolean;
   overlayViewport: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
 };
-
-function firstText(source: Dict, keys: string[]): string {
-  for (const key of keys) {
-    const value = text(source[key]);
-    if (value) return value;
-  }
-  return "";
-}
 
 function displayDate(value: string | null | undefined): string {
   if (!value) return "—";
@@ -147,16 +108,6 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-function mergeReceipts(items: AgentReceipt[]): AgentReceipt[] {
-  const byId = new Map<string, AgentReceipt>();
-  for (const item of items) {
-    if (item.receipt_id) byId.set(item.receipt_id, item);
-  }
-  return Array.from(byId.values()).sort((left, right) =>
-    String(right.created_at ?? "").localeCompare(String(left.created_at ?? "")),
-  );
-}
-
 function initialTitle(conversation: AgentConversation): string {
   return conversation.title || "Untitled conversation";
 }
@@ -167,27 +118,6 @@ function statusLabel(status: AgentStatus | null, loading: boolean): string {
   if (!status.enabled) return "DISABLED";
   if (!status.configured) return "SETUP REQUIRED";
   return "READY";
-}
-
-function eventPayload(event: AgentStreamEvent): Dict {
-  return asRecord(event.payload);
-}
-
-function safeLinks(value: unknown, localOnly = false): string[] {
-  if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.filter((item): item is string => {
-    if (typeof item !== "string" || item.length > 2_048) return false;
-    if (localOnly) return item.startsWith("/api/agent/artifacts/");
-    try {
-      const parsed = new URL(item);
-      return (parsed.protocol === "https:" || parsed.protocol === "http:")
-        && Boolean(parsed.hostname)
-        && !parsed.username
-        && !parsed.password;
-    } catch {
-      return false;
-    }
-  }))).slice(0, 20);
 }
 
 export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: AgentRailProps) {
@@ -210,7 +140,6 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [turns, setTurns] = useState<Record<string, AgentTurn[]>>({});
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
-  const [streams, setStreams] = useState<Record<string, StreamSnapshot>>({});
   const [composer, setComposer] = useState("");
   const [composerComposing, setComposerComposing] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState("");
@@ -227,13 +156,27 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [focusMode, setFocusMode] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const controllers = useRef(new Map<string, AbortController>());
-  const reconnectControllers = useRef(new Map<string, AbortController>());
   const refreshControllers = useRef(new Map<string, AbortController>());
   const modelCatalogController = useRef<AbortController | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const copyResetTimer = useRef<number | null>(null);
+  const {
+    streams,
+    isStreaming,
+    updateStream,
+    sendMessage: streamMessage,
+    retryTurn: retryStream,
+    reconnectTurn,
+    abortStream,
+    abortReconnect,
+  } = useAgentConversation({
+    reducer: {
+      completedSourceLinks: "safe",
+      artifactLinks: "safe",
+      pendingActionFallback: "This action requires an explicit decision.",
+    },
+  });
 
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.conversation_id === selectedId) ?? null,
@@ -245,11 +188,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const selectedTurns = selectedId ? turns[selectedId] ?? [] : [];
   const selectedMetrics = selectedId ? metrics[selectedId] ?? null : null;
   const selectedStream = selectedId ? streams[selectedId] : undefined;
-  const selectedStreaming = selectedId
-    ? controllers.current.has(selectedId) || reconnectControllers.current.has(selectedId)
-    : false;
+  const selectedStreaming = selectedId ? isStreaming(selectedId) : false;
   const currentReceipts = useMemo(
-    () => mergeReceipts([...selectedReceipts, ...(selectedStream?.receipts ?? [])]),
+    () => mergeAgentReceipts([...selectedReceipts, ...(selectedStream?.receipts ?? [])]),
     [selectedReceipts, selectedStream?.receipts],
   );
   const inlineReceipts = useMemo(() => {
@@ -560,25 +501,15 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
 
   async function retryFailedTurn() {
     if (!selectedId || !latestTurn || latestTurn.status !== "FAILED" || actionBusy) return;
-    const controller = new AbortController();
-    controllers.current.set(selectedId, controller);
-    setStreams((current) => ({ ...current, [selectedId]: { ...EMPTY_STREAM } }));
     setActionError(null);
-    try {
-      await retryAgentTurnStream(
-        selectedId,
-        latestTurn.turn_id,
-        (event) => handleStreamEvent(selectedId, event),
-        controller.signal,
-      );
-      if (!controller.signal.aborted) {
-        await reloadDurableConversation(selectedId);
-        await loadConversations();
-      }
-    } catch (error) {
-      if (!isAbortError(error)) setActionError(errorText(error, "Unable to retry this turn"));
-    } finally {
-      controllers.current.delete(selectedId);
+    const completed = await retryStream(
+      selectedId,
+      latestTurn.turn_id,
+      (message) => setActionError(message),
+    );
+    if (completed) {
+      await reloadDurableConversation(selectedId);
+      await loadConversations();
     }
   }
 
@@ -710,8 +641,6 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       preferencesController.abort();
       modelCatalogController.current?.abort();
       refreshControllers.current.forEach((controller) => controller.abort());
-      controllers.current.forEach((controller) => controller.abort());
-      reconnectControllers.current.forEach((controller) => controller.abort());
     };
   }, [loadConversations, loadPreferences, loadStatus]);
 
@@ -725,156 +654,25 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   }, [selectedId]);
 
   useEffect(() => {
-    if (!selectedId || !latestTurn || !durableTurnActive || controllers.current.has(selectedId)) return;
-    reconnectControllers.current.get(selectedId)?.abort();
-    const controller = new AbortController();
-    reconnectControllers.current.set(selectedId, controller);
-    setStreams((current) => ({
-      ...current,
-      [selectedId]: {
-        ...(current[selectedId] ?? EMPTY_STREAM),
-        turnId: latestTurn.turn_id,
-        phase: latestTurn.status === "WAITING_TOOL" ? "tool" : "waiting",
-      },
-    }));
-    void reconnectAgentTurnStream(
+    if (!selectedId || !latestTurn || !durableTurnActive || isStreaming(selectedId)) return;
+    void reconnectTurn(
       selectedId,
       latestTurn.turn_id,
-      (event) => handleStreamEvent(selectedId, event),
-      controller.signal,
-    ).catch((error: unknown) => {
-      if (!isAbortError(error)) {
-        updateStream(selectedId, { error: errorText(error, "Unable to reconnect to this turn") });
-      }
-    }).finally(() => {
-      if (reconnectControllers.current.get(selectedId) === controller) {
-        reconnectControllers.current.delete(selectedId);
-      }
-      if (!controller.signal.aborted) void reloadDurableConversation(selectedId);
+      latestTurn.status === "WAITING_TOOL" ? "tool" : "waiting",
+    ).then((completed) => {
+      if (completed) void reloadDurableConversation(selectedId);
     });
-    return () => {
-      controller.abort();
-      if (reconnectControllers.current.get(selectedId) === controller) {
-        reconnectControllers.current.delete(selectedId);
-      }
-    };
-  }, [durableTurnActive, latestTurn?.status, latestTurn?.turn_id, reloadDurableConversation, selectedId]);
-
-  function updateStream(conversationId: string, patch: Partial<StreamSnapshot>) {
-    setStreams((current) => ({
-      ...current,
-      [conversationId]: { ...(current[conversationId] ?? EMPTY_STREAM), ...patch },
-    }));
-  }
-
-  function handleStreamEvent(conversationId: string, event: AgentStreamEvent) {
-    const payload = eventPayload(event);
-    if (event.jsonError) {
-      updateStream(conversationId, { error: "The Agent stream returned an invalid event payload." });
-      return;
-    }
-    switch (event.event) {
-      case "message_started":
-        updateStream(conversationId, {
-          turnId: text(payload.turn_id) || null,
-          phase: "waiting",
-          error: null,
-        });
-        return;
-      case "tool_started":
-        updateStream(conversationId, { phase: "tool", error: null });
-        return;
-      case "tool_finished": {
-        const receipt = parseReceipt(payload.receipt ?? payload);
-        const artifactUrl = text(payload.artifact_url);
-        if (receipt) {
-          setStreams((current) => {
-            const existing = current[conversationId] ?? EMPTY_STREAM;
-            return {
-              ...current,
-              [conversationId]: {
-                ...existing,
-                phase: "tool",
-                receipts: mergeReceipts([...existing.receipts, receipt]),
-                artifactUrls: artifactUrl.startsWith("/api/agent/artifacts/")
-                  ? Array.from(new Set([...existing.artifactUrls, artifactUrl])).slice(0, 20)
-                  : existing.artifactUrls,
-              },
-            };
-          });
-        }
-        return;
-      }
-      case "text_delta": {
-        const delta = firstText(payload, ["text_delta", "delta", "text", "content"])
-          || (typeof event.payload === "string" ? event.payload : "");
-        if (delta) {
-          setStreams((current) => {
-            const existing = current[conversationId] ?? EMPTY_STREAM;
-            return {
-              ...current,
-              [conversationId]: {
-                ...existing,
-                phase: "streaming",
-                draft: existing.draft + delta,
-                error: null,
-              },
-            };
-          });
-        }
-        return;
-      }
-      case "pending_action": {
-        const action = parsePendingAction(payload.pending_action ?? payload);
-        const token = text(payload.confirmation_token);
-        updateStream(conversationId, {
-          phase: "tool",
-          pendingSummary: action?.presented_summary
-            || firstText(payload, ["presented_summary", "summary", "message"])
-            || "This action requires an explicit decision.",
-          pendingAction: action && token ? { action, token } : null,
-        });
-        return;
-      }
-      case "completed": {
-        const finalText = firstText(payload, ["text", "content", "answer"])
-          || (typeof event.payload === "string" ? event.payload : "");
-        setStreams((current) => {
-          const existing = current[conversationId] ?? EMPTY_STREAM;
-          const sourceUrls = safeLinks(payload.web_source_urls);
-          const artifactUrls = safeLinks(payload.artifact_urls, true);
-          return {
-            ...current,
-            [conversationId]: {
-              ...existing,
-              phase: "complete",
-              draft: finalText || existing.draft,
-              sourceUrls: sourceUrls.length ? sourceUrls : existing.sourceUrls,
-              artifactUrls: artifactUrls.length ? artifactUrls : existing.artifactUrls,
-            },
-          };
-        });
-        return;
-      }
-      case "failed":
-        updateStream(conversationId, {
-          phase: "complete",
-          error: firstText(payload, ["message", "detail", "error", "code"])
-            || "The Agent stream failed before completion.",
-        });
-        return;
-      case "cancelled":
-        updateStream(conversationId, {
-          phase: "complete",
-          error: null,
-          pendingSummary: "This turn was cancelled. No new tool call will be started.",
-        });
-        return;
-      default:
-        return;
-    }
-  }
-
+    return () => abortReconnect(selectedId);
+  }, [
+    abortReconnect,
+    durableTurnActive,
+    isStreaming,
+    latestTurn?.status,
+    latestTurn?.turn_id,
+    reconnectTurn,
+    reloadDurableConversation,
+    selectedId,
+  ]);
   async function sendMessage(contentOverride?: string) {
     const content = (contentOverride ?? composer).trim();
     if (
@@ -904,7 +702,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         setActionBusy(null);
       }
     }
-    if (!conversationId || controllers.current.has(conversationId)) return;
+    if (!conversationId || isStreaming(conversationId)) return;
     if (contentOverride === undefined) setComposer("");
     setEditingMessageId(null);
     setActionError(null);
@@ -920,40 +718,17 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       ...current,
       [conversationId]: [...(current[conversationId] ?? []), optimistic],
     }));
-    const controller = new AbortController();
-    controllers.current.set(conversationId, controller);
-    setStreams((current) => ({ ...current, [conversationId]: { ...EMPTY_STREAM, phase: "waiting" } }));
-    try {
-      await streamAgentMessage(
-        conversationId,
-        content,
-        (event) => handleStreamEvent(conversationId, event),
-        controller.signal,
-        ephemeralContext,
-        selectedProviderId || undefined,
-        selectedModelName || undefined,
-        selectedReasoningEffort || undefined,
-      );
-      if (!controller.signal.aborted) {
-        await reloadDurableConversation(conversationId);
-        await loadConversations();
-      }
-    } catch (error) {
-      if (!isAbortError(error) && !controller.signal.aborted) {
-        updateStream(conversationId, {
-          phase: "complete",
-          error: errorText(error, "The Agent stream could not be started."),
-        });
-      }
-    } finally {
-      controllers.current.delete(conversationId);
-      if (!controller.signal.aborted) {
-        setStreams((current) => {
-          const existing = current[conversationId];
-          if (!existing) return current;
-          return { ...current, [conversationId]: { ...existing, draft: "", phase: "complete" } };
-        });
-      }
+    const completed = await streamMessage({
+      conversationId,
+      content,
+      ephemeralContext,
+      providerId: selectedProviderId || undefined,
+      modelName: selectedModelName || undefined,
+      reasoningEffort: selectedReasoningEffort || undefined,
+    });
+    if (completed) {
+      await reloadDurableConversation(conversationId);
+      await loadConversations();
     }
   }
 
@@ -968,16 +743,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         actionableToken,
         decision,
       );
-      setStreams((current) => {
-        const existing = current[selectedId] ?? EMPTY_STREAM;
-        return {
-          ...current,
-          [selectedId]: {
-            ...existing,
-            pendingAction: null,
-            pendingSummary: `${updated.capability}.${updated.operation}: ${updated.status}`,
-          },
-        };
+      updateStream(selectedId, {
+        pendingAction: null,
+        pendingSummary: `${updated.capability}.${updated.operation}: ${updated.status}`,
       });
       await reloadDurableConversation(selectedId);
     } catch (error) {
@@ -1022,10 +790,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     setActionError(null);
     try {
       const cancelled = await cancelAgentTurn(selectedId, turnId);
-      controllers.current.get(selectedId)?.abort();
-      reconnectControllers.current.get(selectedId)?.abort();
-      controllers.current.delete(selectedId);
-      reconnectControllers.current.delete(selectedId);
+      abortStream(selectedId);
       setTurns((current) => ({
         ...current,
         [selectedId]: [cancelled, ...(current[selectedId] ?? []).filter(
