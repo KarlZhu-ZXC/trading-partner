@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from application.dto.error_mapper import to_error_info, to_error_info_from_exception
 from application.dto.portfolio import (
     AccountGetPositionsInput,
     AccountGetSnapshotInput,
@@ -23,10 +22,10 @@ from application.dto.tool_envelope import SourceReference, ToolEnvelope, Warning
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import exception_envelope
 from application.services.account_service import AccountService
 from application.services.portfolio_service import PortfolioService
 from domain.common.enums import Freshness, SourceRole, VendorId
-from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 from domain.portfolio.models import AccountSnapshot
 
@@ -194,19 +193,10 @@ class PortfolioToolCoordinator:
     def _failure[T](
         self, request_id: str, as_of: datetime, exc: BaseException
     ) -> ToolEnvelope[T]:
-        mapped = (
-            to_error_info(exc, self._redactor)
-            if isinstance(exc, TradingPartnerError)
-            else to_error_info_from_exception(exc, self._redactor)
-        )
-        return ToolEnvelope.failure(
+        return exception_envelope(
             request_id=request_id,
-            market=None,
             as_of=as_of,
-            fetched_at=self._clock.now(),
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=(mapped,),
-            degraded=True,
-            data=None,
+            exc=exc,
+            clock=self._clock,
+            redactor=self._redactor,
         )

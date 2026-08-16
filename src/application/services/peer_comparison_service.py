@@ -28,6 +28,7 @@ from application.dto.us_research import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import FRESHNESS_ORDER
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
 from domain.a_share.enums import AShareSnapshotDetail
@@ -44,13 +45,6 @@ from domain.company_comparison.models import (
     PeerOperatingFact,
 )
 from domain.us_research.enums import USStatementFrequency, USStatementView
-
-_FRESHNESS_ORDER = {
-    Freshness.FRESH: 0,
-    Freshness.DELAYED: 1,
-    Freshness.STALE: 2,
-    Freshness.UNKNOWN: 3,
-}
 
 
 class PeerComparisonService:
@@ -152,7 +146,7 @@ class PeerComparisonService:
             )
             freshness = max(
                 (env.freshness for env in envelopes),
-                key=lambda item: _FRESHNESS_ORDER[item],
+                key=lambda item: FRESHNESS_ORDER[item],
                 default=Freshness.UNKNOWN,
             )
             return ToolEnvelope.success(
