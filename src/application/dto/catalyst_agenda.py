@@ -271,9 +271,17 @@ class AgendaCoverageDTO(_DTO):
     limitation_codes: tuple[str, ...]
 
 
+class AgendaSummaryDTO(_DTO):
+    upcoming_7d_count: int = Field(ge=0)
+    upcoming_count: int = Field(ge=0)
+    overdue_count: int = Field(ge=0)
+    coverage_gap_count: int = Field(ge=0)
+
+
 class AgendaQueryDTO(_DTO):
     items: tuple[AgendaItemDTO, ...]
     coverage: tuple[AgendaCoverageDTO, ...]
+    summary: AgendaSummaryDTO
     as_of: datetime
     window_end: datetime
     scope_basis: Literal["CURRENT_DURABLE"] = "CURRENT_DURABLE"

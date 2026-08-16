@@ -19,6 +19,7 @@ import {
 import { ConsoleShell } from "../components/console-shell";
 import { authenticatedFetch, envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { unwrapAgendaSync } from "../lib/agenda-receipt.mjs";
+import { agendaSummaryFromPayload } from "../lib/agenda-presentation";
 import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
@@ -312,40 +313,6 @@ function groupByAgendaId(payload: Dict, nowMs: number): AgendaGroup[] {
   });
 }
 
-function parseSummary(payload: unknown): { upcoming7d: number; upcoming: number; overdue: number; coverageGap: number } {
-  const source = unwrap(payload);
-  const rows = groupByAgendaId(source, Date.now());
-  const nowMs = Date.now();
-  let upcoming7d = 0;
-  let upcoming = 0;
-  let overdue = 0;
-  for (const row of rows) {
-    const classification = classify(row.latest, nowMs);
-    if (classification.badge === "UPCOMING 7D" || classification.badge === "FUTURE") {
-      upcoming += 1;
-    }
-    if (classification.badge === "UPCOMING 7D") {
-      upcoming7d += 1;
-    }
-    if (classification.badge === "OVERDUE") {
-      overdue += 1;
-    }
-  }
-
-  const coveragePayload = asDict(asDict(source).coverage);
-  const coverage = listOf<Dict>(source, "coverage");
-  const coverageGap = coverage.length > 0
-    ? coverage.filter((entry) => text(entry.status) === "UNAVAILABLE").length
-    : 0;
-  const explicitCoverageGap = toNumber(coveragePayload.coverage_gap_count);
-  return {
-    upcoming7d,
-    upcoming,
-    overdue,
-    coverageGap: explicitCoverageGap || coverageGap,
-  };
-}
-
 function buildRequest(action: AgendaAction, form: AgendaItemForm): Dict {
   const request: Dict = {
     operation: "agenda_item",
@@ -459,7 +426,7 @@ export default function CatalystAgendaPage() {
   const agendaHasMore = agendaPage.has_more === true;
   const agendaTotal = toNumber(agendaPage.total);
   const grouped = useMemo(() => groupByAgendaId(agendaPayload, nowMs), [agendaPayload, nowMs]);
-  const summary = useMemo(() => parseSummary(agendaPayload), [agendaPayload]);
+  const summary = useMemo(() => agendaSummaryFromPayload(agendaPayload), [agendaPayload]);
   const subjects = useMemo(() => extractSubjects(agendaApi.data), [agendaApi.data]);
   // Debounce the outcome-candidate scope so typing in the subject/instrument
   // fields does not issue one request per keystroke.

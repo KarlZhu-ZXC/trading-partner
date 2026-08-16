@@ -391,6 +391,8 @@ def test_revise_keeps_identity_and_history_projects_superseded() -> None:
         AgendaItemStatus.SUPERSEDED,
         AgendaItemStatus.UPCOMING,
     ]
+    assert history.data.summary.upcoming_count == 1
+    assert history.data.summary.upcoming_7d_count == 1
     rejected = service.manage(
         _mutation(
             action=AgendaMutationAction.REVISE,
@@ -624,6 +626,8 @@ def test_query_returns_overdue_item_and_reverify_warning() -> None:
         "AGENDA_EVENT_OUTCOME_UNVERIFIED",
         "AGENDA_DATE_REVERIFY_REQUIRED",
     )
+    assert result.data.summary.overdue_count == 1
+    assert result.data.summary.upcoming_count == 0
     assert {warning.code for warning in result.warnings} >= {
         "AGENDA_EVENT_OUTCOME_UNVERIFIED",
         "AGENDA_DATE_REVERIFY_REQUIRED",
@@ -646,6 +650,7 @@ def test_no_visible_item_is_coverage_unavailable_not_no_catalysts() -> None:
     assert result.ok and result.data is not None
     assert result.data.items == ()
     assert result.data.coverage[0].status.value == "UNAVAILABLE"
+    assert result.data.summary.coverage_gap_count == 1
     assert "AGENDA_COVERAGE_UNAVAILABLE" in result.data.limitation_codes
 
 
