@@ -252,10 +252,14 @@ function ScorecardCard({
 }
 
 export default function JudgmentScorecardsPage() {
-  const [subjectId, setSubjectId] = useState<string>(() => {
-    if (typeof window === "undefined") return ALL_SUBJECTS;
-    return new URLSearchParams(window.location.search).get("subject_id") || ALL_SUBJECTS;
-  });
+  const [subjectId, setSubjectId] = useState<string>(ALL_SUBJECTS);
+  // Read the deep-link filter after mount so SSR and the first client render
+  // agree; reading window during state initialization causes a hydration
+  // mismatch when a subject_id query parameter is present.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("subject_id");
+    if (requested) setSubjectId(requested);
+  }, []);
   const [thesisId, setThesisId] = useState<string>("");
   const [historyOffset, setHistoryOffset] = useState(0);
   const [outcomeFilter, setOutcomeFilter] = useState<string>("ALL");
@@ -411,7 +415,7 @@ export default function JudgmentScorecardsPage() {
             <label>
               <span>Dimension Outcome</span>
               <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value)}>
-                {outcomeSet.sort().map((item) => <option key={item} value={item}>{item}</option>)}
+                {outcomeSet.length > 0 && [...outcomeSet].sort().map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             </label>
           </div>

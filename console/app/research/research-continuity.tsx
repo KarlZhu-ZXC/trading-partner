@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { ActionButton, Badge, Card, Empty, displayJson, formatDate, formatDecimal, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi } from "../lib/api";
@@ -148,7 +147,11 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy }: { subj
       }),
       notes: notes.trim(),
     };
-    await onWrite("research_judgment_propose", { operation: "research_state", case_id: value(subject.subject_id), payload, proposed_by: "user", proposed_by_rationale: "Trade Plan version proposed from the local Research workspace", idempotency_key: key("trade-plan") }, "research_judgment_propose");
+    try {
+      await onWrite("research_judgment_propose", { operation: "research_state", case_id: value(subject.subject_id), payload, proposed_by: "user", proposed_by_rationale: "Trade Plan version proposed from the local Research workspace", idempotency_key: key("trade-plan") }, "research_judgment_propose");
+    } catch {
+      return; // onWrite already surfaced the failure; keep the editor open.
+    }
     setEditing(false);
     onRefresh();
   }
@@ -160,7 +163,7 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy }: { subj
 
   const monitorHandoff = current?.status === "ACTIVE" ? `/monitors?trade_plan_id=${encodeURIComponent(value(current.plan_id, ""))}&trade_plan_version=${encodeURIComponent(value(current.version, ""))}&subject_id=${encodeURIComponent(value(subject.subject_id, ""))}&instrument_id=${encodeURIComponent(value(current.instrument_id, ""))}` : "";
 
-  return <Card id="research-section-plan" className="research-trade-plan-card" kicker="POSITION INTENT" title="Trade Plan" subtitle="Versioned sizing and review conditions · non-executing" action={<div className="research-detail-actions">{current && <Badge value={`V${value(current.version)} · ${value(current.status)}`} />}{monitorHandoff && <Link className="close-button" href={monitorHandoff}>Create Monitor From Plan</Link>}<ActionButton onClick={openEditor}>{current ? "Propose New Version" : "Create Trade Plan"}</ActionButton></div>}>
+  return <Card id="research-section-plan" className="research-trade-plan-card" kicker="POSITION INTENT" title="Trade Plan" subtitle="Versioned sizing and review conditions · non-executing" action={<div className="research-detail-actions">{current && <Badge value={`V${value(current.version)} · ${value(current.status)}`} />}{monitorHandoff && <a className="close-button" href={monitorHandoff}>Create Monitor From Plan</a>}<ActionButton onClick={openEditor}>{current ? "Propose New Version" : "Create Trade Plan"}</ActionButton></div>}>
     {current ? <>
       <div className="trade-plan-identity"><div><span>Instrument</span><strong>{shortId(current.instrument_id)}</strong><small>{value(current.instrument_id)}</small></div><div><span>Plan ID</span><strong>{value(current.plan_id)}</strong><small>{plans.length} persisted versions</small></div><div><span>Thesis</span><strong>{shortId(current.thesis_id)}</strong><small>{value(current.thesis_id)}</small></div><div><span>Confirmed</span><strong>{formatDate(current.created_at)}</strong><small>{value(current.confirmed_by)}</small></div></div>
       <div className="trade-plan-metrics"><div className="trade-plan-price"><span>Reference Price</span><strong>{value(current.currency, "")} {formatDecimal(current.reference_price, 4)}</strong><small>{formatDate(current.reference_price_at)}</small></div><div><span>Target Position</span><strong>{formatDecimal(current.target_position_percent, 2)}%</strong></div><div><span>Max Position</span><strong>{formatDecimal(current.max_position_percent, 2)}%</strong></div><div><span>Risk Budget</span><strong>{formatDecimal(current.risk_budget_percent, 2)}%</strong></div><div><span>Stop Price</span><strong>{current.stop_price == null ? "—" : formatDecimal(current.stop_price, 4)}</strong></div></div>
@@ -207,7 +210,11 @@ function ResearchMemoryWorkspace({ subject, onWrite, busy }: { subject: Dict; on
   async function submit() {
     if (!title.trim() || !body.trim()) { window.alert("Title and content are required."); return; }
     const request = mode === "journal" ? { operation: "journal", case_id: subjectId, entry_type: entryType, title: title.trim(), body_markdown: body.trim(), authored_by: "user", confirmed_by: "user", instrument_ids: subject.primary_instrument_id ? [subject.primary_instrument_id] : [], topic_tags: [], idempotency_key: key("journal") } : { operation: "decision", case_id: subjectId, decision_type: decisionType, title: title.trim(), rationale: body.trim(), decided_at: new Date().toISOString(), decided_by: "user", confirmation_mode: "strict_review", primary_instrument_id: subject.primary_instrument_id ?? null, thesis_revision_ids: [], evidence_ids: [], report_ids: [], idempotency_key: key("decision") };
-    await onWrite("research_memory_append", request, "research_memory_append");
+    try {
+      await onWrite("research_memory_append", request, "research_memory_append");
+    } catch {
+      return; // onWrite already surfaced the failure; keep the entry form open.
+    }
     setMode(null); setTitle(""); setBody(""); await load();
   }
 

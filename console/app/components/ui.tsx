@@ -193,7 +193,7 @@ export function formatDate(value: unknown): string {
   if (!value || typeof value !== "string") return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -215,7 +215,7 @@ export function formatDecimal(value: unknown, maximumFractionDigits = 2): string
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return String(value);
-  return new Intl.NumberFormat("zh-CN", {
+  return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 0,
     maximumFractionDigits,
   }).format(numeric);

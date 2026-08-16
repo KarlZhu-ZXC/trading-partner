@@ -46,7 +46,7 @@ export function useApi<T>(route: string): ApiResult<T> {
     const controller = new AbortController();
     fetch(`${API_BASE}${route}`, { signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
         return (await response.json()) as T;
       })
       .then((value) => {
@@ -111,15 +111,40 @@ export async function authenticatedFetch(
   return response;
 }
 
-export async function postApi<T>(route: string, body: unknown): Promise<T> {
+/**
+ * Extract a human-readable message from an error response.  Falls back to the
+ * HTTP status when the body is missing, not JSON, or carries no detail.
+ */
+export async function responseErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown; message?: unknown };
+    const detail = payload?.detail ?? payload?.message;
+    if (typeof detail === "string" && detail.trim().length > 0) return detail;
+  } catch {
+    // Non-JSON error bodies keep the plain status text.
+  }
+  return `HTTP ${response.status}`;
+}
+
+export async function postApi<T>(
+  route: string,
+  body: unknown,
+  init: { signal?: AbortSignal } = {},
+): Promise<T> {
   const response = await authenticatedFetch(route, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: init.signal,
   });
-  const payload = (await response.json()) as T & { detail?: string };
-  if (!response.ok) {
-    throw new Error(payload.detail ?? `HTTP ${response.status}`);
+  let payload: (T & { detail?: string }) | null = null;
+  try {
+    payload = (await response.json()) as T & { detail?: string };
+  } catch {
+    // A non-JSON body (empty 204, plain-text gateway error) keeps payload null.
   }
-  return payload;
+  if (!response.ok) {
+    throw new Error(payload?.detail ?? `HTTP ${response.status}`);
+  }
+  return payload as T;
 }
