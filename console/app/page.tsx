@@ -148,8 +148,8 @@ export default function OverviewPage() {
                 <MetricTile label="Activity Coverage" value={qualityActivity.length} detail="Latest Receipt per Account" />
                 <MetricTile label="Active Monitors" value={qualityMonitors.length} detail="Latest Runs, Read Only" />
                 <MetricTile label="Monitor Blind Spots" value={blindMonitorCount} valueClassName={blindMonitorCount ? "text-amber" : ""} detail="Not Run / Unevaluated / Incomplete" />
-                <MetricTile label="24h Provider Fallbacks" value={recentFallbacks} valueClassName={recentFallbacks ? "text-amber" : ""} detail={`${qualityRoutes.length} market/category pairs`} />
-                <MetricTile label="24h Provider Failures" value={recentRouteFailures} valueClassName={recentRouteFailures ? "text-amber" : ""} detail="Secret-Safe Route Receipts" />
+                <MetricTile label="24H Provider Fallbacks" value={recentFallbacks} valueClassName={recentFallbacks ? "text-amber" : ""} detail={`${qualityRoutes.length} market/category pairs`} />
+                <MetricTile label="24H Provider Failures" value={recentRouteFailures} valueClassName={recentRouteFailures ? "text-amber" : ""} detail="Secret-Safe Route Receipts" />
               </div>
               <div className="quality-issues">
                 <div className="quality-section-heading">

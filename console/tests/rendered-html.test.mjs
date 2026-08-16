@@ -591,6 +591,8 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
 
   const workspace = await readFile(new URL("../app/chat/chat-workspace.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
+  const conversationSource = await readFile(new URL("../app/lib/use-agent-conversation.ts", import.meta.url), "utf8");
+  const streamSource = await readFile(new URL("../app/lib/agent-stream.ts", import.meta.url), "utf8");
   const messageContentSource = await readFile(new URL("../app/components/agent-message-content.tsx", import.meta.url), "utf8");
   const pageContextSource = await readFile(new URL("../app/lib/agent-page-context.ts", import.meta.url), "utf8");
   const apiSource = await readFile(new URL("../app/lib/agent-api.ts", import.meta.url), "utf8");
@@ -602,7 +604,9 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
   assert.match(railSource, /collectEphemeralContext/);
   assert.match(railSource, /nativeEvent\.isComposing/);
   assert.match(railSource, /Cancel Current Agent Turn/);
-  assert.match(railSource, /reconnectAgentTurnStream/);
+  assert.match(railSource, /useAgentConversation/);
+  assert.match(conversationSource, /reconnectAgentTurnStream/);
+  assert.match(streamSource, /reduceAgentStream/);
   assert.match(railSource, /cancelAgentTurn/);
   assert.match(railSource, /Confirm/);
   assert.match(railSource, /Reject/);

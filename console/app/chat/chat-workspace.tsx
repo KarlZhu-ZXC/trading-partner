@@ -12,10 +12,8 @@ import {
 import {
   AgentConversation,
   AgentMessage,
-  AgentPendingAction,
   AgentReceipt,
   AgentStatus,
-  AgentStreamEvent,
   archiveAgentConversation,
   createAgentConversation,
   createTelegramHandoff,
@@ -24,37 +22,10 @@ import {
   fetchAgentMessages,
   fetchAgentReceipts,
   fetchAgentStatus,
-  parseReceipt,
-  parsePendingAction,
-  streamAgentMessage,
 } from "../lib/agent-api";
-import { asRecord, textStrict as text } from "../lib/coerce";
-
-type Dict = Record<string, unknown>;
-
-type StreamSnapshot = {
-  phase: "waiting" | "tool" | "streaming" | "complete";
-  draft: string;
-  receipts: AgentReceipt[];
-  sourceUrls: string[];
-  chartLinks: string[];
-  researchSubjectIds: string[];
-  pendingSummary: string | null;
-  pendingAction: { action: AgentPendingAction; token: string } | null;
-  error: string | null;
-};
-
-const EMPTY_STREAM: StreamSnapshot = {
-  phase: "waiting",
-  draft: "",
-  receipts: [],
-  sourceUrls: [],
-  chartLinks: [],
-  researchSubjectIds: [],
-  pendingSummary: null,
-  pendingAction: null,
-  error: null,
-};
+import { textStrict as text } from "../lib/coerce";
+import { extractResearchSubjectIds, mergeAgentReceipts } from "../lib/agent-stream";
+import { useAgentConversation } from "../lib/use-agent-conversation";
 
 function displayDate(value: string | null | undefined): string {
   if (!value) return "—";
@@ -69,71 +40,16 @@ function displayDate(value: string | null | undefined): string {
   }).format(date);
 }
 
+function initialTitle(conversation: AgentConversation): string {
+  return conversation.title || "Untitled conversation";
+}
+
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
-}
-
-function eventPayload(event: AgentStreamEvent): Dict {
-  return asRecord(event.payload);
-}
-
-function firstText(source: Dict, keys: string[]): string {
-  for (const key of keys) {
-    const candidate = text(source[key]);
-    if (candidate) return candidate;
-  }
-  return "";
-}
-
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-}
-
-function researchSubjectIds(value: unknown): string[] {
-  const source = asRecord(value);
-  return Array.from(new Set([
-    ...stringList(source.research_subject_ids),
-    ...stringList(source.subject_ids),
-    ...[
-      source.research_subject_id,
-      source.subject_id,
-      source.case_id,
-    ].filter((item): item is string => typeof item === "string" && item.trim().length > 0),
-  ]));
-}
-
-function collectLinks(value: unknown): string[] {
-  if (typeof value === "string") {
-    return /^(?:https?:\/\/|\/api\/|\/artifacts\/)/i.test(value) ? [value] : [];
-  }
-  if (Array.isArray(value)) return value.flatMap(collectLinks);
-  if (value === null || typeof value !== "object") return [];
-  const source = value as Dict;
-  return [
-    ...collectLinks(source.url),
-    ...collectLinks(source.href),
-    ...collectLinks(source.artifact_url),
-    ...collectLinks(source.display_url),
-  ];
-}
-
-function initialTitle(conversation: AgentConversation): string {
-  return conversation.title || "Untitled conversation";
-}
-
-function mergeReceipts(items: AgentReceipt[]): AgentReceipt[] {
-  const byId = new Map<string, AgentReceipt>();
-  for (const item of items) {
-    if (item.receipt_id) byId.set(item.receipt_id, item);
-  }
-  return Array.from(byId.values()).sort((left, right) =>
-    String(right.created_at ?? "").localeCompare(String(left.created_at ?? "")),
-  );
 }
 
 function statusLabel(status: AgentStatus | null, loading: boolean): string {
@@ -156,14 +72,28 @@ export function ChatWorkspace() {
   const [receipts, setReceipts] = useState<Record<string, AgentReceipt[]>>({});
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
-  const [streams, setStreams] = useState<Record<string, StreamSnapshot>>({});
   const [composer, setComposer] = useState("");
   const [composerComposing, setComposerComposing] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [handoff, setHandoff] = useState<{ conversationId: string; token: string; expiresAt: string } | null>(null);
-  const controllers = useRef(new Map<string, AbortController>());
   const refreshControllers = useRef(new Map<string, AbortController>());
+  const {
+    streams,
+    isStreaming,
+    updateStream,
+    sendMessage: streamMessage,
+    abortStream,
+  } = useAgentConversation({
+    reducer: {
+      toolSourceLinks: "permissive",
+      completedSourceLinks: "permissive",
+      artifactLinks: "permissive",
+      includeChartLinks: true,
+      includeResearchSubjectIds: true,
+      pendingActionFallback: "This action requires an explicit decision.",
+    },
+  });
 
   const selectedConversation = useMemo(
     () => conversations.find((conversation) => conversation.conversation_id === selectedId) ?? null,
@@ -172,9 +102,9 @@ export function ChatWorkspace() {
   const selectedMessages = selectedId ? messages[selectedId] ?? [] : [];
   const selectedReceipts = selectedId ? receipts[selectedId] ?? [] : [];
   const selectedStream = selectedId ? streams[selectedId] : undefined;
-  const selectedStreaming = selectedId ? controllers.current.has(selectedId) : false;
+  const selectedStreaming = selectedId ? isStreaming(selectedId) : false;
   const currentReceipts = useMemo(
-    () => mergeReceipts([
+    () => mergeAgentReceipts([
       ...selectedReceipts,
       ...(selectedStream?.receipts ?? []),
     ]),
@@ -182,7 +112,7 @@ export function ChatWorkspace() {
   );
   const relatedSubjectIds = useMemo(
     () => Array.from(new Set([
-      ...currentReceipts.flatMap((receipt) => researchSubjectIds(receipt)),
+      ...currentReceipts.flatMap((receipt) => extractResearchSubjectIds(receipt)),
       ...(selectedStream?.researchSubjectIds ?? []),
     ])),
     [currentReceipts, selectedStream?.researchSubjectIds],
@@ -253,7 +183,6 @@ export function ChatWorkspace() {
       statusController.abort();
       conversationController.abort();
       refreshControllers.current.forEach((controller) => controller.abort());
-      controllers.current.forEach((controller) => controller.abort());
     };
   }, [loadConversations, loadStatus]);
 
@@ -261,123 +190,6 @@ export function ChatWorkspace() {
     if (!selectedId) return;
     void reloadDurableConversation(selectedId);
   }, [reloadDurableConversation, selectedId]);
-
-  function updateStream(conversationId: string, patch: Partial<StreamSnapshot>) {
-    setStreams((current) => ({
-      ...current,
-      [conversationId]: { ...(current[conversationId] ?? EMPTY_STREAM), ...patch },
-    }));
-  }
-
-  function handleStreamEvent(conversationId: string, event: AgentStreamEvent) {
-    const payload = eventPayload(event);
-    if (event.jsonError) {
-      updateStream(conversationId, { error: "The Agent stream returned an invalid event payload." });
-      return;
-    }
-    switch (event.event) {
-      case "message_started":
-        updateStream(conversationId, { phase: "waiting", error: null });
-        return;
-      case "tool_started":
-        updateStream(conversationId, { phase: "tool", error: null });
-        return;
-      case "tool_finished": {
-        const receipt = parseReceipt(payload.receipt ?? payload);
-        const links = collectLinks(payload);
-        if (receipt) {
-          setStreams((current) => {
-            const existing = current[conversationId] ?? EMPTY_STREAM;
-            return {
-              ...current,
-              [conversationId]: {
-                ...existing,
-                phase: "tool",
-                receipts: mergeReceipts([...existing.receipts, receipt]),
-                sourceUrls: Array.from(new Set([...existing.sourceUrls, ...stringList(payload.source_urls), ...links])),
-                chartLinks: Array.from(new Set([...existing.chartLinks, ...collectLinks(payload.chart_artifact)])),
-                researchSubjectIds: Array.from(new Set([
-                  ...existing.researchSubjectIds,
-                  ...researchSubjectIds(payload),
-                  ...researchSubjectIds(receipt),
-                ])),
-              },
-            };
-          });
-        }
-        return;
-      }
-      case "text_delta": {
-        const delta = firstText(payload, ["text_delta", "delta", "text", "content"])
-          || (typeof event.payload === "string" ? event.payload : "");
-        if (delta) {
-          setStreams((current) => {
-            const existing = current[conversationId] ?? EMPTY_STREAM;
-            return {
-              ...current,
-              [conversationId]: {
-                ...existing,
-                phase: "streaming",
-                draft: existing.draft + delta,
-                error: null,
-              },
-            };
-          });
-        }
-        return;
-      }
-      case "pending_action": {
-        const action = parsePendingAction(payload.pending_action ?? payload);
-        const token = text(payload.confirmation_token);
-        const summary = action?.presented_summary
-          || firstText(payload, ["presented_summary", "summary", "message"]);
-        updateStream(conversationId, {
-          phase: "tool",
-          pendingSummary: summary || "This action is disabled in the current read-only milestone.",
-          pendingAction: action && token ? { action, token } : null,
-        });
-        return;
-      }
-      case "completed": {
-        const finalText = firstText(payload, ["text", "content", "answer"])
-          || (typeof event.payload === "string" ? event.payload : "");
-        setStreams((current) => {
-          const existing = current[conversationId] ?? EMPTY_STREAM;
-          return {
-            ...current,
-            [conversationId]: {
-              ...existing,
-              phase: "complete",
-              draft: finalText || existing.draft,
-              sourceUrls: Array.from(new Set([
-                ...existing.sourceUrls,
-                ...stringList(payload.web_source_urls ?? payload.source_urls),
-              ])),
-              chartLinks: Array.from(new Set([
-                ...existing.chartLinks,
-                ...collectLinks(payload.chart_artifact),
-              ])),
-              researchSubjectIds: Array.from(new Set([
-                ...existing.researchSubjectIds,
-                ...researchSubjectIds(payload),
-              ])),
-            },
-          };
-        });
-        return;
-      }
-      case "failed": {
-        const message = firstText(payload, ["message", "detail", "error", "code"]);
-        updateStream(conversationId, {
-          phase: "complete",
-          error: message || "The Agent stream failed before completion.",
-        });
-        return;
-      }
-      default:
-        return;
-    }
-  }
 
   async function sendMessage() {
     const content = composer.trim();
@@ -400,7 +212,7 @@ export function ChatWorkspace() {
         setActionBusy(null);
       }
     }
-    if (controllers.current.has(conversationId)) return;
+    if (isStreaming(conversationId)) return;
     setComposer("");
     setActionError(null);
     const optimistic: AgentMessage = {
@@ -415,46 +227,10 @@ export function ChatWorkspace() {
       ...current,
       [conversationId]: [...(current[conversationId] ?? []), optimistic],
     }));
-    const controller = new AbortController();
-    controllers.current.set(conversationId, controller);
-    setStreams((current) => ({
-      ...current,
-      [conversationId]: { ...EMPTY_STREAM, phase: "waiting" },
-    }));
-    try {
-      await streamAgentMessage(
-        conversationId,
-        content,
-        (event) => handleStreamEvent(conversationId, event),
-        controller.signal,
-      );
-      if (!controller.signal.aborted) {
-        await reloadDurableConversation(conversationId);
-        await loadConversations();
-      }
-    } catch (error) {
-      if (!isAbortError(error) && !controller.signal.aborted) {
-        updateStream(conversationId, {
-          phase: "complete",
-          error: errorText(error, "The Agent stream could not be started."),
-        });
-      }
-    } finally {
-      controllers.current.delete(conversationId);
-      if (!controller.signal.aborted) {
-        setStreams((current) => {
-          const existing = current[conversationId];
-          if (!existing) return current;
-          return {
-            ...current,
-            [conversationId]: {
-              ...existing,
-              draft: "",
-              phase: "complete",
-            },
-          };
-        });
-      }
+    const completed = await streamMessage({ conversationId, content });
+    if (completed) {
+      await reloadDurableConversation(conversationId);
+      await loadConversations();
     }
   }
 
@@ -470,16 +246,9 @@ export function ChatWorkspace() {
         pending.token,
         decision,
       );
-      setStreams((current) => {
-        const existing = current[selectedId] ?? EMPTY_STREAM;
-        return {
-          ...current,
-          [selectedId]: {
-            ...existing,
-            pendingAction: null,
-            pendingSummary: `${updated.capability}.${updated.operation}: ${updated.status}`,
-          },
-        };
+      updateStream(selectedId, {
+        pendingAction: null,
+        pendingSummary: `${updated.capability}.${updated.operation}: ${updated.status}`,
       });
       await reloadDurableConversation(selectedId);
     } catch (error) {
@@ -491,15 +260,8 @@ export function ChatWorkspace() {
 
   function stopWaiting() {
     if (!selectedId) return;
-    const controller = controllers.current.get(selectedId);
-    if (!controller) return;
-    controller.abort();
-    controllers.current.delete(selectedId);
-    setStreams((current) => {
-      const next = { ...current };
-      delete next[selectedId];
-      return next;
-    });
+    if (!isStreaming(selectedId)) return;
+    abortStream(selectedId, true);
     // Stopping only aborts this browser request.  The durable store remains
     // authoritative, so immediately reread it without issuing a cancellation
     // command to the Agent service.
@@ -625,7 +387,7 @@ export function ChatWorkspace() {
             ) : (
               conversations.map((conversation) => {
                 const active = conversation.conversation_id === selectedId;
-                const running = controllers.current.has(conversation.conversation_id);
+                const running = isStreaming(conversation.conversation_id);
                 return (
                   <button
                     className={`chat-conversation-row${active ? " active" : ""}`}
