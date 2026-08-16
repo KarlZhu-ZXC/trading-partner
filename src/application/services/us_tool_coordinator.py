@@ -36,6 +36,7 @@ from application.dto.us_market import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import exception_envelope
 from application.services.instrument_access_service import InstrumentAccessService
 from application.services.us_market_context_service import (
     USMarketContextResult,
@@ -681,23 +682,13 @@ class USToolCoordinator:
         effective_as_of: datetime,
         exc: BaseException,
     ) -> ToolEnvelope[T]:
-        fetched_at = self._clock.now()
-        error: ErrorInfo
-        if isinstance(exc, TradingPartnerError):
-            error = to_error_info(exc, self._secret_redactor)
-        else:
-            error = to_error_info_from_exception(exc, self._secret_redactor)
-        return ToolEnvelope.failure(
+        return exception_envelope(
             request_id=request_id,
             market=Market.US,
             as_of=effective_as_of,
-            fetched_at=fetched_at,
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=[error],
-            degraded=True,
-            warnings=(),
-            data=None,
+            exc=exc,
+            clock=self._clock,
+            redactor=self._secret_redactor,
         )
 
 

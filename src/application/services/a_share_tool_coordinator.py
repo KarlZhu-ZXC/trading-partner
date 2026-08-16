@@ -33,9 +33,8 @@ from application.dto.a_share import (
     ResearchSearchReportsInput,
 )
 from application.dto.a_share_provenance import AShareComponentProvenance
-from application.dto.error_mapper import to_error_info, to_error_info_from_exception
+from application.dto.error_mapper import to_error_info
 from application.dto.tool_envelope import (
-    ErrorInfo,
     SourceReference,
     ToolEnvelope,
     WarningInfo,
@@ -43,6 +42,7 @@ from application.dto.tool_envelope import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.services._router_envelope_support import exception_envelope
 from application.services.a_share_capital_service import AShareCapitalService
 from application.services.a_share_company_operating_metrics_service import (
     AShareCompanyOperatingMetricsService,
@@ -438,23 +438,13 @@ class AShareToolCoordinator:
         effective_as_of: datetime,
         exc: BaseException,
     ) -> ToolEnvelope[T]:
-        fetched_at = self._clock.now()
-        error: ErrorInfo
-        if isinstance(exc, TradingPartnerError):
-            error = to_error_info(exc, self._secret_redactor)
-        else:
-            error = to_error_info_from_exception(exc, self._secret_redactor)
-        return ToolEnvelope.failure(
+        return exception_envelope(
             request_id=request_id,
             market=Market.A_SHARE,
             as_of=effective_as_of,
-            fetched_at=fetched_at,
-            freshness=Freshness.UNKNOWN,
-            sources=(),
-            errors=[error],
-            degraded=True,
-            warnings=(),
-            data=None,
+            exc=exc,
+            clock=self._clock,
+            redactor=self._secret_redactor,
         )
 
 
