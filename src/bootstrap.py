@@ -23,19 +23,6 @@ from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
 from application.runtime import ApplicationServices, RuntimeContext
-from application.services.a_share_capital_service import AShareCapitalService
-from application.services.a_share_company_operating_metrics_service import (
-    AShareCompanyOperatingMetricsService,
-)
-from application.services.a_share_etf_option_service import AShareEtfOptionService
-from application.services.a_share_industry_cycle_service import AShareIndustryCycleService
-from application.services.a_share_limit_up_service import AShareLimitUpService
-from application.services.a_share_market_structure_service import (
-    AShareMarketStructureService,
-)
-from application.services.a_share_sentiment_service import AShareSentimentService
-from application.services.a_share_snapshot_service import AShareSnapshotService
-from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.agent_conversation_metrics import AgentConversationMetricsService
@@ -61,7 +48,6 @@ from application.services.instrument_master_service import InstrumentMasterServi
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
-from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_fact_resolver import MonitorFactResolver
@@ -84,9 +70,6 @@ from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.provider_router import ProviderRouter
 from application.services.research_archive_service import ResearchArchiveService
 from application.services.research_context_builder import ResearchContextBuilder
-from application.services.research_report_search_service import (
-    ResearchReportSearchService,
-)
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
 from application.services.research_subject_service import ResearchSubjectService
@@ -98,27 +81,10 @@ from application.services.risk_policy_service import RiskPolicyService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.routed_futures_provider import RoutedFuturesProvider
 from application.services.sgov_shadow_plan_service import SgovShadowPlanService
-from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.trade_retro_service import TradeRetroService
-from application.services.us_community_heat_service import USCommunityHeatService
-from application.services.us_company_update_service import USCompanyUpdateService
-from application.services.us_context_services import (
-    USMacroService,
-    USNewsService,
-    USPredictionMarketService,
-    USSentimentService,
-)
-from application.services.us_context_tool_coordinator import USContextToolCoordinator
-from application.services.us_filing_service import USFilingService
-from application.services.us_fundamental_service import USFundamentalService
-from application.services.us_market_breadth_service import USMarketBreadthService
-from application.services.us_market_context_service import USMarketContextService
-from application.services.us_market_data_service import USMarketDataService
-from application.services.us_research_tool_coordinator import USResearchToolCoordinator
-from application.services.us_technical_service import USTechnicalService
-from application.services.us_tool_coordinator import USToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
+from composition_root.market_facts import build_market_facts_services
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
 from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
@@ -158,34 +124,6 @@ from infrastructure.persistence.risk_policy_repository import (
 from infrastructure.persistence.sqlalchemy_futures_definition_repository import (
     SqlAlchemyFuturesDefinitionRepository,
 )
-from infrastructure.providers.a_share.codecs import (
-    announcements_codec,
-    bars_codec,
-    block_trades_codec,
-    chip_distribution_codec,
-    consensus_codec,
-    corporate_actions_codec,
-    daily_flow_codec,
-    dragon_tiger_codec,
-    f10_codec,
-    fundamentals_codec,
-    industry_performance_codec,
-    interactive_qa_codec,
-    intraday_flow_codec,
-    limit_context_codec,
-    margin_codec,
-    market_board_codec,
-    news_codec,
-    northbound_codec,
-    option_snapshot_codec,
-    order_book_codec,
-    quote_codec,
-    reports_codec,
-    sentiment_codec,
-    shareholder_counts_codec,
-    statements_codec,
-    ticks_codec,
-)
 from infrastructure.providers.account.reconciliation_writer import (
     OwnerOnlyBrokerReconciliationWriter,
 )
@@ -204,28 +142,11 @@ from infrastructure.providers.instrument_directory import (
 from infrastructure.providers.notifications.telegram import TelegramNotificationAdapter
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.us.catalyst_calendar_codecs import catalyst_calendar_codec
-from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
-from infrastructure.providers.us.context_codecs import (
-    us_community_heat_codec,
-    us_macro_context_codec,
-    us_market_breadth_codec,
-    us_news_feed_codec,
-    us_prediction_market_context_codec,
-    us_sentiment_samples_codec,
-)
-from infrastructure.providers.us.research_codecs import (
-    us_corporate_actions_codec,
-    us_filings_codec,
-    us_financial_statements_codec,
-    us_fundamental_snapshot_codec,
-    us_insider_activity_codec,
-)
 from infrastructure.system.agent_turn_lock import AgentTurnLockFactory
 from infrastructure.system.clock import SystemClock
 from infrastructure.system.id_generator import Uuid7IdGenerator
 from infrastructure.system.process_file_lock import ProcessFileLock
 from infrastructure.system.redactor import DefaultSecretRedactor
-from infrastructure.technical import MatplotlibChartRenderer, TALibIndicatorEngine
 
 UowFactory = Callable[[], ResearchUnitOfWork]
 InstrumentUowFactory = Callable[[], InstrumentUnitOfWork]
@@ -542,221 +463,19 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    quote_cache_codec = quote_codec()
-    bars_cache_codec = bars_codec()
-    order_book_cache_codec = order_book_codec()
-    ticks_cache_codec = ticks_codec()
-    industry_performance_cache_codec = industry_performance_codec()
-    market_board_cache_codec = market_board_codec()
-    fundamentals_cache_codec = fundamentals_codec()
-    f10_cache_codec = f10_codec()
-    statements_cache_codec = statements_codec()
-    announcements_cache_codec = announcements_codec()
-    news_cache_codec = news_codec()
-    corporate_actions_cache_codec = corporate_actions_codec()
-    reports_cache_codec = reports_codec()
-    consensus_cache_codec = consensus_codec()
-    intraday_flow_cache_codec = intraday_flow_codec()
-    daily_flow_cache_codec = daily_flow_codec()
-    northbound_cache_codec = northbound_codec()
-    dragon_tiger_cache_codec = dragon_tiger_codec()
-    margin_cache_codec = margin_codec()
-    block_trades_cache_codec = block_trades_codec()
-    shareholder_counts_cache_codec = shareholder_counts_codec()
-    chip_distribution_cache_codec = chip_distribution_codec()
-    limit_context_cache_codec = limit_context_codec()
-    sentiment_cache_codec = sentiment_codec()
-    interactive_qa_cache_codec = interactive_qa_codec()
-    option_snapshot_cache_codec = option_snapshot_codec()
-    a_share_snapshot_service = AShareSnapshotService(
-        router=provider_router,
-        clock=clock,
-        quote_codec=quote_cache_codec,
-        fundamentals_codec=fundamentals_cache_codec,
-        f10_codec=f10_cache_codec,
-        statements_codec=statements_cache_codec,
-        announcements_codec=announcements_cache_codec,
-        news_codec=news_cache_codec,
-        corporate_actions_codec=corporate_actions_cache_codec,
-        current_window_seconds=settings.a_share_current_window_seconds,
-    )
-    a_share_market_structure_service = AShareMarketStructureService(
-        router=provider_router,
-        clock=clock,
-        calendar=a_share_calendar,
-        quote_codec=quote_cache_codec,
-        bars_codec=bars_cache_codec,
-        order_book_codec=order_book_cache_codec,
-        ticks_codec=ticks_cache_codec,
-        industry_codec=industry_performance_cache_codec,
-        market_board_codec=market_board_cache_codec,
-        freshness_window_seconds=settings.a_share_current_window_seconds,
-    )
-    a_share_capital_service = AShareCapitalService(
-        router=provider_router,
-        clock=clock,
-        calendar=a_share_calendar,
-        intraday_flow_codec=intraday_flow_cache_codec,
-        daily_flow_codec=daily_flow_cache_codec,
-        northbound_codec=northbound_cache_codec,
-        dragon_tiger_codec=dragon_tiger_cache_codec,
-        margin_codec=margin_cache_codec,
-        block_trades_codec=block_trades_cache_codec,
-        shareholder_counts_codec=shareholder_counts_cache_codec,
-        chip_distribution_codec=chip_distribution_cache_codec,
-        corporate_actions_codec=corporate_actions_cache_codec,
-        current_window_seconds=settings.a_share_current_window_seconds,
-    )
-    a_share_limit_up_service = AShareLimitUpService(
-        router=provider_router,
-        clock=clock,
-        calendar=a_share_calendar,
-        limit_context_codec=limit_context_cache_codec,
-    )
-    a_share_sentiment_service = AShareSentimentService(
-        router=provider_router,
-        clock=clock,
-        sentiment_codec=sentiment_cache_codec,
-        interactive_qa_codec=interactive_qa_cache_codec,
-        news_codec=news_cache_codec,
-    )
-    a_share_etf_option_service = AShareEtfOptionService(
-        router=provider_router,
-        clock=clock,
-        option_snapshot_codec=option_snapshot_cache_codec,
-    )
-    a_share_industry_cycle_service = AShareIndustryCycleService(
-        provider_router,
-        industry_metric_repository,
-    )
-    a_share_company_operating_metrics_service = AShareCompanyOperatingMetricsService(
-        provider_router,
-    )
-    research_report_search_service = ResearchReportSearchService(
-        router=provider_router,
-        clock=clock,
-        secret_redactor=secret_redactor,
-        reports_codec=reports_cache_codec,
-        consensus_codec=consensus_cache_codec,
-    )
-    a_share_tool_coordinator = AShareToolCoordinator(
-        instrument_access=access_service,
+    market_facts = build_market_facts_services(
+        settings=settings,
+        engine=engine,
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
-        snapshot_service=a_share_snapshot_service,
-        market_structure_service=a_share_market_structure_service,
-        capital_service=a_share_capital_service,
-        limit_up_service=a_share_limit_up_service,
-        sentiment_service=a_share_sentiment_service,
-        etf_option_service=a_share_etf_option_service,
-        industry_cycle_service=a_share_industry_cycle_service,
-        company_operating_metrics_service=a_share_company_operating_metrics_service,
-        report_search_service=research_report_search_service,
-    )
-    us_quote_cache_codec = us_quote_codec()
-    us_bars_cache_codec = us_bars_codec()
-    us_market_data_service = USMarketDataService(
-        router=provider_router,
-        clock=clock,
-        quote_codec=us_quote_cache_codec,
-        bars_codec=us_bars_cache_codec,
-        current_quote_window_seconds=settings.us_current_window_seconds,
-    )
-    us_market_breadth_service = USMarketBreadthService(
-        router=provider_router,
-        clock=clock,
-        codec=us_market_breadth_codec(),
-    )
-    us_community_heat_service = USCommunityHeatService(
-        router=provider_router,
-        clock=clock,
-        codec=us_community_heat_codec(),
-    )
-    us_market_context_service = USMarketContextService(
-        data_service=us_market_data_service,
-        instrument_master=instrument_master_service,
-        clock=clock,
-        breadth_service=us_market_breadth_service,
-        community_heat_service=us_community_heat_service,
-        community_heat_limit=settings.moomoo_community_heat_limit,
-    )
-    us_technical_service = USTechnicalService(
-        data_service=us_market_data_service,
-        clock=clock,
-    )
-    us_tool_coordinator = USToolCoordinator(
-        instrument_access=access_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        data_service=us_market_data_service,
-        context_service=us_market_context_service,
-        technical_service=us_technical_service,
-    )
-    market_tool_coordinator = MarketToolCoordinator(
-        instrument_access=access_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        us_tool_coordinator=us_tool_coordinator,
-        data_service=us_market_data_service,
+        provider_router=provider_router,
+        access_service=access_service,
+        instrument_master_service=instrument_master_service,
         commodity_spot_service=commodity_spot_service,
         futures_curve_service=futures_curve_service,
-    )
-    technical_tool_coordinator = TechnicalToolCoordinator(
-        instrument_access=access_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        us_data_service=us_market_data_service,
-        a_share_data_service=a_share_market_structure_service,
-        indicator_engine=TALibIndicatorEngine(),
-        chart_renderer=MatplotlibChartRenderer(),
-        commodity_spot_service=commodity_spot_service,
-    )
-    us_fundamental_service = USFundamentalService(
-        router=provider_router,
-        clock=clock,
-        fundamental_codec=us_fundamental_snapshot_codec(),
-        statements_codec=us_financial_statements_codec(),
-        actions_codec=us_corporate_actions_codec(),
-    )
-    us_filing_service = USFilingService(
-        router=provider_router,
-        clock=clock,
-        filings_codec=us_filings_codec(),
-        insider_codec=us_insider_activity_codec(),
-    )
-    us_news_service = USNewsService(provider_router, clock, us_news_feed_codec())
-    us_company_update_service = USCompanyUpdateService(
-        us_fundamental_service,
-        us_filing_service,
-        us_news_service,
-    )
-    us_research_tool_coordinator = USResearchToolCoordinator(
-        instrument_access=access_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        fundamental_service=us_fundamental_service,
-        filing_service=us_filing_service,
-        company_update_service=us_company_update_service,
-    )
-    us_macro_service = USMacroService(provider_router, clock, us_macro_context_codec())
-    us_sentiment_service = USSentimentService(provider_router, clock, us_sentiment_samples_codec())
-    us_prediction_market_service = USPredictionMarketService(
-        provider_router, clock, us_prediction_market_context_codec()
-    )
-    us_context_tool_coordinator = USContextToolCoordinator(
-        instrument_access=access_service,
-        clock=clock,
-        id_generator=id_generator,
-        secret_redactor=secret_redactor,
-        news_service=us_news_service,
-        macro_service=us_macro_service,
-        sentiment_service=us_sentiment_service,
-        prediction_service=us_prediction_market_service,
+        industry_metric_repository=industry_metric_repository,
+        a_share_calendar=a_share_calendar,
     )
     account_service = AccountService(
         provider_infrastructure.account_providers,
@@ -824,10 +543,10 @@ def build_application(
         monitor_schedule_service,
     )
     monitor_fact_resolver = MonitorFactResolver(
-        technical=technical_tool_coordinator,
-        a_share=a_share_tool_coordinator,
-        us_research=us_research_tool_coordinator,
-        us_context=us_context_tool_coordinator,
+        technical=market_facts.technical,
+        a_share=market_facts.a_share,
+        us_research=market_facts.us_research,
+        us_context=market_facts.us_context,
         research_uow_factory=research_unit_of_work_factory,
     )
     monitor_judgment_provider = build_monitor_judgment_provider(settings)
@@ -836,7 +555,7 @@ def build_application(
     if monitor_judgment_provider is not None:
         monitor_judgment_service = MonitorJudgmentService(
             monitor_repository,
-            market_tool_coordinator,
+            market_facts.market,
             monitor_judgment_provider,
             clock,
             id_generator,
@@ -844,8 +563,8 @@ def build_application(
         )
     monitor_evaluation_service = MonitorEvaluationService(
         monitor_repository,
-        a_share_tool_coordinator,
-        market_tool_coordinator,
+        market_facts.a_share,
+        market_facts.market,
         risk_tool_coordinator,
         clock,
         id_generator,
@@ -1008,9 +727,9 @@ def build_application(
         account_service,
         instrument_resolve_service,
         research_context_builder,
-        a_share_tool_coordinator,
-        us_tool_coordinator,
-        us_research_tool_coordinator,
+        market_facts.a_share,
+        market_facts.us,
+        market_facts.us_research,
         PortfolioRiskCalculator(),
         PortfolioEnrichmentCalculator(),
         clock,
@@ -1018,8 +737,8 @@ def build_application(
         secret_redactor,
     )
     peer_comparison_service = PeerComparisonService(
-        a_share=a_share_tool_coordinator,
-        us_research=us_research_tool_coordinator,
+        a_share=market_facts.a_share,
+        us_research=market_facts.us_research,
         calculator=PeerComparisonCalculator(),
         clock=clock,
         id_generator=id_generator,
@@ -1030,10 +749,10 @@ def build_application(
         research_subject_service,
         research_context_builder,
         research_archive_service,
-        a_share_tool_coordinator,
-        us_tool_coordinator,
-        us_research_tool_coordinator,
-        us_context_tool_coordinator,
+        market_facts.a_share,
+        market_facts.us,
+        market_facts.us_research,
+        market_facts.us_context,
         portfolio_tool_coordinator,
         account_transaction_coordinator,
         portfolio_review_fact_service,
@@ -1078,12 +797,12 @@ def build_application(
             journal=journal_service,
             decisions=decision_record_service,
             instruments=instrument_resolve_service,
-            a_share=a_share_tool_coordinator,
-            us_market=us_tool_coordinator,
-            market=market_tool_coordinator,
-            technical=technical_tool_coordinator,
-            us_research=us_research_tool_coordinator,
-            us_context=us_context_tool_coordinator,
+            a_share=market_facts.a_share,
+            us_market=market_facts.us,
+            market=market_facts.market,
+            technical=market_facts.technical,
+            us_research=market_facts.us_research,
+            us_context=market_facts.us_context,
             portfolio=portfolio_tool_coordinator,
             risk=risk_tool_coordinator,
             monitoring=monitor_tool_coordinator,
