@@ -115,9 +115,10 @@ export function createSseParser({ onEvent } = {}) {
 export function parseSseEvents(text) {
   const events = [];
   const errors = [];
+  // The parser reports failures by throwing from push/end; there is no
+  // separate onError channel on createSseParser.
   const parser = createSseParser({
     onEvent: (event) => events.push(event),
-    onError: (error) => errors.push(error),
   });
   try {
     parser.push(text);

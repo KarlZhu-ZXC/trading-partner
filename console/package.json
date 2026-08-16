@@ -12,6 +12,8 @@
     "start": "next start --hostname 127.0.0.1",
     "start:lan": "node scripts/start-lan.mjs start",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:unit": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
