@@ -785,6 +785,22 @@ Imports are top-level (`application.*`, `domain.*`, `infrastructure.*`,
 Docs: `docs/README.md` indexes the roadmap, consolidated phase specifications,
 user guides, and historical archives.
 
+## Documentation placement
+
+The root `README.md` is the project's simplified product manual, not a design
+record. It stays limited to the product tour, capability summary, safety
+boundary, quick start, operational command cheat sheet, and documentation
+links. Do not grow it with design or implementation narrative.
+
+Design and implementation content — architecture internals such as composition
+bundles and ORM grouping, provider pacing/fallback rules, runtime semantics,
+confirmation/idempotency contract detail, and capability contracts — belongs
+in this file when it defines an agent-facing boundary, or in a dedicated page
+under `docs/` (typically `docs/operations/` or `docs/guide/`) for
+operator/user-facing detail. When the detail already exists here or under
+`docs/`, link to it from the README instead of restating it. Every new `docs/`
+page must be added to the `docs/README.md` index.
+
 ## Secrets and configuration
 
 - Static secrets live only in project-root `.env` (gitignored).

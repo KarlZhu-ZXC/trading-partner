@@ -77,6 +77,27 @@ uv run trading-partner-agent eval
 fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执行；`--live` 当前 fail closed，
 不会意外联网或调用 LLM。
 
+### Telegram Agent 长轮询（可选）
+
+Telegram Agent 对入站聊天是独立 opt-in：在通用 `LLM_*` 端点就绪后设置
+`TELEGRAM_AGENT_ENABLED=true`，并复用同一 Bot 的数字 `TELEGRAM_CHAT_ID` allowlist。
+负数群组 chat 还必须设置数字 `TELEGRAM_AGENT_USER_ID`；正数私聊默认只接受该 chat 对应
+的用户。陌生 chat 或陌生用户不会调用模型、工具或确认 gateway。
+
+```bash
+uv run trading-partner-agent telegram run
+uv run trading-partner-agent telegram status
+uv run trading-partner-agent telegram install
+uv run trading-partner-agent telegram uninstall
+```
+
+陌生 chat 静默忽略；Agent cursor 与消息回执持久化，Monitor/Agenda/SGOV Outbox
+仍由原有通知 sender 独立处理。Telegram Agent 的 assistant marker 在发消息前写入，
+重启时不重复调用模型或重发已标记回答，但发送前崩溃窗口可能漏发（at-most-once）。
+Pending Action 卡片只携带 `c:<opaque-token>` / `r:<opaque-token>`（不含动作参数）；回调
+再次点击只返回已处理，不会重复执行。若 assistant marker 已落盘而回答或动作卡发送前
+进程崩溃，重放可能缺少该回复/卡片，但不会再次调用模型或重放确认动作。
+
 ### 受保护的局域网访问（可选）
 
 需要从同一可信局域网中的手机或另一台电脑访问时，后端仍保持在
@@ -224,6 +245,15 @@ enqueue 必须带 `title`、幂等键、`user`/`external_agent` 确认者和授�
 JSON 回执不会回显正文或授权说明，也不会产生订单或其他交易状态效果。
 内部确定性生产者使用封闭的 `SYSTEM` source；`MANUAL` 仅用于显式授权的调用者写入。
 
+投递语义：durable Outbox 携带 Monitor 告警和显式授权的手工文本；重复的 Monitor
+观测只留在 Run 历史，不会重复通知。每小时本地 dispatcher 重试 pending 消息，
+不打开 Codex 任务、不消耗模型 token；统一 dispatcher 同时负责 A 股/美股/KR 收盘后
+Monitor 执行，Codex market-review Automations 不得重复 Monitor 评估或告警。只有
+显式启用 composite judgment policy 的 Monitor 或显式运行的 Trade Retro 叙述可以调用
+配置的服务端 LLM：Monitor 跳过未变化的定性特征状态，Trade Retro 只接收已持久化的
+确定性事实；搜索用量与有限来源 URL 会被持久化，价格/账户事实始终由确定性 Provider
+所有。完整契约见 AGENTS.md。
+
 Schwab SGOV 自动现金管理属于 operational capability，不增加 MCP 工具：
 
 ```bash
@@ -270,6 +300,15 @@ uv run trading-partner-maintenance prune-cache --retention-days 30 --apply
 
 Monitor Run/observation/event、研究记录、交易和账户快照、QuantConnect 验证产物都不自动
 删除。数据库备份也由使用者显式管理，避免静默丢失审计历史。
+
+### 券商对账草稿（owner-only）
+
+`trading-partner-performance-reconciliation` 只接受 `data/artifacts/reconciliation/`
+目录下的相对 CSV 路径，读取时把文件限制为 owner-only 权限，输出哈希与脱敏账户摘要，
+不回显原始行或账户标签。`compare-schwab-realized` 是 durable-only 对账：不刷新 Schwab，
+把逐标的费后 FIFO 残差和 typed 缺口写入 `receipts/` 下的 owner-only JSON 草稿；相互抵消的
+标的残差不能被账户级零总额掩盖。草稿匹配或命令成功都不构成 A1 sign-off，账户与标的
+残差仍需人工复核。
 
 ## 数据集维护脚本
 
