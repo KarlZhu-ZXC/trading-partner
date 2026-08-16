@@ -4,13 +4,9 @@ import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { ActionButton, Badge, Card, Empty, displayJson, formatDate, formatDecimal, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi } from "../lib/api";
+import { textDash as value } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
-
-function value(value: unknown, fallback = "—"): string {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return typeof value === "string" && value.trim() ? value : fallback;
-}
 
 function key(prefix: string): string {
   return `console-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;

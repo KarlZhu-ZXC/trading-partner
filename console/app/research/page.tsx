@@ -21,6 +21,7 @@ import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { notifyConsole } from "../lib/notifications";
 import { ResearchContinuity } from "./research-continuity";
+import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 type SubjectAggregate = { subject?: Dict; state?: Dict };
@@ -46,12 +47,6 @@ const RESEARCH_MODULES = [
 ] as const;
 type ResearchModule = (typeof RESEARCH_MODULES)[number]["key"];
 const RESEARCH_MODULE_KEYS = new Set<string>(RESEARCH_MODULES.map((module) => module.key));
-
-function text(value: unknown, fallback = "—"): string {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value !== "string") return fallback;
-  return value.trim() || fallback;
-}
 
 function ResearchPageActions({
   creating,

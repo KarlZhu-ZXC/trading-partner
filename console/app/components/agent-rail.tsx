@@ -78,6 +78,7 @@ import {
   AGENT_RAIL_MAX_WIDTH,
   AGENT_RAIL_MIN_WIDTH,
 } from "../lib/agent-rail-layout.mjs";
+import { asRecord, textStrict as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 const AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-provider-id";
@@ -115,16 +116,6 @@ type AgentRailProps = {
   overlayViewport: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
 };
-
-function asRecord(value: unknown): Dict {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Dict)
-    : {};
-}
-
-function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" && value.trim() ? value : fallback;
-}
 
 function firstText(source: Dict, keys: string[]): string {
   for (const key of keys) {
