@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { asRecord, textStrict as text } from "./coerce";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_TRADING_PARTNER_API ?? "/api/console";
@@ -112,18 +113,51 @@ export async function authenticatedFetch(
 }
 
 /**
- * Extract a human-readable message from an error response.  Falls back to the
- * HTTP status when the body is missing, not JSON, or carries no detail.
+ * Extract a human-readable message from an error response: a JSON detail
+ * (string, or {message}), a top-level message, an error.message, or a short
+ * plain-text body. Falls back to the HTTP status.
  */
 export async function responseErrorMessage(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: unknown; message?: unknown };
-    const detail = payload?.detail ?? payload?.message;
-    if (typeof detail === "string" && detail.trim().length > 0) return detail;
-  } catch {
-    // Non-JSON error bodies keep the plain status text.
+  const body = await response.text();
+  if (body) {
+    try {
+      const parsed = asRecord(JSON.parse(body));
+      const detail = text(parsed.detail)
+        || text(asRecord(parsed.detail).message)
+        || text(parsed.message)
+        || text(asRecord(parsed.error).message);
+      if (detail) return detail;
+    } catch {
+      if (body.length < 240) return body;
+    }
   }
   return `HTTP ${response.status}`;
+}
+
+/** Authenticated GET returning parsed JSON ({} on 204). */
+export async function getJson(route: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await authenticatedFetch(route, { method: "GET", signal });
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  if (response.status === 204) return {};
+  return response.json() as Promise<unknown>;
+}
+
+/** Authenticated JSON POST/PUT returning parsed JSON ({} on 204). */
+export async function sendJsonMethod(
+  route: string,
+  method: "POST" | "PUT",
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const response = await authenticatedFetch(route, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  if (response.status === 204) return {};
+  return response.json() as Promise<unknown>;
 }
 
 export async function postApi<T>(

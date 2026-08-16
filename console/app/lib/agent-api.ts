@@ -1,6 +1,6 @@
 "use client";
 
-import { authenticatedFetch } from "./api";
+import { authenticatedFetch, getJson, responseErrorMessage, sendJsonMethod } from "./api";
 import { getAgentPageContext } from "./agent-page-context";
 import { textStrict as text } from "./coerce";
 
@@ -422,49 +422,8 @@ export function parseTurn(value: unknown): AgentTurn | null {
   };
 }
 
-async function responseError(response: Response): Promise<Error> {
-  const body = await response.text();
-  if (body) {
-    try {
-      const parsed = asRecord(JSON.parse(body));
-      const detail = text(parsed.detail)
-        || text(asRecord(parsed.detail).message)
-        || text(parsed.message)
-        || text(asRecord(parsed.error).message);
-      if (detail) return new Error(detail);
-    } catch {
-      if (body.length < 240) return new Error(body);
-    }
-  }
-  return new Error(`HTTP ${response.status}`);
-}
-
-async function getJson(route: string, signal?: AbortSignal): Promise<unknown> {
-  const response = await authenticatedFetch(route, { method: "GET", signal });
-  if (!response.ok) throw await responseError(response);
-  if (response.status === 204) return {};
-  return response.json() as Promise<unknown>;
-}
-
 async function sendJson(route: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
   return sendJsonMethod(route, "POST", body, signal);
-}
-
-async function sendJsonMethod(
-  route: string,
-  method: "POST" | "PUT",
-  body: unknown,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  const response = await authenticatedFetch(route, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok) throw await responseError(response);
-  if (response.status === 204) return {};
-  return response.json() as Promise<unknown>;
 }
 
 function parsePreferences(value: unknown): AgentPreferences {
@@ -820,7 +779,7 @@ async function consumeAgentStream(
   response: Response,
   onEvent: (event: AgentStreamEvent) => void,
 ): Promise<void> {
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
   if (!response.body) throw new Error("The Agent stream returned no body");
 
   // Importing the small parser here keeps the API adapter usable in tests and
