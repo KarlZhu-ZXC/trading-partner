@@ -73,10 +73,14 @@ export function ConsoleShell({
   const [lanMode, setLanMode] = useState(false);
 
   useEffect(() => {
-    fetch("/api/lan-auth", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload: { enabled?: unknown }) => setLanMode(payload.enabled === true))
+    const controller = new AbortController();
+    fetch("/api/lan-auth", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json()) as { enabled?: unknown };
+        setLanMode(payload.enabled === true);
+      })
       .catch(() => setLanMode(false));
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -186,7 +190,11 @@ export function ConsoleShell({
   const overlayOpen = overlayViewport && (!collapsed || !agentRailCollapsed);
 
   async function signOutLanSession() {
-    await fetch("/api/lan-auth", { method: "DELETE" });
+    try {
+      await fetch("/api/lan-auth", { method: "DELETE" });
+    } catch {
+      // The cookie clears on redirect anyway; surface nothing extra here.
+    }
     window.location.assign("/lan-login");
   }
 

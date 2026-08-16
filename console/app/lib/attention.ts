@@ -31,7 +31,7 @@ function formatRunTime(value: unknown): string {
   if (!value || typeof value !== "string") return "Time not recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

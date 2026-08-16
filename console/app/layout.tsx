@@ -1,4 +1,8 @@
 import type { Metadata } from "next";
+import {
+  AGENT_RAIL_MAX_WIDTH,
+  AGENT_RAIL_MIN_WIDTH,
+} from "./lib/agent-rail-layout.mjs";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -26,7 +30,7 @@ const appearanceInitScript = `
     var agentRailCollapsed = overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") === "true";
     document.documentElement.classList.toggle("agent-rail-collapsed", agentRailCollapsed);
     var storedAgentRailWidth = Number(localStorage.getItem("trading-partner-agent-rail-width"));
-    if (Number.isFinite(storedAgentRailWidth) && storedAgentRailWidth >= 320 && storedAgentRailWidth <= 720) {
+    if (Number.isFinite(storedAgentRailWidth) && storedAgentRailWidth >= ${AGENT_RAIL_MIN_WIDTH} && storedAgentRailWidth <= ${AGENT_RAIL_MAX_WIDTH}) {
       document.documentElement.style.setProperty("--agent-rail-user-width", storedAgentRailWidth + "px");
     }
   } catch (_) {

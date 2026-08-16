@@ -72,6 +72,12 @@ import {
   AgentMessageCard,
   AgentReceiptCard,
 } from "./agent-message-card";
+import {
+  AGENT_RAIL_DEFAULT_WIDTH,
+  AGENT_RAIL_MAX_VIEWPORT_RATIO,
+  AGENT_RAIL_MAX_WIDTH,
+  AGENT_RAIL_MIN_WIDTH,
+} from "../lib/agent-rail-layout.mjs";
 
 type Dict = Record<string, unknown>;
 const AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-provider-id";
@@ -79,10 +85,6 @@ const LEGACY_AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-model-id";
 const AGENT_MODEL_STORAGE_KEY = "trading-partner-agent-model-name";
 const AGENT_REASONING_STORAGE_KEY = "trading-partner-agent-reasoning-effort";
 const AGENT_RAIL_WIDTH_STORAGE_KEY = "trading-partner-agent-rail-width";
-const AGENT_RAIL_MIN_WIDTH = 320;
-const AGENT_RAIL_DEFAULT_WIDTH = 340;
-const AGENT_RAIL_MAX_WIDTH = 840;
-const AGENT_RAIL_MAX_VIEWPORT_RATIO = 0.68;
 
 type StreamSnapshot = {
   turnId: string | null;
@@ -136,7 +138,7 @@ function displayDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -336,8 +338,13 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     );
   }, []);
 
+  // Tracks the applied width for the window-resize listener without putting
+  // railWidth itself into that effect's dependencies, which would re-register
+  // the listener on every pixel of a drag.
+  const appliedRailWidthRef = useRef(AGENT_RAIL_DEFAULT_WIDTH);
   const applyRailWidth = useCallback((value: number, persist = false) => {
     const next = Math.max(AGENT_RAIL_MIN_WIDTH, Math.min(maximumRailWidth(), Math.round(value)));
+    appliedRailWidthRef.current = next;
     setRailWidth(next);
     document.documentElement.style.setProperty("--agent-rail-user-width", `${next}px`);
     if (persist) {
@@ -358,10 +365,10 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       // Keep the default width.
     }
     applyRailWidth(stored);
-    const handleResize = () => applyRailWidth(railWidth);
+    const handleResize = () => applyRailWidth(appliedRailWidthRef.current);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [applyRailWidth, railWidth]);
+  }, [applyRailWidth]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("agent-focus-mode", focusMode && !overlayViewport);
@@ -408,9 +415,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       setSelectedProviderId("");
       return;
     }
-    const stored = window.localStorage.getItem(AGENT_PROVIDER_STORAGE_KEY)
-      ?? window.localStorage.getItem(LEGACY_AGENT_PROVIDER_STORAGE_KEY)
-      ?? "";
+    let stored = "";
+    try {
+      stored = window.localStorage.getItem(AGENT_PROVIDER_STORAGE_KEY)
+        ?? window.localStorage.getItem(LEGACY_AGENT_PROVIDER_STORAGE_KEY)
+        ?? "";
+    } catch {
+      // Private-mode storage failures fall back to the default provider.
+    }
     const next = providerOptions.some((item) => item.id === stored)
       ? stored
       : status?.default_model_id ?? providerOptions[0].id;
@@ -904,7 +916,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     setEditingMessageId(null);
     setActionError(null);
     const optimistic: AgentMessage = {
-      message_id: `local-${Date.now()}`,
+      message_id: `local-${crypto.randomUUID()}`,
       conversation_id: conversationId,
       role: "USER",
       content,
@@ -1277,7 +1289,11 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   <strong>Continue in Telegram</strong>
                   <p>Send <code>/continue {handoff.token}</code> to the configured Trading Partner bot.</p>
                   <small>One-Time Code · Expires {displayDate(handoff.expiresAt)}</small>
-                  <button onClick={() => void navigator.clipboard.writeText(`/continue ${handoff.token}`)} type="button">Copy Command</button>
+                  <button onClick={() => {
+                    navigator.clipboard.writeText(`/continue ${handoff.token}`).catch(() => {
+                      // Clipboard access can be denied; the token stays visible above.
+                    });
+                  }} type="button">Copy Command</button>
                 </div>
               )}
               {preferencesOpen && preferenceDraft ? (
@@ -1325,7 +1341,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   {selectedMetrics && (
                     <div className="agent-metrics" aria-label="Conversation Usage">
                       <span><strong>{selectedMetrics.model_calls}</strong> Model Calls</span>
-                      <span><strong>{selectedMetrics.total_tokens.toLocaleString()}</strong> tokens</span>
+                      <span><strong>{selectedMetrics.total_tokens.toLocaleString("en-US")}</strong> tokens</span>
                       <span><strong>{selectedMetrics.web_search_calls + selectedMetrics.web_extractor_calls}</strong> Web Calls</span>
                       <span><strong>{(selectedMetrics.latency_ms / 1000).toFixed(1)}s</strong> Model Time</span>
                       {selectedMetrics.truncated && <small>Bounded sample</small>}

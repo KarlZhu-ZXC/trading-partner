@@ -676,11 +676,16 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
 test("keeps the Agent rail width and focus mode accessible and durable", async () => {
   const layoutSource = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
+  const railConstants = await readFile(new URL("../app/lib/agent-rail-layout.mjs", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(layoutSource, /trading-partner-agent-rail-width/);
-  assert.match(railSource, /AGENT_RAIL_MIN_WIDTH = 320/);
-  assert.match(railSource, /AGENT_RAIL_MAX_WIDTH = 840/);
-  assert.match(railSource, /AGENT_RAIL_MAX_VIEWPORT_RATIO = 0\.68/);
+  // The boot script and the rail must clamp to the SAME shared bounds.
+  assert.match(railConstants, /AGENT_RAIL_MIN_WIDTH = 320/);
+  assert.match(railConstants, /AGENT_RAIL_MAX_WIDTH = 840/);
+  assert.match(railConstants, /AGENT_RAIL_MAX_VIEWPORT_RATIO = 0\.68/);
+  assert.match(layoutSource, /AGENT_RAIL_MIN_WIDTH/);
+  assert.match(layoutSource, /AGENT_RAIL_MAX_WIDTH/);
+  assert.match(railSource, /from "\.\.\/lib\/agent-rail-layout\.mjs"/);
   assert.match(railSource, /Math\.min\(AGENT_RAIL_MAX_WIDTH, Math\.floor\(window\.innerWidth \* AGENT_RAIL_MAX_VIEWPORT_RATIO\)\)/);
   assert.match(railSource, /aria-orientation="vertical"/);
   assert.match(railSource, /ArrowLeft/);

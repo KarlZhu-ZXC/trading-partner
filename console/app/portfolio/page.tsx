@@ -540,7 +540,7 @@ function RiskTab({ policyEnvelope, riskEnvelope, onRefresh }: { policyEnvelope: 
   // a custom event lets the page retain the durable aggregate while replacing this result.
   return <div className="portfolio-tab-stack">
     <Card kicker="RISK POLICY · APPEND ONLY" title="Current Risk Policy" action={policy ? <Badge value={policy.is_system_default ? "SYSTEM_DEFAULT" : `VERSION ${text(policy.version)}`} /> : undefined}>
-      {!policy ? <Empty>Risk Policy unavailable.</Empty> : <><div className="policy-grid">{POLICY_FIELDS.map(({ key, label }) => <div key={key}><span>{label}</span><strong>{text(policy[key])}</strong></div>)}</div><p className="card-note">Confirmed by: {text(policy.confirmed_by)} · Created {formatDate(policy.created_at)} · schema {text(policy.schema_version)}</p><PolicyForm policy={policy} onSaved={onRefresh} /></>}
+      {!policy ? <Empty>Risk Policy unavailable.</Empty> : <><div className="policy-grid">{POLICY_FIELDS.map(({ key, label }) => <div key={key}><span>{label}</span><strong>{text(policy[key])}</strong></div>)}</div><p className="card-note">Confirmed by: {text(policy.confirmed_by)} · Created {formatDate(policy.created_at)} · schema {text(policy.schema_version)}</p><PolicyForm key={`policy-v${text(policy.version, "0")}`} policy={policy} onSaved={onRefresh} /></>}
     </Card>
     <Card kicker="RISK CHECK · READ ONLY" title="Current Risk Check">
       <p className="card-note">Read-only durable risk_check by default. Hypothetical Additions are calculation-only; they do not change accounts, Policy, Trade Plan, or create orders.</p>
