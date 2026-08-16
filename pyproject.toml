@@ -77,11 +77,12 @@ trading-partner-agent = "interfaces.cli.agent:main"
 [tool.hatch.build]
 dev-mode-dirs = ["src"]
 
-# Standard wheel: only-include + sources ships bootstrap.py and the four
-# packages at the distribution root (no trading_partner package layer).
+# Standard wheel: only-include + sources ships bootstrap.py and the five
+# top-level packages at the distribution root (no trading_partner package layer).
 [tool.hatch.build.targets.wheel]
 only-include = [
     "src/bootstrap.py",
+    "src/composition_root",
     "src/application",
     "src/domain",
     "src/infrastructure",

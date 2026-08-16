@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -778,7 +779,7 @@ def test_src_trading_partner_package_does_not_exist() -> None:
 
 
 def test_src_top_level_layout_is_exactly_allowed() -> None:
-    """src may only contain bootstrap.py and the four layer packages (ignore caches)."""
+    """src may only contain bootstrap.py and the five top-level packages (ignore caches)."""
     assert SRC.is_dir()
     actual = {
         entry.name
@@ -789,6 +790,22 @@ def test_src_top_level_layout_is_exactly_allowed() -> None:
         f"Unexpected src top-level entries: {sorted(actual - ALLOWED_SRC_TOP_LEVEL)}; "
         f"missing: {sorted(ALLOWED_SRC_TOP_LEVEL - actual)}"
     )
+
+
+def test_wheel_includes_every_importable_src_root() -> None:
+    """A source-only composition root must not disappear from installed wheels."""
+
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    only_include = set(project["tool"]["hatch"]["build"]["targets"]["wheel"]["only-include"])
+    expected = {
+        "src/bootstrap.py",
+        "src/composition_root",
+        "src/application",
+        "src/domain",
+        "src/infrastructure",
+        "src/interfaces",
+    }
+    assert expected <= only_include
 
 
 def test_project_root_markdown_is_exactly_readme_and_agents() -> None:
