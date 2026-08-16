@@ -667,7 +667,10 @@ The Shared Agent Runtime is disabled by default and provider-neutral. It persist
 conversations, explicit channel bindings, append-only messages, bounded model/tool
 receipts, Pending Actions, cursors, and one-time channel handoffs through migrations
 `0044`–`0046`. Migration `0049` adds durable Agent Turn lifecycle records for refresh/
-disconnect recovery; terminal failures persist only bounded safe error codes. Console Chat
+disconnect recovery, migration `0050` adds explicit owner-scoped Agent presentation
+preferences, and migration `0051` discards legacy Moomoo `initial_margin` values that
+were persisted as financing usage before `debtCash` became the semantics. Terminal
+failures persist only bounded safe error codes. Console Chat
 and the strictly allowlisted Telegram poller are implemented;
 Agent broker orders remain unavailable and are not authorized by a research action.
 
