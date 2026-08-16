@@ -270,3 +270,20 @@ uv run trading-partner-maintenance prune-cache --retention-days 30 --apply
 
 Monitor Run/observation/event、研究记录、交易和账户快照、QuantConnect 验证产物都不自动
 删除。数据库备份也由使用者显式管理，避免静默丢失审计历史。
+
+## 数据集维护脚本
+
+`scripts/` 下的两个生成器用于维护内置数据集快照，均无订单效果：
+
+```bash
+# A-share 交易日历候选（确定性：2024–2026 固定节假日 + 周末排除，无网络访问）
+uv run python scripts/generate_a_share_trading_calendar.py --check
+uv run python scripts/generate_a_share_trading_calendar.py --stdout
+uv run python scripts/generate_a_share_trading_calendar.py --write --force
+
+# CNINFO orgId 映射快照（--check 离线校验；--refresh/--write 拉取官方清单并重写版本化快照）
+uv run python scripts/generate_cninfo_org_map.py --check
+uv run python scripts/generate_cninfo_org_map.py --refresh --write
+```
+
+两者默认拒绝覆盖已跟踪文件，需显式 `--force` / `--write`；刷新后按 diff 审阅再提交。

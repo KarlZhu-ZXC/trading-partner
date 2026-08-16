@@ -1,6 +1,6 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-08-11
+> Updated: 2026-08-16
 > Scope: reproducible defects and external product-boundary gaps only. Completed
 > implementation narratives belong in phase specifications and release notes.
 
@@ -34,11 +34,14 @@ These are deliberate product boundaries, not open defects:
   QMT, A-share account synchronization, and FX aggregation are intentionally
   deferred for at least two months; A-share monitoring remains fact-only and does
   not imply an A-share broker snapshot.
-- Local stdio MCP exposes no authenticated user identity, order write, fill,
-  execution, or automated backtest runner. Runtime LLM use is limited to an enabled
-  composite Monitor judgment or optional Trade Retro narration. Both receive only
-  bounded deterministic facts and have no mutation/order port; Trade Retro remains
-  valid with its deterministic Chinese fallback when no model is configured.
+- Local stdio MCP exposes no authenticated user identity, fill, execution, or
+  automated backtest runner. Schwab US stock/ETF order writes exist only behind
+  the exact current-chat confirmation gate, and the installed SGOV cash-sweep
+  scheduler is the sole unattended execution exception. Runtime LLM use is
+  limited to an enabled composite Monitor judgment or optional Trade Retro
+  narration. Both receive only bounded deterministic facts and have no
+  mutation/order port; Trade Retro remains valid with its deterministic
+  Chinese fallback when no model is configured.
 
 ## Resolved index
 
@@ -75,5 +78,6 @@ Detailed contracts are now owned by the phase specifications and release notes.
 | Pending-order risk | Risk v2 includes safely valued remaining BUY open-order notional in prospective exposure and explicitly reports SELL orders, unknown status, and incomplete valuation instead of treating pending exposure as absent. |
 
 See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
-[Phase 3](../phases/phase3.md), and [release notes](../releases/v0.2.0.md) for the
+[Phase 3](../phases/phase3.md), and the
+[release notes](../releases/v0.6.0.md) for the
 accepted implementation details.
