@@ -18,30 +18,11 @@ import {
 } from "./components/ui";
 import { envelopeData, listOf, postApi, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
+import { agendaSummaryFromPayload } from "./lib/agenda-presentation";
 import { endOfDayIsoOrNull } from "./lib/review-due-date.mjs";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
-
-function agendaSummary(payload: unknown) {
-  const source = envelopeData<Dict>(payload);
-  const items = listOf<Dict>(source, "items");
-  const coverage = listOf<Dict>(source, "coverage");
-  const now = Date.now();
-  const sevenDays = now + 7 * 24 * 60 * 60 * 1000;
-  const isOverdue = (item: Dict) => Array.isArray(item.limitation_codes)
-    && item.limitation_codes.includes("AGENDA_OUTCOME_UNVERIFIED");
-  const upcoming = items.filter((item) => String(item.status) === "UPCOMING" && !isOverdue(item));
-  return {
-    upcoming7d: upcoming.filter((item) => {
-      const startsAt = Date.parse(String(item.window_start ?? ""));
-      return Number.isFinite(startsAt) && startsAt <= sevenDays;
-    }).length,
-    upcoming: upcoming.length,
-    overdue: items.filter(isOverdue).length,
-    coverageGap: coverage.filter((item) => String(item.status) === "UNAVAILABLE").length,
-  };
-}
 
 function durationLabel(value: unknown): string {
   const seconds = Number(value);
@@ -108,7 +89,7 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
-  const agendaCounts = agendaSummary(result.data?.agenda_summary);
+  const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   async function transitionReviewItem(item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") {
     const reviewItemId = String(item.review_item_id ?? "");

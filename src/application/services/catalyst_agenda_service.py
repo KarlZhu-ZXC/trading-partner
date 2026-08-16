@@ -16,6 +16,7 @@ from application.dto.catalyst_agenda import (
     AgendaOutcomeLinkPayload,
     AgendaQueryDTO,
     AgendaQueryInput,
+    AgendaSummaryDTO,
     AgendaUpsertPayload,
 )
 from application.dto.tool_envelope import DUPLICATE_IDEMPOTENCY_KEY, ToolEnvelope, WarningInfo
@@ -357,6 +358,31 @@ class CatalystAgendaService:
                 limitations.append("AGENDA_SCOPE_EMPTY")
             total = len(projected)
             page = tuple(projected[request.offset : request.offset + request.limit])
+            latest_items = {
+                item.agenda_item_id: item
+                for item in sorted(projected, key=lambda value: value.version)
+            }.values()
+            overdue_count = sum(
+                _OUTCOME_UNVERIFIED in item.limitation_codes for item in latest_items
+            )
+            upcoming_items = tuple(
+                item
+                for item in latest_items
+                if item.status is AgendaItemStatus.UPCOMING
+                and _OUTCOME_UNVERIFIED not in item.limitation_codes
+            )
+            seven_day_end = as_of + timedelta(days=7)
+            summary = AgendaSummaryDTO(
+                upcoming_7d_count=sum(
+                    item.window_start is not None and item.window_start <= seven_day_end
+                    for item in upcoming_items
+                ),
+                upcoming_count=len(upcoming_items),
+                overdue_count=overdue_count,
+                coverage_gap_count=sum(
+                    item.status is AgendaCoverageStatus.UNAVAILABLE for item in coverage
+                ),
+            )
             warnings = tuple(
                 WarningInfo(code=code, message=self._warning_message(code))
                 for code in limitations
@@ -367,6 +393,7 @@ class CatalystAgendaService:
                 data=AgendaQueryDTO(
                     items=page,
                     coverage=coverage,
+                    summary=summary,
                     as_of=as_of,
                     window_end=window_end,
                     total=total,
