@@ -120,6 +120,44 @@ async def test_compact_is_the_only_public_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compact_registration_order_and_schema_inventory_are_frozen() -> None:
+    tools = await create_mcp_server(_container()).list_tools()
+
+    assert [tool.name for tool in tools] == [
+        "system_health",
+        "instrument_resolve",
+        "investment_case_read",
+        "investment_case_manage",
+        "research_judgment_get",
+        "research_judgment_propose",
+        "research_judgment_confirm",
+        "research_memory_get",
+        "research_memory_append",
+        "a_share_get_facts",
+        "market_data_get",
+        "technical_get_snapshot",
+        "technical_render_chart",
+        "us_company_get",
+        "us_context_get",
+        "account_get",
+        "external_state_sync",
+        "broker_order_manage",
+        "portfolio_analyze",
+        "research_workflow_run",
+        "watchlist_get",
+        "watchlist_manage",
+        "portfolio_risk_get",
+        "risk_policy_update",
+        "monitor_read",
+        "monitor_manage",
+        "monitor_evaluate",
+    ]
+    # Exact inventory bytes were captured before the registration split.
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 25_615
+    assert _wire_size(tools) == 35_719
+
+
+@pytest.mark.asyncio
 async def test_research_proposal_tool_documents_direct_instrument_attachment() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
 
