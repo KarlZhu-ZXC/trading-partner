@@ -16,18 +16,22 @@ from application.dto.tool_envelope import ErrorInfo, SourceReference, ToolEnvelo
 from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import (
     MonitorEvaluationService,
+)
+from application.services.monitor_judgment_service import MonitorJudgmentService
+from application.services.monitor_notification_rendering import (
     _append_judgment_notification,
     _data_recovery_message,
     _notification_event_label,
     _notification_event_symbol,
     _notification_messages,
+    _notification_price_basis,
     _notification_price_change_lines,
+    _notification_warning_lines,
     _NotificationPriceContext,
     _post_market_summary_message,
     _rule_condition,
     _rule_meaning,
 )
-from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.monitor_notification_service import MonitorNotificationService
 from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import Freshness, Market, SourceRole, TradingSession
@@ -171,6 +175,8 @@ async def test_telegram_adapter_maps_rate_limit_without_exposing_response() -> N
 def test_monitor_notification_formats_price_first_mobile_rule_cards() -> None:
     body = """Gold monitor
 当前价格：4078.3
+价格口径：IG Weekend Gold CFD 周末代理；不是 XAUUSD 现货黄金或 LBMA 基准价，\
+价格与工作日市场分开形成，时间为网页抓取时间
 价格时间：2026-07-29T08:51:19-04:00
 上次价格：4081.2
 价格变化：-2.9 (-0.07%)
@@ -182,8 +188,7 @@ RULE                      COND    VALUE   DIST   STATE      LEVEL
 ------------------------  ------  ------  -----  ---------  ------
 GC_PULLBACK_ALERT_4080    < 4080  4078.3  -1.7   TRIGGERED  MEDIUM
 GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
-数据提示：DELAYED_US_DATA, FUTURES_CONTRACT_NOT_SPOT
-周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理；不是现货黄金或 LBMA 基准价。
+数据提示：DELAYED_US_DATA、FUTURES_CONTRACT_NOT_SPOT
 """
 
     rendered = _format_notification_html(
@@ -193,10 +198,12 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
 
     assert rendered.startswith("<b>🚨 GC=F · 4078.3 · TRIGGERED</b>")
     assert "💰 <b>当前价格：4078.3</b>" not in rendered
-    assert (
-        "🕒 2026-07-29 08:51 UTC-04:00 · 📡 <b>IG Weekend Gold（Apify）</b>" in rendered
-    )
-    assert "↩️ 上次 4081.2 · 较上次 <b>-2.9 (-0.07%)</b>" in rendered
+    assert "🕒 <b>价格时间</b>：2026-07-29 08:51 UTC-04:00" in rendered
+    assert "📡 <b>数据来源</b>：IG Weekend Gold（Apify）" in rendered
+    assert "↩️ <b>上次价格</b>：4081.2" in rendered
+    assert "📊 <b>价格变化</b>：-2.9 (-0.07%)" in rendered
+    assert "UTC-04:00 · 📡" not in rendered
+    assert "4081.2 · 较上次" not in rendered
     assert "🟥 <b>新告警触发</b>" in rendered
     assert "状态较上次发生变化" in rendered
     assert "IG Weekend Gold（Apify）" in rendered
@@ -209,9 +216,38 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
     assert "⚪️ <b>未触发</b> · 高" in rendered
     assert "GC_STRUCTURE_FAIL_3940" not in rendered
     assert "<pre>" not in rendered
-    assert "数据提示：DELAYED_US_DATA" in rendered
-    assert "周末口径：IG Weekend Gold CFD 仅作为 XAUUSD 周末波动代理" in rendered
+    assert "<b>数据提示</b>：DELAYED_US_DATA、FUTURES_CONTRACT_NOT_SPOT" in rendered
+    assert "<b>价格口径</b>：IG Weekend Gold CFD 周末代理" in rendered
+    assert "周末口径" not in rendered
     assert rendered.index("新告警触发") < rendered.index("规则概览")
+
+
+def test_weekend_proxy_warnings_collapse_into_one_price_basis() -> None:
+    warnings = (
+        "PAXG_USDC_WEEKEND_PROXY",
+        "WEEKEND_PROXY_NOT_XAUUSD_SPOT",
+        "TOKENIZED_GOLD_BASIS_RISK",
+        "USDC_PEG_RISK",
+        "PRICE_TIME_IS_FETCH_TIME",
+    )
+    provenance, remaining = _notification_warning_lines(warnings)
+    basis = _notification_price_basis(
+        _NotificationPriceContext(
+            instrument_id="commodity_spot:OTC:XAUUSD",
+            symbol="XAUUSD",
+            price="4390",
+            price_time="2026-08-16T10:00:00+00:00",
+            current_available=True,
+        ),
+        warnings,
+        provenance_basis=provenance,
+    )
+
+    assert basis is not None
+    assert basis.startswith("Binance PAXG/USDC 代币化黄金现货周末代理")
+    assert "不是 XAUUSD 或 LBMA 基准价" in basis
+    assert "USDC 基差" in basis
+    assert remaining == ()
 
 
 def test_cross_instrument_title_and_same_run_judgment_are_compact() -> None:
@@ -794,7 +830,7 @@ END_MONITOR
     assert "<th>状态</th><th>规则与含义</th>" in rendered
     assert "<details><summary>⚪ 未触发 · 1 项</summary>" in rendered
     assert "&gt; 249.4" in rendered
-    assert "数据提示：EXTENDED_HOURS_PRICE" in rendered
+    assert "ℹ️ <b>数据提示</b>：EXTENDED_HOURS_PRICE" in rendered
     assert "<pre>" not in rendered
 
 
@@ -819,7 +855,7 @@ RULES
     )
 
     assert rendered.startswith("<b>⚠️ GC=F · 4081.2 · NOT_EVALUATED</b>")
-    assert "⚠️ 价格口径：上一有效价格（当前不可用）" in rendered
+    assert "📐 <b>价格口径</b>：上一有效价格（当前不可用）" in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
     assert "QUOTE_MISSING" in rendered
     assert rendered.count("QUOTE_MISSING") == 1
@@ -827,6 +863,26 @@ RULES
     assert "<b>数据不可用</b>" in rendered
     assert "GC_PULLBACK" not in rendered
     assert "<pre>" not in rendered
+
+
+def test_notification_data_notes_each_render_on_their_own_line() -> None:
+    body = """Monitor
+标的：XAUUSD
+当前价格：4390
+RULES
+• 状态：TRIGGERED · 条件：> 4380 · 含义：突破观察位 · 级别：HIGH
+数据原因：PROVIDER_TIMEOUT_ERROR
+数据提示：DELAYED_DATA
+周末口径：历史消息中的代理口径
+"""
+
+    rendered = _format_notification_html("🚨 XAUUSD · TRIGGERED", body)
+
+    assert (
+        "⛔ <b>数据原因</b>：PROVIDER_TIMEOUT_ERROR\n"
+        "ℹ️ <b>数据提示</b>：DELAYED_DATA\n"
+        "📐 <b>周末口径</b>：历史消息中的代理口径"
+    ) in rendered
 
 
 def test_rule_meaning_and_dukascopy_provenance_are_bounded() -> None:
@@ -847,7 +903,7 @@ RULES
 口径：Dukascopy OTC，非 LBMA
 """
     rendered = _format_notification_html("🚨 XAUUSD · TRIGGERED", body)
-    assert "口径：Dukascopy OTC，非 LBMA" in rendered
+    assert "<b>价格口径</b>：Dukascopy OTC，非 LBMA" in rendered
     assert "DUKASCOPY_SWFX_NOT_LBMA" not in rendered
 
 
@@ -945,7 +1001,9 @@ END_MONITOR
     )
 
     assert "XAUUSD · 100" in rendered
-    assert "↩️ 上次 99 · 较上次 <b>+1 (+1.01%)</b>" in rendered
+    assert "↩️ <b>上次价格</b>：99" in rendered
+    assert "📊 <b>价格变化</b>：+1 (+1.01%)" in rendered
+    assert "99 · 较上次" not in rendered
     assert "🔴 <b>&gt; 100</b> · <b>已触发</b> · 高" in rendered
     assert "🟢 <b>&lt; 99</b> · <b>告警解除</b> · 中" in rendered
     assert "含义：突破关键位" in rendered
