@@ -28,6 +28,7 @@ _COMPACT_CARD_PATTERN = re.compile(
     r"条件：(?P<condition>.*?)\s*·\s*"
     r"含义：(?P<meaning>.*?)(?:\s*·\s*级别：(?P<level>\S+))?$"
 )
+_NUMBERED_POINT_PATTERN = re.compile(r"(?=[①②③④⑤⑥⑦⑧⑨⑩])")
 
 
 class TelegramNotificationAdapter:
@@ -171,6 +172,8 @@ def _format_notification_html(title: str, body: str) -> str:
     try:
         rules_index = lines.index("RULES")
     except ValueError:
+        if _is_standalone_judgment(lines):
+            return _format_standalone_judgment_html(title, lines)
         return render_plain_text_html(title, body)
     if rules_index + 1 >= len(lines):
         return render_plain_text_html(title, body)
@@ -202,35 +205,54 @@ def _format_notification_html(title: str, body: str) -> str:
         sections.append(f"<i>{html.escape(monitor_name)}</i>")
 
     formatted_changes = tuple(
-        formatted for line in changes if (formatted := _format_change(line)) is not None
+        formatted
+        for line in changes
+        if (formatted := _format_change(line, symbol=symbol)) is not None
     )
     if formatted_changes:
         sections.append(_change_banner(changes) + "\n" + "\n".join(formatted_changes))
 
-    price_lines: list[str] = []
-    if price_basis is not None:
-        price_lines.append(f"📐 <b>价格口径</b>：{html.escape(price_basis)}")
-    if price_time is not None:
-        price_lines.append(f"🕒 <b>价格时间</b>：{html.escape(_format_price_time(price_time))}")
-    if data_source is not None:
-        price_lines.append(
-            f"📡 <b>数据来源</b>：{html.escape(_display_source_names(data_source))}"
-        )
-    if previous_price is not None:
-        price_lines.append(f"↩️ <b>上次价格</b>：{html.escape(previous_price)}")
-    if price_change is not None:
-        price_lines.append(f"📊 <b>价格变化</b>：{html.escape(price_change)}")
-    if price_lines:
-        sections.append("\n".join(price_lines))
+    price_context = _format_price_context(
+        price_basis=price_basis,
+        price_time=price_time,
+        data_source=data_source,
+        previous_price=previous_price,
+        price_change=price_change,
+    )
+    if price_context:
+        sections.append(price_context)
 
-    sections.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
+    if judgment_lines:
+        sections.append(_format_judgment_section(judgment_lines))
+    changed_conditions = frozenset(
+        match.group("condition").strip()
+        for line in changes
+        if (match := _detailed_change_match(line)) is not None
+    )
+    rule_cards = _format_rule_cards(
+        rows,
+        symbol=symbol,
+        exclude_conditions=changed_conditions,
+    )
+    if rule_cards:
+        sections.append(rule_cards)
     if notes:
         sections.append("\n".join(_format_notification_note(note) for note in notes))
-    if judgment_lines:
-        sections.append(
-            "🧭 <b>复合判断</b>\n"
-            + "\n".join(html.escape(line) for line in judgment_lines if line.strip())
-        )
+    return "\n\n".join(sections)
+
+
+def _is_standalone_judgment(lines: list[str]) -> bool:
+    return any(line.startswith("结论：") for line in lines) or any(
+        line.startswith("状态：复合判断") for line in lines
+    )
+
+
+def _format_standalone_judgment_html(title: str, lines: list[str]) -> str:
+    sections = [f"<b>{html.escape(title)}</b>"]
+    monitor_name = _prefixed_value(lines, "监控：")
+    if monitor_name is not None and len(monitor_name) <= 80:
+        sections.append(f"<i>{html.escape(monitor_name)}</i>")
+    sections.append(_format_judgment_section(lines))
     return "\n\n".join(sections)
 
 
@@ -316,20 +338,19 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     parts = [f"<b>{html.escape(heading)}</b>"]
     if name and name != symbol and len(name) <= 48:
         parts.append(f"<i>{html.escape(name)}</i>")
-    if price_time is not None:
-        parts.append(f"🕒 <b>价格时间</b>：{html.escape(_format_price_time(price_time))}")
-    if data_source is not None:
-        parts.append(
-            f"📡 <b>数据来源</b>：{html.escape(_display_source_names(data_source))}"
-        )
-    if price_basis is not None:
-        parts.append(f"📐 <b>价格口径</b>：{html.escape(price_basis)}")
-    if previous_price is not None:
-        parts.append(f"↩️ <b>上次价格</b>：{html.escape(previous_price)}")
-    if price_change is not None:
-        parts.append(f"📊 <b>价格变化</b>：{html.escape(price_change)}")
+    price_context = _format_price_context(
+        price_basis=price_basis,
+        price_time=price_time,
+        data_source=data_source,
+        previous_price=previous_price,
+        price_change=price_change,
+    )
+    if price_context:
+        parts.append(price_context)
     formatted_changes = tuple(
-        formatted for line in changes if (formatted := _format_change(line)) is not None
+        formatted
+        for line in changes
+        if (formatted := _format_change(line, symbol=symbol)) is not None
     )
     if formatted_changes:
         parts.append(_change_banner(changes) + "\n" + "\n".join(formatted_changes))
@@ -337,12 +358,52 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         if note not in {price_basis}:
             parts.append(_format_notification_note(note))
     if judgment_lines:
-        parts.append(
-            "⚠️ <b>复合判断状态</b>\n"
-            + "\n".join(html.escape(line) for line in judgment_lines if line.strip())
-        )
-    parts.append("<b>规则概览</b>\n" + _format_rule_cards(rows, symbol=symbol))
+        parts.append(_format_judgment_section(judgment_lines))
+    changed_conditions = frozenset(
+        match.group("condition").strip()
+        for line in changes
+        if (match := _detailed_change_match(line)) is not None
+    )
+    rule_cards = _format_rule_cards(
+        rows,
+        symbol=symbol,
+        exclude_conditions=changed_conditions,
+    )
+    if rule_cards:
+        parts.append(rule_cards)
     return "\n".join(parts)
+
+
+def _format_price_context(
+    *,
+    price_basis: str | None,
+    price_time: str | None,
+    data_source: str | None,
+    previous_price: str | None,
+    price_change: str | None,
+) -> str:
+    """Render one short market block without repeating source and basis."""
+
+    lines: list[str] = []
+    if price_change is not None:
+        lines.append(f"变化：{html.escape(price_change)}")
+    if previous_price is not None:
+        lines.append(f"前值：{html.escape(previous_price)}")
+    source = _display_source_names(data_source) if data_source is not None else None
+    if price_basis is not None and source is not None:
+        source_name = source.split("（", 1)[0]
+        if source_name.casefold() in price_basis.casefold() and "（" not in source:
+            lines.append(f"来源：{html.escape(price_basis)}")
+        else:
+            lines.append(f"来源：{html.escape(source)}")
+            lines.append(f"口径：{html.escape(price_basis)}")
+    elif source is not None:
+        lines.append(f"来源：{html.escape(source)}")
+    elif price_basis is not None:
+        lines.append(f"来源：{html.escape(price_basis)}")
+    if price_time is not None:
+        lines.append(f"时间：{html.escape(_format_price_time(price_time))}")
+    return "📈 <b>行情</b>\n" + "\n".join(lines) if lines else ""
 
 
 def _format_notification_note(note: str) -> str:
@@ -362,6 +423,131 @@ def _format_notification_note(note: str) -> str:
                 f"{html.escape(note.removeprefix(prefix).strip())}"
             )
     return f"<i>{html.escape(note)}</i>"
+
+
+def _format_judgment_section(lines: list[str]) -> str:
+    """Turn the model's bounded fields into a scannable mobile hierarchy."""
+
+    fields = {
+        prefix: value
+        for prefix in (
+            "状态",
+            "错误码",
+            "失败模型",
+            "调用路径",
+            "fallback",
+            "失败阶段",
+            "处理",
+            "阶段",
+            "结论",
+            "市场",
+            "背离",
+            "依据",
+            "关注",
+            "失效",
+            "说明",
+        )
+        if (value := _prefixed_value(lines, f"{prefix}：")) is not None
+    }
+    if "结论" not in fields:
+        status = fields.get("状态", "复合判断暂时不可用；确定性规则结果仍然有效。")
+        visible = ["⚠️ <b>复合判断不可用</b>", html.escape(status)]
+        if error_code := fields.get("错误码"):
+            visible.append(f"错误：<code>{html.escape(error_code)}</code>")
+        diagnostics = [
+            f"{label}：{html.escape(fields[label])}"
+            for label in ("失败模型", "调用路径", "fallback", "失败阶段", "处理")
+            if label in fields
+        ]
+        if diagnostics:
+            visible.append(
+                "<details><summary>模型诊断</summary>"
+                + "\n".join(diagnostics)
+                + "</details>"
+            )
+        return "\n".join(visible)
+
+    conclusion, _, quantity = fields["结论"].partition(" · 数量 ")
+    phase, _, urgency = fields.get("阶段", "未定义 · WATCH").partition(" · ")
+    heading = f"🧭 <b>判断</b>：{html.escape(conclusion)}"
+    if urgency:
+        heading += f" · {html.escape(urgency)}"
+    visible = [heading, f"阶段：{html.escape(phase)}"]
+    if quantity:
+        visible.append(f"数量：{html.escape(quantity)}")
+
+    details: list[str] = []
+    market_points = _split_judgment_points(fields.get("市场") or fields.get("状态"))
+    next_points = _split_judgment_points(fields.get("关注"))
+    market_visible, market_more = market_points[:2], market_points[2:]
+    next_visible, next_more = next_points[:2], next_points[2:]
+    if market_visible:
+        visible.append(_format_point_block("市场观察", market_visible))
+    if next_visible:
+        visible.append(_format_point_block("下一关注", next_visible))
+    if market_more:
+        details.append(_format_point_block("市场补充", market_more))
+    if next_more:
+        details.append(_format_point_block("后续关注", next_more))
+
+    divergence = fields.get("背离")
+    if divergence:
+        readable_divergence = "未发现" if divergence == "NONE" else divergence
+        details.append(f"<b>背离</b>：{html.escape(readable_divergence)}")
+    evidence = fields.get("依据")
+    if evidence:
+        evidence_count = len(tuple(item for item in evidence.split(",") if item.strip()))
+        details.append(f"<b>判断依据</b>：{evidence_count} 项已记录特征")
+    invalidation_points = _split_judgment_points(fields.get("失效"))
+    if invalidation_points:
+        details.append(_format_point_block("失效条件", invalidation_points))
+    if details:
+        visible.append(
+            "<details><summary>更多判断与失效条件</summary>"
+            + "\n".join(details)
+            + "</details>"
+        )
+    visible.append("<i>只记录判断；未修改持仓、阶段或订单。</i>")
+    return "\n".join(visible)
+
+
+def _split_judgment_points(value: str | None) -> tuple[str, ...]:
+    if value is None or not value.strip():
+        return ()
+    compact = " ".join(value.split())
+    if any(marker in compact for marker in "①②③④⑤⑥⑦⑧⑨⑩"):
+        raw = _NUMBERED_POINT_PATTERN.split(compact)
+    else:
+        raw = re.split(r"[；;]", compact)
+    normalized = tuple(
+        item.lstrip("①②③④⑤⑥⑦⑧⑨⑩ ").rstrip("。；; ")
+        for item in raw
+        if item.lstrip("①②③④⑤⑥⑦⑧⑨⑩ ").rstrip("。；; ")
+    )
+    return tuple(part for item in normalized for part in _split_long_judgment_point(item))
+
+
+def _split_long_judgment_point(value: str, *, target: int = 88) -> tuple[str, ...]:
+    """Wrap a long model clause at Chinese commas without dropping text."""
+
+    if len(value) <= target or "，" not in value:
+        return (value,)
+    chunks: list[str] = []
+    current = ""
+    for part in value.split("，"):
+        candidate = f"{current}，{part}" if current else part
+        if current and len(candidate) > target:
+            chunks.append(current)
+            current = part
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return tuple(chunks)
+
+
+def _format_point_block(title: str, points: tuple[str, ...]) -> str:
+    return f"<b>{title}</b>\n" + "\n".join(f"• {html.escape(item)}" for item in points)
 
 
 def _parse_rule_rows(
@@ -411,16 +597,21 @@ def _parse_rule_rows(
     return tuple(rows), tuple(notes)
 
 
-def _format_change(line: str) -> str | None:
+def _format_change(line: str, *, symbol: str | None = None) -> str | None:
     detailed_match = _detailed_change_match(line)
     if detailed_match is not None:
         event = detailed_match.group("event")
         severity = _short_severity(detailed_match.group("severity"))
+        severity_suffix = f" · {html.escape(severity)}" if severity != "INFO" else ""
+        meaning = _deduplicate_rule_meaning(
+            detailed_match.group("meaning"),
+            condition=detailed_match.group("condition"),
+            symbol=symbol,
+        )
         return (
             f"{_state_emoji(event)} <b>{html.escape(detailed_match.group('condition'))}</b>"
-            f" · <b>{html.escape(_state_label(event))}</b> · "
-            f"{html.escape(severity)}\n"
-            f"含义：{html.escape(detailed_match.group('meaning'))}"
+            f" · <b>{html.escape(_state_label(event))}</b>{severity_suffix}\n"
+            f"{html.escape(meaning)}"
         )
     match = _CHANGE_PATTERN.fullmatch(line.strip())
     if match is None:
@@ -452,10 +643,10 @@ def _change_event(line: str) -> str | None:
 def _change_banner(changes: list[str]) -> str:
     event_types = {event for line in changes if (event := _change_event(line)) is not None}
     if event_types == {"TRIGGERED"}:
-        return "🟥 <b>新告警触发</b> · 状态较上次发生变化"
+        return "🟥 <b>新告警</b>"
     if event_types == {"RECOVERED"}:
         return (
-            "🟩 <b>告警已解除</b> · 状态较上次发生变化\n"
+            "🟩 <b>告警解除</b>\n"
             "原触发条件当前已不成立；不代表价格上涨或行情转好。"
         )
     return f"🟨 <b>监控状态变化 · {len(changes)} 项</b>"
@@ -466,6 +657,7 @@ def _display_source_names(value: str) -> str:
         "ig_weekend_gold": "IG Weekend Gold（Apify）",
         "binance": "Binance PAXG/USDC",
         "hyperliquid": "Hyperliquid XYZ CL/USDC",
+        "dukascopy": "Dukascopy",
         "yfinance": "yfinance",
     }
     return ", ".join(labels.get(item.strip(), item.strip()) for item in value.split(","))
@@ -475,15 +667,21 @@ def _format_rule_cards(
     rows: tuple[tuple[str, ...], ...],
     *,
     symbol: str | None = None,
+    exclude_conditions: frozenset[str] = frozenset(),
 ) -> str:
-    attention = tuple(row for row in rows if row[4] not in {"QUIET", "RECOVERED"})
+    attention = tuple(
+        row
+        for row in rows
+        if row[4] not in {"QUIET", "RECOVERED"} and row[1] not in exclude_conditions
+    )
     quiet = tuple(row for row in rows if row[4] in {"QUIET", "RECOVERED"})
     sections: list[str] = []
     if attention:
         sections.append(
-            f"<b>需关注 · {len(attention)} 项</b>" + _format_rule_table(attention, symbol=symbol)
+            f"🔔 <b>其他需关注 · {len(attention)} 项</b>"
+            + _format_rule_table(attention, symbol=symbol)
         )
-    else:
+    elif not exclude_conditions:
         sections.append("✅ <b>当前无触发或数据异常规则</b>")
     if quiet:
         sections.append(
