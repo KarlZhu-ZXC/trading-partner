@@ -198,17 +198,19 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
 
     assert rendered.startswith("<b>🚨 GC=F · 4078.3 · TRIGGERED</b>")
     assert "💰 <b>当前价格：4078.3</b>" not in rendered
-    assert "🕒 <b>价格时间</b>：2026-07-29 08:51 UTC-04:00" in rendered
-    assert "📡 <b>数据来源</b>：IG Weekend Gold（Apify）" in rendered
-    assert "↩️ <b>上次价格</b>：4081.2" in rendered
-    assert "📊 <b>价格变化</b>：-2.9 (-0.07%)" in rendered
+    assert "📈 <b>行情</b>" in rendered
+    assert "时间：2026-07-29 08:51 UTC-04:00" in rendered
+    assert "来源：IG Weekend Gold（Apify）" in rendered
+    assert "口径：IG Weekend Gold CFD 周末代理" in rendered
+    assert "前值：4081.2" in rendered
+    assert "变化：-2.9 (-0.07%)" in rendered
     assert "UTC-04:00 · 📡" not in rendered
     assert "4081.2 · 较上次" not in rendered
-    assert "🟥 <b>新告警触发</b>" in rendered
-    assert "状态较上次发生变化" in rendered
+    assert "🟥 <b>新告警</b>" in rendered
+    assert "状态较上次发生变化" not in rendered
     assert "IG Weekend Gold（Apify）" in rendered
     assert "🔴 <code>GC_PULLBACK_ALERT_4080</code>" in rendered
-    assert "<b>规则概览</b>" in rendered
+    assert "<b>规则概览</b>" not in rendered
     assert "<table bordered striped>" in rendered
     assert "<th>状态</th><th>规则与含义</th>" in rendered
     assert "🔴 <b>触发</b> · 中" in rendered
@@ -217,9 +219,9 @@ GC_STRUCTURE_FAIL_3940    < 3940  4078.3  138.3  QUIET      HIGH
     assert "GC_STRUCTURE_FAIL_3940" not in rendered
     assert "<pre>" not in rendered
     assert "<b>数据提示</b>：DELAYED_US_DATA、FUTURES_CONTRACT_NOT_SPOT" in rendered
-    assert "<b>价格口径</b>：IG Weekend Gold CFD 周末代理" in rendered
+    assert "IG Weekend Gold CFD 周末代理" in rendered
     assert "周末口径" not in rendered
-    assert rendered.index("新告警触发") < rendered.index("规则概览")
+    assert rendered.index("新告警") < rendered.index("其他需关注")
 
 
 def test_weekend_proxy_warnings_collapse_into_one_price_basis() -> None:
@@ -290,8 +292,9 @@ def test_cross_instrument_title_and_same_run_judgment_are_compact() -> None:
     assert "盘前报价可用" in merged.body
     assert len(merged.body) <= 4096
     rendered = _format_notification_html(merged.title, merged.body)
-    assert "🧭 <b>复合判断</b>" in rendered
+    assert "🧭 <b>判断</b>：WAIT" in rendered
     assert "盘前报价可用" in rendered
+    assert "只记录判断；未修改持仓、阶段或订单。" in rendered
 
 
 def test_model_degradation_merges_into_deterministic_card_with_same_run_context() -> None:
@@ -791,10 +794,10 @@ def test_post_market_model_degradation_stays_in_existing_digest() -> None:
     assert message.body.count("JUDGMENT") == 1
     assert message.body.count("错误码：PROVIDER_TIMEOUT_ERROR") == 1
     rendered = _format_notification_html(message.title, message.body)
-    assert "复合判断状态" in rendered
+    assert "复合判断不可用" in rendered
     assert "当前价格：2405" in message.body
     assert "数据来源：dukascopy" in message.body
-    assert "错误码：PROVIDER_TIMEOUT_ERROR" in rendered
+    assert "错误：<code>PROVIDER_TIMEOUT_ERROR</code>" in rendered
     assert "未定义" not in rendered
     assert "UNKNOWN" not in rendered
     assert "建议数量0" not in rendered
@@ -855,7 +858,7 @@ RULES
     )
 
     assert rendered.startswith("<b>⚠️ GC=F · 4081.2 · NOT_EVALUATED</b>")
-    assert "📐 <b>价格口径</b>：上一有效价格（当前不可用）" in rendered
+    assert "来源：上一有效价格（当前不可用）" in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
     assert "QUOTE_MISSING" in rendered
     assert rendered.count("QUOTE_MISSING") == 1
@@ -924,8 +927,8 @@ RULES
     assert "🟨 <b>监控状态变化 · 2 项</b>" in rendered
     assert "🔴 <b>&gt; 4080</b> · <b>已触发</b> · 高" in rendered
     assert "🟢 <b>&lt; 4080</b> · <b>告警解除</b> · 中" in rendered
-    assert "含义：突破 &lt;关键位&gt; &amp; 观察" in rendered
-    assert "含义：回落 &lt;关键位&gt; &amp; 已恢复" in rendered
+    assert "突破 &lt;关键位&gt; &amp; 观察" in rendered
+    assert "回落 &lt;关键位&gt; &amp; 已恢复" in rendered
     assert rendered.index("&gt; 4080") < rendered.index("&lt; 4080")
     assert rendered.count("状态变化") == 1
 
@@ -942,7 +945,7 @@ RULES
 
     rendered = _format_notification_html("🟢 XAUUSD · 告警解除", body)
 
-    assert "🟩 <b>告警已解除</b>" in rendered
+    assert "🟩 <b>告警解除</b>" in rendered
     assert "原触发条件当前已不成立；不代表价格上涨或行情转好。" in rendered
     assert "触发点位已恢复" not in rendered
     assert "<table bordered striped>" in rendered
@@ -968,7 +971,7 @@ def test_mobile_rule_overview_uses_two_columns_deduplicates_and_collapses_quiet(
 
     assert "<th>状态</th><th>规则与含义</th>" in rendered
     assert "<th>含义</th>" not in rendered
-    assert "<b>需关注 · 1 项</b>" in rendered
+    assert "<b>其他需关注 · 1 项</b>" in rendered
     assert "<details><summary>⚪ 未触发 · 2 项</summary>" in rendered
     assert "<b>≥ 4380</b> · 突破结构仍在，继续观察黄金方向" in rendered
     assert "XAUUSD ≥ 4380：" not in rendered
@@ -1001,13 +1004,13 @@ END_MONITOR
     )
 
     assert "XAUUSD · 100" in rendered
-    assert "↩️ <b>上次价格</b>：99" in rendered
-    assert "📊 <b>价格变化</b>：+1 (+1.01%)" in rendered
+    assert "前值：99" in rendered
+    assert "变化：+1 (+1.01%)" in rendered
     assert "99 · 较上次" not in rendered
     assert "🔴 <b>&gt; 100</b> · <b>已触发</b> · 高" in rendered
     assert "🟢 <b>&lt; 99</b> · <b>告警解除</b> · 中" in rendered
-    assert "含义：突破关键位" in rendered
-    assert "含义：回落关键位" in rendered
+    assert "突破关键位" in rendered
+    assert "回落关键位" in rendered
     assert "<pre>" not in rendered
 
 
