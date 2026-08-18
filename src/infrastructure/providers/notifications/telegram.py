@@ -68,6 +68,7 @@ class TelegramNotificationAdapter:
         rendered = _render_notification_html(notification)
         payload: dict[str, object] = {"chat_id": self._chat_id, "disable_notification": False}
         if is_monitor:
+            rendered = _render_rich_message_html(rendered)
             payload["rich_message"] = {
                 "html": rendered,
                 "skip_entity_detection": True,
@@ -162,6 +163,13 @@ def _render_notification_html(notification: NotificationOutboxEntry) -> str:
     }:
         return _format_notification_html(notification.title, notification.body)
     return render_plain_text_html(notification.title, notification.body)
+
+
+def _render_rich_message_html(value: str) -> str:
+    """Use explicit breaks because Rich Message HTML collapses plain newlines."""
+
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", "<br>")
 
 
 def _format_notification_html(title: str, body: str) -> str:

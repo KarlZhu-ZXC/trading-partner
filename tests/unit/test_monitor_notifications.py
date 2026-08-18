@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -127,6 +128,10 @@ async def test_telegram_adapter_sends_json_and_returns_message_id() -> None:
         assert b'"rich_message":{"html":' in request.content
         assert b'"skip_entity_detection":true' in request.content
         assert b"&lt;" in request.content
+        payload = json.loads(request.content)
+        rich_html = payload["rich_message"]["html"]
+        assert "<br>" in rich_html
+        assert "\n" not in rich_html
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
