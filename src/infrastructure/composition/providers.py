@@ -508,6 +508,7 @@ def build_provider_infrastructure(
         client_secret=settings.schwab_client_secret,
         redirect_uri=settings.schwab_redirect_uri,
         token_path=settings.schwab_token_path,
+        clock=clock,
     )
     schwab_order = SchwabOrderExecutionAdapter(
         enabled="SCHWAB" in settings.holdings_sources,
