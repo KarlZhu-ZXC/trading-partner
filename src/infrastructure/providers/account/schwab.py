@@ -66,7 +66,7 @@ from domain.portfolio.models import (
 from infrastructure.system.clock import SystemClock
 
 _BASE_URL = "https://api.schwabapi.com"
-_MAX_BROKER_QUOTE_FUTURE_SKEW = timedelta(minutes=6)
+_MAX_BROKER_QUOTE_CLOCK_SKEW = timedelta(seconds=5)
 
 _ACTIVE_ORDER_STATUSES = frozenset(
     {
@@ -357,6 +357,7 @@ class SchwabBrokerQuoteAdapter:
         client_secret: str | None,
         redirect_uri: str,
         token_path: Path,
+        clock: Clock | None = None,
         client_factory: ReadClientFactory | None = None,
     ) -> None:
         self._enabled = enabled
@@ -364,6 +365,7 @@ class SchwabBrokerQuoteAdapter:
         self._client_secret = client_secret
         self._redirect_uri = redirect_uri
         self._token_path = token_path
+        self._clock = clock or SystemClock()
         self._client_factory = client_factory
 
     def is_configured(self) -> bool:
@@ -394,6 +396,7 @@ class SchwabBrokerQuoteAdapter:
             raise DataContractError("Schwab broker quote requires a US equity or ETF")
         try:
             payload = await asyncio.to_thread(self._client().quote, symbol)
+            retrieved_at = self._clock.now()
             root = _mapping(payload, "quote response")
             row = _mapping(root.get(symbol) or root.get(symbol.upper()), "quote instrument")
             quote = _mapping(row.get("quote"), "quote")
@@ -405,18 +408,16 @@ class SchwabBrokerQuoteAdapter:
                 )
             quote_at = datetime.fromtimestamp(float(quote_millis) / 1000, tz=UTC)
             source = VendorId.SCHWAB.value
-            if quote_at > as_of:
-                if quote_at - as_of > _MAX_BROKER_QUOTE_FUTURE_SKEW:
+            if quote_at > retrieved_at:
+                if quote_at - retrieved_at > _MAX_BROKER_QUOTE_CLOCK_SKEW:
                     raise DataContractError(
-                        "Schwab quote timestamp exceeds as_of",
+                        "Schwab quote timestamp exceeds retrieval time",
                         code="SCHWAB_QUOTE_TIMESTAMP_FUTURE",
                     )
-                # Schwab can stamp the live NBBO snapshot at the imminent US
-                # session boundary (observed near 15:55 ET as 16:00 ET).  Do
-                # not pretend that future vendor time already occurred: use
-                # the authenticated retrieval observation time and disclose
-                # that basis through the bounded source label.
-                quote_at = as_of
+                # A bounded Provider/server clock skew is not a future market
+                # fact. Preserve a truthful retrieval-time observation instead
+                # of comparing against the pre-request ``as_of`` instant.
+                quote_at = retrieved_at
                 source = "schwab_retrieval_time"
             return BrokerQuoteObservation(
                 instrument_id=instrument_id,

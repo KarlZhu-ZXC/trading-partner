@@ -29,7 +29,15 @@ class _QuoteClient:
         }
 
 
-def _adapter(quote_at: datetime) -> SchwabBrokerQuoteAdapter:
+class _Clock:
+    def __init__(self, value: datetime) -> None:
+        self._value = value
+
+    def now(self) -> datetime:
+        return self._value
+
+
+def _adapter(quote_at: datetime, *, retrieved_at: datetime) -> SchwabBrokerQuoteAdapter:
     client = _QuoteClient(quote_at)
     return SchwabBrokerQuoteAdapter(
         enabled=True,
@@ -37,29 +45,54 @@ def _adapter(quote_at: datetime) -> SchwabBrokerQuoteAdapter:
         client_secret="test-secret",
         redirect_uri="https://127.0.0.1/callback",
         token_path=Path("unused-in-factory-test"),
+        clock=_Clock(retrieved_at),
         client_factory=lambda: client,
     )
 
 
 @pytest.mark.asyncio
-async def test_schwab_quote_uses_retrieval_time_for_bounded_session_boundary_skew() -> None:
+async def test_schwab_quote_accepts_update_during_request_without_relabeling_time() -> None:
     as_of = datetime(2026, 8, 17, 19, 55, 9, tzinfo=UTC)
-    quote = await _adapter(as_of + timedelta(minutes=4, seconds=51)).get_quote(
+    quote_at = as_of + timedelta(seconds=3)
+    quote = await _adapter(
+        quote_at,
+        retrieved_at=as_of + timedelta(seconds=4),
+    ).get_quote(
         instrument_id="etf:US:SGOV",
         as_of=as_of,
     )
 
-    assert quote.quote_at == as_of
-    assert quote.source == "schwab_retrieval_time"
+    assert quote.quote_at == quote_at
+    assert quote.source == "schwab"
     assert quote.bid is not None and quote.ask is not None
 
 
 @pytest.mark.asyncio
-async def test_schwab_quote_rejects_future_timestamp_beyond_bounded_skew() -> None:
+async def test_schwab_quote_uses_retrieval_time_for_bounded_clock_skew() -> None:
     as_of = datetime(2026, 8, 17, 19, 55, 9, tzinfo=UTC)
+    retrieved_at = as_of + timedelta(seconds=4)
+    quote = await _adapter(
+        retrieved_at + timedelta(seconds=4),
+        retrieved_at=retrieved_at,
+    ).get_quote(
+        instrument_id="etf:US:SGOV",
+        as_of=as_of,
+    )
 
-    with pytest.raises(DataContractError, match="timestamp exceeds as_of") as captured:
-        await _adapter(as_of + timedelta(minutes=6, seconds=1)).get_quote(
+    assert quote.quote_at == retrieved_at
+    assert quote.source == "schwab_retrieval_time"
+
+
+@pytest.mark.asyncio
+async def test_schwab_quote_rejects_timestamp_beyond_retrieval_clock_skew() -> None:
+    as_of = datetime(2026, 8, 17, 19, 55, 9, tzinfo=UTC)
+    retrieved_at = as_of + timedelta(seconds=4)
+
+    with pytest.raises(DataContractError, match="timestamp exceeds retrieval") as captured:
+        await _adapter(
+            retrieved_at + timedelta(seconds=6),
+            retrieved_at=retrieved_at,
+        ).get_quote(
             instrument_id="etf:US:SGOV",
             as_of=as_of,
         )
@@ -70,7 +103,7 @@ async def test_schwab_quote_rejects_future_timestamp_beyond_bounded_skew() -> No
 async def test_schwab_quote_keeps_provider_time_when_not_in_future() -> None:
     as_of = datetime(2026, 8, 17, 19, 55, 9, tzinfo=UTC)
     provider_time = as_of - timedelta(seconds=2)
-    quote = await _adapter(provider_time).get_quote(
+    quote = await _adapter(provider_time, retrieved_at=as_of + timedelta(seconds=3)).get_quote(
         instrument_id="etf:US:SGOV",
         as_of=as_of,
     )
