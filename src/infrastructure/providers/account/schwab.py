@@ -66,6 +66,7 @@ from domain.portfolio.models import (
 from infrastructure.system.clock import SystemClock
 
 _BASE_URL = "https://api.schwabapi.com"
+_MAX_BROKER_QUOTE_FUTURE_SKEW = timedelta(minutes=6)
 
 _ACTIVE_ORDER_STATUSES = frozenset(
     {
@@ -398,10 +399,25 @@ class SchwabBrokerQuoteAdapter:
             quote = _mapping(row.get("quote"), "quote")
             quote_millis = quote.get("quoteTime") or quote.get("tradeTime")
             if not isinstance(quote_millis, int | float):
-                raise DataContractError("Schwab quote timestamp is missing")
+                raise DataContractError(
+                    "Schwab quote timestamp is missing",
+                    code="SCHWAB_QUOTE_TIMESTAMP_MISSING",
+                )
             quote_at = datetime.fromtimestamp(float(quote_millis) / 1000, tz=UTC)
+            source = VendorId.SCHWAB.value
             if quote_at > as_of:
-                raise DataContractError("Schwab quote timestamp exceeds as_of")
+                if quote_at - as_of > _MAX_BROKER_QUOTE_FUTURE_SKEW:
+                    raise DataContractError(
+                        "Schwab quote timestamp exceeds as_of",
+                        code="SCHWAB_QUOTE_TIMESTAMP_FUTURE",
+                    )
+                # Schwab can stamp the live NBBO snapshot at the imminent US
+                # session boundary (observed near 15:55 ET as 16:00 ET).  Do
+                # not pretend that future vendor time already occurred: use
+                # the authenticated retrieval observation time and disclose
+                # that basis through the bounded source label.
+                quote_at = as_of
+                source = "schwab_retrieval_time"
             return BrokerQuoteObservation(
                 instrument_id=instrument_id,
                 symbol=symbol,
@@ -409,7 +425,7 @@ class SchwabBrokerQuoteAdapter:
                 bid=_decimal(quote.get("bidPrice")),
                 ask=_decimal(quote.get("askPrice")),
                 last=_decimal(quote.get("lastPrice")),
-                source=VendorId.SCHWAB.value,
+                source=source,
             )
         except TradingPartnerError:
             raise
