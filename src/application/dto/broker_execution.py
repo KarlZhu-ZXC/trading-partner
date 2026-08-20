@@ -106,12 +106,57 @@ class SgovShadowPlanDisposition(StrEnum):
     SKIPPED_WINDOW_CLOSED = "SKIPPED_WINDOW_CLOSED"
 
 
+class SgovShadowPlanPhase(StrEnum):
+    PASSIVE_BID = "PASSIVE_BID"
+    COMPLETION = "COMPLETION"
+
+
+class SgovAutoOrderOutcome(StrEnum):
+    SKIPPED = "SKIPPED"
+    SUBMITTED = "SUBMITTED"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+    FAILED = "FAILED"
+
+
+class SgovBlockedStage(StrEnum):
+    ACCOUNT_REFRESH = "ACCOUNT_REFRESH"
+    QUOTE_AND_SIZING = "QUOTE_AND_SIZING"
+    PRE_SUBMIT = "PRE_SUBMIT"
+    SUBMISSION = "SUBMISSION"
+
+
+class SgovProviderDiagnosticDTO(_DTO):
+    stage: SgovBlockedStage
+    provider: str
+    error_code: str
+    retryable: bool
+    attempt_count: int = Field(default=1, ge=1, le=3)
+    operation: str | None = None
+    error_type: str | None = None
+    status_class: str | None = None
+    status_code: int | None = Field(default=None, ge=100, le=599)
+
+
+class SgovAutoOrderReceiptDTO(_DTO):
+    account_ref: str
+    outcome: SgovAutoOrderOutcome
+    quantity: int = 0
+    limit_price: DecimalWire | None = None
+    order_intent_id: str | None = None
+    durable_status: str | None = None
+    provider_status: str | None = None
+    error_codes: tuple[str, ...] = ()
+    execution_effect: bool = False
+
+
 class SgovShadowPlanDTO(_DTO):
     """One scheduled or foreground SGOV Shadow calculation receipt."""
 
     disposition: SgovShadowPlanDisposition
+    phase: SgovShadowPlanPhase | None = None
     market_session_date: date | None = None
     scheduled_for: datetime | None = None
+    completion_check_at: datetime | None = None
     generated_at: datetime | None = None
     account_refresh_ok: bool | None = None
     refreshed_snapshot_ids: tuple[str, ...] = ()
@@ -119,10 +164,15 @@ class SgovShadowPlanDTO(_DTO):
     notification_id: str | None = None
     notification_status: str | None = None
     notification_flush_disposition: str | None = None
+    automation_enabled: bool = False
+    execution_due: bool = False
+    orders: tuple[SgovAutoOrderReceiptDTO, ...] = ()
+    blocked_stage: SgovBlockedStage | None = None
+    provider_diagnostics: tuple[SgovProviderDiagnosticDTO, ...] = ()
     warning_codes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
-    execution_effect: Literal[False] = False
-    shadow_only: Literal[True] = True
+    execution_effect: bool = False
+    shadow_only: bool = True
 
 
 class BrokerOrderIntentPreviewInput(_DTO):

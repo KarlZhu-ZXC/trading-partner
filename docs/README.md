@@ -48,7 +48,7 @@ authority for current operation.
 | Document | Status |
 |---|---|
 | [plans/catalyst-agenda-and-scorecard-plan.md](plans/catalyst-agenda-and-scorecard-plan.md) | Implemented C0–C3/S0–S1 contract and bounded TDD record |
-| [plans/schwab-sgov-cash-management.md](plans/schwab-sgov-cash-management.md) | Implemented Shadow Preview, scheduled plan, and confirmation-gated live orders; unattended execution remains future scope |
+| [plans/schwab-sgov-cash-management.md](plans/schwab-sgov-cash-management.md) | Implemented Shadow Preview, SGOV-only automatic BUY scheduler, and confirmation-gated general live orders |
 
 ## Release history
 

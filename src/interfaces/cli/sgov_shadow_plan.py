@@ -1,4 +1,4 @@
-"""Operational SGOV Shadow plan CLI; calculation and notification only."""
+"""Operational SGOV plan CLI with one dedicated automatic-buy command."""
 
 from __future__ import annotations
 
@@ -19,11 +19,23 @@ def _money(value: Decimal | None) -> str:
 
 def _render_table(result: SgovShadowPlanDTO) -> str:
     header = [
-        f"SGOV Shadow 购买计划 · {result.market_session_date or '即时预览'}",
-        f"状态：{result.disposition.value} · execution_effect=false",
+        f"SGOV {'自动买入' if result.automation_enabled else 'Shadow 购买计划'} · "
+        f"{result.market_session_date or '即时预览'}",
+        f"状态：{result.disposition.value} · "
+        f"execution_effect={str(result.execution_effect).lower()}",
     ]
     if result.scheduled_for is not None:
         header.append(f"计划时间：{result.scheduled_for.isoformat()}")
+    if result.completion_check_at is not None:
+        header.append(f"完成复核：{result.completion_check_at.isoformat()}")
+    if result.phase is not None:
+        header.append(f"阶段：{result.phase.value}")
+    for order in result.orders:
+        header.append(
+            f"订单：{order.account_ref} · {order.outcome.value} · "
+            f"{order.quantity} 股 @ {_money(order.limit_price)} · "
+            f"{order.order_intent_id or '无意图ID'}"
+        )
     preview = result.preview
     if preview is None:
         if result.warning_codes:
@@ -34,9 +46,9 @@ def _render_table(result: SgovShadowPlanDTO) -> str:
 
     header.extend(
         (
-            f"SGOV 参考限价：{_money(preview.quote.reference_limit_price)} "
-            f"({preview.quote.source}/{preview.quote.price_basis}, "
-            f"age={preview.quote.age_seconds}s)",
+            f"SGOV bid / ask：{_money(preview.quote.bid)} / {_money(preview.quote.ask)} "
+            f"({preview.quote.source}, age={preview.quote.age_seconds}s)",
+            "数量按 ask 保守计算；先挂 bid，未成交则在收盘前5分钟重新刷新并用当时 ask 限价。",
             "",
             "| Schwab 账户 | cashBalance | 未成交 BUY 预留 | 现金底线 | "
             "缓冲 | Shadow 股数 | 预计金额 | 预计剩余现金 | 状态 |",
@@ -57,7 +69,11 @@ def _render_table(result: SgovShadowPlanDTO) -> str:
         (
             "",
             f"合计：{preview.total_quantity} 股 / {_money(preview.total_estimated_notional)}",
-            "仅为 Shadow 计算；未提交、修改或撤销任何订单。",
+            (
+                "自动路径仅允许 SGOV BUY LIMIT · DAY · NORMAL。"
+                if result.automation_enabled
+                else "仅为 Shadow 计算；未提交、修改或撤销任何订单。"
+            ),
         )
     )
     return "\n".join(header)
@@ -71,7 +87,7 @@ async def _run(command: str, *, as_json: bool) -> int:
                 item
                 for item in container.operations.notifications.recent_entries(100)
                 if item.source_type is NotificationSourceType.SYSTEM
-                and item.source_id.startswith("sgov-shadow-plan:")
+                and item.source_id.startswith(("sgov-shadow-plan:", "sgov-auto-plan:"))
             )
             payload = {
                 "ok": True,
@@ -108,11 +124,14 @@ async def _run(command: str, *, as_json: bool) -> int:
             )
             return 1
         try:
-            result = (
-                await container.operations.sgov_shadow_plan.run_if_due()
-                if command == "run"
-                else await container.operations.sgov_shadow_plan.preview_now()
-            )
+            if command == "auto-run":
+                result = await container.operations.sgov_shadow_plan.run_if_due(
+                    auto_execute=True
+                )
+            elif command == "run":
+                result = await container.operations.sgov_shadow_plan.run_if_due()
+            else:
+                result = await container.operations.sgov_shadow_plan.preview_now()
         finally:
             lock.release()
         if as_json:
@@ -128,11 +147,16 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="trading-partner-sgov-plan",
         description=(
-            "Generate a fresh Schwab SGOV Shadow plan. It never submits, replaces, "
-            "or cancels an order."
+            "Generate a Schwab SGOV plan. auto-run uses the dedicated persistent "
+            "SGOV-only BUY authorization; run and preview remain non-executing."
         ),
     )
-    parser.add_argument("command", nargs="?", choices=("run", "preview", "status"), default="run")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("auto-run", "run", "preview", "status"),
+        default="run",
+    )
     parser.add_argument("--json", action="store_true", help="Print a machine-readable receipt")
     return parser
 
