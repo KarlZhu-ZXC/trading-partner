@@ -105,7 +105,7 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
         order_intent_id: str,
         idempotency_key: str,
         confirmed_by: Literal["user"],
-        submitted_via: Literal["codex_chat"],
+        submitted_via: Literal["codex_chat", "mcp_chat"],
         authorization_note: str,
     ) -> dict[str, Any]:
         """Submit exactly one unexpired preview after explicit user confirmation."""
@@ -147,7 +147,7 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
         order_intent_id: str,
         idempotency_key: str,
         confirmed_by: Literal["user"],
-        submitted_via: Literal["codex_chat"],
+        submitted_via: Literal["codex_chat", "mcp_chat"],
         authorization_note: str,
     ) -> dict[str, Any]:
         """Request cancellation of one exact submitted order after user confirmation."""

@@ -1,5 +1,23 @@
 # Unreleased
 
+- Recorded the 2026-08-17 MCP host decision-loop read-only smoke. Current
+  source checkout passed; the already-connected Grok stdio process was still
+  pre-PR3 and must be reloaded.
+- MCP Registry invoke and FastMCP stdio share Agent result compaction. Canonical
+  JSON stays within 15 KiB; final TextContent stays within 16 KiB. Envelope
+  `ok/as_of/warnings/errors` survive truncation. Chart ImageContent is untouched.
+- Closed-variant validation failures return `TOOL_INPUT_INVALID` with bounded
+  field names and reason codes. Transport-level missing `request` stays a
+  standard MCP error and is still redacted.
+- External MCP hosts can read a durable-only Attention inbox through
+  `investment_case_read/attention`. The query never reconciles ReviewItems.
+  `system_health.attention_summary` reports materialized ReviewItem counts only
+  and does not replace the inbox. Console workflow/operational attention rows
+  reuse the same typed projectors.
+- Current-chat authorization is host-neutral: write and order gates accept
+  `submitted_via=mcp_chat` with the same user + `authorization_note` rules as
+  `codex_chat`. Existing Codex callers keep working; the stored channel now
+  identifies the host instead of forcing every stdio chat to impersonate Codex.
 - Simplified Console decision flows: explicitly labelled action buttons no longer
   trigger a second duplicate browser confirmation for non-destructive candidate,
   agenda, policy, retro, scorecard, sync, or Monitor-edit operations. Destructive,

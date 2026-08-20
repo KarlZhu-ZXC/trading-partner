@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from statistics import median
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -226,6 +226,13 @@ class SqlAlchemyReviewItemRepository:
                 statement = statement.limit(limit)
             rows = session.scalars(statement)
             return tuple(_domain(row) for row in rows)
+
+    def latest_observed_at(self) -> datetime | None:
+        with Session(self._engine) as session:
+            value = session.scalar(select(func.max(ReviewItemRow.last_seen_at)))
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
 
     def metrics(
         self,

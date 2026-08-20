@@ -22,6 +22,19 @@ class ActorAssurance(StrEnum):
 class ActorSubmissionChannel(StrEnum):
     DIRECT = "direct"
     CODEX_CHAT = "codex_chat"
+    MCP_CHAT = "mcp_chat"
+
+    @property
+    def is_current_chat(self) -> bool:
+        return self in {ActorSubmissionChannel.CODEX_CHAT, ActorSubmissionChannel.MCP_CHAT}
+
+
+CURRENT_CHAT_SUBMISSION_VALUES = frozenset(
+    {
+        ActorSubmissionChannel.CODEX_CHAT.value,
+        ActorSubmissionChannel.MCP_CHAT.value,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,16 +59,10 @@ class ActorContext:
                 raise DataContractError(
                     "authorization_note must be a non-blank string of at most 4000 characters"
                 )
-        if (
-            self.submitted_via is ActorSubmissionChannel.CODEX_CHAT
-            and self.actor_type is not ActorType.USER
-        ):
-            raise DataContractError("codex_chat submission requires actor_type=user")
-        if (
-            self.submitted_via is ActorSubmissionChannel.CODEX_CHAT
-            and self.authorization_note is None
-        ):
-            raise DataContractError("codex_chat submission requires authorization_note")
+        if self.submitted_via.is_current_chat and self.actor_type is not ActorType.USER:
+            raise DataContractError("current-chat submission requires actor_type=user")
+        if self.submitted_via.is_current_chat and self.authorization_note is None:
+            raise DataContractError("current-chat submission requires authorization_note")
 
     @classmethod
     def caller_asserted(cls, confirmed_by: str, *, request_id: str) -> ActorContext:
@@ -67,18 +74,40 @@ class ActorContext:
         )
 
     @classmethod
+    def current_chat_authorized(
+        cls,
+        *,
+        request_id: str,
+        authorization_note: str,
+        submitted_via: ActorSubmissionChannel | str = ActorSubmissionChannel.MCP_CHAT,
+    ) -> ActorContext:
+        """Represent an explicit local user's decision relayed by the current chat host."""
+        channel = (
+            submitted_via
+            if isinstance(submitted_via, ActorSubmissionChannel)
+            else ActorSubmissionChannel(submitted_via)
+        )
+        if not channel.is_current_chat:
+            raise DataContractError("submitted_via must be a current-chat channel")
+        return cls(
+            actor_type=ActorType.USER,
+            principal_id=ActorType.USER.value,
+            assurance=ActorAssurance.CALLER_ASSERTED,
+            request_id=request_id,
+            submitted_via=channel,
+            authorization_note=authorization_note,
+        )
+
+    @classmethod
     def codex_chat_authorized(
         cls,
         *,
         request_id: str,
         authorization_note: str,
     ) -> ActorContext:
-        """Represent an explicit local user's decision relayed by the Codex chat host."""
-        return cls(
-            actor_type=ActorType.USER,
-            principal_id=ActorType.USER.value,
-            assurance=ActorAssurance.CALLER_ASSERTED,
+        """Compatibility alias for Codex hosts; same gate as ``mcp_chat``."""
+        return cls.current_chat_authorized(
             request_id=request_id,
-            submitted_via=ActorSubmissionChannel.CODEX_CHAT,
             authorization_note=authorization_note,
+            submitted_via=ActorSubmissionChannel.CODEX_CHAT,
         )

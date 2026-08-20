@@ -11,7 +11,10 @@ from pydantic import ValidationError
 from application.dto.catalyst_agenda import AgendaMutationInput, AgendaQueryInput
 from application.dto.research_memory import ResearchSearchQuery
 from bootstrap import ApplicationContainer
-from domain.common.actor import ActorContext
+from domain.common.actor import (
+    CURRENT_CHAT_SUBMISSION_VALUES,
+    ActorContext,
+)
 from interfaces.mcp.schemas import (
     DecisionRecordAppendInput,
     JournalAppendInput,
@@ -304,14 +307,15 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                     "payload": normalized_payload,
                 }
             )
-            if submitted_via not in {"direct", "codex_chat"}:
-                raise ValueError("submitted_via must be direct or codex_chat")
+            if submitted_via not in {"direct", *CURRENT_CHAT_SUBMISSION_VALUES}:
+                raise ValueError("submitted_via must be direct, mcp_chat, or codex_chat")
             actor_context = (
-                ActorContext.codex_chat_authorized(
+                ActorContext.current_chat_authorized(
                     request_id=f"mcp:agenda:{request.action.value}:{request.idempotency_key}",
                     authorization_note=request.authorization_note,
+                    submitted_via=submitted_via,
                 )
-                if submitted_via == "codex_chat"
+                if submitted_via in CURRENT_CHAT_SUBMISSION_VALUES
                 else None
             )
             return container.services.catalyst_agenda.manage(

@@ -6,7 +6,6 @@ import json
 from typing import Any
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from interfaces.agent.capability_gateway import (
     AgentCapabilityAccessDeniedError,
@@ -218,8 +217,9 @@ async def test_read_uses_exact_grouped_validation_without_confirmation() -> None
     result = await gateway.read("grouped_read", "alpha", {"value": 7})
     assert result.result["data"] == {"operation": "alpha", "value": 7}
     assert result.receipt.request_id == "req_group"
-    with pytest.raises(ToolError):
-        await gateway.read("grouped_read", "alpha", {"value": "wrong"})
+    invalid = await gateway.read("grouped_read", "alpha", {"value": "wrong"})
+    assert invalid.result["ok"] is False
+    assert invalid.result["errors"][0]["code"] == "TOOL_INPUT_INVALID"
 
 
 @pytest.mark.asyncio
@@ -352,6 +352,10 @@ def test_large_quote_batch_compaction_preserves_latest_price_and_baseline() -> N
         ("us_company_get", "live_news", "items"),
         ("us_company_get", "company_updates", "updates"),
         ("decision_workbench_review_queue", "open_items", "items"),
+        ("investment_case_read", "attention", "items"),
+        ("investment_case_read", "context", "entries"),
+        ("research_workflow_run", "deep_dive", "sections"),
+        ("a_share_get_facts", "financials", "statements"),
     ),
 )
 def test_operation_compaction_keeps_provenance_and_decision_data(

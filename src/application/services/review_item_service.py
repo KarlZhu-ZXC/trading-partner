@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from application.dto.review_item import (
     ReviewItemDTO,
     ReviewItemMetricsDTO,
@@ -109,6 +111,9 @@ class ReviewItemService:
         return ReviewItemMetricsDTO.from_domain(
             self._repository.metrics(now=self._clock.now(), subject_id=subject_id)
         )
+
+    def latest_observed_at(self) -> datetime | None:
+        return self._repository.latest_observed_at()
 
     def transition(self, request: ReviewItemTransitionInput) -> ReviewItemDTO:
         try:

@@ -560,6 +560,22 @@ def test_prepare_allows_exact_research_closure_actions_and_requires_user_authori
         presented_summary="Confirm the exact candidate",
     )
     assert candidate.action.status is AgentPendingActionStatus.PRESENTED
+    mcp_candidate = service.propose(
+        conversation_id="agent_conversation_1",
+        channel=AgentChannel.CONSOLE,
+        principal="local-console",
+        capability="research_judgment_confirm",
+        operation="candidate",
+        arguments={
+            "candidate_id": "candidate_2",
+            "action": "confirm",
+            "reviewed_by": "user",
+            "submitted_via": "mcp_chat",
+            "authorization_note": "User explicitly confirmed this exact candidate.",
+        },
+        presented_summary="Confirm the exact candidate from an MCP host",
+    )
+    assert mcp_candidate.action.status is AgentPendingActionStatus.PRESENTED
     assert {
         ("research_memory_append", "agenda_item"),
         ("research_workflow_run", "trade_retro"),

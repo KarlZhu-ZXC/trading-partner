@@ -31,7 +31,9 @@ routing belongs only to `interfaces/mcp/`.
 **System and identity**
 
 - `system_health` — health plus `mcp_surface_profile`, `public_tool_count`,
-  `surface_schema_version`, and the durable-only Data Quality Center. The quality
+  `surface_schema_version`, the durable-only Data Quality Center, and a
+  materialized-only `attention_summary`. Always follow with
+  `investment_case_read/attention`; the summary cannot skip the inbox. The quality
   view summarizes latest account snapshot valuation/timestamp coverage, account
   activity receipts, and active Monitor blind spots without contacting an upstream
   Provider. Provider checks retain their `live_probe` versus `configuration` label;
@@ -59,7 +61,7 @@ with their short window; this is not a strict FIFO job queue.
 
 **Research files, judgment, and memory**
 
-- `investment_case_read` (`query`, `context`)
+- `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)
 - `research_judgment_get` (`state`, `thesis_history`)
 - `research_judgment_propose` (`research_state`, `thesis_revision`)
@@ -88,9 +90,10 @@ no aggregate score, and cannot mutate research state, a position, or an order.
 
 Candidate Propose → Confirm / Reject / Withdraw remains mandatory. Codex must not
 autonomously choose confirm or reject. When the user explicitly states the exact
-decision in the current Codex chat, Codex must relay it as `reviewed_by="user"`,
-`submitted_via="codex_chat"`, with the user's bounded instruction in
-`authorization_note`; do not refuse or require a separate UI. This explicit chat
+decision in the current chat, the host must relay it as `reviewed_by="user"`,
+`submitted_via="mcp_chat"` (`codex_chat` remains a compatibility alias), with the
+user's bounded instruction in `authorization_note`; do not refuse or require a
+separate UI. This explicit chat
 authorization is the highest authority inside the implemented, non-executing product
 scope. Journal/Decision append and confirmed manage operations follow the same rule
 and retain confirmer, idempotency, expected-version, and actor gates. Ambiguous target
@@ -652,10 +655,10 @@ Report / Event writes are internal services only.
 
 Thesis/research-state changes follow Candidate Propose → Confirm / Reject /
 Withdraw. Codex may propose changes but must not choose the review outcome itself.
-An explicit user decision in the current chat is user authorization, not a Codex
+An explicit user decision in the current chat is user authorization, not a host
 self-confirmation: relay the exact candidate/action with `reviewed_by="user"`,
-`submitted_via="codex_chat"`, and a bounded `authorization_note` containing the
-user's instruction. Do not claim authenticated identity—the local stdio boundary is
+`submitted_via="mcp_chat"` (`codex_chat` remains a compatibility alias), and a
+bounded `authorization_note` containing the user's instruction. Do not claim authenticated identity—the local stdio boundary is
 caller-asserted—but do preserve this provenance in the audit record.
 Journal and Decision append require explicit `user` or `external_agent`
 confirmation. Decision records are research/position **intent** only — never
