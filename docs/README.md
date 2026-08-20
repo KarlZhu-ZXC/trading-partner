@@ -16,6 +16,9 @@ truth.
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Local Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects, accepted constraints, and resolved issue index |
 | [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Current product direction and future sequencing |
+| [plans/reliability-usability-and-closure-plan.md](plans/reliability-usability-and-closure-plan.md) | Active reliability, usability, and decision-loop implementation plan |
+| [plans/mcp-host-decision-loop.md](plans/mcp-host-decision-loop.md) | External MCP host attention read, result compaction, and schema-repair plan |
+| [plans/refactor-slimming-backlog.md](plans/refactor-slimming-backlog.md) | Deferred defect follow-ups plus the backend/frontend slimming and consolidation backlog |
 
 ## Current specifications
 
@@ -34,6 +37,7 @@ truth.
 | [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文快速开始与第一个安全研究问题 |
 | [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Command-line OpenD lifecycle on macOS |
 | [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Cross-asset free-provider smoke checks and expected typed degradation |
+| [operations/mcp-host-decision-loop-smoke-2026-08-17.md](operations/mcp-host-decision-loop-smoke-2026-08-17.md) | External MCP host decision-loop read-only smoke receipts |
 
 ## Design and implementation records
 

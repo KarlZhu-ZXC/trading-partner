@@ -30,6 +30,10 @@ class ReviewItemRepository(Protocol):
         limit: int | None = 100,
     ) -> tuple[ReviewItem, ...]: ...
 
+    def latest_observed_at(self) -> datetime | None:
+        """Return max(last_seen_at) across all ReviewItems, including resolved."""
+        ...
+
     def metrics(
         self,
         *,

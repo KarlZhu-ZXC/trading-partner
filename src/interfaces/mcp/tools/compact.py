@@ -18,7 +18,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from bootstrap import ApplicationContainer
 from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
@@ -37,6 +37,8 @@ from interfaces.mcp.tools.us_context import build_us_context_adapters
 from interfaces.mcp.tools.us_research import build_us_research_adapters
 from interfaces.mcp.tools.watchlist import build_watchlist_adapters
 from interfaces.mcp.tools.workflows import build_workflow_adapters
+from interfaces.mcp.validation import tool_input_invalid_envelope
+from interfaces.shared.result_compaction import compact_mcp_result
 
 
 class CapabilityEffect(StrEnum):
@@ -298,6 +300,30 @@ class CapabilityRegistrar(Protocol):
     ) -> None: ...
 
 
+def _bound_arguments(fn: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+    except TypeError:
+        return dict(kwargs)
+    return {key: value for key, value in bound.arguments.items() if key != "self"}
+
+
+def _mcp_result_wrapper(tool: FastMCPTool) -> Any:
+    fn = tool.fn
+
+    @wraps(fn)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        result = fn(*args, **kwargs)
+        resolved = await result if inspect.isawaitable(result) else result
+        return compact_mcp_result(
+            resolved,
+            capability=tool.name,
+            arguments=_bound_arguments(fn, args, kwargs),
+        )
+
+    return wrapped
+
+
 class CompactCapabilityRegistry:
     """One validated compact capability graph shared by MCP and HTTP adapters."""
 
@@ -537,14 +563,15 @@ class CompactCapabilityRegistry:
         # HTTP callers need the validated handler result before MCP content-block
         # conversion. FastMCP performs that transport conversion only when serving
         # an MCP request.
-        return await capability.tool.run(arguments)
+        result = await capability.tool.run(arguments)
+        return compact_mcp_result(result, capability=name, arguments=arguments)
 
     def bind_mcp(self, server: FastMCP) -> None:
         """Render the same registry as FastMCP transport tools."""
         for capability in self._capabilities.values():
             tool = capability.tool
             server.add_tool(
-                tool.fn,
+                _mcp_result_wrapper(tool),
                 name=tool.name,
                 title=tool.title,
                 description=tool.description,
@@ -639,6 +666,8 @@ async def _invoke_variant(
     spec: VariantSpec,
     exact_model: type[BaseModel],
     arguments: dict[str, Any],
+    *,
+    capability: str,
 ) -> Any:
     """Validate and dispatch one closed operation variant.
 
@@ -651,7 +680,14 @@ async def _invoke_variant(
     payload = dict(arguments)
     if "operation" not in payload:
         payload["operation"] = spec.operation
-    exact_request = exact_model.model_validate(payload)
+    try:
+        exact_request = exact_model.model_validate(payload)
+    except ValidationError as error:
+        return tool_input_invalid_envelope(
+            tool=capability,
+            operation=spec.operation,
+            error=error,
+        )
     translated = exact_request.model_dump(mode="python")
     translated.pop("operation", None)
     if spec.adapter_operation_field is not None:
@@ -682,7 +718,9 @@ def _register_dispatch_tool(
         operation = request.operation
         spec = by_operation[operation]
         model = models_by_operation[operation]
-        return await _invoke_variant(spec, model, request.model_dump(mode="python"))
+        return await _invoke_variant(
+            spec, model, request.model_dump(mode="python"), capability=name
+        )
 
     dispatch.__name__ = name
     dispatch.__doc__ = description
@@ -702,7 +740,9 @@ def _register_dispatch_tool(
             _spec: VariantSpec = spec,
             _model: type[BaseModel] = model,
         ) -> Any:
-            return await _invoke_variant(_spec, _model, arguments)
+            return await _invoke_variant(
+                _spec, _model, arguments, capability=name
+            )
 
         def validate_variant(
             arguments: dict[str, Any],
@@ -800,6 +840,7 @@ def _register_flat_dispatch_tool(
             spec,
             exact_model,
             request.model_dump(mode="python", exclude_unset=True),
+            capability=name,
         )
 
     dispatch.__name__ = name
@@ -821,7 +862,9 @@ def _register_flat_dispatch_tool(
             _spec: VariantSpec = spec,
             _model: type[BaseModel] = model,
         ) -> Any:
-            return await _invoke_variant(_spec, _model, arguments)
+            return await _invoke_variant(
+                _spec, _model, arguments, capability=name
+            )
 
         def validate_variant(
             arguments: dict[str, Any],
@@ -1339,8 +1382,10 @@ def create_compact_capability_registry(
         registry,
         name="investment_case_read",
         description=(
-            "Read durable Research Subjects (标的) or build one bounded current research "
-            "context. Legacy transport keeps investment_case_read plus case_id/case_type."
+            "Read durable Research Subjects (标的), build one bounded current research "
+            "context, or read the cross-domain durable-only decision inbox. Legacy "
+            "transport keeps investment_case_read plus case_id/case_type. "
+            "operation=attention is read-only and never reconciles ReviewItems."
         ),
         variants=(
             _spec(
@@ -1352,6 +1397,11 @@ def create_compact_capability_registry(
                 "context",
                 adapters.research.research_context_build,
                 _all_fields(adapters.research.research_context_build),
+            ),
+            _spec(
+                "attention",
+                adapters.research.attention_read,
+                _all_fields(adapters.research.attention_read),
             ),
         ),
         policy=READ_DURABLE,

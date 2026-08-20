@@ -9,6 +9,7 @@ from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.attention_query_service import AttentionQueryService
 from application.services.broker_order_service import BrokerOrderService
 from application.services.cash_sweep_shadow_service import CashSweepShadowService
 from application.services.catalyst_agenda_service import CatalystAgendaService
@@ -77,6 +78,7 @@ class ApplicationServices:
     broker_order_preview: CashSweepShadowService
     broker_orders: BrokerOrderService
     review_items: ReviewItemService
+    attention: AttentionQueryService
 
 
 @dataclass(frozen=True, slots=True)

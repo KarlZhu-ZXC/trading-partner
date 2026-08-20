@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,6 +22,13 @@ from application.dto.catalyst_agenda_sync import (
 )
 from application.dto.monitoring import MonitorArchiveInput
 from application.dto.review_item import ReviewItemTransitionInput
+from application.services.attention_projection import (
+    console_attention_payload,
+    project_agenda_overdue_fields,
+    project_trade_retro_fields,
+    project_unresolved_agent_fields,
+    project_unresolved_broker,
+)
 from application.services.trade_retro_schedule import trade_retro_weekly_windows
 from bootstrap import ApplicationContainer, build_default_application
 from domain.common.errors import TradingPartnerError
@@ -508,6 +514,12 @@ def _console_failure(request: Request, error: Exception, code: str) -> dict[str,
     return failure_payload(code, _sanitized_error(request, error))
 
 
+def _console_row(item: Any, *, href: str) -> dict[str, Any]:
+    payload = console_attention_payload(item)
+    payload["href"] = href
+    return payload
+
+
 def _workflow_attention_items(
     *,
     agenda: dict[str, Any],
@@ -521,27 +533,26 @@ def _workflow_attention_items(
     for value in agenda_items if isinstance(agenda_items, list) else ():
         if not isinstance(value, dict):
             continue
-        limitation_codes = value.get("limitation_codes")
-        if not isinstance(limitation_codes, list) or "AGENDA_OUTCOME_UNVERIFIED" not in {
-            str(code) for code in limitation_codes
-        }:
-            continue
         item_id = value.get("agenda_item_id")
         if not isinstance(item_id, str) or not item_id:
             continue
-        items.append(
-            {
-                "key": f"agenda-overdue-{item_id}",
-                "severity": "ATTENTION",
-                "title": f"Catalyst outcome overdue · {value.get('title') or item_id}",
-                "detail": "The event window passed without a linked durable outcome fact.",
-                "href": f"/agenda#agenda-{item_id}",
-                "source_type": "CATALYST_AGENDA",
-                "source_ref": item_id,
-                "subject_id": value.get("subject_id"),
-                "recommended_action": "LINK_OUTCOME_OR_REVISE",
-            }
+        limitation_codes = value.get("limitation_codes")
+        projected = project_agenda_overdue_fields(
+            agenda_item_id=item_id,
+            title=str(value.get("title") or item_id),
+            limitation_codes=(
+                tuple(str(code) for code in limitation_codes)
+                if isinstance(limitation_codes, list)
+                else ()
+            ),
+            subject_id=(
+                str(value["subject_id"])
+                if isinstance(value.get("subject_id"), str) and value["subject_id"]
+                else None
+            ),
         )
+        if projected is not None:
+            items.append(_console_row(projected, href=f"/agenda#agenda-{item_id}"))
 
     retro_data = retro.get("data") if isinstance(retro, dict) else None
     retro_runs = retro_data.get("runs") if isinstance(retro_data, dict) else None
@@ -558,7 +569,6 @@ def _workflow_attention_items(
             else "UNREVIEWED"
         )
         findings = value.get("findings")
-        finding_count = len(findings) if isinstance(findings, list) else 0
         subject_ids_value = value.get("subject_ids")
         subject_ids = tuple(
             dict.fromkeys(
@@ -568,56 +578,18 @@ def _workflow_attention_items(
                 )
                 if isinstance(subject_id, str) and subject_id
             )
-        ) or (None,)
+        )
         action_items = (
             latest_review.get("action_items") if isinstance(latest_review, dict) else None
         )
-        normalized_actions = tuple(
-            dict.fromkeys(
-                " ".join(action.split())
-                for action in (action_items if isinstance(action_items, list) else ())
-                if isinstance(action, str) and action.strip()
-            )
-        )
-        action_count = len(normalized_actions)
-        for subject_id in subject_ids:
-            scope_key = subject_id or "global"
-            if review_status != "RESOLVED":
-                for normalized_action in normalized_actions:
-                    action_key = hashlib.sha256(normalized_action.encode("utf-8")).hexdigest()[:16]
-                    items.append(
-                        {
-                            "key": f"retro-action-{run_id}-{scope_key}-{action_key}",
-                            "severity": "ATTENTION",
-                            "title": "Trade Retro follow-up action",
-                            "detail": normalized_action,
-                            "href": f"/retro#retro-{run_id}",
-                            "source_type": "TRADE_RETRO",
-                            "source_ref": run_id,
-                            "subject_id": subject_id,
-                            "recommended_action": "COMPLETE_RETRO_ACTION",
-                        }
-                    )
-        if review_status not in {"UNREVIEWED", "OPEN", "DISPUTED"}:
-            continue
-        detail = f"{finding_count} deterministic finding(s)"
-        if action_count:
-            detail += f" · {action_count} recorded follow-up action(s)"
-        for subject_id in subject_ids:
-            scope_key = subject_id or "global"
-            items.append(
-                {
-                    "key": f"retro-review-{run_id}-{scope_key}",
-                    "severity": "ATTENTION" if review_status != "DISPUTED" else "REVIEW",
-                    "title": f"Trade Retro · {review_status.lower().replace('_', ' ')}",
-                    "detail": detail,
-                    "href": f"/retro#retro-{run_id}",
-                    "source_type": "TRADE_RETRO",
-                    "source_ref": run_id,
-                    "subject_id": subject_id,
-                    "recommended_action": "REVIEW_RETRO",
-                }
-            )
+        for projected in project_trade_retro_fields(
+            run_id=run_id,
+            finding_count=len(findings) if isinstance(findings, list) else 0,
+            review_status=review_status,
+            action_items=tuple(action_items) if isinstance(action_items, list) else (),
+            subject_ids=subject_ids,
+        ):
+            items.append(_console_row(projected, href=f"/retro#retro-{run_id}"))
 
     return items
 
@@ -635,53 +607,34 @@ def _operational_attention_items(
         if not action_id:
             continue
         status = str(getattr(getattr(action, "status", None), "value", "UNKNOWN"))
-        capability = str(getattr(action, "capability", "Agent action"))
-        operation = str(getattr(action, "operation", ""))
         items.append(
-            {
-                "key": f"agent-unresolved-{action_id}",
-                "severity": "ERROR" if status == "UNKNOWN" else "ATTENTION",
-                "title": f"Agent action requires reconciliation · {status}",
-                "detail": (
-                    f"{capability}/{operation} was not safely resolved; "
-                    "it will not retry automatically."
+            _console_row(
+                project_unresolved_agent_fields(
+                    action_id=action_id,
+                    status=status,
+                    capability=str(getattr(action, "capability", "Agent action")),
+                    operation=str(getattr(action, "operation", "")),
                 ),
-                "href": "/chat",
-                "source_type": "AGENT_PENDING_ACTION",
-                "source_ref": action_id,
-                "recommended_action": "RECONCILE_AGENT_ACTION",
-            }
+                href="/chat",
+            )
         )
     for intent in broker_intents:
         intent_id = str(getattr(intent, "order_intent_id", ""))
         if not intent_id:
             continue
-        status = str(getattr(intent, "status", "UNKNOWN"))
-        symbol = str(getattr(intent, "symbol", None) or getattr(intent, "instrument_id", "Order"))
-        provider_status = getattr(intent, "provider_status", None)
-        if status in {"SUBMITTING", "UNKNOWN"}:
-            detail = (
-                "Submission was claimed but has no durable broker outcome; do not retry. "
-                "Reconcile against Schwab activity."
-            )
-        else:
-            detail = (
-                "Cancellation was requested but has not yet been confirmed "
-                "by a durable Provider observation."
-            )
-        if provider_status:
-            detail += f" · Provider status: {provider_status}"
         items.append(
-            {
-                "key": f"broker-unresolved-{intent_id}",
-                "severity": "ERROR" if status in {"SUBMITTING", "UNKNOWN"} else "ATTENTION",
-                "title": f"{symbol} order · {status}",
-                "detail": detail,
-                "href": "/capabilities",
-                "source_type": "BROKER_ORDER_INTENT",
-                "source_ref": intent_id,
-                "recommended_action": "RECONCILE_BROKER_ORDER",
-            }
+            _console_row(
+                project_unresolved_broker(
+                    order_intent_id=intent_id,
+                    status=str(getattr(intent, "status", "UNKNOWN")),
+                    symbol=str(
+                        getattr(intent, "symbol", None)
+                        or getattr(intent, "instrument_id", "Order")
+                    ),
+                    provider_status=getattr(intent, "provider_status", None),
+                ),
+                href="/capabilities",
+            )
         )
     return items
 

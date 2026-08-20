@@ -208,7 +208,7 @@ class BrokerOrderSubmitInput(_DTO):
     order_intent_id: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=200)
     confirmed_by: Literal["user"]
-    submitted_via: Literal["codex_chat"]
+    submitted_via: Literal["codex_chat", "mcp_chat"]
     authorization_note: str = Field(min_length=1, max_length=1_000)
 
 
@@ -221,7 +221,7 @@ class BrokerOrderCancelInput(_DTO):
     order_intent_id: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=200)
     confirmed_by: Literal["user"]
-    submitted_via: Literal["codex_chat"]
+    submitted_via: Literal["codex_chat", "mcp_chat"]
     authorization_note: str = Field(min_length=1, max_length=1_000)
 
 

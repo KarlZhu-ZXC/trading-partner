@@ -8,10 +8,15 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
+from application.dto.attention import AttentionQueryInput
 from application.dto.judgment_scorecard import JudgmentScorecardHistoryInput
 from application.dto.research_context import ResearchContextBuildInput
+from application.dto.tool_envelope import ToolEnvelope
 from bootstrap import ApplicationContainer
-from domain.common.actor import ActorContext
+from domain.attention.enums import ATTENTION_DEFAULT_LIMIT
+from domain.common.actor import CURRENT_CHAT_SUBMISSION_VALUES, ActorContext
+from domain.common.enums import Freshness
+from domain.common.ids import EntityIdPrefix
 from interfaces.mcp.schemas import (
     ResearchStateGetInput,
     ResearchStateUpdateInput,
@@ -308,12 +313,12 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         candidate_id: str,
         reviewed_by: Literal["user", "external_agent", "codex"],
         action: Literal["confirm", "reject", "withdraw"] = "confirm",
-        submitted_via: Literal["direct", "codex_chat"] = "direct",
+        submitted_via: Literal["direct", "codex_chat", "mcp_chat"] = "direct",
         authorization_note: str | None = None,
         review_note: str | None = None,
         rejection_reason: str | None = None,
     ) -> dict[str, Any]:
-        """Apply an explicit review decision; Codex may relay an exact user chat approval."""
+        """Apply an explicit review decision; a current-chat host may relay user approval."""
         try:
             inp = ThesisRevisionConfirmInput.model_validate(
                 {
@@ -327,11 +332,12 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
                 }
             )
             actor_context = (
-                ActorContext.codex_chat_authorized(
+                ActorContext.current_chat_authorized(
                     request_id=f"mcp:{inp.action}:{inp.candidate_id}",
                     authorization_note=inp.authorization_note or "",
+                    submitted_via=inp.submitted_via,
                 )
-                if inp.submitted_via == "codex_chat"
+                if inp.submitted_via in CURRENT_CHAT_SUBMISSION_VALUES
                 else None
             )
             if inp.action == "confirm":
@@ -394,6 +400,31 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def attention_read(
+        case_id: str | None = None,
+        limit: int = ATTENTION_DEFAULT_LIMIT,
+    ) -> dict[str, Any]:
+        """Read the durable-only cross-domain decision inbox without writing."""
+        try:
+            request = AttentionQueryInput.model_validate(
+                {"case_id": case_id, "limit": limit}
+            )
+            digest = container.services.attention.list_digest(request)
+            now = container.context.clock.now()
+            return ToolEnvelope.success(
+                request_id=container.context.id_generator.new(EntityIdPrefix.REQ),
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                freshness=Freshness.FRESH,
+                sources=(),
+                data=digest,
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     def research_context_build(
         case_id: str | None = None,
         instrument_id: str | None = None,
@@ -428,4 +459,5 @@ def build_research_adapters(container: ApplicationContainer) -> SimpleNamespace:
         thesis_history_get=thesis_history_get,
         judgment_scorecard_history=judgment_scorecard_history,
         research_context_build=research_context_build,
+        attention_read=attention_read,
     )

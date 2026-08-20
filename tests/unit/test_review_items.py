@@ -54,6 +54,28 @@ def service() -> tuple[ReviewItemService, _Clock]:
     return ReviewItemService(SqlAlchemyReviewItemRepository(engine), clock, _Ids()), clock
 
 
+def test_latest_observed_at_is_max_last_seen_including_resolved(
+    service: tuple[ReviewItemService, _Clock],
+) -> None:
+    subject, clock = service
+    assert subject.latest_observed_at() is None
+    subject.reconcile(
+        (_projection(),),
+        observed_source_types=frozenset({ReviewItemSourceType.CATALYST_AGENDA}),
+    )
+    first = subject.latest_observed_at()
+    assert first == clock.value
+    clock.value += timedelta(hours=2)
+    subject.reconcile(
+        (),
+        observed_source_types=frozenset({ReviewItemSourceType.CATALYST_AGENDA}),
+        authoritative_source_refs=frozenset({(ReviewItemSourceType.CATALYST_AGENDA, "agenda_1")}),
+    )
+    later = subject.latest_observed_at()
+    assert later == first
+    assert subject.list_open() == ()
+
+
 def test_review_item_auto_resolves_only_after_successful_source_observation_and_reopens(
     service: tuple[ReviewItemService, _Clock],
 ) -> None:

@@ -259,6 +259,17 @@ def test_thesis_revision_confirm_action_rules() -> None:
     assert relayed.reviewed_by == "user"
     assert relayed.submitted_via == "codex_chat"
 
+    mcp_relayed = ThesisRevisionConfirmInput.model_validate(
+        {
+            "candidate_id": "run_00000000-0000-7000-8000-000000000001",
+            "action": "confirm",
+            "reviewed_by": "user",
+            "submitted_via": "mcp_chat",
+            "authorization_note": "Confirm this candidate in Grok chat",
+        }
+    )
+    assert mcp_relayed.submitted_via == "mcp_chat"
+
     with pytest.raises(ValidationError, match="authorization_note"):
         ThesisRevisionConfirmInput.model_validate(
             {
@@ -280,7 +291,7 @@ def test_thesis_revision_confirm_action_rules() -> None:
             }
         )
 
-    with pytest.raises(ValidationError, match="submitted_via=codex_chat"):
+    with pytest.raises(ValidationError, match="current-chat submitted_via"):
         ThesisRevisionConfirmInput.model_validate(
             {
                 "candidate_id": "run_00000000-0000-7000-8000-000000000001",

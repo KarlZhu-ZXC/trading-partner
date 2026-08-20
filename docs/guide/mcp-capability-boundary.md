@@ -139,6 +139,7 @@ Trade Plan，再以 STRICT_REVIEW 确认 Thesis 归档，最后归档研究档�
 | `investment_case_manage` (`create`) | 创建经用户确认的研究档案；company/catalyst 必须绑定标的，且不自动形成投资判断 |
 | `investment_case_manage` (`update`) | 经用户或外部 agent 确认、带幂等键地更新研究档案标题、摘要、标签或关联研究档案；不改写 Thesis、Trade Plan 或历史记录 |
 | `investment_case_read` (`query`) | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
+| `investment_case_read` (`attention`) | durable-only 跨域决策 inbox：Candidate、Agenda、Retro、Scorecard、Monitor 盲区、未决 Broker/Agent 与 Data Quality。只读，不 reconcile ReviewItem，不访问上游。空列表必须保留 `CATALYST_AGENDA_SYNC_RECEIPT_MISSING` 等 limitation |
 | `investment_case_manage` (`archive`) | 经明确复核后归档研究档案；不删除 Instrument，也不是物理删除 |
 | `research_judgment_get` (`state`) | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
 | `research_judgment_propose` (`research_state`) | 提出结构化研究状态候选变更 |
@@ -149,9 +150,9 @@ Trade Plan，再以 STRICT_REVIEW 确认 Thesis 归档，最后归档研究档�
 状态变更采用 Candidate Propose → Confirm / Reject / Withdraw。跨实体冲突返回
 `RESEARCH_STATE_CONFLICT`，不可重试；应先完成父研究档案或子状态的显式转换。
 Codex 不得自主选择确认或
-拒绝；但用户在当前聊天中明确表达决定时，该表达就是用户授权，Codex 应立即按
-`reviewed_by="user"`、`submitted_via="codex_chat"` 转交，并把原始授权语句写入
-`authorization_note`。这不是 Codex 自确认，也不需要额外审核界面；目标或动作不明确时才需澄清。
+拒绝；但用户在当前聊天中明确表达决定时，该表达就是用户授权，宿主应立即按
+`reviewed_by="user"`、`submitted_via="mcp_chat"`（`codex_chat` 仍为兼容别名）转交，并把原始授权语句写入
+`authorization_note`。这不是宿主自确认，也不需要额外审核界面；目标或动作不明确时才需澄清。
 一个研究档案可以同时拥有多条 Thesis，但 live PRIMARY 在
 `ACTIVE`/`STRENGTHENED`/`WEAKENED` 中合计最多一个。多个 SUB 可以共享同一个
 PRIMARY 作为并列驱动，COMPETITOR/BEAR 用于替代解释与反方判断。SUB 的父 Thesis
@@ -368,7 +369,7 @@ SELL 不占用现金。它按 SGOV broker ask 计算整数股，并返回 LIMIT/
 `preview` 必须精确绑定一个稳定 `account_ref`、美股/ETF Instrument、方向、整数股数、
 订单类型、时段、期限和全部价格字段，并立即重读 `cashBalance`、融资余额、持仓与 active
 BUY 预留。意图只存活 30–300 秒。`submit` 只接受 `confirmed_by=user`、
-`submitted_via=codex_chat`、新的 idempotency key 和本次对话中的明确授权说明；成功必须以
+`submitted_via=mcp_chat` 或兼容别名 `codex_chat`、新的 idempotency key 和本次对话中的明确授权说明；成功必须以
 Schwab 返回 order ID 为准。网络中断、5xx 或缺少 order ID 都持久化为非自动重试的
 `BROKER_ORDER_SUBMISSION_UNCERTAIN/UNKNOWN`，不能以相同或新 key 盲目再发。
 
@@ -661,7 +662,12 @@ sources, degraded, data, warnings, errors
 4. 精确数字必须保留 source、freshness 和 basis；若 source 返回
    `data_delay_seconds`，它表示该来源明确披露的数据延迟秒数，不能改写成实时行情。
 5. 缺失字段保持缺失，不能用模型记忆补齐。
-6. Schema 输入错误通常是 JSON-RPC error；业务失败是 `ok=false` envelope。
+6. 缺必填 `request` 或公开 flattened model 拒绝的输入仍是标准 MCP/JSON-RPC error。
+   已进入 grouped handler 的 closed-variant 失败返回 `ok=false` 且
+   `errors[].code=TOOL_INPUT_INVALID`，details 只含有界字段名和 reason code。
+7. 超过约 15 KiB 的 MCP 结果会被压缩并带 `_truncated=true`；必须保留
+   `ok/as_of/freshness/degraded/warnings/errors`。不得把截断当成“没有数据”。
+8. 缺失字段保持缺失，不能用模型记忆补齐。
 
 ## 5. 写入边界与用户控制
 

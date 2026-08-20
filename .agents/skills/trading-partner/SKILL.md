@@ -19,7 +19,10 @@ Keep calls and explanations bounded; never copy the product specification into c
 
 ## Tool routing
 
-- System/identity: `system_health`, `instrument_resolve`.
+- System/identity: `system_health`, `instrument_resolve`. Daily recovery
+  always follows `system_health` with `investment_case_read/attention`; the
+  health `attention_summary` is materialized ReviewItems only and cannot skip
+  the inbox.
 - Research: `investment_case_read`, `investment_case_manage`,
   `research_judgment_get`, `research_judgment_propose`,
   `research_judgment_confirm`, `research_memory_get`, `research_memory_append`.
@@ -74,8 +77,9 @@ must retain their token/perpetual/CFD identity and basis warnings.
   Shortlist, Select, or another status-transition step. Legacy Instrument Selection
   statuses may appear in durable reads but are not a user task to complete.
 - When the user explicitly decides in the current chat, relay exactly
-  `reviewed_by="user"`, `submitted_via="codex_chat"`, and a bounded
-  `authorization_note`. Ambiguous target/action requires clarification.
+  `reviewed_by="user"`, `submitted_via="mcp_chat"` (`codex_chat` remains valid),
+  and a bounded `authorization_note`. Ambiguous target/action requires
+  clarification.
 - Journal, decision, watchlist, policy, Monitor, review, and agenda writes retain
   their idempotency/version/actor gates.
 

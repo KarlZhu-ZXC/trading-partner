@@ -22,6 +22,7 @@ from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from domain.agent.enums import AgentChannel, AgentPendingActionStatus
 from domain.agent.models import AgentPendingAction, arguments_digest
+from domain.common.actor import CURRENT_CHAT_SUBMISSION_VALUES
 from domain.common.errors import DataContractError, PersistenceError, TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 
@@ -313,7 +314,7 @@ class AgentPendingActionService:
                 )
         if capability == "research_judgment_confirm" and (
             normalized.get("reviewed_by") != "user"
-            or normalized.get("submitted_via") != "codex_chat"
+            or normalized.get("submitted_via") not in CURRENT_CHAT_SUBMISSION_VALUES
             or not normalized.get("authorization_note")
         ):
             raise DataContractError(

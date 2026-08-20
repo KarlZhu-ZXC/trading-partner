@@ -56,6 +56,23 @@ def test_explicit_user_chat_authorization_is_relayed_without_impersonating_codex
     ) is context
 
 
+def test_mcp_chat_authorization_is_a_current_chat_channel() -> None:
+    context = ActorContext.current_chat_authorized(
+        request_id="req_chat_mcp_1",
+        authorization_note="Confirm the TSLA trim in this chat",
+        submitted_via=ActorSubmissionChannel.MCP_CHAT,
+    )
+
+    assert context.submitted_via is ActorSubmissionChannel.MCP_CHAT
+    assert context.submitted_via.is_current_chat
+    assert context.actor_type is ActorType.USER
+    assert require_confirm_reviewer(
+        "user",
+        action="confirm_candidate",
+        actor_context=context,
+    ) is context
+
+
 def test_codex_chat_channel_cannot_claim_an_external_agent() -> None:
     with pytest.raises(DataContractError, match="actor_type=user"):
         ActorContext(

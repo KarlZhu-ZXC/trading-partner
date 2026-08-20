@@ -74,6 +74,20 @@ def build_system_adapters(
                         "surface_schema_version": surface_schema_version,
                     }
                 )
+                try:
+                    data["attention_summary"] = (
+                        container.services.attention.health_summary().model_dump(
+                            mode="json"
+                        )
+                    )
+                except Exception:  # noqa: BLE001 — health remains available
+                    limitations = []
+                    quality_data = data.get("data_quality")
+                    if isinstance(quality_data, dict):
+                        limitations = list(quality_data.get("limitations") or [])
+                        if "ATTENTION_SUMMARY_UNAVAILABLE" not in limitations:
+                            limitations.append("ATTENTION_SUMMARY_UNAVAILABLE")
+                        quality_data["limitations"] = limitations
             return result
         except Exception as exc:  # noqa: BLE001 — MCP must return ToolEnvelope
             return _unexpected_failure(container, exc)

@@ -48,6 +48,15 @@ def _container() -> MagicMock:
     container.settings = SimpleNamespace(mcp_server_name="Trading Partner Test")
     container.services = MagicMock()
     container.services.data_quality.check.return_value = _Envelope()
+    container.services.attention.health_summary.return_value.model_dump.return_value = {
+        "generated_at": "2026-08-17T12:00:00+00:00",
+        "basis": "materialized_review_items",
+        "live_projections_not_included": True,
+        "open_review_item_count": 0,
+        "acknowledged_review_item_count": 0,
+        "catalyst_sync_receipt_missing": True,
+        "coverage_status": "UNKNOWN",
+    }
     return container
 
 
@@ -153,8 +162,8 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_evaluate",
     ]
     # Exact inventory bytes were captured before the registration split.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 25_615
-    assert _wire_size(tools) == 35_719
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 25_728
+    assert _wire_size(tools) == 35_951
 
 
 @pytest.mark.asyncio
@@ -182,6 +191,7 @@ async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable
     tools = {tool.name: tool for tool in registry.list_tools()}
 
     assert "Research Subjects (标的)" in tools["investment_case_read"].description
+    assert "decision inbox" in tools["investment_case_read"].description
     assert "Legacy transport" in tools["investment_case_manage"].description
     serialized_manage_schema = json.dumps(
         tools["investment_case_manage"].inputSchema, separators=(",", ":")
@@ -216,6 +226,40 @@ async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable
     assert result["data"]["case_type"] == "company"
     assert result["data"]["linked_case_ids"] == []
     assert "subject_id" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_investment_case_read_attention_is_read_only() -> None:
+    from datetime import UTC, datetime
+
+    from application.dto.attention import AttentionDigestDTO, AttentionMetricsDTO
+
+    container = _container()
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    container.context.clock.now.return_value = now
+    container.context.id_generator.new.return_value = "req_attention"
+    container.services.attention.list_digest.return_value = AttentionDigestDTO(
+        generated_at=now,
+        scope="global",
+        total_count=0,
+        returned_count=0,
+        truncated=False,
+        metrics=AttentionMetricsDTO(
+            open_count=0,
+            acknowledged_count=0,
+            overdue_count=0,
+            unknown_execution_count=0,
+        ),
+    )
+    registry = create_capability_registry(container)
+    result = await registry.invoke(
+        "investment_case_read",
+        {"request": {"operation": "attention"}},
+    )
+    assert result["ok"] is True
+    assert result["data"]["mode"] == "durable_only_read"
+    container.services.attention.list_digest.assert_called_once()
+    container.services.review_items.reconcile.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -325,7 +369,7 @@ async def test_technical_snapshot_description_discloses_cross_market_support() -
 async def test_compact_grouped_tools_publish_closed_discriminated_request_unions() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
     expected_variants = {
-        "investment_case_read": 2,
+        "investment_case_read": 3,
         "external_state_sync": 3,
         "research_judgment_get": 4,
         "research_judgment_confirm": 2,
@@ -400,40 +444,42 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
     assert errors
 
     registry = create_capability_registry(_container())
-    with pytest.raises(ToolError, match="judgment_policy"):
-        await registry.invoke(
-            "monitor_manage",
-            {
-                "request": {
-                    "operation": "resolve_event",
-                    "event_id": "event_1",
-                    "action": "RESOLVE",
-                    "note": "reviewed",
-                    "confirmed_by": "user",
-                    "idempotency_key": "resolve-1",
-                    "judgment_policy": {
-                        "playbook": "must not belong to resolve_event",
-                        "reference_instrument_ids": ["equity:US:NVDA"],
-                    },
-                }
-            },
-            confirmation="monitor_manage",
-        )
+    resolve_invalid = await registry.invoke(
+        "monitor_manage",
+        {
+            "request": {
+                "operation": "resolve_event",
+                "event_id": "event_1",
+                "action": "RESOLVE",
+                "note": "reviewed",
+                "confirmed_by": "user",
+                "idempotency_key": "resolve-1",
+                "judgment_policy": {
+                    "playbook": "must not belong to resolve_event",
+                    "reference_instrument_ids": ["equity:US:NVDA"],
+                },
+            }
+        },
+        confirmation="monitor_manage",
+    )
+    assert resolve_invalid["errors"][0]["code"] == "TOOL_INPUT_INVALID"
+    assert "judgment_policy" in resolve_invalid["errors"][0]["details"]["unexpected_fields"]
 
-    with pytest.raises(ToolError, match="start"):
-        await registry.invoke(
-            "research_workflow_run",
-            {
-                "request": {
-                    "operation": "judgment_scorecard",
-                    "case_id": "case_1",
-                    "thesis_id": "thesis_1",
-                    "idempotency_key": "scorecard-1",
-                    "start": "2026-08-01T00:00:00Z",
-                }
-            },
-            confirmation="research_workflow_run",
-        )
+    scorecard_invalid = await registry.invoke(
+        "research_workflow_run",
+        {
+            "request": {
+                "operation": "judgment_scorecard",
+                "case_id": "case_1",
+                "thesis_id": "thesis_1",
+                "idempotency_key": "scorecard-1",
+                "start": "2026-08-01T00:00:00Z",
+            }
+        },
+        confirmation="research_workflow_run",
+    )
+    assert scorecard_invalid["errors"][0]["code"] == "TOOL_INPUT_INVALID"
+    assert "start" in scorecard_invalid["errors"][0]["details"]["unexpected_fields"]
     judgment_validator = Draft202012Validator(tools["research_judgment_get"].inputSchema)
     assert list(
         judgment_validator.iter_errors(
@@ -571,6 +617,15 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         "mcp_surface_profile": "mcp_vnext_shadow",
         "public_tool_count": 27,
         "surface_schema_version": "mcp-vnext-shadow-v2",
+        "attention_summary": {
+            "generated_at": "2026-08-17T12:00:00+00:00",
+            "basis": "materialized_review_items",
+            "live_projections_not_included": True,
+            "open_review_item_count": 0,
+            "acknowledged_review_item_count": 0,
+            "catalyst_sync_receipt_missing": True,
+            "coverage_status": "UNKNOWN",
+        },
     }
 
 
@@ -598,6 +653,8 @@ async def test_system_health_keeps_operational_and_data_quality_states_separate(
     assert result["data"]["status"] == "ok"
     assert result["data"]["data_quality"]["status"] == "degraded"
     assert result["data"]["data_quality"]["component_checks"] == {"provider": {"state": "ok"}}
+    assert result["data"]["attention_summary"]["basis"] == "materialized_review_items"
+    assert result["data"]["attention_summary"]["live_projections_not_included"] is True
     assert result["warnings"] == []
 
 

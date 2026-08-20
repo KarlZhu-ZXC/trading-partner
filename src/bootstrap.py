@@ -26,6 +26,7 @@ from application.runtime import ApplicationServices, RuntimeContext
 from application.services.account_service import AccountService
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.agent_conversation_metrics import AgentConversationMetricsService
+from application.services.attention_query_service import AttentionQueryService
 from application.services.broker_order_service import BrokerOrderService
 from application.services.cash_sweep_shadow_service import CashSweepShadowService
 from application.services.catalyst_agenda_notification_service import (
@@ -620,6 +621,17 @@ def build_application(
         clock=clock,
         id_generator=id_generator,
     )
+    attention_query_service = AttentionQueryService(
+        clock,
+        review_item_service,
+        research_unit_of_work_factory,
+        catalyst_agenda_service,
+        trade_retro_service,
+        judgment_scorecard_service,
+        data_quality_service,
+        broker_order_service,
+        persistence.agent_pending_actions,
+    )
     notification_service = NotificationService(
         monitor_repository,
         notification_sender,
@@ -818,6 +830,7 @@ def build_application(
             broker_order_preview=cash_sweep_shadow_service,
             broker_orders=broker_order_service,
             review_items=review_item_service,
+            attention=attention_query_service,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,
