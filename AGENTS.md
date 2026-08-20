@@ -61,6 +61,14 @@ with their short window; this is not a strict FIFO job queue.
 
 **Research files, judgment, and memory**
 
+For every user discussion of a Thesis, Trade Plan, entry/exit, adding/reducing,
+holding, or trading strategy, apply the user's default
+`strategy_v1` discipline. The response must cover `UPSIDE`,
+`SIDEWAYS`, `PULLBACK`, and `INVALIDATION`, with an explicit action or `NO_ACTION`
+for each. If the user selects another primary Strategy, keep BossMo only as a
+risk/process check. This discipline is model interpretation, not a Provider fact,
+confirmation, position mutation, or order authorization.
+
 - `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)
 - `research_judgment_get` (`state`, `thesis_history`)

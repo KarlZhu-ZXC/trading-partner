@@ -68,6 +68,10 @@ must retain their token/perpetual/CFD identity and basis warnings.
 ## Research and writes
 
 - Say Research Subject / 标的 / 研究档案, not user-facing “InvestmentCase”.
+- For any Thesis, Trade Plan, entry/exit, add/reduce, hold, or strategy discussion,
+  also apply the installed `bossmo-trading-discipline` skill. Require explicit
+  `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION` outcomes; another user-selected
+  Strategy may be primary, but BossMo remains a risk/process check.
 - Research Subject metadata defines durable scope; Thesis holds judgment; Trade Plan
   holds conditional execution intent. Do not merge these concepts.
 - Candidate decisions use Propose → explicit Confirm/Reject/Withdraw. Never choose
