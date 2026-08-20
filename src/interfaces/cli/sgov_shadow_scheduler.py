@@ -1,4 +1,4 @@
-"""Install and manage the token-free SGOV Shadow plan scheduler on macOS."""
+"""Install and manage the dedicated SGOV automatic cash-sweep scheduler."""
 
 from __future__ import annotations
 
@@ -31,14 +31,14 @@ def _launchd_payload(project_root: Path, uv_path: Path) -> dict[str, Any]:
             "--directory",
             str(project_root),
             "trading-partner-sgov-plan",
-            "run",
+            "auto-run",
             "--json",
         ],
         "WorkingDirectory": str(project_root),
-        # Wake hourly at :45 so application-side America/New_York due selection
-        # remains correct across DST and XNYS early closes. Non-due wakes do not
-        # contact Schwab or the quote Provider.
-        "StartCalendarInterval": {"Minute": 45},
+        # Wake hourly at :45 for the passive bid phase and :55 for the completion
+        # phase. Application-side America/New_York due selection remains correct
+        # across DST and XNYS early closes. Non-due wakes do not contact Providers.
+        "StartCalendarInterval": [{"Minute": 45}, {"Minute": 55}],
         "ProcessType": "Background",
         "LowPriorityIO": True,
         "StandardOutPath": "/dev/null",
@@ -95,7 +95,7 @@ def status() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Manage the token-free Schwab SGOV Shadow plan scheduler."
+        description="Manage the dedicated Schwab SGOV automatic-buy scheduler."
     )
     parser.add_argument("command", choices=("install", "status", "uninstall"))
     args = parser.parse_args()

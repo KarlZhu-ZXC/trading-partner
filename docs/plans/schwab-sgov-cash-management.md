@@ -1,12 +1,12 @@
 # Schwab SGOV Cash Management
 
-Status: **Shadow Preview, scheduled daily plan, and confirmation-gated live orders implemented**
+Status: **Shadow Preview, SGOV-only automatic BUY, and confirmation-gated general orders implemented**
 
 ## Objective
 
 Use Schwab account facts to keep excess USD cash in whole shares of SGOV while
-preserving a per-account cash reserve. The feature must remain auditable and fail
-closed before any future order write is enabled.
+preserving a per-account cash reserve. The automatic path remains auditable and
+fails closed outside one exact SGOV BUY boundary.
 
 ## Source-of-truth contract
 
@@ -44,8 +44,8 @@ projected_cash   = cashBalance - open_buy_reserve - estimated_cost
 
 `broker_order_manage(request={"operation":"cash_sweep_preview",...})` returns the
 calculation, blocker codes, and exact hypothetical Schwab payload with
-`shadow_only=true` and `execution_effect=false`. The scheduled SGOV path never calls
-the separate live-order service.
+`shadow_only=true` and `execution_effect=false`. The public MCP preview and the
+legacy `run` command never call the separate live-order service.
 
 ## Delivery stages
 
@@ -61,17 +61,24 @@ the separate live-order service.
 ### S0.5 — Scheduled Shadow plan (implemented)
 
 - `trading-partner-sgov-plan run` is due-checked by the XNYS calendar. It runs at
-  15:45 `America/New_York` on ordinary sessions and 15 minutes before an official
-  early close; weekends and exchange holidays make no Provider request.
+  15:45 `America/New_York` on ordinary sessions (15 minutes before an official early
+  close) to recommend a passive bid, then refreshes again at 15:55 (five minutes
+  before an early close) for a completion check. Weekends and exchange holidays make
+  no Provider request.
 - Each due run explicitly refreshes Schwab only, then calculates every returned
   Schwab account from `cashBalance`, active BUY reserves, the $3,000 floor, and the
   $200 buffer. A stale quote or another blocker stays visible and no order is sent.
-- One stable Outbox identity per market session prevents duplicate account refreshes
-  and duplicate Telegram cards. The mobile notification uses vertical account blocks;
+- One stable Outbox identity per market session and phase prevents duplicate account
+  refreshes and duplicate Telegram cards. The first card recommends a current-bid DAY
+  limit while sizing conservatively at ask. The completion card never reuses the old
+  bid or assumes a one-cent spread: if the user is still unfilled and still wants same-
+  day deployment, it recommends the newly refreshed current ask as the limit. The
+  mobile notification uses vertical account blocks;
   `trading-partner-sgov-plan preview` prints the same facts as a terminal table without
   enqueueing a notification.
-- `trading-partner-sgov-plan-scheduler install` creates a token-free macOS launchd
-  wake at minute 45 of each hour. Application-side New York due selection handles DST.
+- `trading-partner-sgov-plan-scheduler install` creates token-free macOS launchd wakes
+  at minutes 45 and 55 of each hour. Application-side New York due selection handles
+  DST; non-due wakes do not contact a Provider.
 
 ### S1 — Confirmation-gated live order (implemented)
 
@@ -91,24 +98,37 @@ the separate live-order service.
 - The live service blocks non-zero/unknown margin, insufficient `cashBalance` after
   existing BUY reserves, overselling, and unbounded BUY market/stop/trailing orders.
 
-### S2 — Narrow unattended sweep (future, separate authorization)
+### S2 — Narrow unattended BUY sweep (implemented)
 
-- Persist a versioned allowlist policy: Schwab accounts, SGOV only, daily cap,
-  monthly cap, reserve, buffer, minimum notional, market-calendar window, spread and
-  quote-age bounds, margin prohibition, and kill switch.
-- Run once per XNYS session near 15:45 America/New_York; daylight saving and early
-  closes come from the exchange calendar.
-- Use one durable idempotency identity per account/session and never retry an unknown
-  submission outcome as a new order.
-- Notify preview, submission, rejection, cancellation, and reconciliation through the
-  existing durable Outbox. Unattended SGOV sales or arbitrary-stock orders are a
-  separate capability and are not implied by the buy sweep.
+- Installing `trading-partner-sgov-plan-scheduler` is the durable authorization;
+  uninstalling it is the kill switch. The job invokes the private `auto-run` command,
+  while MCP and Agent order actions remain unchanged and confirmation-gated.
+- 15:45 is preparation-only. At 15:55 ET (or five minutes before an official early
+  close), the service refreshes Schwab again and may place at most one order per
+  eligible account: instrument `etf:US:SGOV`, BUY, LIMIT at current ask, DAY, NORMAL.
+- Missing/stale bid or ask, spread above $0.02, unknown/non-zero margin, unsupported
+  open orders, less than $1,000 deployable notional, or failure to preserve the
+  `$3,000 + $200` reserve blocks that account.
+- Stable session/account preview and submit identities survive retries. A replayed
+  `SUBMITTING` claim, or an `UNKNOWN` Provider outcome, never issues another POST and
+  stays in the unresolved queue for reconciliation.
+- The completion Telegram receipt survives past market close and distinguishes
+  submitted, skipped, failed, and reconciliation-required accounts.
+- Retryable account-refresh and quote/sizing reads use at most three bounded
+  attempts. Unknown order submission outcomes are never retried. A blocked
+  completion notification identifies the failed stage, attempt count, Provider,
+  typed error, and safe HTTP status when one was returned.
+- The exception cannot sell SGOV, cancel/replace an order, use margin, use AM/PM/
+  SEAMLESS/overnight sessions, or submit any other instrument. Those actions still
+  require exact current-chat confirmation through `broker_order_manage`.
 
 ## Explicit non-goals
 
 - No use of margin or `buyingPower` to increase quantity.
 - No fractional ETF shares.
 - No market-on-close or market order fallback.
+- No claim that SGOV is risk-free or that the Schwab API path supports 24-hour SGOV
+  execution; the automatic order is restricted to the regular XNYS session.
 - No automatic assumption about QII or the user's local tax filing. Tax attributes
   remain annual issuer/broker facts outside the order-sizing algorithm.
 - No order, fill, or tax claim inferred from a Shadow Preview.

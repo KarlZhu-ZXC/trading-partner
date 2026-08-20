@@ -203,17 +203,80 @@ class BrokerOrderService:
             return self._failure(request_id, now, exc)
 
     async def submit(self, request: BrokerOrderSubmitInput) -> ToolEnvelope[BrokerOrderIntentDTO]:
+        """Submit one explicitly confirmed current-chat order."""
+
+        return await self._submit_authorized(
+            order_intent_id=request.order_intent_id,
+            idempotency_key=request.idempotency_key,
+            confirmed_by=request.confirmed_by,
+            submitted_via=request.submitted_via,
+            authorization_note=request.authorization_note.strip(),
+        )
+
+    async def submit_sgov_cash_sweep(
+        self,
+        *,
+        order_intent_id: str,
+        idempotency_key: str,
+        minimum_cash_reserve: Decimal,
+        max_quote_age_seconds: int = 30,
+        max_spread: Decimal = Decimal("0.02"),
+    ) -> ToolEnvelope[BrokerOrderIntentDTO]:
+        """Use the durable SGOV-only scheduler authorization.
+
+        This is intentionally not part of the public MCP input contract.  It
+        cannot submit another symbol, a sell, an extended-hours order, or an
+        unbounded order, and it re-checks the cash reserve immediately before
+        the Provider call.
+        """
+
+        if minimum_cash_reserve < 0:
+            raise ValueError("minimum_cash_reserve cannot be negative")
+        if max_quote_age_seconds < 1 or max_spread < 0:
+            raise ValueError("SGOV quote guards are invalid")
+        return await self._submit_authorized(
+            order_intent_id=order_intent_id,
+            idempotency_key=idempotency_key,
+            confirmed_by="user",
+            submitted_via="sgov_scheduler",
+            authorization_note=(
+                "Persistent user authorization: buy SGOV only through the dedicated "
+                "cash-sweep scheduler; all other live actions remain confirmation-gated."
+            ),
+            minimum_cash_reserve=minimum_cash_reserve,
+            require_sgov_cash_sweep=True,
+            max_quote_age_seconds=max_quote_age_seconds,
+            max_spread=max_spread,
+        )
+
+    async def _submit_authorized(
+        self,
+        *,
+        order_intent_id: str,
+        idempotency_key: str,
+        confirmed_by: str,
+        submitted_via: str,
+        authorization_note: str,
+        minimum_cash_reserve: Decimal = Decimal(0),
+        require_sgov_cash_sweep: bool = False,
+        max_quote_age_seconds: int = 30,
+        max_spread: Decimal = Decimal("0.02"),
+    ) -> ToolEnvelope[BrokerOrderIntentDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         now = self._clock.now()
+        acquired = False
+        provider_submission_received = False
         try:
             claimed, acquired = self._repository.claim_submit(
-                order_intent_id=request.order_intent_id,
+                order_intent_id=order_intent_id,
                 now=now,
-                submit_idempotency_key=request.idempotency_key,
-                confirmed_by=request.confirmed_by,
-                submitted_via=request.submitted_via,
-                authorization_note=request.authorization_note.strip(),
+                submit_idempotency_key=idempotency_key,
+                confirmed_by=confirmed_by,
+                submitted_via=submitted_via,
+                authorization_note=authorization_note,
             )
+            if require_sgov_cash_sweep:
+                self._validate_sgov_cash_sweep_intent(claimed)
             if claimed.status is BrokerOrderIntentStatus.SUBMITTED:
                 return ToolEnvelope.success(
                     request_id=request_id,
@@ -227,9 +290,6 @@ class BrokerOrderService:
                     warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
                 )
             if claimed.status is not BrokerOrderIntentStatus.SUBMITTING or not acquired:
-                # `acquired=False` marks an idempotent replay of a submit that
-                # another call already claimed; sending again could duplicate
-                # the broker order, so the replay stays a conflict.
                 raise BrokerOrderStateConflict(
                     "Broker order submit was already claimed and will not be sent again",
                     details={"status": claimed.status.value},
@@ -237,11 +297,28 @@ class BrokerOrderService:
             account = await self._provider.get_account_state(
                 account_ref=claimed.account_ref, observed_at=self._clock.now()
             )
-            self._validate_intent_account(claimed, account)
+            self._validate_intent_account(
+                claimed,
+                account,
+                minimum_cash_reserve=minimum_cash_reserve,
+            )
+            if require_sgov_cash_sweep:
+                quote = await self._quotes.get_quote(
+                    instrument_id=claimed.instrument_id,
+                    as_of=self._clock.now(),
+                )
+                self._validate_sgov_execution_quote(
+                    claimed,
+                    quote,
+                    now=self._clock.now(),
+                    max_quote_age_seconds=max_quote_age_seconds,
+                    max_spread=max_spread,
+                )
             submission = await self._provider.place_order(
                 account_ref=claimed.account_ref,
                 order_payload=claimed.order_payload,
             )
+            provider_submission_received = True
             saved = self._repository.mark_submitted(
                 order_intent_id=claimed.order_intent_id,
                 broker_order_id=submission.broker_order_id,
@@ -258,8 +335,8 @@ class BrokerOrderService:
                     "quantity": saved.quantity,
                     "order_type": saved.order_type.value,
                     "payload_sha256": saved.payload_sha256,
-                    "confirmed_by": request.confirmed_by,
-                    "submitted_via": request.submitted_via,
+                    "confirmed_by": confirmed_by,
+                    "submitted_via": submitted_via,
                 },
                 request_id=request_id,
             )
@@ -280,7 +357,7 @@ class BrokerOrderService:
             )
         except BrokerOrderSubmissionUncertain as exc:
             saved = self._repository.mark_unknown(
-                order_intent_id=request.order_intent_id,
+                order_intent_id=order_intent_id,
                 code=exc.code,
                 now=self._clock.now(),
             )
@@ -291,15 +368,42 @@ class BrokerOrderService:
                 data=BrokerOrderIntentDTO.from_domain(saved, execution_effect=True),
             )
         except Exception as exc:  # noqa: BLE001
-            current = self._repository.get(request.order_intent_id)
+            current = self._repository.get(order_intent_id)
             data = None
-            if current is not None and current.status is BrokerOrderIntentStatus.SUBMITTING:
-                current = self._repository.mark_rejected(
-                    order_intent_id=current.order_intent_id,
-                    code=getattr(exc, "code", type(exc).__name__),
-                    now=self._clock.now(),
+            if (
+                acquired
+                and current is not None
+                and current.status is BrokerOrderIntentStatus.SUBMITTING
+            ):
+                if provider_submission_received:
+                    current = self._repository.mark_unknown(
+                        order_intent_id=current.order_intent_id,
+                        code="BROKER_ORDER_SUBMISSION_PERSISTENCE_UNCERTAIN",
+                        now=self._clock.now(),
+                    )
+                    data = BrokerOrderIntentDTO.from_domain(
+                        current,
+                        execution_effect=True,
+                    )
+                else:
+                    current = self._repository.mark_rejected(
+                        order_intent_id=current.order_intent_id,
+                        code=getattr(exc, "code", type(exc).__name__),
+                        now=self._clock.now(),
+                    )
+                    data = BrokerOrderIntentDTO.from_domain(current)
+            elif current is not None:
+                data = BrokerOrderIntentDTO.from_domain(
+                    current,
+                    execution_effect=(
+                        current.status
+                        in {
+                            BrokerOrderIntentStatus.SUBMITTING,
+                            BrokerOrderIntentStatus.SUBMITTED,
+                            BrokerOrderIntentStatus.UNKNOWN,
+                        }
+                    ),
                 )
-                data = BrokerOrderIntentDTO.from_domain(current)
             return self._failure(request_id, now, exc, data=data)
 
     async def status(self, request: BrokerOrderStatusInput) -> ToolEnvelope[BrokerOrderStatusDTO]:
@@ -321,10 +425,21 @@ class BrokerOrderService:
                     broker_order_id=intent.broker_order_id,
                     observed_at=now,
                 )
+                observed_status = observation.status.strip()
+                intent = self._repository.record_provider_observation(
+                    order_intent_id=intent.order_intent_id,
+                    provider_status=observed_status,
+                    now=observation.observed_at,
+                    status=(
+                        BrokerOrderIntentStatus.CANCELLED
+                        if observed_status.upper() in {"CANCELED", "CANCELLED"}
+                        else None
+                    ),
+                )
             data = BrokerOrderStatusDTO(
                 intent=BrokerOrderIntentDTO.from_domain(intent),
                 provider_checked=observation is not None,
-                provider_status=observation.status if observation else intent.provider_status,
+                provider_status=intent.provider_status,
                 filled_quantity=observation.filled_quantity if observation else None,
                 remaining_quantity=observation.remaining_quantity if observation else None,
                 average_fill_price=observation.average_fill_price if observation else None,
@@ -390,7 +505,7 @@ class BrokerOrderService:
             await self._provider.cancel_order(
                 account_ref=intent.account_ref, broker_order_id=intent.broker_order_id
             )
-            saved = self._repository.mark_cancelled(
+            saved = self._repository.mark_cancel_requested(
                 order_intent_id=intent.order_intent_id, now=self._clock.now()
             )
             self._audit.append(
@@ -459,7 +574,10 @@ class BrokerOrderService:
 
     @staticmethod
     def _validate_intent_account(
-        intent: BrokerOrderIntent, account: BrokerExecutionAccountState
+        intent: BrokerOrderIntent,
+        account: BrokerExecutionAccountState,
+        *,
+        minimum_cash_reserve: Decimal = Decimal(0),
     ) -> None:
         BrokerOrderService._validate_values(
             instruction=intent.instruction,
@@ -468,7 +586,70 @@ class BrokerOrderService:
             order_type=intent.order_type,
             limit_price=intent.limit_price,
             account=account,
+            minimum_cash_reserve=minimum_cash_reserve,
         )
+
+    @staticmethod
+    def _validate_sgov_cash_sweep_intent(intent: BrokerOrderIntent) -> None:
+        expected_payload = {
+            "instrument_id": "etf:US:SGOV",
+            "symbol": "SGOV",
+            "instruction": BrokerOrderInstruction.BUY,
+            "order_type": BrokerOrderType.LIMIT,
+            "session": "NORMAL",
+            "duration": "DAY",
+        }
+        actual = {
+            "instrument_id": intent.instrument_id,
+            "symbol": intent.symbol,
+            "instruction": intent.instruction,
+            "order_type": intent.order_type,
+            "session": intent.session.value,
+            "duration": intent.duration.value,
+        }
+        if actual != expected_payload or intent.limit_price is None:
+            raise BrokerOrderStateConflict(
+                "The SGOV scheduler can submit only an SGOV BUY LIMIT DAY order in NORMAL session",
+                code="SGOV_AUTO_EXECUTION_BOUNDARY_VIOLATION",
+            )
+
+    @staticmethod
+    def _validate_sgov_execution_quote(
+        intent: BrokerOrderIntent,
+        quote: BrokerQuoteObservation,
+        *,
+        now: datetime,
+        max_quote_age_seconds: int,
+        max_spread: Decimal,
+    ) -> None:
+        if quote.instrument_id != "etf:US:SGOV" or quote.symbol.upper() != "SGOV":
+            raise DataContractError(
+                "The pre-submit quote does not identify SGOV",
+                code="SGOV_AUTO_QUOTE_IDENTITY_MISMATCH",
+            )
+        if quote.bid is None or quote.ask is None:
+            raise DataContractError(
+                "The pre-submit SGOV bid/ask is unavailable",
+                code="SGOV_AUTO_BID_ASK_UNAVAILABLE",
+            )
+        age_seconds = (now - quote.quote_at).total_seconds()
+        spread = quote.ask - quote.bid
+        assert intent.limit_price is not None
+        if age_seconds < -5 or age_seconds > max_quote_age_seconds:
+            raise DataContractError(
+                "The pre-submit SGOV quote is outside the freshness bound",
+                code="SGOV_AUTO_QUOTE_STALE",
+            )
+        if spread < 0 or spread > max_spread:
+            raise DataContractError(
+                "The pre-submit SGOV spread is outside the execution bound",
+                code="SGOV_AUTO_SPREAD_TOO_WIDE",
+            )
+        if abs(quote.ask - intent.limit_price) > max_spread:
+            raise DataContractError(
+                "The SGOV ask moved beyond the configured execution bound",
+                code="SGOV_AUTO_LIMIT_PRICE_MOVED",
+            )
 
     @staticmethod
     def _validate_values(
@@ -479,6 +660,7 @@ class BrokerOrderService:
         order_type: BrokerOrderType,
         limit_price: Decimal | None,
         account: BrokerExecutionAccountState,
+        minimum_cash_reserve: Decimal = Decimal(0),
     ) -> None:
         if account.margin_balance is None:
             raise DataContractError(
@@ -509,11 +691,19 @@ class BrokerOrderService:
                 )
             assert limit_price is not None
             required = limit_price * quantity
-            available = account.cash_balance - account.open_buy_order_reserve
+            available = (
+                account.cash_balance
+                - account.open_buy_order_reserve
+                - minimum_cash_reserve
+            )
             if required > available:
                 raise BrokerOrderRejected(
-                    "The BUY order exceeds cash after existing open BUY reserves",
-                    details={"required_notional": str(required), "available_cash": str(available)},
+                    "The BUY order exceeds cash after open BUY orders and the required reserve",
+                    details={
+                        "required_notional": str(required),
+                        "available_cash": str(available),
+                        "minimum_cash_reserve": str(minimum_cash_reserve),
+                    },
                     code="BROKER_CASH_GUARD_FAILED",
                 )
         else:

@@ -9,7 +9,9 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from application.dto.broker_execution import (
+    BrokerOrderCancelInput,
     BrokerOrderIntentPreviewInput,
+    BrokerOrderStatusInput,
     BrokerOrderSubmitInput,
 )
 from application.services.broker_order_service import BrokerOrderService
@@ -47,15 +49,40 @@ class _Audit:
 
 class _Quote:
     async def get_quote(self, *, instrument_id: str, as_of: datetime) -> BrokerQuoteObservation:
+        symbol = instrument_id.rsplit(":", 1)[-1]
+        if symbol == "SGOV":
+            bid, ask, last = Decimal("99.99"), Decimal("100"), Decimal("100")
+        else:
+            bid, ask, last = Decimal("312.90"), Decimal("313.10"), Decimal("313.00")
         return BrokerQuoteObservation(
             instrument_id=instrument_id,
-            symbol="AAPL",
+            symbol=symbol,
             quote_at=as_of,
-            bid=Decimal("312.90"),
-            ask=Decimal("313.10"),
-            last=Decimal("313.00"),
+            bid=bid,
+            ask=ask,
+            last=last,
             source="schwab",
         )
+
+
+class _MovingSgovQuote(_Quote):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_quote(self, *, instrument_id: str, as_of: datetime) -> BrokerQuoteObservation:
+        self.calls += 1
+        value = await super().get_quote(instrument_id=instrument_id, as_of=as_of)
+        if instrument_id == "etf:US:SGOV" and self.calls > 1:
+            return BrokerQuoteObservation(
+                instrument_id=instrument_id,
+                symbol="SGOV",
+                quote_at=as_of,
+                bid=Decimal("100.02"),
+                ask=Decimal("100.03"),
+                last=Decimal("100.02"),
+                source="schwab",
+            )
+        return value
 
 
 class _Provider:
@@ -63,7 +90,9 @@ class _Provider:
         self.uncertain = uncertain
         self.cash = Decimal(cash)
         self.place_calls = 0
+        self.cancel_calls = 0
         self.payloads: list[Mapping[str, object]] = []
+        self.order_status = "WORKING"
 
     async def get_account_state(
         self, *, account_ref: str, observed_at: datetime
@@ -94,7 +123,7 @@ class _Provider:
         return BrokerOrderStatusObservation(
             broker_order_id=broker_order_id,
             observed_at=observed_at,
-            status="WORKING",
+            status=self.order_status,
             filled_quantity=Decimal(0),
             remaining_quantity=Decimal(1),
             average_fill_price=None,
@@ -102,6 +131,7 @@ class _Provider:
 
     async def cancel_order(self, *, account_ref: str, broker_order_id: str) -> None:
         del account_ref, broker_order_id
+        self.cancel_calls += 1
 
 
 def _service(tmp_path, provider: _Provider) -> BrokerOrderService:
@@ -221,6 +251,221 @@ async def test_uncertain_submit_is_persisted_and_never_retried(tmp_path) -> None
     assert replay.ok is False
     assert provider.place_calls == 1
     assert replay.errors[0].code == "BROKER_ORDER_STATE_CONFLICT"
+    assert [item.order_intent_id for item in service.list_unresolved()] == [
+        preview.data.order_intent_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_replayed_submitting_claim_never_calls_provider_again(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'claimed.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyBrokerOrderRepository(engine)
+    provider = _Provider()
+    service = BrokerOrderService(
+        repository,
+        provider,
+        _Quote(),
+        _Audit(),
+        FixedClock(NOW),
+        SequentialIdGenerator(),
+        DefaultSecretRedactor(),
+    )
+    preview = await service.preview(_preview_request())
+    assert preview.data is not None
+    repository.claim_submit(
+        order_intent_id=preview.data.order_intent_id,
+        now=NOW,
+        submit_idempotency_key="claimed-submit",
+        confirmed_by="user",
+        submitted_via="codex_chat",
+        authorization_note="Submit once.",
+    )
+
+    replay = await service.submit(
+        BrokerOrderSubmitInput(
+            order_intent_id=preview.data.order_intent_id,
+            idempotency_key="claimed-submit",
+            confirmed_by="user",
+            submitted_via="codex_chat",
+            authorization_note="Submit once.",
+        )
+    )
+
+    assert replay.ok is False
+    assert replay.data is not None and replay.data.status == "SUBMITTING"
+    assert provider.place_calls == 0
+    assert [item.status for item in service.list_unresolved()] == ["SUBMITTING"]
+
+
+@pytest.mark.asyncio
+async def test_sgov_scheduler_enforces_symbol_and_cash_reserve(tmp_path) -> None:
+    provider = _Provider(cash="2250")
+    service = _service(tmp_path, provider)
+    preview = await service.preview(
+        _preview_request(
+            instrument_id="etf:US:SGOV",
+            quantity=1,
+            limit_price="100",
+            idempotency_key="sgov-auto-preview",
+        )
+    )
+    assert preview.data is not None
+
+    result = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="sgov-auto-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+
+    assert result.ok is False
+    assert result.errors[0].code == "BROKER_CASH_GUARD_FAILED"
+    assert provider.place_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_sgov_scheduler_submits_exact_normal_session_buy_once(tmp_path) -> None:
+    provider = _Provider(cash="10000")
+    service = _service(tmp_path, provider)
+    preview = await service.preview(
+        _preview_request(
+            instrument_id="etf:US:SGOV",
+            quantity=50,
+            limit_price="100",
+            idempotency_key="sgov-success-preview",
+        )
+    )
+    assert preview.data is not None
+
+    first = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="sgov-success-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+    replay = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="sgov-success-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+
+    assert first.ok is replay.ok is True
+    assert first.data is not None and first.data.status == "SUBMITTED"
+    assert provider.place_calls == 1
+    assert provider.payloads == [
+        {
+            "session": "NORMAL",
+            "duration": "DAY",
+            "orderType": "LIMIT",
+            "price": "100",
+            "quantity": 50,
+            "orderStrategyType": "SINGLE",
+            "orderLegCollection": [
+                {
+                    "instruction": "BUY",
+                    "quantity": 50,
+                    "instrument": {"symbol": "SGOV", "assetType": "EQUITY"},
+                }
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sgov_scheduler_blocks_when_ask_moves_before_submit(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'moved.db'}")
+    Base.metadata.create_all(engine)
+    provider = _Provider(cash="10000")
+    service = BrokerOrderService(
+        SqlAlchemyBrokerOrderRepository(engine),
+        provider,
+        _MovingSgovQuote(),
+        _Audit(),
+        FixedClock(NOW),
+        SequentialIdGenerator(),
+        DefaultSecretRedactor(),
+    )
+    preview = await service.preview(
+        _preview_request(
+            instrument_id="etf:US:SGOV",
+            quantity=50,
+            limit_price="100",
+            idempotency_key="sgov-moved-preview",
+        )
+    )
+    assert preview.data is not None
+
+    result = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="sgov-moved-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+
+    assert result.ok is False
+    assert result.errors[0].code == "SGOV_AUTO_LIMIT_PRICE_MOVED"
+    assert provider.place_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_successful_provider_write_with_failed_persistence_becomes_unknown(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'persist-failure.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyBrokerOrderRepository(engine)
+    provider = _Provider(cash="10000")
+    service = BrokerOrderService(
+        repository,
+        provider,
+        _Quote(),
+        _Audit(),
+        FixedClock(NOW),
+        SequentialIdGenerator(),
+        DefaultSecretRedactor(),
+    )
+    preview = await service.preview(
+        _preview_request(
+            instrument_id="etf:US:SGOV",
+            quantity=50,
+            limit_price="100",
+            idempotency_key="sgov-persistence-preview",
+        )
+    )
+    assert preview.data is not None
+
+    def fail_mark_submitted(**_: object) -> None:
+        raise RuntimeError("simulated durable receipt failure")
+
+    monkeypatch.setattr(repository, "mark_submitted", fail_mark_submitted)
+    result = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="sgov-persistence-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+
+    assert result.ok is False
+    assert result.data is not None and result.data.status == "UNKNOWN"
+    assert result.data.execution_effect is True
+    assert provider.place_calls == 1
+    assert [item.status for item in service.list_unresolved()] == ["UNKNOWN"]
+
+
+@pytest.mark.asyncio
+async def test_sgov_scheduler_rejects_non_sgov_intent(tmp_path) -> None:
+    provider = _Provider()
+    service = _service(tmp_path, provider)
+    preview = await service.preview(_preview_request())
+    assert preview.data is not None
+
+    result = await service.submit_sgov_cash_sweep(
+        order_intent_id=preview.data.order_intent_id,
+        idempotency_key="invalid-auto-submit",
+        minimum_cash_reserve=Decimal("2200"),
+    )
+
+    assert result.ok is False
+    assert result.errors[0].code == "SGOV_AUTO_EXECUTION_BOUNDARY_VIOLATION"
+    assert provider.place_calls == 0
 
 
 @pytest.mark.asyncio
@@ -233,3 +478,111 @@ async def test_buy_preview_uses_cash_not_buying_power(tmp_path) -> None:
     assert result.ok is False
     assert result.errors[0].code == "BROKER_CASH_GUARD_FAILED"
     assert provider.place_calls == 0
+
+
+async def _submitted_order(tmp_path, provider: _Provider) -> tuple[BrokerOrderService, str]:
+    service = _service(tmp_path, provider)
+    preview = await service.preview(_preview_request())
+    assert preview.data is not None
+    submit = await service.submit(
+        BrokerOrderSubmitInput(
+            order_intent_id=preview.data.order_intent_id,
+            idempotency_key="aapl-lifecycle-submit",
+            confirmed_by="user",
+            submitted_via="codex_chat",
+            authorization_note="Submit the exact preview once.",
+        )
+    )
+    assert submit.data is not None and submit.data.status == "SUBMITTED"
+    return service, preview.data.order_intent_id
+
+
+@pytest.mark.asyncio
+async def test_cancel_request_remains_cancel_requested_until_provider_confirmation(
+    tmp_path,
+) -> None:
+    provider = _Provider()
+    service, order_intent_id = await _submitted_order(tmp_path, provider)
+
+    cancelled = await service.cancel(
+        BrokerOrderCancelInput(
+            order_intent_id=order_intent_id,
+            idempotency_key="aapl-lifecycle-cancel",
+            confirmed_by="user",
+            submitted_via="codex_chat",
+            authorization_note="Cancel the exact submitted order.",
+        )
+    )
+
+    assert cancelled.ok is True
+    assert cancelled.data is not None
+    assert cancelled.data.status == "CANCEL_REQUESTED"
+    assert cancelled.data.provider_status == "CANCEL_REQUEST_ACCEPTED"
+    assert provider.cancel_calls == 1
+    assert [item.status for item in service.list_unresolved()] == ["CANCEL_REQUESTED"]
+
+    durable = await service.status(BrokerOrderStatusInput(order_intent_id=order_intent_id))
+    assert durable.ok is True
+    assert durable.data is not None
+    assert durable.data.intent.status == "CANCEL_REQUESTED"
+    assert durable.data.intent.provider_status == "CANCEL_REQUEST_ACCEPTED"
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_persists_provider_observation_and_later_cancel_confirmation(
+    tmp_path,
+) -> None:
+    provider = _Provider()
+    service, order_intent_id = await _submitted_order(tmp_path, provider)
+
+    working = await service.status(
+        BrokerOrderStatusInput(order_intent_id=order_intent_id, refresh_provider=True)
+    )
+    assert working.ok is True
+    assert working.data is not None
+    assert working.data.intent.status == "SUBMITTED"
+    assert working.data.intent.provider_status == "WORKING"
+
+    durable_working = await service.status(BrokerOrderStatusInput(order_intent_id=order_intent_id))
+    assert durable_working.ok is True
+    assert durable_working.data is not None
+    assert durable_working.data.intent.provider_status == "WORKING"
+
+    requested = await service.cancel(
+        BrokerOrderCancelInput(
+            order_intent_id=order_intent_id,
+            idempotency_key="aapl-lifecycle-cancel",
+            confirmed_by="user",
+            submitted_via="codex_chat",
+            authorization_note="Cancel the exact submitted order.",
+        )
+    )
+    assert requested.ok is True
+    assert requested.data is not None and requested.data.status == "CANCEL_REQUESTED"
+
+    provider.order_status = "FILLED"
+    terminal_non_cancel = await service.status(
+        BrokerOrderStatusInput(order_intent_id=order_intent_id, refresh_provider=True)
+    )
+    assert terminal_non_cancel.ok is True
+    assert terminal_non_cancel.data is not None
+    assert terminal_non_cancel.data.intent.status == "CANCEL_REQUESTED"
+    assert terminal_non_cancel.data.intent.provider_status == "FILLED"
+
+    provider.order_status = "CANCELED"
+    confirmed = await service.status(
+        BrokerOrderStatusInput(order_intent_id=order_intent_id, refresh_provider=True)
+    )
+
+    assert confirmed.ok is True
+    assert confirmed.data is not None
+    assert confirmed.data.intent.status == "CANCELLED"
+    assert confirmed.data.intent.provider_status == "CANCELED"
+
+    durable_confirmed = await service.status(
+        BrokerOrderStatusInput(order_intent_id=order_intent_id)
+    )
+    assert durable_confirmed.ok is True
+    assert durable_confirmed.data is not None
+    assert durable_confirmed.data.intent.status == "CANCELLED"
+    assert durable_confirmed.data.intent.provider_status == "CANCELED"
