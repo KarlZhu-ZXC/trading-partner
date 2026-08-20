@@ -263,7 +263,7 @@ class AppSettings(BaseSettings):
 
     # Scheduled Schwab SGOV Shadow plan. Installing the dedicated launchd job is
     # the enablement gate; these values only define its calculation policy.
-    sgov_shadow_hard_cash_floor: Decimal = Field(default=Decimal("2000"), ge=0)
+    sgov_shadow_hard_cash_floor: Decimal = Field(default=Decimal("3000"), ge=0)
     sgov_shadow_operational_buffer: Decimal = Field(default=Decimal("200"), ge=0)
     sgov_shadow_minimum_order_notional: Decimal = Field(default=Decimal("1000"), gt=0)
 

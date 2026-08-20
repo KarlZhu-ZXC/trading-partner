@@ -23,7 +23,7 @@ closed before any future order write is enabled.
 ## Default Shadow policy
 
 ```text
-hard cash floor           $2,000 per account
+hard cash floor           $3,000 per account
 operational buffer          $200 per account
 minimum order notional    $1,000
 price reference           current Schwab ask
@@ -64,7 +64,7 @@ the separate live-order service.
   15:45 `America/New_York` on ordinary sessions and 15 minutes before an official
   early close; weekends and exchange holidays make no Provider request.
 - Each due run explicitly refreshes Schwab only, then calculates every returned
-  Schwab account from `cashBalance`, active BUY reserves, the $2,000 floor, and the
+  Schwab account from `cashBalance`, active BUY reserves, the $3,000 floor, and the
   $200 buffer. A stale quote or another blocker stays visible and no order is sent.
 - One stable Outbox identity per market session prevents duplicate account refreshes
   and duplicate Telegram cards. The mobile notification uses vertical account blocks;

@@ -572,7 +572,7 @@ async def test_broker_order_manage_keeps_shadow_preview_and_live_write_closed() 
     assert result["data"] == {"shadow_only": True, "execution_effect": False}
     request = container.services.broker_order_preview.preview.await_args.args[0]
     assert request.instrument_id == "etf:US:SGOV"
-    assert request.hard_cash_floor == 2000
+    assert request.hard_cash_floor == 3000
 
     exact = await registry.invoke(
         "broker_order_manage",

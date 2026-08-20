@@ -44,7 +44,7 @@ def test_phase2_watchlist_defaults() -> None:
     assert settings.watchlist_default_group == "Favorites"
     assert settings.manual_watchlist_csv_path is None
     assert settings.post_market_sync_delay_minutes == 10
-    assert settings.sgov_shadow_hard_cash_floor == Decimal("2000")
+    assert settings.sgov_shadow_hard_cash_floor == Decimal("3000")
     assert settings.sgov_shadow_operational_buffer == Decimal("200")
     assert settings.sgov_shadow_minimum_order_notional == Decimal("1000")
     assert (

@@ -359,7 +359,7 @@ uv run trading-partner-account-transactions \
 orders；复杂订单或订单读取失败保留 typed warning。MCP 不读取或保存交易解锁凭据。
 自动现金管理只把 `currentBalances.cashBalance` 当作可用现金事实，不以 `buyingPower`、
 `liquidationValue`、`totalCash` 或推断值代替。`broker_order_manage/cash_sweep_preview` 默认逐账户保留
-`$2,000` hard floor 与 `$200` operating buffer，再扣除 active BUY 剩余限价名义金额；
+`$3,000` hard floor 与 `$200` operating buffer，再扣除 active BUY 剩余限价名义金额；
 SELL 不占用现金。它按 SGOV broker ask 计算整数股，并返回 LIMIT/DAY/NORMAL 假设 payload。
 周末/陈旧报价、价差过宽、融资非零或未知、cashBalance 缺失、open-order 读取失败都会显式
 阻断 Shadow 可执行性；所有 Shadow 结果均为
