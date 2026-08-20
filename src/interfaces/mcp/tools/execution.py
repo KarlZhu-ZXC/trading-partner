@@ -32,7 +32,7 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
     async def cash_sweep_preview(
         account_refs: tuple[str, ...] = (),
         instrument_id: str = "etf:US:SGOV",
-        hard_cash_floor: Decimal = Decimal("2000"),
+        hard_cash_floor: Decimal = Decimal("3000"),
         operational_buffer: Decimal = Decimal("200"),
         minimum_order_notional: Decimal = Decimal("1000"),
         max_quote_age_seconds: int = 30,

@@ -132,26 +132,26 @@ async def test_shadow_uses_cash_balance_and_ignores_buying_power_and_sell_orders
     assert envelope.errors == ()
     assert envelope.data is not None
     first, second = envelope.data.accounts
-    assert (first.quantity, first.estimated_notional) == (56, Decimal("5627.44"))
-    assert first.projected_cash_after_all_open_buys == Decimal("2254.20")
-    assert first.residual_above_reserve == Decimal("54.20")
-    assert (second.quantity, second.estimated_notional) == (148, Decimal("14872.52"))
+    assert (first.quantity, first.estimated_notional) == (46, Decimal("4622.54"))
+    assert first.projected_cash_after_all_open_buys == Decimal("3259.10")
+    assert first.residual_above_reserve == Decimal("59.10")
+    assert (second.quantity, second.estimated_notional) == (138, Decimal("13867.62"))
     assert second.open_buy_order_reserve == 0
-    assert second.projected_cash_after_all_open_buys == Decimal("2214.92")
-    assert envelope.data.total_quantity == 204
-    assert envelope.data.total_estimated_notional == Decimal("20499.96")
+    assert second.projected_cash_after_all_open_buys == Decimal("3219.82")
+    assert envelope.data.total_quantity == 184
+    assert envelope.data.total_estimated_notional == Decimal("18490.16")
     assert envelope.data.policy["cash_source"] == "currentBalances.cashBalance"
     assert first.schwab_order_payload == {
         "session": "NORMAL",
         "duration": "DAY",
         "orderType": "LIMIT",
         "price": "100.49",
-        "quantity": 56,
+        "quantity": 46,
         "orderStrategyType": "SINGLE",
         "orderLegCollection": [
             {
                 "instruction": "BUY",
-                "quantity": 56,
+                "quantity": 46,
                 "instrument": {"symbol": "SGOV", "assetType": "EQUITY"},
             }
         ],
@@ -181,8 +181,8 @@ async def test_shadow_reserves_open_buy_orders_before_sizing(
     assert envelope.data is not None
     account = envelope.data.accounts[0]
     assert account.open_buy_order_reserve == Decimal("1000")
-    assert account.quantity == 46
-    assert account.projected_cash_after_all_open_buys == Decimal("2259.10")
+    assert account.quantity == 36
+    assert account.projected_cash_after_all_open_buys == Decimal("3264.00")
 
 
 @pytest.mark.asyncio
@@ -200,7 +200,7 @@ async def test_stale_quote_is_calculated_but_never_presented_as_executable(
 
     assert envelope.data is not None
     account = envelope.data.accounts[0]
-    assert account.quantity == 56
+    assert account.quantity == 46
     assert account.status == "INDICATIVE"
     assert account.blocker_codes == ("BROKER_QUOTE_STALE",)
     assert envelope.degraded is True

@@ -271,7 +271,7 @@ uv run trading-partner-sgov-plan-scheduler uninstall
 普通交易日 15:45 America/New_York 只做准备检查；15:55 再刷新并自动提交合格账户的
 `SGOV BUY LIMIT · DAY · NORMAL`，官方提前收盘日分别使用收盘前 15 和 5 分钟。
 launchd 每小时 `:45` 与 `:55` 只做本地到期判断，休市日和其他时段不访问 Schwab。
-每账户按 `$2,000 + $200 + active BUY reserve` 保留现金，且提交前再次检查 margin、
+每账户按 `$3,000 + $200 + active BUY reserve` 保留现金，且提交前再次检查 margin、
 现金、bid/ask、30 秒报价年龄和 `$0.02` 最大价差。每账户/交易日使用稳定的 preview/
 submit 幂等键；`SUBMITTING`/`UNKNOWN` 不会自动重试。完成结果通过 SYSTEM Outbox
 发送，回执延长至收盘后 24 小时；不调用 Codex/LLM。此授权不包含卖出、撤单、改单、

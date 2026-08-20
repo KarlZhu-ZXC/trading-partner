@@ -187,7 +187,7 @@ async def test_due_run_refreshes_only_schwab_and_enqueues_one_shadow_plan() -> N
     assert result.refreshed_snapshot_ids == ("snapshot_a", "snapshot_b")
     assert portfolio.calls == preview.calls == notifications.flush_calls == 1
     assert preview.request.account_refs == ("schwab-account-a", "schwab-account-b")
-    assert preview.request.hard_cash_floor == Decimal("2000")
+    assert preview.request.hard_cash_floor == Decimal("3000")
     assert notifications.enqueued[0]["idempotency_key"] == "sgov-shadow-plan:2026-08-10"
     assert notifications.enqueued[0]["expires_at"] == session.close_at
     assert "合计：204 股 / $20499.96" in notifications.enqueued[0]["body"]

@@ -30,7 +30,7 @@ class BrokerOrderPreviewInput(_DTO):
     mode: Literal["cash_sweep_shadow"] = "cash_sweep_shadow"
     account_refs: tuple[str, ...] = ()
     instrument_id: str = "etf:US:SGOV"
-    hard_cash_floor: Decimal = Field(default=Decimal("2000"), ge=0)
+    hard_cash_floor: Decimal = Field(default=Decimal("3000"), ge=0)
     operational_buffer: Decimal = Field(default=Decimal("200"), ge=0)
     minimum_order_notional: Decimal = Field(default=Decimal("1000"), gt=0)
     max_quote_age_seconds: int = Field(default=30, ge=1, le=3600)

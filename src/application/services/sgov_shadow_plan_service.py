@@ -37,7 +37,7 @@ class SgovShadowPlanService:
         broker_orders: BrokerOrderService | None = None,
         notifications: NotificationService,
         clock: Clock,
-        hard_cash_floor: Decimal = Decimal("2000"),
+        hard_cash_floor: Decimal = Decimal("3000"),
         operational_buffer: Decimal = Decimal("200"),
         minimum_order_notional: Decimal = Decimal("1000"),
         max_quote_age_seconds: int = 30,
