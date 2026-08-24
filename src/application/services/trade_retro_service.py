@@ -67,6 +67,12 @@ _BUY_DECISIONS = {DecisionType.INITIATE_INTENT.value, DecisionType.ADD_INTENT.va
 _SELL_DECISIONS = {DecisionType.REDUCE_INTENT.value, DecisionType.EXIT_INTENT.value}
 
 
+def _llm_failure_warning_code(exc: BaseException) -> str:
+    if isinstance(exc, TradingPartnerError):
+        return f"TRADE_RETRO_LLM_{exc.code}"
+    return "TRADE_RETRO_LLM_UNEXPECTED_ERROR"
+
+
 class TradeRetroService:
     def __init__(
         self,
@@ -267,8 +273,13 @@ class TradeRetroService:
                     summary = response.summary_markdown
                     llm_provider = response.provider_name
                     llm_model = response.model
-                except Exception:  # noqa: BLE001 - deterministic result remains valid
-                    warning_codes.append("TRADE_RETRO_LLM_UNAVAILABLE")
+                except Exception as exc:  # noqa: BLE001 - deterministic result remains valid
+                    warning_codes.extend(
+                        (
+                            "TRADE_RETRO_LLM_UNAVAILABLE",
+                            _llm_failure_warning_code(exc),
+                        )
+                    )
             elif use_llm:
                 warning_codes.append("TRADE_RETRO_LLM_NOT_CONFIGURED")
             value = TradeRetroRun(

@@ -7,10 +7,7 @@ import {
   Blocks,
   BookOpenText,
   BriefcaseBusiness,
-  CalendarCheck,
   LayoutDashboard,
-  History,
-  ListChecks,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -27,7 +24,7 @@ import { GlobalNotifications } from "./global-notifications";
 
 export const CONSOLE_PAGE_LABELS = {
   overview: "Overview",
-  "decision-workbench": "Workbench",
+  "decision-workbench": "Journal",
   research: "Research",
   scorecards: "Scorecards",
   agenda: "Catalyst Agenda",
@@ -36,23 +33,19 @@ export const CONSOLE_PAGE_LABELS = {
   portfolio: "Portfolio",
   retro: "Trade Retro",
   operations: "Operations",
-  chat: "Agent Chat",
 } as const;
 
 type ConsolePageKey = keyof typeof CONSOLE_PAGE_LABELS;
-type NavigationItem = { href: string; key: Exclude<ConsolePageKey, "chat">; icon: LucideIcon };
+type NavigationItem = { href: string; key: ConsolePageKey; icon: LucideIcon };
 
 const navigation: NavigationItem[] = [
   { href: "/", icon: LayoutDashboard, key: "overview" },
   { href: "/decision-workbench", icon: Workflow, key: "decision-workbench" },
   { href: "/research", icon: BookOpenText, key: "research" },
-  { href: "/scorecards", icon: ListChecks, key: "scorecards" },
-  { href: "/agenda", icon: CalendarCheck, key: "agenda" },
   { href: "/monitors", icon: Radar, key: "monitors" },
-  { href: "/capabilities", icon: Blocks, key: "capabilities" },
   { href: "/portfolio", icon: BriefcaseBusiness, key: "portfolio" },
-  { href: "/retro", icon: History, key: "retro" },
   { href: "/operations", icon: SlidersHorizontal, key: "operations" },
+  { href: "/capabilities", icon: Blocks, key: "capabilities" },
 ];
 
 const SIDEBAR_STORAGE_KEY = "trading-partner-sidebar-collapsed";
@@ -88,13 +81,19 @@ export function ConsoleShell({
       const storedCollapsed = window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
       const storedAgentCollapsed = window.localStorage.getItem(AGENT_RAIL_STORAGE_KEY) === "true";
       const overlayViewport = window.matchMedia("(max-width: 1100px)").matches;
-      document.documentElement.classList.toggle("sidebar-collapsed", overlayViewport || storedCollapsed);
+      const agentRequested = new URLSearchParams(window.location.search).get("agent") === "open";
+      const nextSidebarCollapsed = overlayViewport || storedCollapsed;
+      const nextAgentCollapsed = agentRequested ? false : overlayViewport || storedAgentCollapsed;
+      document.documentElement.classList.toggle(
+        "sidebar-collapsed",
+        agentRequested && overlayViewport ? true : nextSidebarCollapsed,
+      );
       document.documentElement.classList.toggle(
         "agent-rail-collapsed",
-        overlayViewport || storedAgentCollapsed,
+        nextAgentCollapsed,
       );
-      setCollapsed(overlayViewport || storedCollapsed);
-      setAgentRailCollapsed(overlayViewport || storedAgentCollapsed);
+      setCollapsed(agentRequested && overlayViewport ? true : nextSidebarCollapsed);
+      setAgentRailCollapsed(nextAgentCollapsed);
       setOverlayViewport(overlayViewport);
     } catch {
       // The expanded default remains usable when storage is unavailable.

@@ -19,8 +19,11 @@ from application.services.monitor_judgment_service import (
 )
 from domain.common.enums import TradingSession
 from domain.common.errors import DataContractError, ProviderTimeoutError
+from domain.monitoring.enums import MonitorJudgmentConclusion
+from domain.monitoring.models import MonitorJudgment
 from domain.us_market.enums import USBarInterval
 from infrastructure.providers.llm import (
+    BailianChatMonitorJudgmentProvider,
     BailianMonitorJudgmentProvider,
     DeepSeekMonitorJudgmentProvider,
 )
@@ -183,6 +186,70 @@ async def test_bailian_adapter_retries_empty_max_reasoning_once_at_high() -> Non
 
     assert efforts == ["max", "high"]
     assert result.reasoning_effort_used == "high"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bailian_deepseek_chat_enforces_json_and_repairs_structure_once() -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        content = "not json" if len(payloads) == 1 else json.dumps(
+            {
+                "urgency": "WATCH",
+                "phase": "A",
+                "market_state": "确定性事实没有变化",
+                "divergence": "NONE",
+                "conclusion": "WAIT",
+                "quantity_min": 0,
+                "quantity_max": 0,
+                "summary": "继续等待新的确认。",
+                "evidence_feature_ids": ["sessions_aligned"],
+                "next_trigger": "等待新的确定性触发",
+                "invalidation": "关键事实不可用时失效",
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(
+            200,
+            json={
+                "model": "deepseek-v4-flash-0731",
+                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+            },
+        )
+
+    client = httpx.AsyncClient(
+        base_url="https://example.cn/compatible-mode/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    provider = BailianChatMonitorJudgmentProvider(
+        api_key="test-bailian-key",
+        base_url="https://example.cn/compatible-mode/v1",
+        model="deepseek-v4-flash-0731",
+        reasoning_effort="max",
+        timeout_seconds=10,
+        max_output_tokens=3000,
+        client=client,
+    )
+
+    result = await provider.judge(
+        MonitorJudgmentRequest(
+            playbook="Wait.",
+            confirmed_state_json="{}",
+            feature_snapshot_json='{"sessions_aligned":true}',
+            allowed_feature_ids=("sessions_aligned",),
+        )
+    )
+
+    assert result.summary == "继续等待新的确认。"
+    assert result.reasoning_effort_used == "high"
+    assert provider.provider_name == "bailian"
+    assert len(payloads) == 2
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+    assert payloads[1]["response_format"] == {"type": "json_object"}
+    assert "previous answer did not satisfy" in payloads[1]["messages"][-1]["content"]  # type: ignore[index]
     await client.aclose()
 
 
@@ -670,6 +737,68 @@ def test_fallback_contract_failure_notification_explains_call_path() -> None:
     assert "模型输出结构校验；未采用不合规结果" in notification.body
 
 
+def test_weekend_proxy_overrides_model_otc_wording_and_labels_notification_source() -> None:
+    ids = MagicMock()
+    ids.new.return_value = "monitor_notification_weekend"
+    service = MonitorJudgmentService(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), ids
+    )
+    raw = MonitorJudgmentResponse(
+        urgency="WATCH",
+        phase="PYRAMID_WAIT",
+        market_state="周六OTC黄金报价新鲜。",
+        divergence="NONE",
+        conclusion="HOLD",
+        quantity_min=0,
+        quantity_max=0,
+        summary="维持观察。",
+        evidence_feature_ids=(),
+        next_trigger="等待美股常规时段。",
+        invalidation="关键结构失效时复核。",
+    )
+
+    normalized = service._validate(  # noqa: SLF001
+        raw,
+        "{}",
+        {
+            "warning_codes": (
+                "PAXG_USDC_WEEKEND_PROXY",
+                "WEEKEND_PROXY_NOT_XAUUSD_SPOT",
+            ),
+            "quote_sessions_aligned": False,
+        },
+        (),
+    )
+    judgment = SimpleNamespace(
+        status="SUCCEEDED",
+        quantity_max=0,
+        quantity_min=0,
+        urgency=normalized.urgency,
+        phase=normalized.phase,
+        conclusion=MonitorJudgmentConclusion.HOLD,
+        market_state=normalized.market_state,
+        summary=normalized.summary,
+        divergence=normalized.divergence,
+        evidence_feature_ids=(),
+        next_trigger=normalized.next_trigger,
+        invalidation=normalized.invalidation,
+        warning_codes=("PAXG_USDC_WEEKEND_PROXY",),
+        created_at=datetime.now(UTC),
+    )
+    notification = service._notification(  # noqa: SLF001
+        SimpleNamespace(
+            name="黄金监控", primary_instrument_id="commodity_spot:OTC:XAUUSD"
+        ),
+        judgment,
+        SimpleNamespace(event_id="monitor_event_weekend"),
+    )
+
+    assert normalized.market_state.startswith("周末参考：Binance PAXG/USDC")
+    assert "非XAUUSD OTC、非LBMA" in normalized.market_state
+    assert "周六OTC黄金报价新鲜" not in normalized.market_state
+    assert notification.title == "🧭 XAUUSD（PAXG周末参考） · HOLD"
+
+
 @pytest.mark.asyncio
 async def test_model_failure_emits_typed_operational_alert_once() -> None:
     now = datetime.now(UTC)
@@ -736,6 +865,163 @@ async def test_model_failure_emits_typed_operational_alert_once() -> None:
     assert repeated is not None
     assert repeated.event is None
     assert repeated.notification is None
+
+
+@pytest.mark.asyncio
+async def test_neutral_hold_watch_wait_oscillation_does_not_notify_every_interval() -> None:
+    now = datetime.now(UTC)
+    previous = MonitorJudgment(
+        judgment_id="monitor_judgment_previous",
+        run_id="monitor_run_previous",
+        monitor_id="monitor_gold",
+        monitor_version=1,
+        status="SUCCEEDED",
+        urgency="WATCH",
+        phase="PYRAMID_WAIT",
+        market_state="等待同窗报价。",
+        divergence="NONE",
+        conclusion=MonitorJudgmentConclusion.HOLD,
+        quantity_min=0,
+        quantity_max=0,
+        summary="维持观察。",
+        evidence_feature_ids=(),
+        next_trigger="等待常规时段。",
+        invalidation="结构失效时复核。",
+        feature_signature="old-signature",
+        result_fingerprint="old-fingerprint",
+        provider="bailian",
+        model="qwen3.8-max",
+        reasoning_effort="high",
+        prompt_version="v1",
+        warning_codes=(),
+        error_codes=(),
+        created_at=now - timedelta(hours=4),
+    )
+    repository = MagicMock()
+    repository.latest_judgment.return_value = previous
+    repository.list_judgments.return_value = (previous,)
+    provider = MagicMock(
+        provider_name="bailian", model="qwen3.8-max", reasoning_effort="high"
+    )
+    provider.judge = AsyncMock(
+        return_value=MonitorJudgmentResponse(
+            urgency="WATCH",
+            phase="PYRAMID_WAIT",
+            market_state="仍等待同窗报价。",
+            divergence="NONE",
+            conclusion="WAIT",
+            quantity_min=0,
+            quantity_max=0,
+            summary="仍无操作。",
+            evidence_feature_ids=(),
+            next_trigger="等待常规时段。",
+            invalidation="结构失效时复核。",
+            reasoning_effort_used="high",
+        )
+    )
+    clock = MagicMock()
+    clock.now.return_value = now
+    ids = MagicMock()
+    ids.new.return_value = "monitor_judgment_current"
+    service = MonitorJudgmentService(repository, MagicMock(), provider, clock, ids)
+    service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=(
+            {"warning_codes": (), "quote_sessions_aligned": True},
+            (),
+            "new-signature",
+        )
+    )
+    monitor = SimpleNamespace(
+        monitor_id="monitor_gold",
+        version=1,
+        name="黄金监控",
+        primary_instrument_id="commodity_spot:OTC:XAUUSD",
+        judgment_policy=SimpleNamespace(
+            playbook="等待确认。",
+            confirmed_state_json="{}",
+            prompt_version="v1",
+        ),
+    )
+
+    result = await service.evaluate(
+        run_id="monitor_run_current",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+
+    assert result is not None and result.judgment.conclusion is MonitorJudgmentConclusion.WAIT
+    assert result.event is None
+    assert result.notification is None
+
+
+@pytest.mark.asyncio
+async def test_consecutive_model_failures_with_different_codes_emit_one_interruption() -> None:
+    now = datetime.now(UTC)
+    previous = MonitorJudgment(
+        judgment_id="monitor_judgment_failed_previous",
+        run_id="monitor_run_failed_previous",
+        monitor_id="monitor_gold",
+        monitor_version=1,
+        status="FAILED",
+        urgency=None,
+        phase=None,
+        market_state=None,
+        divergence=None,
+        conclusion=None,
+        quantity_min=None,
+        quantity_max=None,
+        summary="复合判断暂时不可用；确定性规则结果仍然有效。",
+        evidence_feature_ids=(),
+        next_trigger=None,
+        invalidation=None,
+        feature_signature="failed-signature",
+        result_fingerprint=None,
+        provider="bailian",
+        model="qwen3.8-max",
+        reasoning_effort="high",
+        prompt_version="v1",
+        warning_codes=(),
+        error_codes=("DATA_CONTRACT_ERROR",),
+        created_at=now - timedelta(hours=4),
+    )
+    repository = MagicMock()
+    repository.latest_judgment.return_value = previous
+    repository.list_judgments.return_value = (previous,)
+    provider = MagicMock(
+        provider_name="bailian", model="qwen3.8-max", reasoning_effort="high"
+    )
+    provider.judge = AsyncMock(side_effect=ProviderTimeoutError("timed out"))
+    clock = MagicMock()
+    clock.now.return_value = now
+    ids = MagicMock()
+    ids.new.return_value = "monitor_judgment_failed_current"
+    service = MonitorJudgmentService(repository, MagicMock(), provider, clock, ids)
+    service._features = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+        return_value=({"warning_codes": ()}, (), "new-failed-signature")
+    )
+    monitor = SimpleNamespace(
+        monitor_id="monitor_gold",
+        version=1,
+        judgment_policy=SimpleNamespace(
+            playbook="等待确认。",
+            confirmed_state_json="{}",
+            prompt_version="v1",
+        ),
+    )
+
+    result = await service.evaluate(
+        run_id="monitor_run_failed_current",
+        monitor=monitor,
+        observations=(),
+        hard_transition=False,
+    )
+
+    assert result is not None and result.judgment.error_codes == (
+        "PROVIDER_TIMEOUT_ERROR",
+    )
+    assert result.event is None
+    assert result.notification is None
 
 
 @pytest.mark.asyncio

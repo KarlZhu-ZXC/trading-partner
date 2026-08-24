@@ -566,6 +566,31 @@ class CompactCapabilityRegistry:
         result = await capability.tool.run(arguments)
         return compact_mcp_result(result, capability=name, arguments=arguments)
 
+    async def invoke_uncompacted(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+    ) -> Any:
+        """Invoke the same validated capability without MCP transport compaction.
+
+        This path is reserved for trusted local application surfaces such as the
+        loopback Console BFF. It preserves the exact FastMCP/Pydantic validation,
+        confirmation policy, and handler used by :meth:`invoke`; only the final
+        15 KiB MCP transport projection is skipped.
+        """
+
+        capability = self._capabilities.get(name)
+        if capability is None:
+            raise CapabilityNotFoundError(name)
+        if (
+            capability.policy.confirmation is ConfirmationPolicy.MATCH_CAPABILITY_NAME
+            and confirmation != name
+        ):
+            raise CapabilityConfirmationRequiredError(name)
+        return await capability.tool.run(arguments)
+
     def bind_mcp(self, server: FastMCP) -> None:
         """Render the same registry as FastMCP transport tools."""
         for capability in self._capabilities.values():
@@ -1549,8 +1574,8 @@ def create_compact_capability_registry(
         registry,
         name="research_memory_append",
         description=(
-            "Append a confirmed Journal, Decision intent, or Catalyst Agenda version, "
-            "including an explicit durable outcome link; never create an order."
+            "Append a confirmed Journal, Decision intent, Broker-activity annotation, "
+            "or Catalyst Agenda version; never create an order."
         ),
         variants=(
             _spec(
@@ -1567,6 +1592,21 @@ def create_compact_capability_registry(
                 "agenda_item",
                 adapters.research_memory.catalyst_agenda_manage,
                 _all_fields(adapters.research_memory.catalyst_agenda_manage),
+            ),
+            _spec(
+                "activity_annotation",
+                adapters.research_memory.activity_annotation_append,
+                _all_fields(adapters.research_memory.activity_annotation_append),
+            ),
+            _spec(
+                "trade_cycle_override",
+                adapters.research_memory.trade_cycle_override_append,
+                _all_fields(adapters.research_memory.trade_cycle_override_append),
+            ),
+            _spec(
+                "behavior_review",
+                adapters.research_memory.behavior_review_run,
+                _all_fields(adapters.research_memory.behavior_review_run),
             ),
         ),
         policy=APPEND,

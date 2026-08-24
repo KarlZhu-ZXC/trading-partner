@@ -548,6 +548,19 @@ def _text_payload(item: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
+def _truncate_utf8_text(value: str, maximum_bytes: int) -> str:
+    if maximum_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= maximum_bytes:
+        return value
+    marker = "…[TRUNCATED]".encode()
+    if maximum_bytes <= len(marker):
+        return marker[:maximum_bytes].decode("utf-8", errors="ignore")
+    prefix = encoded[: maximum_bytes - len(marker)].decode("utf-8", errors="ignore")
+    return f"{prefix}{marker.decode('utf-8')}"
+
+
 def compact_mcp_result(
     value: Any,
     *,
@@ -564,27 +577,48 @@ def compact_mcp_result(
             return value
     if is_content_block_list(value):
         compacted_blocks: list[object] = []
+        remaining_bytes = max_bytes
+        remaining_text_blocks = sum(
+            _content_type(item) == "text" for item in value
+        )
         for item in value:
             if _content_type(item) != "text":
                 compacted_blocks.append(item)
                 continue
+            block_budget = (
+                remaining_bytes
+                if remaining_text_blocks <= 1
+                else max(0, remaining_bytes // remaining_text_blocks)
+            )
+            remaining_text_blocks -= 1
             payload = _text_payload(item)
             if payload is None:
                 compacted_blocks.append(item)
                 continue
+            if len(payload.encode("utf-8")) <= block_budget:
+                encoded_text = payload
+                compacted_blocks.append(item)
+                remaining_bytes -= len(encoded_text.encode("utf-8"))
+                continue
             try:
                 parsed = json.loads(payload)
             except json.JSONDecodeError:
-                compacted_blocks.append(item)
+                encoded_text = _truncate_utf8_text(payload, block_budget)
+                compacted_blocks.append(_replace_text(item, encoded_text))
+                remaining_bytes -= len(encoded_text.encode("utf-8"))
                 continue
-            compacted = compact_tool_result(
-                parsed,
-                max_bytes=max_bytes,
-                capability=capability,
-                operation=operation,
-            )
-            encoded_text = encode_result(compacted).decode("utf-8")
+            if block_budget < MIN_RESULT_MAX_BYTES:
+                encoded_text = ""
+            else:
+                compacted = compact_tool_result(
+                    parsed,
+                    max_bytes=block_budget,
+                    capability=capability,
+                    operation=operation,
+                )
+                encoded_text = encode_result(compacted).decode("utf-8")
             compacted_blocks.append(_replace_text(item, encoded_text))
+            remaining_bytes -= len(encoded_text.encode("utf-8"))
         return compacted_blocks
     return compact_tool_result(
         value,

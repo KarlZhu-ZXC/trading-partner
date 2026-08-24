@@ -2,9 +2,10 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { Play, Plus, RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
 import { EntityBrowser } from "../components/entity-browser";
-import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, RefreshButton, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
+import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, HorizontalTabs, PageActionMenu, displayJson, formatDate, formatDecimal, monitorAnchorId, shortId } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { monitorRunPresentation } from "../lib/monitor-runs";
 import { useAgentPageContext } from "../lib/agent-page-context";
@@ -341,10 +342,17 @@ export default function MonitorsPage() {
     selected_monitor_id: selectedMonitorId,
     selected_run_id: selectedRunId,
   });
-  const dashboard = envelopeData<Dict>((result.data?.dashboard as Dict | undefined));
+  const dashboardEnvelope = (result.data?.dashboard as Dict | undefined) ?? {};
+  const dashboard = envelopeData<Dict>(dashboardEnvelope);
   const runs = envelopeData<Dict>((result.data?.runs as Dict | undefined));
   const events = envelopeData<Dict>((result.data?.events as Dict | undefined));
-  const dashboardItems = listOf<Dict>(dashboard, "items");
+  const dashboardItems = listOf<Dict>(dashboard, "items").filter((item) => (
+    item._truncated !== true
+    && item.monitor !== null
+    && typeof item.monitor === "object"
+    && typeof (item.monitor as Dict).monitor_id === "string"
+  ));
+  const dashboardTruncated = dashboardEnvelope._truncated === true;
   const items = dashboardItems.filter((item) => {
     const monitor = (item.monitor ?? {}) as Dict;
     return statusFilter === "ALL" || String(monitor.status ?? "").toUpperCase() === statusFilter;
@@ -564,12 +572,13 @@ export default function MonitorsPage() {
   const editingSelected = editingMonitor !== null && editingMonitor !== undefined && String(editingMonitor.monitor_id) === String(selectedDefinition.monitor_id);
 
   return (
-    <ConsoleShell active="monitors">
+    <ConsoleShell active="monitors" pageActions={<PageActionMenu ariaLabel="Monitors Page Actions" items={[
+      { id: "new", label: "New Monitor", description: "Open a new durable Monitor definition", icon: <Plus aria-hidden="true" />, onSelect: () => { setNewMonitorTemplate(null); setEditingMonitor(null); } },
+      { id: "run-due", label: running ? "Running Due Monitors…" : "Run Due Monitors", description: "Evaluate definitions that are currently due", icon: <Play aria-hidden="true" />, disabled: running, onSelect: () => { void runDue(); } },
+      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload durable Monitor data", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
+    ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
-        <div className="toolbar">
-          <p>Select one durable Monitor, then inspect its current state, rules, immutable runs, and transition events.</p>
-          <div className="toolbar-actions"><ActionButton onClick={() => { setNewMonitorTemplate(null); setEditingMonitor(null); }}>New Monitor</ActionButton><ActionButton onClick={runDue} busy={running}>Run Due Monitors</ActionButton><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
-        </div>
+        {dashboardTruncated && <ErrorNote role="alert">Monitor Library is incomplete because its durable dashboard result was truncated. Refresh after restarting the local Console API.</ErrorNote>}
         <ErrorNote>{runError}</ErrorNote>
         <ErrorNote role="alert">{resolutionError}</ErrorNote>
         {runReceipt !== null && <details className="run-receipt"><summary>View Run Receipt</summary><pre>{displayJson(runReceipt)}</pre></details>}
@@ -623,6 +632,7 @@ export default function MonitorsPage() {
                     <div className="symbol-tile large">{shortId(selectedDefinition.primary_instrument_id)}</div>
                     <div className="monitor-copy"><h2>{String(selectedDefinition.name ?? "Untitled Monitor")}</h2><span className="mono">{String(selectedDefinition.monitor_id)} · v{String(selectedDefinition.version ?? "—")}</span></div>
                     <div className="monitor-title-actions">
+                      {selectedDefinition.subject_id ? <Link href={`/decision-workbench?subject_id=${encodeURIComponent(String(selectedDefinition.subject_id))}&capture=decision`}>Record Decision</Link> : null}
                       <button type="button" onClick={() => setEditingMonitor(selectedDefinition)}>Edit</button>
                       {String(selectedDefinition.status ?? "").toUpperCase() === "ACTIVE" ? <button type="button" disabled={lifecycleId === String(selectedDefinition.monitor_id)} onClick={() => { void changeMonitorStatus(selectedDefinition, "PAUSED"); }}>{lifecycleId === String(selectedDefinition.monitor_id) ? "Working…" : "Pause"}</button> : <button className="restore-text" type="button" disabled={lifecycleId === String(selectedDefinition.monitor_id)} onClick={() => { void changeMonitorStatus(selectedDefinition, "ACTIVE"); }}>{lifecycleId === String(selectedDefinition.monitor_id) ? "Working…" : String(selectedDefinition.status ?? "").toUpperCase() === "ARCHIVED" ? "Restore & Activate" : "Activate"}</button>}
                       {String(selectedDefinition.status ?? "").toUpperCase() !== "ARCHIVED" && <button className="monitor-delete-button" type="button" disabled={archivingId === String(selectedDefinition.monitor_id)} onClick={() => { void archiveMonitor(selectedDefinition); }}>{archivingId === String(selectedDefinition.monitor_id) ? "Archiving…" : "Archive"}</button>}

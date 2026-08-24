@@ -25,6 +25,8 @@ from infrastructure.persistence.orm import (
     ResearchReportRow,
     SubjectEvidenceLinkRow,
     ThesisRevisionRow,
+    TradeCycleOverrideRevisionRow,
+    TransactionDecisionLinkRow,
 )
 
 _LISTENERS_REGISTERED = False
@@ -40,6 +42,8 @@ _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
     ResearchEventRow,
     DecisionRecordRow,
     JournalEntryRow,
+    TransactionDecisionLinkRow,
+    TradeCycleOverrideRevisionRow,
 )
 
 _PHASE1C_ID_ATTR: dict[type[Any], str] = {
@@ -53,6 +57,8 @@ _PHASE1C_ID_ATTR: dict[type[Any], str] = {
     ResearchEventRow: "event_id",
     DecisionRecordRow: "decision_id",
     JournalEntryRow: "journal_id",
+    TransactionDecisionLinkRow: "annotation_id",
+    TradeCycleOverrideRevisionRow: "override_id",
 }
 
 _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
@@ -66,6 +72,8 @@ _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
     ResearchEventRow: "event",
     DecisionRecordRow: "decision",
     JournalEntryRow: "journal",
+    TransactionDecisionLinkRow: "transaction_decision_link",
+    TradeCycleOverrideRevisionRow: "trade_cycle_override_revision",
 }
 
 

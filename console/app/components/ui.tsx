@@ -1,4 +1,53 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { EllipsisVertical } from "lucide-react";
+
+export type PageActionItem = {
+  id: string;
+  label: ReactNode;
+  description?: ReactNode;
+  icon?: ReactNode;
+  disabled?: boolean;
+  onSelect: () => void;
+};
+
+/** Compact page-level action collector. View controls stay in the page body;
+ * infrequent create/sync/refresh actions live in this shared Header menu. */
+export function PageActionMenu({
+  ariaLabel,
+  items,
+}: {
+  ariaLabel: string;
+  items: ReadonlyArray<PageActionItem>;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsidePointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return <div className="page-action-menu" ref={rootRef}>
+    <button className="page-action-trigger" type="button" aria-label={`Open ${ariaLabel}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <EllipsisVertical aria-hidden="true" />
+    </button>
+    {open ? <div className="page-action-list" role="menu" aria-label={ariaLabel}>{items.map((item) => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { item.onSelect(); setOpen(false); }}>
+      {item.icon ?? <span aria-hidden="true" />}
+      <span><strong>{item.label}</strong>{item.description != null && <small>{item.description}</small>}</span>
+    </button>)}</div> : null}
+  </div>;
+}
 
 export function RequiredMark() {
   return <b className="required-mark" aria-hidden="true">*</b>;

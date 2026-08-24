@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TypeVar
@@ -29,6 +30,7 @@ from application.ports.broker_order_repository import BrokerOrderRepository
 from application.ports.broker_quote_provider import BrokerQuoteProvider
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
+from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
 from domain.common.enums import Freshness, Market, SourceRole, VendorId
 from domain.common.errors import (
@@ -38,6 +40,7 @@ from domain.common.errors import (
     BrokerOrderSubmissionUncertain,
     DataContractError,
     IdempotencyConflict,
+    InvalidResearchLink,
     TradingPartnerError,
 )
 from domain.common.ids import EntityIdPrefix
@@ -66,6 +69,7 @@ class BrokerOrderService:
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
+        research_uow_factory: Callable[[], ResearchUnitOfWork] | None = None,
     ) -> None:
         self._repository = repository
         self._provider = provider
@@ -74,6 +78,7 @@ class BrokerOrderService:
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
+        self._research_uow_factory = research_uow_factory
 
     async def preview(
         self, request: BrokerOrderIntentPreviewInput
@@ -106,6 +111,7 @@ class BrokerOrderService:
                 warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
             )
         try:
+            self._validate_research_context(request)
             account, quote = await self._read_current_facts(request, now=now)
             self._validate_account(request, account)
             _, _, symbol = parse_instrument_id(request.instrument_id)
@@ -144,6 +150,10 @@ class BrokerOrderService:
                 quote_price=price,
                 estimated_notional=estimated,
                 status=BrokerOrderIntentStatus.PREVIEWED,
+                subject_id=request.case_id,
+                decision_id=request.decision_id,
+                trade_plan_id=request.trade_plan_id,
+                trade_plan_version=request.trade_plan_version,
                 updated_at=now,
             )
             persisted = self._repository.create_preview(intent)
@@ -160,6 +170,10 @@ class BrokerOrderService:
                     "duration": persisted.duration.value,
                     "payload_sha256": persisted.payload_sha256,
                     "expires_at": persisted.expires_at.isoformat(),
+                    "subject_id": persisted.subject_id,
+                    "decision_id": persisted.decision_id,
+                    "trade_plan_id": persisted.trade_plan_id,
+                    "trade_plan_version": persisted.trade_plan_version,
                 },
                 request_id=request_id,
             )
@@ -201,6 +215,30 @@ class BrokerOrderService:
             )
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, now, exc)
+
+    def _validate_research_context(self, request: BrokerOrderIntentPreviewInput) -> None:
+        if request.case_id is None:
+            return
+        if self._research_uow_factory is None:
+            raise InvalidResearchLink("Broker order research context is unavailable")
+        with self._research_uow_factory() as uow:
+            uow.subjects.get(request.case_id)
+            if request.decision_id is not None:
+                decision = uow.decisions.get(request.decision_id)
+                if decision.subject_id != request.case_id:
+                    raise InvalidResearchLink("Decision belongs to another Research Subject")
+                if decision.primary_instrument_id not in {None, request.instrument_id}:
+                    raise InvalidResearchLink("Decision belongs to another Instrument")
+            if request.trade_plan_id is not None and request.trade_plan_version is not None:
+                plan = uow.trade_plans.get_version(
+                    request.trade_plan_id, request.trade_plan_version
+                )
+                if plan is None:
+                    raise InvalidResearchLink("Trade Plan version does not exist")
+                if plan.subject_id != request.case_id:
+                    raise InvalidResearchLink("Trade Plan belongs to another Research Subject")
+                if plan.instrument_id != request.instrument_id:
+                    raise InvalidResearchLink("Trade Plan belongs to another Instrument")
 
     async def submit(self, request: BrokerOrderSubmitInput) -> ToolEnvelope[BrokerOrderIntentDTO]:
         """Submit one explicitly confirmed current-chat order."""
@@ -473,6 +511,14 @@ class BrokerOrderService:
         return tuple(
             BrokerOrderIntentDTO.from_domain(value)
             for value in self._repository.list_unresolved(limit=limit)
+        )
+
+    def list_recent(self, *, limit: int = 100) -> tuple[BrokerOrderIntentDTO, ...]:
+        """Read complete bounded order-intent history without Provider access."""
+
+        return tuple(
+            BrokerOrderIntentDTO.from_domain(value)
+            for value in self._repository.list_recent(limit=limit)
         )
 
     async def cancel(self, request: BrokerOrderCancelInput) -> ToolEnvelope[BrokerOrderIntentDTO]:

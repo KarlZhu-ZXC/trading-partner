@@ -56,6 +56,28 @@ class SqliteOperationalMaintenance:
         tables = tuple(sorted(inspect(self._engine).get_table_names()))
         counts: list[TableCountDTO] = []
         with self._engine.connect() as connection:
+            sqlite_journal_mode = str(
+                connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
+            ).lower()
+            synchronous_code = int(
+                connection.exec_driver_sql("PRAGMA synchronous").scalar_one()
+            )
+            sqlite_synchronous = {0: "OFF", 1: "NORMAL", 2: "FULL", 3: "EXTRA"}.get(
+                synchronous_code,
+                f"UNKNOWN_{synchronous_code}",
+            )
+            sqlite_busy_timeout_ms = int(
+                connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
+            )
+            sqlite_wal_autocheckpoint_pages = int(
+                connection.exec_driver_sql("PRAGMA wal_autocheckpoint").scalar_one()
+            )
+            checkpoint = tuple(
+                int(value)
+                for value in connection.exec_driver_sql(
+                    "PRAGMA wal_checkpoint(PASSIVE)"
+                ).one()
+            )
             for table in tables:
                 if not _SAFE_TABLE.fullmatch(table):
                     continue
@@ -90,6 +112,13 @@ class SqliteOperationalMaintenance:
             monitor_scheduler_plist_present=scheduler_plist.is_file(),
             monitor_scheduler_loaded=scheduler_loaded,
             monitor_scheduler_last_exit_code=scheduler_last_exit,
+            sqlite_journal_mode=sqlite_journal_mode,
+            sqlite_synchronous=sqlite_synchronous,
+            sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+            sqlite_wal_autocheckpoint_pages=sqlite_wal_autocheckpoint_pages,
+            sqlite_wal_busy=checkpoint[0],
+            sqlite_wal_log_frames=checkpoint[1],
+            sqlite_wal_checkpointed_frames=checkpoint[2],
         )
 
     def backup(self) -> DatabaseBackupReceiptDTO:

@@ -6,6 +6,7 @@ import {
   retryAgentTurnStream,
   streamAgentMessage,
   type AgentEphemeralContext,
+  type AgentImageInput,
   type AgentStreamEvent,
 } from "./agent-api";
 import {
@@ -14,6 +15,7 @@ import {
   type AgentStreamReducerOptions,
   type AgentStreamSnapshot,
 } from "./agent-stream";
+import { reconnectAgentStreamWithBackoff } from "./agent-reconnect.mjs";
 
 type StreamMode = "send" | "retry" | "reconnect";
 
@@ -32,6 +34,7 @@ export type SendAgentMessageOptions = {
   providerId?: string;
   modelName?: string;
   reasoningEffort?: string;
+  attachments?: AgentImageInput[];
 };
 
 export type AgentConversationHookOptions = {
@@ -68,9 +71,9 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
- * Owns the transport controllers and stream reducer used by both Agent UI
- * surfaces. Durable messages, receipts, and confirmation decisions remain in
- * the shells because those views intentionally load different record sets.
+ * Owns the single Agent Rail transport controller and stream reducer. Durable
+ * messages, receipts, and confirmation decisions remain in the Rail view;
+ * `/chat` is only a compatibility redirect and has no conversation controller.
  */
 export function useAgentConversation(
   options: AgentConversationHookOptions = {},
@@ -80,6 +83,7 @@ export function useAgentConversation(
   const activeStreamsRef = useRef(new Set<string>());
   const controllers = useRef(new Map<string, AbortController>());
   const reconnectControllers = useRef(new Map<string, AbortController>());
+  const durableTurnIds = useRef(new Map<string, string>());
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -97,6 +101,14 @@ export function useAgentConversation(
   }, []);
 
   const handleStreamEvent = useCallback((conversationId: string, event: AgentStreamEvent) => {
+    const payload = event.payload && typeof event.payload === "object"
+      ? event.payload as Record<string, unknown>
+      : {};
+    if (event.event === "message_started" && typeof payload.turn_id === "string") {
+      durableTurnIds.current.set(conversationId, payload.turn_id);
+    } else if (["completed", "cancelled", "failed"].includes(event.event)) {
+      durableTurnIds.current.delete(conversationId);
+    }
     setStreams((current) => ({
       ...current,
       [conversationId]: reduceAgentStream(
@@ -129,7 +141,10 @@ export function useAgentConversation(
   ) => {
     const reconnect = mode === "reconnect";
     const map = reconnect ? reconnectControllers.current : controllers.current;
-    if (map.has(conversationId)) return false;
+    if (
+      controllers.current.has(conversationId)
+      || reconnectControllers.current.has(conversationId)
+    ) return false;
     const controller = new AbortController();
     map.set(conversationId, controller);
     markActive(conversationId, true);
@@ -151,6 +166,7 @@ export function useAgentConversation(
           streamOptions.providerId,
           streamOptions.modelName,
           streamOptions.reasoningEffort,
+          streamOptions.attachments,
         );
       } else if (mode === "retry") {
         await retryAgentTurnStream(
@@ -169,13 +185,32 @@ export function useAgentConversation(
       }
       completed = true;
     } catch (error) {
-      if (!isAbortError(error) && !controller.signal.aborted) {
+      let finalError = error;
+      const durableTurnId = durableTurnIds.current.get(conversationId)
+        ?? (mode === "reconnect" ? turnId : null);
+      if (!isAbortError(error) && !controller.signal.aborted && durableTurnId) {
+        try {
+          await reconnectAgentStreamWithBackoff(
+            () => reconnectAgentTurnStream(
+              conversationId,
+              durableTurnId,
+              (event) => handleStreamEvent(conversationId, event),
+              controller.signal,
+            ),
+            { signal: controller.signal },
+          );
+          completed = true;
+        } catch (reconnectError) {
+          finalError = reconnectError;
+        }
+      }
+      if (!completed && !isAbortError(finalError) && !controller.signal.aborted) {
         const fallback = mode === "reconnect"
           ? "Unable to reconnect to this turn"
           : mode === "retry"
             ? "Unable to retry this turn"
             : "The Agent stream could not be started.";
-        const message = errorText(error, fallback);
+        const message = errorText(finalError, fallback);
         if (mode === "send" || mode === "reconnect") {
           updateStream(conversationId, { phase: "complete", error: message });
         }
@@ -256,6 +291,7 @@ export function useAgentConversation(
   useEffect(() => () => {
     controllers.current.forEach((controller) => controller.abort());
     reconnectControllers.current.forEach((controller) => controller.abort());
+    durableTurnIds.current.clear();
   }, []);
 
   return {

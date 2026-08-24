@@ -51,7 +51,9 @@ uv run trading-partner-agent all status
 `last_exit`。`restart` 明确使用 `launchctl kickstart -k`。Telegram 的持久偏好通过
 `/preferences` 读取；写入必须显式携带 `version`、`idempotency_key` 和
 `authorization_note`，且仅允许语言、回答密度、来源代码、风险风格和默认图表等
-presentation 字段。Web Search 在 Provider 支持时默认开启，不提供偏好开关。Console
+presentation 字段。Web Search 默认开启，不提供偏好开关：所有 Agent 模型通过私有
+`tp_web_search` 使用服务端 Tavily Search sidecar。回答模型不会收到 sidecar API key，
+搜索不会额外调用百炼模型；网页只作不可信背景，不能覆盖 Trading Partner 事实。Console
 对应接口为：
 
 ```text
@@ -66,7 +68,7 @@ GET  /api/agent/conversations/{conversation_id}/metrics
 记忆、授权或交易意图。Metrics 只从 durable `model_receipt_json` 与 turns 汇总，最多采样
 500 条；超限时返回 `truncated=true`，畸形 receipt 被忽略并计入 warning。
 
-行为门禁使用真实 Agent runtime 的确定性 fake fixtures，覆盖 14 个 catalog case：
+行为门禁使用真实 Agent runtime 的确定性 fake fixtures，覆盖 15 个 catalog case：
 
 ```bash
 uv run trading-partner-agent eval
@@ -76,6 +78,70 @@ uv run trading-partner-agent eval
 逐场景行为断言、schema repair 结果、失败原因和关键 prompt/runtime/capability 源码
 fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执行；`--live` 当前 fail closed，
 不会意外联网或调用 LLM。
+
+### OpenCode Zen / Go Provider（可选）
+
+OpenCode Zen 与 Go 在 Console 中是两个独立 Provider，拥有不同的模型目录、Base URL
+和计费/entitlement 路径，但默认共用同一把 OpenCode 账户 API key。按
+[OpenCode Zen](https://opencode.ai/docs/zen/) 或 [OpenCode Go](https://opencode.ai/docs/go/)
+的控制台连接流程复制 API key，再写入项目私有 `.env`：
+
+```dotenv
+OPENCODE_API_KEY=
+OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+OPENCODE_GO_MODEL=deepseek-v4-flash
+OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
+OPENCODE_ZEN_MODEL=gpt-5.6-luna
+```
+
+配置公共 key 后，Console Agent 下拉框同时显示 `opencode_go` 与 `opencode_zen`，并从
+各自服务端短时缓存 `/models` 目录。`OPENCODE_GO_API_KEY` 与
+`OPENCODE_ZEN_API_KEY` 仅作为可选的 Provider 专用覆盖。目录可读不等于某个付费模型已有
+推理 entitlement；401/403 仍作为 typed Provider error 返回。若要让 Monitor 以其中一个
+作为主判断层，另设：
+
+```dotenv
+LLM_PROVIDER=opencode_go
+MONITOR_JUDGMENT_ENABLED=true
+```
+
+Go 的 `muse-spark-1.2-contributor` 使用 Responses API；该 Contributor 模型允许使用提示词
+和补全训练未来模型，并受 Meta 地域政策限制，不应用于私密研究内容。订阅限额、模型
+entitlement、地域限制与上游故障会保留为 typed Provider error，
+不会静默切换成行情事实或安静规则。该适配不会读取 `~/.local/share/opencode/auth.json`，
+不会把任一 API key 发给浏览器，也不发布原生 Web Search。
+
+Agent 模型请求失败会在对话区显示专用通知卡，并随 durable turn 保留。通知只包含
+Provider、模型、内部错误码、安全 HTTP 状态、是否可重试、尝试次数与固定说明。例如
+HTTP 400/422 显示不可重试的 `PROVIDER_REQUEST_REJECTED`，HTTP 401 表示 Key
+认证失败，HTTP 403 明确表示模型 entitlement/地域/账户策略拒绝，HTTP 429 显示
+`PROVIDER_RATE_LIMIT_ERROR`，HTTP 503 显示 `PROVIDER_UNAVAILABLE_ERROR`。通知不会显示
+endpoint URL、响应正文、异常文本、请求体、headers 或 API key。
+通知固定显示在会话滚动区上方，关闭后会在本机保留最近 50 个 turn 的展示偏好；关闭
+通知不会删除失败 turn、错误码或 Provider 审计，新失败仍会自动出现。
+
+Zen 的 Ox Alpha Free 对应模型 ID `x-preview-f-free`。该模型支持 `low`、`high`、`max`
+三档 reasoning effort；选择 Auto 时不发送显式档位，由 Zen 使用默认推理配置，不表示关闭
+thinking。其他免费 Chat 模型仍按各自目录能力决定是否显示档位。
+
+Composite Monitor 与 Agent 的默认模型分开配置。Monitor 默认使用：
+
+```dotenv
+MONITOR_JUDGMENT_MODEL=deepseek-v4-flash-0731
+MONITOR_JUDGMENT_FALLBACK_PROVIDER=bailian
+MONITOR_JUDGMENT_FALLBACK_MODEL=qwen3.8-max
+MONITOR_JUDGMENT_FALLBACK_REASONING_EFFORT=high
+```
+
+主模型走百炼 Chat Completions 并携带 `response_format=json_object`。若首次内容不是完整
+合约 JSON，只允许一次 structure-only 重试；重试不得改变 feature snapshot、确认状态或
+事实判断。备用 Qwen 继续走百炼 Responses。
+
+选择 OpenCode Go/Zen 作为 Monitor Provider 时，Chat Completions 路由优先使用唯一的
+function call 及其参数 JSON Schema，Responses 路由优先发送 strict JSON Schema；若兼容网关
+明确拒绝结构参数，才降级为 JSON-object 模式。系统只投影 schema 已声明字段，再执行本地
+闭合枚举、必填字段、长度、数量与证据校验；不合约输出只允许一次 structure-only 修复，
+不能从自由文本猜测或补造判断。
 
 ### Telegram Agent 长轮询（可选）
 
@@ -104,7 +170,7 @@ Pending Action 卡片只携带 `c:<opaque-token>` / `r:<opaque-token>`（不含�
 `127.0.0.1:8765`，只把 Next.js 前端绑定到 `0.0.0.0:3000`。前端通过同源代理访问后端，
 浏览器不能直接连接数据 API；所有页面和代理接口先验证 HttpOnly、SameSite 会话 Cookie。
 
-先按上文在终端一启动后端。终端二用至少 16 个字符的密码启动 LAN 模式：
+先按上文在终端一启动后端。终端二用非空密码启动 LAN 模式：
 
 ```bash
 cd console
@@ -121,6 +187,17 @@ npm run dev:lan
 云服务器。密码不要写入 URL、`NEXT_PUBLIC_*`、Git 或聊天记录。使用结束后按 `Ctrl-C`
 停止前端并执行 `unset TRADING_PARTNER_CONSOLE_LAN_PASSWORD`。需要跨不可信网络访问时，
 应另行使用带 TLS 和设备身份的私有网络方案。
+
+若希望 Console supervisor 每次启动时同时开启受保护的 LAN Web，安装持久模式：
+
+```bash
+uv run trading-partner-agent console install --lan
+```
+
+密码生成或复用于 owner-only 的 `data/secrets/console-lan-password`，LaunchAgent 只持有文件路径。
+本机可用 `cat data/secrets/console-lan-password` 读取登录密码。此后普通
+`uv run trading-partner-agent console restart` 会一起重启 loopback API 与 LAN Web；后端仍不
+绑定 LAN 地址。可用 `--lan-port 3001` 选择其他端口。
 
 页面包括：总览、全部
 研究档案/Thesis、Decision Workbench、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、27 个 MCP 能力、持久化账户、

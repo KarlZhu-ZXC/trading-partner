@@ -1,8 +1,10 @@
 import {
   AgentPendingAction,
+  AgentFailureNotice,
   AgentReceipt,
   AgentStreamEvent,
   parsePendingAction,
+  parseAgentFailureNotice,
   parseReceipt,
 } from "./agent-api";
 import { asRecord, textStrict as text } from "./coerce";
@@ -12,9 +14,8 @@ type Dict = Record<string, unknown>;
 export type AgentStreamPhase = "waiting" | "tool" | "streaming" | "complete";
 
 /**
- * The stream state shared by the full Chat page and the compact Agent Rail.
- * Consumers may render only the fields their surface needs, but the stream
- * lifecycle and confirmation boundary remain identical in both places.
+ * Canonical stream state for the Agent Rail. Keeping the lifecycle and
+ * confirmation boundary here prevents a second UI controller from emerging.
  */
 export type AgentStreamSnapshot = {
   turnId: string | null;
@@ -28,6 +29,7 @@ export type AgentStreamSnapshot = {
   pendingSummary: string | null;
   pendingAction: { action: AgentPendingAction; token: string } | null;
   error: string | null;
+  failureNotice: AgentFailureNotice | null;
 };
 
 export const EMPTY_AGENT_STREAM: AgentStreamSnapshot = {
@@ -42,6 +44,7 @@ export const EMPTY_AGENT_STREAM: AgentStreamSnapshot = {
   pendingSummary: null,
   pendingAction: null,
   error: null,
+  failureNotice: null,
 };
 
 export type AgentStreamLinkMode = "none" | "permissive" | "safe";
@@ -164,6 +167,7 @@ export function reduceAgentStream(
         turnId: text(payload.turn_id) || null,
         phase: "waiting",
         error: null,
+        failureNotice: null,
       };
     case "tool_started":
       return { ...snapshot, phase: "tool", error: null };
@@ -236,15 +240,21 @@ export function reduceAgentStream(
           : Array.from(new Set([...snapshot.artifactUrls, ...artifactUrls])).slice(0, 20),
         chartLinks: Array.from(new Set([...snapshot.chartLinks, ...chartLinks])),
         researchSubjectIds: Array.from(new Set([...snapshot.researchSubjectIds, ...subjectIds])),
+        failureNotice: null,
       };
     }
-    case "failed":
+    case "failed": {
+      const failureNotice = parseAgentFailureNotice(payload.notification);
       return {
         ...snapshot,
         phase: "complete",
-        error: firstText(payload, ["message", "detail", "error", "code"])
-          || "The Agent stream failed before completion.",
+        failureNotice,
+        error: failureNotice
+          ? null
+          : firstText(payload, ["message", "detail", "error", "code"])
+            || "The Agent stream failed before completion.",
       };
+    }
     case "cancelled":
       return {
         ...snapshot,

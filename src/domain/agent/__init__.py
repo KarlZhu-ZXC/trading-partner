@@ -1,5 +1,14 @@
 """Shared Agent Runtime domain records and closed vocabularies."""
 
+from domain.agent.attachments import (
+    AGENT_IMAGE_MAX_BYTES,
+    AGENT_IMAGE_MAX_COUNT,
+    AGENT_IMAGE_MAX_DIMENSION,
+    AGENT_IMAGE_MAX_PIXELS,
+    AGENT_IMAGE_MAX_TOTAL_BYTES,
+    AGENT_IMAGE_MEDIA_TYPES,
+    AgentImageAttachment,
+)
 from domain.agent.enums import (
     AgentChannel,
     AgentConversationStatus,
@@ -46,6 +55,13 @@ __all__ = [
     "AgentMessageRole",
     "AgentPendingActionStatus",
     "AgentTurnStatus",
+    "AGENT_IMAGE_MEDIA_TYPES",
+    "AGENT_IMAGE_MAX_BYTES",
+    "AGENT_IMAGE_MAX_COUNT",
+    "AGENT_IMAGE_MAX_DIMENSION",
+    "AGENT_IMAGE_MAX_PIXELS",
+    "AGENT_IMAGE_MAX_TOTAL_BYTES",
+    "AgentImageAttachment",
     "Channel",
     "ConversationStatus",
     "MessageRole",

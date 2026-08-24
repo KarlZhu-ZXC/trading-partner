@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from datetime import UTC
 
+from application.dto.monitor_dispatch import MonitorDispatchDTO
 from application.dto.monitoring import MonitorEvaluateInput, MonitorRunDTO
+from application.dto.operational_job import OperationalJobRunDTO
+from application.services.operational_job_runtime import OperationalJobOutcome
 from bootstrap import build_default_application
 from domain.monitoring.enums import MonitorCadence, MonitorRunStatus
+from domain.operations.enums import OperationalJobStatus
 
 
 async def _run(cadence: MonitorCadence) -> int:
@@ -64,17 +69,49 @@ async def _run_due() -> int:
         await container.aclose()
         return 1
     try:
-        result = await container.operations.monitor_dispatch.run_due()
+        async def operation() -> OperationalJobOutcome[MonitorDispatchDTO]:
+            value = await container.operations.monitor_dispatch.run_due()
+            failed = any(run.status is MonitorRunStatus.FAILED for run in value.runs)
+            return OperationalJobOutcome(
+                status=(
+                    OperationalJobStatus.FAILED
+                    if failed
+                    else OperationalJobStatus.SUCCEEDED
+                ),
+                result_code=(
+                    "MONITOR_DUE_COMPLETED_WITH_FAILURES"
+                    if failed
+                    else "MONITOR_DUE_SUCCEEDED"
+                ),
+                error_code="MONITOR_DUE_RUN_FAILED" if failed else None,
+                value=value,
+            )
+
+        hour = container.context.clock.now().astimezone(UTC).strftime("%Y%m%dT%H")
+        execution = await container.operations.jobs.execute(
+            job_name="monitor.due",
+            idempotency_key=f"monitor.due:{hour}",
+            operation=operation,
+            lease_seconds=300,
+        )
+        result = execution.value
+        payload = {
+            "ok": execution.run.status is OperationalJobStatus.SUCCEEDED,
+            "operational_job": OperationalJobRunDTO.from_domain(execution.run).model_dump(
+                mode="json"
+            ),
+            "invoked": execution.invoked,
+        }
+        if result is not None:
+            payload.update(result.model_dump(mode="json"))
         print(
             json.dumps(
-                {"ok": True, **result.model_dump(mode="json")},
+                payload,
                 ensure_ascii=False,
                 sort_keys=True,
             )
         )
-        if any(run.status is MonitorRunStatus.FAILED for run in result.runs):
-            return 1
-        return 0
+        return 0 if execution.run.status is OperationalJobStatus.SUCCEEDED else 1
     finally:
         lock.release()
         await container.aclose()

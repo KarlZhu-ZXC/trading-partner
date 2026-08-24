@@ -20,14 +20,15 @@ const appearanceInitScript = `
 
   try {
     var overlayViewport = window.matchMedia("(max-width: 1100px)").matches;
-    var sidebarCollapsed = overlayViewport || localStorage.getItem("trading-partner-sidebar-collapsed") === "true";
+    var agentRequested = new URLSearchParams(window.location.search).get("agent") === "open";
+    var sidebarCollapsed = agentRequested && overlayViewport || overlayViewport || localStorage.getItem("trading-partner-sidebar-collapsed") === "true";
     document.documentElement.classList.toggle("sidebar-collapsed", sidebarCollapsed);
   } catch (_) {
     document.documentElement.classList.remove("sidebar-collapsed");
   }
 
   try {
-    var agentRailCollapsed = overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") === "true";
+    var agentRailCollapsed = agentRequested ? false : overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") === "true";
     document.documentElement.classList.toggle("agent-rail-collapsed", agentRailCollapsed);
     var storedAgentRailWidth = Number(localStorage.getItem("trading-partner-agent-rail-width"));
     if (Number.isFinite(storedAgentRailWidth) && storedAgentRailWidth >= ${AGENT_RAIL_MIN_WIDTH} && storedAgentRailWidth <= ${AGENT_RAIL_MAX_WIDTH}) {

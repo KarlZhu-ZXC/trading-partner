@@ -45,6 +45,40 @@ def test_chat_codec_round_trips_text_tool_calls_and_usage() -> None:
     assert result.usage.total_tokens == 8
 
 
+def test_codecs_encode_strict_json_schema_for_each_openai_protocol() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["OK"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    request = ModelRequest(
+        messages=(ModelMessage(role="user", content="return status"),),
+        response_schema_name="status_result",
+        response_schema=schema,
+    )
+
+    chat = ChatCompletionsCodec.encode(request, model="fake")
+    responses = ResponsesCodec.encode(request, model="fake")
+
+    assert chat["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "status_result",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+    assert responses["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "status_result",
+            "strict": True,
+            "schema": schema,
+        }
+    }
+
+
 def test_responses_codec_collects_text_tool_calls_and_bounded_web_sources() -> None:
     result = ResponsesCodec.decode(
         {

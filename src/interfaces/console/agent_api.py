@@ -20,7 +20,7 @@ from typing import Any, Literal, NoReturn, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import AliasChoices, Field, model_validator
 
 from application.dto.agent import (
@@ -31,19 +31,29 @@ from application.dto.agent import (
     EPHEMERAL_CONTEXT_ROUTE_HASH_MAX_CHARS,
     EPHEMERAL_CONTEXT_SELECTION_MAX_CHARS,
     EPHEMERAL_CONTEXT_SURFACE_MAX_CHARS,
+    AgentImageInput,
     AgentTurnEvent,
     AgentTurnRequest,
     EphemeralContext,
 )
+from application.ports.agent_attachment_store import AgentAttachmentStore
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from application.ports.agent_model_provider import AgentModelProvider
+from application.ports.telemetry import NOOP_TELEMETRY
+from application.services.agent_attachment_validation import decode_image_data_url
 from application.services.agent_context_service import AgentContextService
 from application.services.agent_conversation_metrics import AgentConversationMetricsService
+from application.services.agent_failure_notice import agent_failure_notice
 from application.services.agent_handoff_service import AgentHandoffService
 from application.services.agent_pending_action_service import pending_action_wire
 from application.services.agent_preferences_service import AgentPreferencesService
 from application.services.agent_runtime_service import AgentRuntimeService
 from bootstrap import ApplicationContainer
+from domain.agent.attachments import (
+    AGENT_IMAGE_MAX_COUNT,
+    AGENT_IMAGE_MAX_TOTAL_BYTES,
+    AgentImageAttachment,
+)
 from domain.agent.enums import AgentChannel, AgentConversationStatus, AgentTurnStatus
 from domain.agent.models import AgentConversation, AgentMessage, AgentToolReceipt, AgentTurn
 from domain.agent.preferences import DEFAULT_AGENT_PREFERENCES, AgentPreferences
@@ -167,8 +177,23 @@ class EphemeralContextRequest(_RequestModel):
         )
 
 
+class ImageAttachmentRequest(_RequestModel):
+    """One image encoded by the browser as a bounded data URL."""
+
+    data_url: str = Field(min_length=32, max_length=2_800_000)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+
+    def to_dto(self) -> AgentImageInput:
+        media_type, content = decode_image_data_url(self.data_url)
+        return AgentImageInput(
+            content=content,
+            media_type=media_type,
+            original_name=self.name,
+        )
+
 class SendMessageRequest(_RequestModel):
-    content: str = Field(min_length=1, max_length=64_000)
+    content: str = Field(default="", max_length=64_000)
+    attachments: tuple[ImageAttachmentRequest, ...] = Field(default_factory=tuple)
     model_id: str | None = Field(
         default=None,
         min_length=1,
@@ -184,6 +209,26 @@ class SendMessageRequest(_RequestModel):
     reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
     external_message_ref: str | None = Field(default=None, min_length=1, max_length=512)
     ephemeral_context: EphemeralContextRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_content_or_attachments(self) -> SendMessageRequest:
+        if len(self.attachments) > AGENT_IMAGE_MAX_COUNT:
+            raise ValueError("Too many image attachments")
+        total_bytes = 0
+        for item in self.attachments:
+            try:
+                _, content = decode_image_data_url(item.data_url)
+            except TradingPartnerError as error:
+                raise ValueError(error.code) from error
+            total_bytes += len(content)
+        if total_bytes > AGENT_IMAGE_MAX_TOTAL_BYTES:
+            raise ValueError("Image attachments exceed the total size limit")
+        if not self.content.strip() and not self.attachments:
+            raise ValueError("Message must contain text or an image")
+        return self
+
+    def image_inputs(self) -> tuple[AgentImageInput, ...]:
+        return tuple(item.to_dto() for item in self.attachments)
 
 
 class ArchiveConversationRequest(_RequestModel):
@@ -249,6 +294,7 @@ class AgentRuntimeState:
     runtime: AgentRuntimeService | None
     status: dict[str, Any]
     model_providers: Mapping[str, AgentModelProvider] = field(default_factory=dict)
+    attachment_store: AgentAttachmentStore | None = None
     action_gateway: AgentActionGateway | None = None
     handoff_service: AgentHandoffService | None = None
     preferences_service: AgentPreferencesService | None = None
@@ -329,6 +375,10 @@ def build_agent_runtime_state(
         AgentConversationMetricsService | None,
         getattr(operations, "agent_metrics", None),
     )
+    attachment_store = cast(
+        AgentAttachmentStore | None,
+        getattr(getattr(container, "resources", None), "agent_attachment_store", None),
+    )
     if metrics_service is None and repository is not None:
         metrics_service = AgentConversationMetricsService(repository)
     diagnostics: list[dict[str, str]] = []
@@ -361,6 +411,7 @@ def build_agent_runtime_state(
                 repository=repository,
                 clock=clock,
                 id_generator=id_generator,
+                attachment_store=attachment_store,
             )
             pending_repository = cast(Any, getattr(operations, "agent_pending_actions", None))
             if pending_repository is not None:
@@ -387,6 +438,9 @@ def build_agent_runtime_state(
                 )
 
     resources = getattr(container, "resources", None)
+    web_search_sidecar_available = (
+        getattr(resources, "agent_web_search_provider", None) is not None
+    )
     model_provider = getattr(resources, "agent_model_provider", None)
     raw_model_providers = getattr(resources, "agent_model_providers", {})
     model_providers = (
@@ -441,6 +495,11 @@ def build_agent_runtime_state(
                             else []
                         ),
                         "native_web_search": getattr(config, "native_web_search", None),
+                        "web_search_available": (
+                            web_search_sidecar_available
+                            or getattr(config, "native_web_search", "disabled")
+                            == "responses_web_search"
+                        ),
                         "is_default": model_id == default_model_id,
                     }
                     for model_id, config in configs.items()
@@ -463,6 +522,11 @@ def build_agent_runtime_state(
                             else []
                         ),
                         "native_web_search": getattr(endpoint, "native_web_search", None),
+                        "web_search_available": (
+                            web_search_sidecar_available
+                            or getattr(endpoint, "native_web_search", "disabled")
+                            == "responses_web_search"
+                        ),
                         "is_default": True,
                     }
                 ],
@@ -513,7 +577,14 @@ def build_agent_runtime_state(
             ),
             system_prompt=build_agent_system_prompt(),
             pending_action_gateway=action_gateway,
+            attachment_store=attachment_store,
+            web_search_provider=getattr(
+                container.resources,
+                "agent_web_search_provider",
+                None,
+            ),
             preferences_service=preferences_service,
+            telemetry=getattr(container.context, "telemetry", NOOP_TELEMETRY),
             turn_lock_factory=cast(
                 Any,
                 getattr(getattr(container, "resources", None), "agent_turn_lock_factory", None),
@@ -534,6 +605,7 @@ def build_agent_runtime_state(
         "state": state,
         "diagnostics": diagnostics,
         "model_configured": model_provider is not None,
+        "web_search_sidecar_available": web_search_sidecar_available,
         **model_metadata,
         "read_capability_count": sum(
             1 for descriptor in gateway.descriptors() if descriptor.auto_allowed
@@ -546,6 +618,7 @@ def build_agent_runtime_state(
         capability_gateway=gateway,
         runtime=runtime,
         model_providers=model_providers,
+        attachment_store=attachment_store,
         action_gateway=action_gateway,
         handoff_service=handoff_service,
         preferences_service=preferences_service,
@@ -566,6 +639,7 @@ def unavailable_agent_state(*, code: str, message: str) -> AgentRuntimeState:
         handoff_service=None,
         preferences_service=None,
         metrics_service=None,
+        attachment_store=None,
         status={
             "channel": AGENT_CHANNEL.value,
             "owner_principal": AGENT_OWNER_PRINCIPAL,
@@ -767,6 +841,18 @@ def _safe_model_receipt(value: str | None) -> tuple[dict[str, Any] | None, str |
             and len(json.dumps(parsed.get("evidence_manifest"), ensure_ascii=False)) <= 16_384
             else None
         ),
+        "answer_envelope": (
+            parsed.get("answer_envelope")
+            if isinstance(parsed.get("answer_envelope"), dict)
+            and len(json.dumps(parsed.get("answer_envelope"), ensure_ascii=False)) <= 8_192
+            else None
+        ),
+        "trace_id": (
+            parsed.get("trace_id")
+            if isinstance(parsed.get("trace_id"), str)
+            and re.fullmatch(r"[0-9a-f]{32}", parsed["trace_id"])
+            else None
+        ),
         "capability_search_audits": (
             [
                 item
@@ -794,6 +880,16 @@ def _message_wire(value: AgentMessage) -> dict[str, Any]:
         "request_id": value.request_id,
         "model_receipt": model_receipt,
         "model_receipt_warning": receipt_warning,
+        "attachments": [
+            {
+                **item.as_dict(),
+                "url": (
+                    f"/api/agent/conversations/{value.conversation_id}/attachments/"
+                    f"{item.attachment_id}"
+                ),
+            }
+            for item in value.attachments
+        ],
         "created_at": _time(value.created_at),
     }
 
@@ -817,6 +913,18 @@ def _receipt_wire(value: AgentToolReceipt) -> dict[str, Any]:
 def _turn_wire(value: AgentTurn) -> dict[str, Any]:
     """Project only bounded lifecycle metadata for Console refresh/replay."""
 
+    failure_notice = (
+        agent_failure_notice(
+            code=value.error_code,
+            provider_id=value.model_id,
+            model=value.model,
+            http_status=value.error_http_status,
+            retryable=value.error_retryable,
+            attempts=value.error_attempts,
+        )
+        if value.status is AgentTurnStatus.FAILED and value.error_code is not None
+        else None
+    )
     return {
         "turn_id": value.turn_id,
         "conversation_id": value.conversation_id,
@@ -826,7 +934,12 @@ def _turn_wire(value: AgentTurn) -> dict[str, Any]:
         "status": value.status.value,
         "error_code": value.error_code,
         "model_id": value.model_id,
+        "model": value.model,
         "reasoning_effort": value.reasoning_effort,
+        "error_http_status": value.error_http_status,
+        "error_retryable": value.error_retryable,
+        "error_attempts": value.error_attempts,
+        "failure_notice": failure_notice,
         "started_at": _time(value.started_at),
         "updated_at": _time(value.updated_at),
         "completed_at": _time(value.completed_at) if value.completed_at else None,
@@ -1037,11 +1150,21 @@ async def list_agent_provider_models(
             "reasoning_efforts",
             (),
         )
-        efforts = tuple(
-            value
-            for value in ("low", "medium", "high", "max")
-            if value in raw_efforts
-        ) or fallback_efforts
+        reasoning_supported = (
+            None
+            if isinstance(raw_item, str)
+            else getattr(raw_item, "reasoning_supported", None)
+        )
+        efforts = (
+            ()
+            if reasoning_supported is False
+            else tuple(
+                value
+                for value in ("low", "medium", "high", "max")
+                if value in raw_efforts
+            )
+            or fallback_efforts
+        )
         seen.add(model_id)
         items.append(
             {
@@ -1057,6 +1180,11 @@ async def list_agent_provider_models(
         "api_style": getattr(config, "api_style", None),
         "reasoning_mode": getattr(config, "reasoning_mode", "none"),
         "native_web_search": getattr(config, "native_web_search", "disabled"),
+        "web_search_available": bool(
+            state.status.get("web_search_sidecar_available")
+            or getattr(config, "native_web_search", "disabled")
+            == "responses_web_search"
+        ),
         "fetched_at": _time(fetched_at) if isinstance(fetched_at, datetime) else None,
         "cached": cached,
         "models": items,
@@ -1136,6 +1264,58 @@ def list_agent_messages(
         "items": [_message_wire(item) for item in values],
         "latest_turn": _latest_turn_wire(repository, conversation.conversation_id),
     }
+
+
+@router.get("/conversations/{conversation_id}/attachments/{attachment_id}")
+def get_agent_attachment(
+    conversation_id: str,
+    attachment_id: str,
+    request: Request,
+) -> Response:
+    """Serve one image only after proving it belongs to the owned conversation."""
+
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,159}", attachment_id) is None:
+        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+    conversation = _owned_conversation(request, conversation_id)
+    state = _state(request)
+    store = state.attachment_store
+    if store is None:
+        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+    repository = _require_repository(state)
+    attachment: AgentImageAttachment | None = None
+    after_sequence = 0
+    for _page in range(20):
+        messages = repository.list_messages(
+            conversation.conversation_id,
+            after_sequence=after_sequence,
+            limit=500,
+        )
+        match = next(
+            (
+                item
+                for message in messages
+                for item in message.attachments
+                if item.attachment_id == attachment_id
+            ),
+            None,
+        )
+        if match is not None:
+            attachment = match
+            break
+        if len(messages) < 500:
+            break
+        after_sequence = messages[-1].sequence
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+    try:
+        content = store.read(attachment)
+    except TradingPartnerError:
+        raise HTTPException(status_code=404, detail="Agent attachment was not found") from None
+    return Response(
+        content=content,
+        media_type=attachment.media_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/conversations/{conversation_id}/turns")
@@ -1473,6 +1653,14 @@ def _replay_turn_events(
             )
         )
     elif turn.status is AgentTurnStatus.FAILED:
+        notification = agent_failure_notice(
+            code=turn.error_code or "AGENT_RUNTIME_FAILED",
+            provider_id=turn.model_id,
+            model=turn.model,
+            http_status=turn.error_http_status,
+            retryable=turn.error_retryable,
+            attempts=turn.error_attempts,
+        )
         events.append(
             AgentTurnEvent(
                 type="failed",
@@ -1480,7 +1668,8 @@ def _replay_turn_events(
                     "conversation_id": turn.conversation_id,
                     "turn_id": turn.turn_id,
                     "code": turn.error_code or "AGENT_RUNTIME_FAILED",
-                    "message": "Agent 本轮未完成。",
+                    "message": notification["explanation"],
+                    "notification": notification,
                     "replay": True,
                 },
             )
@@ -1542,6 +1731,7 @@ async def stream_agent_message(
         model_id=payload.model_id,
         model=payload.model,
         reasoning_effort=payload.reasoning_effort,
+        attachments=payload.image_inputs(),
         external_message_ref=payload.external_message_ref,
         ephemeral_context=(
             payload.ephemeral_context.to_dto()

@@ -169,6 +169,9 @@ class _Repository:
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: datetime | None = None,
         now: datetime | None = None,
     ) -> AgentTurn:
@@ -180,6 +183,9 @@ class _Repository:
             status=status,
             assistant_message_id=assistant_message_id,
             error_code=error_code,
+            error_http_status=error_http_status,
+            error_retryable=error_retryable,
+            error_attempts=error_attempts,
             completed_at=completed_at,
             updated_at=now or current.updated_at,
             version=current.version + 1,
@@ -288,6 +294,39 @@ class _Gateway(AgentToolGateway):
                     "status": "UNAVAILABLE",
                     "error_code": "MARKET_CLOSED",
                     "freshness": "SESSION_AWARE_UNAVAILABLE",
+                }
+            elif capability == "investment_case_read" and operation == "attention":
+                data = {
+                    "mode": "durable_only_read",
+                    "scope": "global",
+                    "total_count": 1,
+                    "total_count_is_lower_bound": True,
+                    "returned_count": 1,
+                    "truncated": False,
+                    "limitations": ["CATALYST_AGENDA_SYNC_RECEIPT_MISSING"],
+                    "coverage": [
+                        {
+                            "source": "catalyst_agenda",
+                            "state": "PARTIAL",
+                            "limitation_codes": [
+                                "CATALYST_AGENDA_SYNC_RECEIPT_MISSING"
+                            ],
+                        }
+                    ],
+                    "items": [
+                        {
+                            "key": "agenda-overdue-eval",
+                            "source_type": "CATALYST_AGENDA",
+                            "recommended_action": "LINK_OUTCOME_OR_REVISE",
+                            "next_read": {
+                                "tool": "research_memory_get",
+                                "request": {
+                                    "operation": "agenda",
+                                    "agenda_item_id": "agenda_eval",
+                                },
+                            },
+                        }
+                    ],
                 }
             else:
                 data = {
@@ -652,6 +691,16 @@ def _responses(case_id: str) -> list[ModelResponse]:
             {"monitor_id": "monitor_eval_gold"},
             "已重读 durable Monitor；截至 2026-08-13T10:00:00+00:00，保留 EVAL_WARNING。",
         ),
+        "agent_attention_decision_inbox": (
+            "investment_case_read",
+            "attention",
+            {},
+            (
+                "统一 Attention Inbox 当前已知下界有 1 项待处理；coverage=catalyst_agenda/PARTIAL，"
+                "限制 CATALYST_AGENDA_SYNC_RECEIPT_MISSING。next_read 仅是只读建议，"
+                "本轮未自动执行，也未替换成 Review Queue。"
+            ),
+        ),
         "agent_unavailable_indicator": (
             "technical_get_snapshot",
             None,
@@ -673,9 +722,16 @@ def _responses(case_id: str) -> list[ModelResponse]:
     }
     if case_id in fact_routes:
         capability, operation, arguments, answer = fact_routes[case_id]
+        search_query = "decision inbox" if case_id == "agent_attention_decision_inbox" else "quote"
         return [
             ModelResponse(
-                tool_calls=(_tool_call("tp_capability_search", {"query": "quote"}, "search"),)
+                tool_calls=(
+                    _tool_call(
+                        "tp_capability_search",
+                        {"query": search_query},
+                        "search",
+                    ),
+                )
             ),
             ModelResponse(
                 tool_calls=(
@@ -915,6 +971,11 @@ def _expected_read(case_id: str) -> tuple[str, str | None, dict[str, Any]] | Non
             "definitions",
             {"monitor_id": "monitor_eval_gold"},
         ),
+        "agent_attention_decision_inbox": (
+            "investment_case_read",
+            "attention",
+            {},
+        ),
         "agent_unavailable_indicator": (
             "technical_get_snapshot",
             None,
@@ -1002,6 +1063,21 @@ def _assert_case_contract(
         for marker in ("4310.00", "midpoint", "dukascopy", "2026-08-13T10:00:00+00:00"):
             if marker not in assistant_content:
                 errors.append(f"quote_{marker}_missing")
+    elif case_id == "agent_attention_decision_inbox":
+        if gateway.calls != [("investment_case_read", "attention", {})]:
+            errors.append("attention_route_mismatch")
+        if gateway.search_modes != ["read"]:
+            errors.append("attention_search_mode_mismatch")
+        for marker in (
+            "Attention Inbox",
+            "当前已知下界",
+            "PARTIAL",
+            "CATALYST_AGENDA_SYNC_RECEIPT_MISSING",
+            "未自动执行",
+            "未替换成 Review Queue",
+        ):
+            if marker not in assistant_content:
+                errors.append(f"attention_{marker}_missing")
     elif case_id == "agent_unavailable_indicator":
         for marker in ("MARKET_CLOSED", "交易时段", "未替换"):
             if marker not in assistant_content:
@@ -1323,8 +1399,8 @@ async def run_catalog(*, live: bool = False) -> dict[str, Any]:
         raise ValueError("live evaluation smoke is disabled in the deterministic runner")
     payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
     cases = payload.get("cases")
-    if not isinstance(cases, list) or len(cases) != 14:
-        raise ValueError("Agent behavior catalog must contain exactly 14 cases")
+    if not isinstance(cases, list) or len(cases) != 15:
+        raise ValueError("Agent behavior catalog must contain exactly 15 cases")
     results = [await _run_case(case) for case in cases if isinstance(case, dict)]
     schema_repair = await _run_schema_repair_smoke()
     return {

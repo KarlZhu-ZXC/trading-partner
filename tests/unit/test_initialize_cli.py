@@ -36,7 +36,7 @@ def test_initialize_creates_owner_only_config_and_upgrades_idempotently(
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
     finally:
         engine.dispose()
-    assert revision == "0051_moomoo_margin_semantics"
+    assert revision == "0063_agent_image_attachments"
     assert first["mcp_args"] == ["--env-file", str(env_file)]
 
 

@@ -47,7 +47,12 @@ _SECRET_FIELD_NAMES = frozenset(
         "llm_api_key",
         "bailian_api_key",
         "deepseek_api_key",
+        "opencode_api_key",
+        "opencode_zen_api_key",
+        "opencode_go_api_key",
+        "tavily_api_key",
         "retro_obsidian_journal_dir",
+        "otel_exporter_otlp_endpoint",
     }
 )
 
@@ -109,6 +114,14 @@ class AppSettings(BaseSettings):
     default_timezone: str = Field(min_length=1)
     provider_timeout_seconds: float = Field(gt=0)
 
+    # Optional secret-safe OpenTelemetry. Disabled by default; spans never
+    # record request payloads, prompts, URLs, credentials, or exception text.
+    otel_tracing_enabled: bool = False
+    otel_service_name: str = Field(default="trading-partner", min_length=1, max_length=64)
+    otel_exporter: Literal["none", "otlp_http"] = "none"
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+
     # Non-secret path to Vendor Chain YAML. Relative paths resolve against
     # PROJECT_ROOT; default relative may fall back to the packaged wheel copy.
     vendor_chain_path: Path = Field(default=_DEFAULT_VENDOR_CHAIN_RELATIVE)
@@ -159,6 +172,16 @@ class AppSettings(BaseSettings):
     cache_ttl_insider_activity_seconds: int = Field(default=3600, gt=0)
     cache_ttl_default_seconds: int = Field(default=300, gt=0)
     enable_provider_cache: bool = True
+
+    # Optional local-only semantic Research Memory projection. The model is
+    # loaded on-device; no research text is sent to a remote embedding API.
+    research_semantic_search_enabled: bool = False
+    research_semantic_embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        min_length=1,
+        max_length=160,
+    )
+    research_semantic_candidate_limit: int = Field(default=500, ge=50, le=5_000)
 
     # Stale guard (Phase 1D D7). Unwired until Router (D6b+).
     stale_guard_max_age_seconds: int = Field(default=86400, ge=0)
@@ -324,8 +347,18 @@ class AppSettings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     llm_max_output_tokens: int = Field(default=8000, gt=0, le=100_000)
 
+    # Model-neutral Agent Web Search sidecar. Tavily Search returns structured
+    # sources directly, so using it never requires an extra Bailian model call.
+    tavily_web_search_enabled: bool = True
+    tavily_api_key: str | None = None
+    tavily_base_url: Literal["https://api.tavily.com"] = "https://api.tavily.com"
+    tavily_search_depth: Literal["basic", "advanced"] = "basic"
+    tavily_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+
     monitor_judgment_enabled: bool = False
-    llm_provider: Literal["bailian", "deepseek"] = "bailian"
+    llm_provider: Literal[
+        "bailian", "deepseek", "opencode_zen", "opencode_go"
+    ] = "bailian"
     bailian_api_key: str | None = None
     bailian_base_url: str = Field(
         default="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -366,8 +399,39 @@ class AppSettings(BaseSettings):
         validation_alias=AliasChoices(
             "deepseek_model",
             "DEEPSEEK_MODEL",
-            "monitor_judgment_model",
-            "MONITOR_JUDGMENT_MODEL",
+        ),
+    )
+    # One OpenCode account key authenticates both Zen and Go. Provider-specific
+    # keys remain optional rotation/least-privilege overrides.
+    opencode_api_key: str | None = None
+    opencode_zen_api_key: str | None = None
+    opencode_zen_base_url: str = Field(
+        default="https://opencode.ai/zen/v1",
+        validation_alias=AliasChoices(
+            "opencode_zen_base_url",
+            "OPENCODE_ZEN_BASE_URL",
+        ),
+    )
+    opencode_zen_model: str = Field(
+        default="gpt-5.6-luna",
+        validation_alias=AliasChoices(
+            "opencode_zen_model",
+            "OPENCODE_ZEN_MODEL",
+        ),
+    )
+    opencode_go_api_key: str | None = None
+    opencode_go_base_url: str = Field(
+        default="https://opencode.ai/zen/go/v1",
+        validation_alias=AliasChoices(
+            "opencode_go_base_url",
+            "OPENCODE_GO_BASE_URL",
+        ),
+    )
+    opencode_go_model: str = Field(
+        default="deepseek-v4-flash",
+        validation_alias=AliasChoices(
+            "opencode_go_model",
+            "OPENCODE_GO_MODEL",
         ),
     )
     # ``max`` preserves the legacy Monitor default.  An explicitly blank
@@ -377,8 +441,17 @@ class AppSettings(BaseSettings):
     llm_output_language: Literal["zh-CN"] = "zh-CN"
     monitor_judgment_timeout_seconds: float = Field(default=120.0, gt=0, le=300)
     monitor_judgment_max_output_tokens: int = Field(default=8000, ge=512, le=8000)
+    monitor_judgment_model: str = Field(
+        default="deepseek-v4-flash-0731",
+        validation_alias=AliasChoices(
+            "monitor_judgment_model",
+            "MONITOR_JUDGMENT_MODEL",
+        ),
+    )
     monitor_judgment_reasoning_effort: str | None = None
-    monitor_judgment_fallback_provider: Literal["bailian", "deepseek"] | None = None
+    monitor_judgment_fallback_provider: Literal[
+        "bailian", "deepseek", "opencode_zen", "opencode_go"
+    ] | None = None
     monitor_judgment_fallback_model: str | None = None
     monitor_judgment_fallback_reasoning_effort: str | None = None
     # Trade Retro always persists deterministic findings. This switch controls
@@ -450,6 +523,10 @@ class AppSettings(BaseSettings):
         "llm_api_key",
         "bailian_api_key",
         "deepseek_api_key",
+        "opencode_api_key",
+        "opencode_zen_api_key",
+        "opencode_go_api_key",
+        "tavily_api_key",
         mode="before",
     )
     @classmethod
@@ -706,21 +783,29 @@ class AppSettings(BaseSettings):
     @model_validator(mode="after")
     def _validate_monitor_judgment_configuration(self) -> Self:
         if self.monitor_judgment_enabled:
-            config = self.resolved_llm_config
+            try:
+                config = self.resolved_monitor_judgment_config
+            except ConfigurationError as exc:
+                raise ValueError(exc.message) from exc
             if config is None:
-                legacy_key = (
-                    "BAILIAN_API_KEY" if self.llm_provider == "bailian" else "DEEPSEEK_API_KEY"
-                )
+                legacy_key = {
+                    "bailian": "BAILIAN_API_KEY",
+                    "deepseek": "DEEPSEEK_API_KEY",
+                    "opencode_zen": "OPENCODE_ZEN_API_KEY",
+                    "opencode_go": "OPENCODE_GO_API_KEY",
+                }[self.llm_provider]
                 raise ValueError(
                     f"{legacy_key} or a complete generic LLM endpoint is required "
                     "when Monitor judgment is enabled"
                 )
             if (
                 not self._generic_llm_explicit
-                and self.llm_provider == "deepseek"
+                and self.llm_provider in {"deepseek", "opencode_zen", "opencode_go"}
                 and self.llm_reasoning_effort == "xhigh"
             ):
-                raise ValueError("DeepSeek Monitor judgment supports high or max effort")
+                raise ValueError(
+                    "DeepSeek/OpenCode Monitor judgment supports high or max effort"
+                )
             try:
                 fallback = self.resolved_monitor_judgment_fallback_config
             except ConfigurationError as exc:
@@ -735,6 +820,10 @@ class AppSettings(BaseSettings):
             raise ValueError("Bailian base URL must use https")
         if not self.deepseek_base_url.startswith("https://"):
             raise ValueError("DeepSeek base URL must use https")
+        if not self.opencode_go_base_url.startswith("https://"):
+            raise ValueError("OpenCode Go base URL must use https")
+        if not self.opencode_zen_base_url.startswith("https://"):
+            raise ValueError("OpenCode Zen base URL must use https")
         return self
 
     @model_validator(mode="after")
@@ -786,6 +875,9 @@ class AppSettings(BaseSettings):
             not self._generic_llm_explicit
             and self.bailian_api_key is None
             and self.deepseek_api_key is None
+            and self.opencode_api_key is None
+            and self.opencode_zen_api_key is None
+            and self.opencode_go_api_key is None
         ):
             return None
         return resolve_llm_endpoint_config(
@@ -809,6 +901,16 @@ class AppSettings(BaseSettings):
             deepseek_api_key=self.deepseek_api_key,
             deepseek_base_url=self.deepseek_base_url,
             deepseek_model=self.deepseek_model,
+            opencode_zen_api_key=(
+                self.opencode_zen_api_key
+                or self.opencode_api_key
+                or self.opencode_go_api_key
+            ),
+            opencode_zen_base_url=self.opencode_zen_base_url,
+            opencode_zen_model=self.opencode_zen_model,
+            opencode_go_api_key=(self.opencode_go_api_key or self.opencode_api_key),
+            opencode_go_base_url=self.opencode_go_base_url,
+            opencode_go_model=self.opencode_go_model,
         )
 
     @property
@@ -834,17 +936,11 @@ class AppSettings(BaseSettings):
                 model=self.bailian_model,
                 reasoning_mode="effort",
                 reasoning_effort=self.llm_reasoning_effort,
-                native_web_search=(
-                    "responses_web_search"
-                    if self.bailian_web_search_enabled
-                    else "disabled"
-                ),
-                native_web_extractor=(
-                    "responses_web_extractor"
-                    if self.bailian_web_search_enabled
-                    and self.bailian_web_extractor_enabled
-                    else "disabled"
-                ),
+                # Agent search is owned by the provider-neutral Tavily sidecar.
+                # Keep Bailian native search settings available only to the
+                # separate Monitor fallback configuration.
+                native_web_search="disabled",
+                native_web_extractor="disabled",
                 timeout_seconds=self.llm_timeout_seconds,
                 max_output_tokens=self.llm_max_output_tokens,
             )
@@ -855,6 +951,38 @@ class AppSettings(BaseSettings):
                 api_key=self.deepseek_api_key,
                 model=self.deepseek_model,
                 reasoning_mode="thinking",
+                reasoning_effort=self.llm_reasoning_effort,
+                native_web_search="disabled",
+                native_web_extractor="disabled",
+                timeout_seconds=self.llm_timeout_seconds,
+                max_output_tokens=self.llm_max_output_tokens,
+            )
+        go_api_key = self.opencode_go_api_key or self.opencode_api_key
+        if go_api_key is not None:
+            configs["opencode_go"] = LLMEndpointConfig(
+                api_style="chat_completions",
+                base_url=self.opencode_go_base_url,
+                api_key=go_api_key,
+                model=self.opencode_go_model,
+                reasoning_mode="thinking",
+                reasoning_effort=self.llm_reasoning_effort,
+                native_web_search="disabled",
+                native_web_extractor="disabled",
+                timeout_seconds=self.llm_timeout_seconds,
+                max_output_tokens=self.llm_max_output_tokens,
+            )
+        zen_api_key = (
+            self.opencode_zen_api_key
+            or self.opencode_api_key
+            or self.opencode_go_api_key
+        )
+        if zen_api_key is not None:
+            configs["opencode_zen"] = LLMEndpointConfig(
+                api_style="responses",
+                base_url=self.opencode_zen_base_url,
+                api_key=zen_api_key,
+                model=self.opencode_zen_model,
+                reasoning_mode="effort",
                 reasoning_effort=self.llm_reasoning_effort,
                 native_web_search="disabled",
                 native_web_extractor="disabled",
@@ -873,6 +1001,40 @@ class AppSettings(BaseSettings):
         return self.llm_provider if self.llm_provider in configs else next(iter(configs))
 
     @property
+    def resolved_llm_provider_id(self) -> str | None:
+        """Return a secret-safe composition identity for the selected endpoint."""
+
+        if self.resolved_llm_config is None:
+            return None
+        return "default" if self._generic_llm_explicit else self.llm_provider
+
+    @property
+    def resolved_monitor_judgment_config(self) -> LLMEndpointConfig | None:
+        """Return the primary Monitor endpoint without changing Agent defaults."""
+
+        config = self.resolved_llm_config
+        if config is None:
+            return None
+        if not self._generic_llm_explicit and self.llm_provider == "bailian":
+            return LLMEndpointConfig(
+                api_style="chat_completions",
+                base_url=config.base_url,
+                api_key=config.api_key,
+                model=self.monitor_judgment_model,
+                reasoning_mode="thinking",
+                reasoning_effort=(
+                    self.monitor_judgment_reasoning_effort
+                    or config.reasoning_effort
+                    or "max"
+                ),
+                native_web_search="disabled",
+                native_web_extractor="disabled",
+                timeout_seconds=config.timeout_seconds,
+                max_output_tokens=config.max_output_tokens,
+            )
+        return config
+
+    @property
     def resolved_monitor_judgment_fallback_config(self) -> LLMEndpointConfig | None:
         """Resolve the optional Monitor-only fallback endpoint.
 
@@ -885,7 +1047,7 @@ class AppSettings(BaseSettings):
         if provider is None or model is None:
             return None
 
-        primary = self.resolved_llm_config
+        primary = self.resolved_monitor_judgment_config
         if provider == "bailian":
             if primary is not None and primary.api_style == "responses":
                 base_url = primary.base_url
@@ -915,6 +1077,39 @@ class AppSettings(BaseSettings):
                 native_web_search="disabled",
                 timeout_seconds=timeout_seconds,
                 max_output_tokens=max_output_tokens,
+            )
+
+        if provider in {"opencode_zen", "opencode_go"}:
+            is_zen = provider == "opencode_zen"
+            open_code_api_key = (
+                self.opencode_zen_api_key
+                or self.opencode_api_key
+                or self.opencode_go_api_key
+                if is_zen
+                else self.opencode_go_api_key or self.opencode_api_key
+            )
+            if open_code_api_key is None:
+                raise ConfigurationError(
+                    f"{'OPENCODE_ZEN_API_KEY' if is_zen else 'OPENCODE_GO_API_KEY'} "
+                    "is required for the Monitor judgment fallback"
+                )
+            return LLMEndpointConfig(
+                api_style="responses" if is_zen else "chat_completions",
+                base_url=(
+                    self.opencode_zen_base_url if is_zen else self.opencode_go_base_url
+                ),
+                api_key=open_code_api_key,
+                model=model,
+                reasoning_mode="effort" if is_zen else "thinking",
+                reasoning_effort=(
+                    self.monitor_judgment_fallback_reasoning_effort
+                    or self.monitor_judgment_reasoning_effort
+                    or self.llm_reasoning_effort
+                ),
+                native_web_search="disabled",
+                native_web_extractor="disabled",
+                timeout_seconds=self.monitor_judgment_timeout_seconds,
+                max_output_tokens=self.monitor_judgment_max_output_tokens,
             )
 
         if primary is not None and primary.api_style == "chat_completions":
@@ -1079,6 +1274,31 @@ class AppSettings(BaseSettings):
         if self.provider_retry_max_delay_seconds < self.provider_retry_base_delay_seconds:
             raise ValueError(
                 "provider_retry_max_delay_seconds must be >= provider_retry_base_delay_seconds"
+            )
+        return self
+
+    @field_validator("otel_exporter_otlp_endpoint")
+    @classmethod
+    def _safe_otel_endpoint(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        parsed = urlsplit(value.strip())
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(
+                "otel_exporter_otlp_endpoint must be an HTTP(S) URL without credentials"
+            )
+        return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def _otel_exporter_contract(self) -> Self:
+        if self.otel_exporter == "otlp_http" and self.otel_exporter_otlp_endpoint is None:
+            raise ValueError(
+                "otel_exporter_otlp_endpoint is required when otel_exporter=otlp_http"
             )
         return self
 

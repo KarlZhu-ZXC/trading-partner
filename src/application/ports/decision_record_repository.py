@@ -24,3 +24,11 @@ class DecisionRecordRepository(Protocol):
     def list_by_subject(
         self, subject_id: str, *, as_of: datetime | None = None
     ) -> tuple[DecisionRecord, ...]: ...
+
+    def list_review_due(
+        self,
+        *,
+        now: datetime,
+        subject_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[DecisionRecord, ...]: ...

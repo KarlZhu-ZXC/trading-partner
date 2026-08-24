@@ -24,7 +24,6 @@ from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
 from application.runtime import ApplicationServices, RuntimeContext
 from application.services.account_service import AccountService
-from application.services.account_transaction_coordinator import AccountTransactionCoordinator
 from application.services.agent_conversation_metrics import AgentConversationMetricsService
 from application.services.attention_query_service import AttentionQueryService
 from application.services.broker_order_service import BrokerOrderService
@@ -57,6 +56,7 @@ from application.services.monitor_schedule_service import MonitorScheduleService
 from application.services.monitor_service import MonitorService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.notification_service import NotificationService
+from application.services.operational_job_runtime import DurableOperationalJobRuntime
 from application.services.peer_comparison_service import PeerComparisonService
 from application.services.performance_reconciliation_service import (
     PerformanceReconciliationService,
@@ -86,6 +86,7 @@ from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.trade_retro_service import TradeRetroService
 from application.services.watchlist_hub_service import WatchlistHubService
 from composition_root.market_facts import build_market_facts_services
+from composition_root.phase4 import build_phase4_services
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
 from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
@@ -98,7 +99,9 @@ from infrastructure.composition import (
     CompositionOverrides,
     ProviderCompositionOverrides,
     RuntimeResources,
+    build_agent_attachment_store,
     build_agent_model_providers,
+    build_agent_web_search_provider,
     build_monitor_judgment_fallback_provider,
     build_monitor_judgment_provider,
     build_persistence_infrastructure,
@@ -107,6 +110,7 @@ from infrastructure.composition import (
     enabled_account_provider_order,
 )
 from infrastructure.config.settings import PROJECT_ROOT, AppSettings
+from infrastructure.observability.tracing import configure_tracing
 from infrastructure.persistence.audit_log_writer import SqlAlchemyAuditLogWriter
 from infrastructure.persistence.catalyst_agenda_outcome_reader import (
     SqlAlchemyCatalystAgendaOutcomeReader,
@@ -151,17 +155,11 @@ from infrastructure.system.redactor import DefaultSecretRedactor
 
 UowFactory = Callable[[], ResearchUnitOfWork]
 InstrumentUowFactory = Callable[[], InstrumentUnitOfWork]
-
-
 BootstrapOverrides = CompositionOverrides
-
-
 @dataclass(frozen=True, slots=True)
 class ProviderBundle:
     router: ProviderRouter
     registry: VendorRegistry
-
-
 @dataclass(frozen=True, slots=True)
 class OperationalServices:
     industry_metrics: IndustryMetricRepository
@@ -181,12 +179,11 @@ class OperationalServices:
     agent_pending_actions: AgentPendingActionRepository
     agent_metrics: AgentConversationMetricsService
     agent_preferences: AgentPreferencesRepository
+    jobs: DurableOperationalJobRuntime
 
     @property
     def monitor_notifications(self) -> NotificationService:
         return self.notifications
-
-
 @dataclass(slots=True)
 class ApplicationContainer:
     settings: AppSettings
@@ -206,12 +203,11 @@ class ApplicationContainer:
 
     async def aclose(self) -> None:
         await self.resources.aclose()
-
-
 def build_application(
     settings: AppSettings, *, overrides: BootstrapOverrides | None = None
 ) -> ApplicationContainer:
     """Construct services from settings without I/O at import time."""
+    telemetry = configure_tracing(settings)
     overrides = overrides or BootstrapOverrides()
     clock: Clock = overrides.clock or SystemClock()
     id_generator: IdGenerator = Uuid7IdGenerator()
@@ -322,11 +318,23 @@ def build_application(
         clock,
         id_generator,
         secret_redactor,
+        research_unit_of_work_factory,
     )
     review_item_service = ReviewItemService(
         persistence.review_items,
         clock,
         id_generator,
+    )
+    phase4 = build_phase4_services(
+        providers={
+            VendorId.SCHWAB: schwab_account_provider,
+            VendorId.MOOMOO: moomoo_account_provider,
+        },
+        persistence=persistence,
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
+        review_items=review_item_service,
     )
 
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
@@ -576,12 +584,20 @@ def build_application(
         provider_retry_delay_seconds=0.5,
     )
     trade_retro_narrative_provider = build_trade_retro_narrative_provider(settings)
-    agent_model_providers = build_agent_model_providers(settings)
+    agent_model_providers = build_agent_model_providers(
+        settings,
+        resilience=provider_infrastructure.llm_resilience,
+    )
     default_agent_model_id = settings.default_agent_llm_id
     agent_model_provider = (
         agent_model_providers.get(default_agent_model_id)
         if default_agent_model_id is not None
         else None
+    )
+    agent_web_search_provider = build_agent_web_search_provider(
+        settings,
+        agent_model_providers,
+        clock,
     )
     trade_retro_service = TradeRetroService(
         persistence.trade_retro,
@@ -664,9 +680,8 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    monitor_run_lock = ProcessFileLock(
-        settings.post_market_sync_lock_path.parent / "monitoring.lock"
-    )
+    monitor_lock_path = settings.post_market_sync_lock_path.parent / "monitoring.lock"
+    monitor_run_lock = ProcessFileLock(monitor_lock_path)
     post_market_sync_service = PostMarketSyncService(
         calendar=us_market_calendar,
         repository=post_market_sync_run_repository,
@@ -679,6 +694,11 @@ def build_application(
             token_path=settings.schwab_token_path,
             enabled="SCHWAB" in settings.holdings_sources,
         ),
+        transactions=phase4.account_transactions,
+        activity_annotations=phase4.activity_annotations,
+        account_snapshots=account_snapshot_repository,
+        transaction_repository=account_transaction_repository,
+        daily_equity=phase4.daily_equity,
     )
     sgov_shadow_plan_service = SgovShadowPlanService(
         calendar=us_market_calendar,
@@ -717,21 +737,10 @@ def build_application(
         id_generator,
         secret_redactor,
     )
-    account_transaction_coordinator = AccountTransactionCoordinator(
-        {
-            VendorId.SCHWAB: schwab_account_provider,
-            VendorId.MOOMOO: moomoo_account_provider,
-        },
-        account_transaction_repository,
-        account_snapshot_repository,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     reconciliation_root = PROJECT_ROOT / "data" / "artifacts" / "reconciliation"
     performance_reconciliation_service = PerformanceReconciliationService(
         SchwabRealizedGainLossCsvParser(reconciliation_root),
-        account_transaction_coordinator,
+        phase4.account_transactions,
         OwnerOnlyBrokerReconciliationWriter(reconciliation_root),
         clock,
     )
@@ -766,7 +775,7 @@ def build_application(
         market_facts.us_research,
         market_facts.us_context,
         portfolio_tool_coordinator,
-        account_transaction_coordinator,
+        phase4.account_transactions,
         portfolio_review_fact_service,
         peer_comparison_service,
         clock,
@@ -779,6 +788,7 @@ def build_application(
             clock=clock,
             id_generator=id_generator,
             secret_redactor=secret_redactor,
+            telemetry=telemetry,
         ),
         resources=RuntimeResources(
             database=database,
@@ -792,6 +802,8 @@ def build_application(
             trade_retro_narrative_provider=trade_retro_narrative_provider,
             agent_model_provider=agent_model_provider,
             agent_model_providers=agent_model_providers,
+            agent_attachment_store=build_agent_attachment_store(settings),
+            agent_web_search_provider=agent_web_search_provider,
             agent_turn_lock_factory=AgentTurnLockFactory(
                 settings.telegram_agent_lock_path.parent / "agent_turns"
             ),
@@ -820,7 +832,11 @@ def build_application(
             monitoring=monitor_tool_coordinator,
             research_context=research_context_builder,
             challenge=challenge_review_service,
-            account_transactions=account_transaction_coordinator,
+            account_transactions=phase4.account_transactions,
+            activity_annotations=phase4.activity_annotations,
+            trade_cycle_overrides=phase4.trade_cycle_overrides,
+            behavior_reviews=phase4.behavior_reviews,
+            daily_equity=phase4.daily_equity,
             workflows=research_workflow_orchestrator,
             historical_validation=historical_validation_service,
             watchlist=watchlist_hub_service,
@@ -850,14 +866,11 @@ def build_application(
             agent_pending_actions=persistence.agent_pending_actions,
             agent_metrics=AgentConversationMetricsService(persistence.agent_conversations),
             agent_preferences=persistence.agent_preferences,
+            jobs=DurableOperationalJobRuntime(persistence.operational_jobs, clock, id_generator),
         ),
     )
-
-
 def load_settings(env_file: Path | None = None) -> AppSettings:
     return AppSettings.load(env_file=env_file)
-
-
 def build_telegram_agent_client(container: ApplicationContainer) -> Any:
     from infrastructure.providers.telegram.agent_long_poller import TelegramBotAgentClient
 
@@ -869,16 +882,12 @@ def build_telegram_agent_client(container: ApplicationContainer) -> Any:
         timeout_seconds=max(settings.provider_timeout_default_seconds, 35.0),
         proxy_url=settings.provider_proxy_url,
     )
-
-
 def build_telegram_agent_lock(path: Path) -> Any:
     return ProcessFileLock(path)
 
 
 def build_default_application() -> ApplicationContainer:
     return build_application(load_settings())
-
-
 def build_schwab_oauth_flow_manager() -> SchwabOAuthFlowManager:
     settings = load_settings()
     if not settings.schwab_client_id or not settings.schwab_client_secret:

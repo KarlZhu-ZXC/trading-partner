@@ -171,7 +171,7 @@ Assumption、Invalidation、Open Question 等子对象同样不仅要“存在�
 | `research_memory_get` (`report`) | 按 ID 读取一份不可变研究报告 |
 | `research_memory_get` (`timeline`) | 读取一个研究档案的统一时间线 |
 | `research_memory_append` (`journal`) | 在用户明确要求记录后追加日志 |
-| `research_memory_append` (`decision`) | 记录研究或仓位意图；不会产生订单、成交或持仓 |
+| `research_memory_append` (`decision`) | 记录研究或仓位意图；可选绑定 Strategy、四情景之一、同一 Research Subject 的 exact Trade Plan version 和 aware review due time；不会产生订单、成交或持仓。到期 Decision 复用现有 ReviewItem/Attention；只有 later Decision 明确 supersede exact prior Decision 或用户人工 Resolve 才关闭，失败/有界读取不自动关闭 |
 | `research_memory_get` (`agenda`) | durable-only 查询 Catalyst Agenda、scope、coverage、历史版本和过期未闭环提示；不访问 Provider |
 | `research_memory_append` (`agenda_item`) | 经明确确认创建、修订、取消事项，或把已发生事项链接到同研究范围的 Event/Report/Evidence |
 | `research_judgment_get` (`scorecard_history`) | 读取不可变 Judgment Scorecard S0/S1 历史；不重算旧运行 |
@@ -341,9 +341,20 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 | `portfolio_analyze` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
 | `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
 | `portfolio_analyze` (`performance_summary`) | 按账户与原币种重建 FIFO 或展示券商成本口径，分列已实现/未实现损益、股息、利息、费用和外部现金流，并可下钻到活动 ID 与期末快照 |
+| `portfolio_analyze` (`trade_cycles`) | 只读持久化 Transactions，按账户、Instrument、原币种确定性重建 long-only 建仓、加仓、减仓、清仓与 re-entry Cycle；不访问 Broker，不把 Fill 当完整交易，不推断 short；缺价格/费用、oversell、覆盖与截断显式降级 |
+| `portfolio_analyze` (`performance_series`) | 只用持久化 Broker net-assets 与 external flow 计算原币种 TWR、MWR/XIRR 和最大回撤；缺现金流边界、多解或跨币种时不补估值、不隐式汇总 |
+| `portfolio_analyze` (`daily_equity`) | 读取 source-referenced Daily Equity 与 Journal Activation；equity 只来自 Broker net-assets，gross position value 不冒充 NAV |
+| `portfolio_analyze` (`journal_timeline`) | 合并 durable Decision、可选 exact-linked Order Intent/Result 与 Broker Activity；缺链路时保留 INTENT_ONLY/EXECUTION_ONLY，不按时间猜测 |
+| `portfolio_analyze` (`trade_cycle_override_preview`) | 对 split/merge/relink 做无写入影响预览，保留 algorithm projection |
+| `portfolio_analyze` (`behavior_summary`) | 以完整 CLOSED active Cycle 为分母，返回分子、分母、排除项和 exact refs；无综合纪律分，不按 Fill 计算胜率 |
+| `portfolio_analyze` (`behavior_review_history`) | 读取 weekly/monthly/quarterly action recurrence Run；NEW/PERSISTENT/RESOLVED/RECURRED 均保留 exact cohort refs |
+| `portfolio_analyze` (`unlinked_activity`) | 读取未关联 Broker trade 与稳定 ReviewItem；不联网、不推断历史意图 |
+| `research_memory_append` (`activity_annotation`) | 经明确确认追加 exact activity 的 Decision/Plan 关联或 UNPLANNED/CASH_MANAGEMENT/修正分类；不改写成交事实，不产生订单 |
+| `research_memory_append` (`trade_cycle_override`) | 预览后明确确认 append-only split/merge/relink revision；不删除算法 Cycle |
+| `research_memory_append` (`behavior_review`) | 写入确定性 period cohort/action recurrence Run；失败或分页不完整的 source read 不自动产生 RESOLVED |
 | `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
 | `portfolio_analyze` (`retro_history`) | 只读不可变 Trade Retro Run 与追加式人工复核版本；不访问券商、Provider 或 LLM |
-| `broker_order_manage` | `cash_sweep_preview` 计算 SGOV Shadow；`preview` 创建 30–300 秒单次实盘意图；`submit` 在当前对话逐笔确认后提交；`status` 读取/刷新状态；`cancel` 明确确认后撤单。无通用券商请求或改单操作 |
+| `broker_order_manage` | `cash_sweep_preview` 计算 SGOV Shadow；`preview` 创建 30–300 秒单次实盘意图并可带 same-Subject exact Decision/Plan link（该 link 不授权下单）；`submit` 在当前对话逐笔确认后提交；`status` 读取/刷新状态；`cancel` 明确确认后撤单。无通用券商请求或改单操作 |
 
 历史补齐也可走确定性 CLI；单日用 `--date`，长区间用 inclusive
 `--start-date/--end-date`。Schwab 会在 Provider 内部拆成最多 60 天的窗口，CLI 不会启动
@@ -513,8 +524,8 @@ Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保
 `external_state_sync/watchlist` 是“精确全量”同步：一次刷新全部分组与成员并返回 receipt，
 不是默认分组的分页读取。也可使用
 `uv run trading-partner-watchlist-sync` 单独刷新 Watchlist；盘后账户和 Watchlist 的
-组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户，
-再执行精确组内全量刷新，并依据 XNYS 日历在真实收盘十分钟后运行，支持提前收盘、
+组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户和标准化
+Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，并依据 XNYS 日历在真实收盘十分钟后运行，支持提前收盘、
 休市跳过、成功幂等和部分失败重试。
 
 Watchlist 上游严格二选一：Moomoo OpenD 或严格 Manual CSV。它们不会合并、对账、镜像或
@@ -574,11 +585,13 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 1–12 个参考 Instrument、最多 12 组相对强弱关系，以及只由用户明确成交更新的
 `confirmed_state`。每次运行先确定性拉取 60 分钟与日线 bars，计算 1h/4h/1d/3d
 变化、相对强弱、规则状态和跨市场时段对齐，再把带 provenance 的紧凑特征交给
-可配置的服务端 LLM Provider 判断。当前默认启用阿里云百炼 `qwen3.8-max`
-Responses API；旧 DeepSeek Provider 和独立配置仍保留，可通过
-`LLM_PROVIDER=deepseek` 切换。百炼默认使用
-`reasoning.effort=max`；若模型把完整输出预算耗在推理而未返回正文，仅重试一次
-`high` 并在 receipt 中记录实际等级。启用 `BAILIAN_WEB_SEARCH_ENABLED` 后，百炼模型可按需调用
+可配置的服务端 LLM Provider 判断。当前 Monitor 默认使用阿里云百炼
+`deepseek-v4-flash-0731` Chat Completions，并启用 `response_format=json_object`；
+首次结构不合约时只做一次不改变事实的格式修复。百炼 `qwen3.8-max` Responses API
+作为 fallback，且不改变 Console Agent 的默认模型。DeepSeek 与 OpenCode Go subscription Provider 也可通过
+`LLM_PROVIDER=deepseek|opencode_go` 切换。OpenCode Go 根据模型使用 Responses、
+Chat Completions 或 Messages 协议，不提供原生 Web Search。Monitor 默认使用
+`high` reasoning effort。启用 `BAILIAN_WEB_SEARCH_ENABLED` 后，百炼 Responses fallback 可按需调用
 百炼内置 `web_search` 补充近期宏观事件；是否调用及最多十个来源 URL 会持久化，但搜索
 不得覆盖确定性行情、仓位、点位、收益率或数量事实。结果只能来自封闭的
 urgency/divergence/conclusion 枚举，解释字段必须为简体中文，最多引用
@@ -587,9 +600,11 @@ urgency/divergence/conclusion 枚举，解释字段必须为简体中文，最�
 LLM 没有仓位、Research Subject、Thesis、Trade Plan 或订单写端口。
 
 系统用定性方向、规则状态与时段状态形成 feature signature；签名未变化且没有硬规则迁移
-时，不调用 LLM。每次执行/跳过/失败仍写入不可变 judgment receipt，但只有结论、阶段、
-背离、紧急度或数量区间发生实质变化时才创建 `JUDGMENT_CHANGED` 与 Telegram 通知；
-相同失败也不会重复推送。`MONITOR_JUDGMENT_ENABLED=false` 是安全默认值，启用时本机
+时，不调用 LLM。每次执行/跳过/失败仍写入不可变 judgment receipt，但只有阶段、背离、
+紧急度、数量区间或可操作结论发生实质变化时才创建 `JUDGMENT_CHANGED` 与 Telegram 通知；
+同一阶段内零数量的 HOLD/WATCH/WAIT 摆动不推送，连续模型失败即使错误码变化也只发一次。
+周末代理保留 XAUUSD Monitor 身份，但标题与市场口径必须明确 PAXG/USDC 或 IG Weekend Gold，
+不得称为新鲜 OTC/LBMA 报价。`MONITOR_JUDGMENT_ENABLED=false` 是安全默认值，启用时本机
 `.env` 必须提供当前 Provider 对应的 `BAILIAN_API_KEY` 或 `DEEPSEEK_API_KEY`；
 百炼还必须使用与 Token Plan Key 配套的 Base URL。
 密钥不会进入 Monitor、Run、事件、通知或日志。

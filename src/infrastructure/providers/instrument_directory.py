@@ -32,7 +32,7 @@ from domain.common.errors import (
 from domain.common.time import require_aware_datetime
 from domain.common.values import build_instrument_id
 from domain.instruments.models import Instrument
-from domain.instruments.normalize import normalize_symbol_input
+from domain.instruments.normalize import canonical_us_index_symbol, normalize_symbol_input
 from infrastructure.providers.us.alpha_vantage_key_pool import (
     AlphaVantageKeyPool,
     classify_alpha_vantage_notice,
@@ -227,7 +227,11 @@ class YahooInstrumentDirectoryAdapter:
                 currency = "KRW"
                 country = "KR"
             else:
-                symbol = provider_symbol
+                symbol = (
+                    canonical_us_index_symbol(provider_symbol)
+                    if asset_type is AssetType.INDEX
+                    else provider_symbol
+                )
                 exchange = _us_exchange(
                     _text(item.get("exchange")) or _text(item.get("exchDisp"))
                 )

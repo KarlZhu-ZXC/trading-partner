@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CalendarPlus, Play, RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, RefreshButton, formatDate } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, Empty, PageActionMenu, formatDate } from "../components/ui";
 import { listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -199,13 +200,12 @@ export default function TradeRetroPage() {
   }
 
   return (
-    <ConsoleShell active="retro">
+    <ConsoleShell active="retro" pageActions={<PageActionMenu ariaLabel="Trade Retro Page Actions" items={[
+      { id: "prepare", label: busy === "prepare" ? "Preparing…" : "Prepare Next Week", description: "Capture the next review window before it begins", icon: <CalendarPlus aria-hidden="true" />, disabled: !nextWindow.start || busy !== null, onSelect: () => { void invoke("prepare"); } },
+      { id: "run", label: busy === "run" ? "Running…" : "Run Previous Week", description: "Generate the immutable discipline audit", icon: <Play aria-hidden="true" />, disabled: !previousWindow.start || busy !== null, onSelect: () => { void invoke("run"); } },
+      { id: "refresh", label: api.loading ? "Refreshing…" : "Refresh", description: "Reload durable Trade Retro data", icon: <RefreshCw aria-hidden="true" className={api.loading ? "spin" : undefined} />, disabled: api.loading, onSelect: api.refresh },
+    ]} />}>
       <DataBoundary loading={api.loading} error={api.error}>
-        <div className="page-actions">
-          <RefreshButton loading={api.loading} onClick={api.refresh} />
-          <ActionButton disabled={!nextWindow.start} busy={busy === "prepare"} onClick={() => { void invoke("prepare"); }}>Prepare Next Week</ActionButton>
-          <ActionButton disabled={!previousWindow.start} busy={busy === "run"} onClick={() => { void invoke("run"); }}>Run Previous Week</ActionButton>
-        </div>
         {message ? <p className="card-note">{message}</p> : null}
         <Card kicker="SOURCE OF TRUTH" title="Transaction-Versus-Plan Discipline">
           <p className="card-note">Runs and findings are immutable. Human corrections, dispositions, and action items are editable through append-only review revisions with optimistic version checks; none changes research state, positions, or orders.</p>

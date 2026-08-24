@@ -6,11 +6,19 @@ import argparse
 import asyncio
 import json
 from collections.abc import Sequence
+from datetime import UTC
 from decimal import Decimal
 
-from application.dto.broker_execution import SgovShadowPlanDTO
+from application.dto.broker_execution import (
+    SgovAutoOrderOutcome,
+    SgovShadowPlanDisposition,
+    SgovShadowPlanDTO,
+)
+from application.dto.operational_job import OperationalJobRunDTO
+from application.services.operational_job_runtime import OperationalJobOutcome
 from bootstrap import build_default_application
 from domain.notifications.enums import NotificationSourceType
+from domain.operations.enums import OperationalJobStatus
 
 
 def _money(value: Decimal | None) -> str:
@@ -125,9 +133,82 @@ async def _run(command: str, *, as_json: bool) -> int:
             return 1
         try:
             if command == "auto-run":
-                result = await container.operations.sgov_shadow_plan.run_if_due(
-                    auto_execute=True
+                async def operation() -> OperationalJobOutcome[SgovShadowPlanDTO]:
+                    value = await container.operations.sgov_shadow_plan.run_if_due(
+                        auto_execute=True
+                    )
+                    if value.disposition is not SgovShadowPlanDisposition.EXECUTED:
+                        return OperationalJobOutcome(
+                            status=OperationalJobStatus.SKIPPED,
+                            result_code=f"SGOV_AUTO_{value.disposition.value}",
+                            value=value,
+                        )
+                    reconciliation = any(
+                        item.outcome
+                        in {
+                            SgovAutoOrderOutcome.FAILED,
+                            SgovAutoOrderOutcome.RECONCILIATION_REQUIRED,
+                        }
+                        for item in value.orders
+                    )
+                    failed = bool(value.error_codes) or reconciliation
+                    error_code = (
+                        value.error_codes[0]
+                        if value.error_codes
+                        else "SGOV_AUTO_RECONCILIATION_REQUIRED"
+                        if reconciliation
+                        else None
+                    )
+                    return OperationalJobOutcome(
+                        status=(
+                            OperationalJobStatus.FAILED
+                            if failed
+                            else OperationalJobStatus.SUCCEEDED
+                        ),
+                        result_code=(
+                            "SGOV_AUTO_FAILED" if failed else "SGOV_AUTO_SUCCEEDED"
+                        ),
+                        error_code=error_code,
+                        value=value,
+                    )
+
+                minute = container.context.clock.now().astimezone(UTC).strftime(
+                    "%Y%m%dT%H%M"
                 )
+                execution = await container.operations.jobs.execute(
+                    job_name="sgov.auto_run",
+                    idempotency_key=f"sgov-auto:{minute}",
+                    operation=operation,
+                    lease_seconds=900,
+                )
+                result = execution.value
+                if result is None:
+                    print(
+                        json.dumps(
+                            {
+                                "ok": execution.run.status
+                                in {
+                                    OperationalJobStatus.SUCCEEDED,
+                                    OperationalJobStatus.SKIPPED,
+                                },
+                                "operational_job": OperationalJobRunDTO.from_domain(
+                                    execution.run
+                                ).model_dump(mode="json"),
+                                "invoked": execution.invoked,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                    return (
+                        0
+                        if execution.run.status
+                        in {
+                            OperationalJobStatus.SUCCEEDED,
+                            OperationalJobStatus.SKIPPED,
+                        }
+                        else 1
+                    )
             elif command == "run":
                 result = await container.operations.sgov_shadow_plan.run_if_due()
             else:
@@ -135,7 +216,13 @@ async def _run(command: str, *, as_json: bool) -> int:
         finally:
             lock.release()
         if as_json:
-            print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+            payload = result.model_dump(mode="json")
+            if command == "auto-run":
+                payload["operational_job"] = OperationalJobRunDTO.from_domain(
+                    execution.run
+                ).model_dump(mode="json")
+                payload["invoked"] = execution.invoked
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         else:
             print(_render_table(result))
         return 1 if result.error_codes else 0

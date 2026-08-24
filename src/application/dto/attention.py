@@ -108,6 +108,7 @@ class AttentionDigestDTO(_DTO):
     subject_id: str | None = None
     case_id: str | None = None
     total_count: int = Field(ge=0)
+    total_count_is_lower_bound: bool = False
     returned_count: int = Field(ge=0)
     truncated: bool
     highest_severity: AttentionSeverity | None = None
@@ -142,5 +143,6 @@ class AttentionHealthSummaryDTO(_DTO):
     open_review_item_count: int = Field(ge=0)
     acknowledged_review_item_count: int = Field(ge=0)
     highest_severity: AttentionSeverity | None = None
-    catalyst_sync_receipt_missing: bool
+    catalyst_sync_receipt_missing: bool | None
     coverage_status: AttentionCoverageState
+    limitation_codes: tuple[str, ...] = ()

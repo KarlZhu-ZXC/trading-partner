@@ -9,6 +9,7 @@ import {
   ExternalLink,
   GripVertical,
   History,
+  ImagePlus,
   Maximize2,
   MessageSquarePlus,
   Minimize2,
@@ -19,6 +20,7 @@ import {
   Settings2,
   Square,
   Smartphone,
+  TriangleAlert,
   Wrench,
   X,
 } from "lucide-react";
@@ -28,11 +30,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   AgentConversation,
+  AgentFailureNotice,
   AgentMessage,
   AgentPendingAction,
   AgentPreferences,
@@ -41,6 +46,8 @@ import {
   AgentStatus,
   AgentTurn,
   AgentConversationMetrics,
+  AgentImageAttachment,
+  AgentImageInput,
   archiveAgentConversation,
   cancelAgentTurn,
   collectEphemeralContext,
@@ -60,6 +67,7 @@ import {
   resetAgentPreferences,
   updateAgentPreferences,
 } from "../lib/agent-api";
+import { authenticatedFetch } from "../lib/api";
 import { AgentMessageContent } from "./agent-message-content";
 import {
   AgentArtifactGallery,
@@ -80,6 +88,107 @@ const LEGACY_AGENT_PROVIDER_STORAGE_KEY = "trading-partner-agent-model-id";
 const AGENT_MODEL_STORAGE_KEY = "trading-partner-agent-model-name";
 const AGENT_REASONING_STORAGE_KEY = "trading-partner-agent-reasoning-effort";
 const AGENT_RAIL_WIDTH_STORAGE_KEY = "trading-partner-agent-rail-width";
+const AGENT_DISMISSED_FAILURES_STORAGE_KEY = "trading-partner-agent-dismissed-failures";
+const AGENT_IMAGE_MAX_BYTES = 2_000_000;
+const AGENT_IMAGE_MAX_COUNT = 4;
+const AGENT_IMAGE_MAX_TOTAL_BYTES = 4_000_000;
+const AGENT_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg"]);
+
+type ComposerImage = AgentImageInput & {
+  id: string;
+  media_type: "image/png" | "image/jpeg";
+  byte_size: number;
+};
+
+function readImageFile(file: File): Promise<ComposerImage> {
+  if (!AGENT_IMAGE_MEDIA_TYPES.has(file.type)) {
+    return Promise.reject(new Error("Only PNG and JPEG images are supported."));
+  }
+  if (file.size < 1 || file.size > AGENT_IMAGE_MAX_BYTES) {
+    return Promise.reject(new Error("Each image must be 2 MB or smaller."));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read this image."));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Unable to read this image."));
+        return;
+      }
+      resolve({
+        id: crypto.randomUUID(),
+        data_url: reader.result,
+        name: file.name || null,
+        media_type: file.type as ComposerImage["media_type"],
+        byte_size: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read this image."));
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Unable to read this image."));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function restoreImageAttachment(attachment: AgentImageAttachment): Promise<ComposerImage> {
+  const response = await authenticatedFetch(attachment.url);
+  if (!response.ok) throw new Error("Unable to reload the attached image.");
+  const blob = await response.blob();
+  if (blob.type !== attachment.media_type || blob.size > AGENT_IMAGE_MAX_BYTES) {
+    throw new Error("The attached image is no longer available.");
+  }
+  return {
+    id: crypto.randomUUID(),
+    data_url: await blobToDataUrl(blob),
+    name: attachment.original_name,
+    media_type: attachment.media_type,
+    byte_size: blob.size,
+  };
+}
+
+function scopedAgentStorageKey(
+  base: string,
+  providerId: string,
+  modelName?: string,
+): string {
+  return [base, providerId, modelName].filter(Boolean).join(":");
+}
+
+function readAgentStorage(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeAgentStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // The current-session selection remains usable without persistent storage.
+  }
+}
+
+function readDismissedFailureKeys(): Set<string> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(AGENT_DISMISSED_FAILURES_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(value)) return new Set();
+    return new Set(value.filter((item): item is string =>
+      typeof item === "string" && /^[A-Za-z0-9_.:-]{1,320}$/.test(item)).slice(-50));
+  } catch {
+    return new Set();
+  }
+}
 
 type AgentRailProps = {
   collapsed: boolean;
@@ -120,6 +229,58 @@ function statusLabel(status: AgentStatus | null, loading: boolean): string {
   return "READY";
 }
 
+function AgentFailureNotification({
+  notice,
+  disabled,
+  onDismiss,
+  onRetry,
+}: {
+  notice: AgentFailureNotice;
+  disabled: boolean;
+  onDismiss: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <section
+      aria-label="Agent Provider Error Notification"
+      className="agent-failure-notification"
+      role="alert"
+    >
+      <header>
+        <TriangleAlert aria-hidden="true" size={14} />
+        <div><strong>{notice.title}</strong><code>{notice.code}</code></div>
+        <button
+          aria-label="Dismiss Provider Error Notification"
+          className="agent-failure-dismiss"
+          onClick={onDismiss}
+          title="Dismiss Notification"
+          type="button"
+        >
+          <X aria-hidden="true" size={12} />
+        </button>
+      </header>
+      <p>{notice.explanation}</p>
+      <dl>
+        {notice.provider_id && <div><dt>Provider</dt><dd>{notice.provider_id}</dd></div>}
+        {notice.model && <div><dt>Model</dt><dd>{notice.model}</dd></div>}
+        {notice.http_status !== null && (
+          <div><dt>HTTP Status</dt><dd>{notice.http_status}</dd></div>
+        )}
+        {notice.retryable !== null && (
+          <div><dt>Retryable</dt><dd>{notice.retryable ? "Yes" : "No"}</dd></div>
+        )}
+        {notice.attempts !== null && <div><dt>Attempts</dt><dd>{notice.attempts}</dd></div>}
+      </dl>
+      <footer>
+        <span>{notice.next_action}</span>
+        <button className="agent-failure-retry" disabled={disabled} onClick={onRetry} type="button">
+          <RefreshCw aria-hidden="true" size={11} /> Retry Turn
+        </button>
+      </footer>
+    </section>
+  );
+}
+
 export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: AgentRailProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -141,6 +302,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
+  const [composerImages, setComposerImages] = useState<ComposerImage[]>([]);
   const [composerComposing, setComposerComposing] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerCatalogs, setProviderCatalogs] = useState<Record<string, AgentProviderModelCatalog>>({});
@@ -156,10 +318,12 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [focusMode, setFocusMode] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [dismissedFailureKeys, setDismissedFailureKeys] = useState<Set<string>>(() => new Set());
   const refreshControllers = useRef(new Map<string, AbortController>());
   const modelCatalogController = useRef<AbortController | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const copyResetTimer = useRef<number | null>(null);
   const {
     streams,
@@ -177,6 +341,10 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       pendingActionFallback: "This action requires an explicit decision.",
     },
   });
+
+  useEffect(() => {
+    setDismissedFailureKeys(readDismissedFailureKeys());
+  }, []);
 
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.conversation_id === selectedId) ?? null,
@@ -255,6 +423,17 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     [selectedProvider, selectedProviderModel],
   );
   const latestTurn = selectedTurns[0] ?? null;
+  const failureNotice = selectedStream?.failureNotice ?? latestTurn?.failure_notice ?? null;
+  const failureNoticeKey = failureNotice
+    ? selectedStream?.turnId
+      ?? latestTurn?.turn_id
+      ?? `${selectedId ?? "none"}:${failureNotice.code}:${failureNotice.provider_id ?? "none"}:${failureNotice.model ?? "none"}`
+    : null;
+  const visibleFailureNotice = failureNotice
+    && failureNoticeKey
+    && !dismissedFailureKeys.has(failureNoticeKey)
+    ? failureNotice
+    : null;
   const durableTurnActive = latestTurn?.status === "RUNNING" || latestTurn?.status === "WAITING_TOOL";
   const durablePendingAction = selectedPendingActions.find((item) => item.status === "PRESENTED") ?? null;
   const streamPendingAction = selectedStream?.pendingAction ?? null;
@@ -271,6 +450,22 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       Math.min(AGENT_RAIL_MAX_WIDTH, Math.floor(window.innerWidth * AGENT_RAIL_MAX_VIEWPORT_RATIO)),
     );
   }, []);
+
+  const dismissFailureNotice = useCallback(() => {
+    if (!failureNoticeKey) return;
+    setDismissedFailureKeys((current) => {
+      const next = new Set([...current, failureNoticeKey]);
+      try {
+        window.localStorage.setItem(
+          AGENT_DISMISSED_FAILURES_STORAGE_KEY,
+          JSON.stringify(Array.from(next).slice(-50)),
+        );
+      } catch {
+        // The current-tab dismissal remains effective when storage is unavailable.
+      }
+      return next;
+    });
+  }, [failureNoticeKey]);
 
   // Tracks the applied width for the window-resize listener without putting
   // railWidth itself into that effect's dependencies, which would re-register
@@ -351,9 +546,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     }
     let stored = "";
     try {
-      stored = window.localStorage.getItem(AGENT_PROVIDER_STORAGE_KEY)
-        ?? window.localStorage.getItem(LEGACY_AGENT_PROVIDER_STORAGE_KEY)
-        ?? "";
+      stored = readAgentStorage(AGENT_PROVIDER_STORAGE_KEY)
+        || readAgentStorage(LEGACY_AGENT_PROVIDER_STORAGE_KEY);
     } catch {
       // Private-mode storage failures fall back to the default provider.
     }
@@ -384,16 +578,26 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     void fetchAgentProviderModels(selectedProviderId, false, controller.signal)
       .then((catalog) => {
         setProviderCatalogs((current) => ({ ...current, [selectedProviderId]: catalog }));
-        const stored = window.localStorage.getItem(AGENT_MODEL_STORAGE_KEY) ?? "";
+        const stored = readAgentStorage(
+          scopedAgentStorageKey(AGENT_MODEL_STORAGE_KEY, selectedProviderId),
+        ) || readAgentStorage(AGENT_MODEL_STORAGE_KEY);
         const next = catalog.models.some((item) => item.id === stored)
           ? stored
-          : catalog.default_model ?? catalog.models[0].id;
+          : catalog.default_model ?? catalog.models[0]?.id ?? selectedProvider.model;
         setSelectedModelName(next);
-        window.localStorage.setItem(AGENT_MODEL_STORAGE_KEY, next);
+        writeAgentStorage(
+          scopedAgentStorageKey(AGENT_MODEL_STORAGE_KEY, selectedProviderId),
+          next,
+        );
       })
       .catch((error) => {
         if (isAbortError(error)) return;
         setProviderModelsError("Live model list unavailable; using the configured default.");
+        setProviderCatalogs((current) => {
+          const next = { ...current };
+          delete next[selectedProviderId];
+          return next;
+        });
         setSelectedModelName(selectedProvider.model);
       })
       .finally(() => {
@@ -403,27 +607,43 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   }, [selectedProvider, selectedProviderId]);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(AGENT_REASONING_STORAGE_KEY) ?? "";
+    const stored = readAgentStorage(
+      scopedAgentStorageKey(
+        AGENT_REASONING_STORAGE_KEY,
+        selectedProviderId,
+        selectedModelName,
+      ),
+    ) || readAgentStorage(AGENT_REASONING_STORAGE_KEY);
     setSelectedReasoningEffort(reasoningOptions.includes(stored) ? stored : "");
-  }, [selectedModelName, reasoningOptions]);
+  }, [selectedModelName, selectedProviderId, reasoningOptions]);
 
   function selectProvider(providerId: string) {
     if (!providerOptions.some((item) => item.id === providerId)) return;
     setSelectedProviderId(providerId);
     setSelectedModelName("");
-    window.localStorage.setItem(AGENT_PROVIDER_STORAGE_KEY, providerId);
+    writeAgentStorage(AGENT_PROVIDER_STORAGE_KEY, providerId);
   }
 
   function selectModel(modelName: string) {
     if (!providerModelOptions.some((item) => item.id === modelName)) return;
     setSelectedModelName(modelName);
-    window.localStorage.setItem(AGENT_MODEL_STORAGE_KEY, modelName);
+    writeAgentStorage(
+      scopedAgentStorageKey(AGENT_MODEL_STORAGE_KEY, selectedProviderId),
+      modelName,
+    );
   }
 
   function selectReasoningEffort(effort: string) {
     if (effort && !reasoningOptions.includes(effort)) return;
     setSelectedReasoningEffort(effort);
-    window.localStorage.setItem(AGENT_REASONING_STORAGE_KEY, effort);
+    writeAgentStorage(
+      scopedAgentStorageKey(
+        AGENT_REASONING_STORAGE_KEY,
+        selectedProviderId,
+        selectedModelName,
+      ),
+      effort,
+    );
   }
 
   function beginRailResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -477,22 +697,105 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     }
   }
 
-  function editMessage(message: AgentMessage) {
+  async function editMessage(message: AgentMessage) {
     setComposer(message.content);
+    setComposerImages([]);
     setEditingMessageId(message.message_id);
+    if (message.attachments.length > 0) {
+      setActionBusy("images");
+      try {
+        setComposerImages(await Promise.all(message.attachments.map(restoreImageAttachment)));
+      } catch (error) {
+        setActionError(errorText(error, "Unable to reload the attached image."));
+      } finally {
+        setActionBusy(null);
+      }
+    }
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
       composerRef.current?.setSelectionRange(message.content.length, message.content.length);
     });
   }
 
-  function retryMessage(message: AgentMessage) {
+  async function addComposerImages(files: File[]) {
+    if (files.length === 0) return;
+    setActionError(null);
+    const remainingSlots = AGENT_IMAGE_MAX_COUNT - composerImages.length;
+    if (files.length > remainingSlots) {
+      setActionError(`You can attach up to ${AGENT_IMAGE_MAX_COUNT} images.`);
+      return;
+    }
+    const remainingBytes = AGENT_IMAGE_MAX_TOTAL_BYTES
+      - composerImages.reduce((total, image) => total + image.byte_size, 0);
+    const added: ComposerImage[] = [];
+    let usedBytes = 0;
+    try {
+      for (const file of files) {
+        const image = await readImageFile(file);
+        usedBytes += image.byte_size;
+        if (usedBytes > remainingBytes) {
+          throw new Error("Attached images must total 4 MB or less.");
+        }
+        added.push(image);
+      }
+      setComposerImages((current) => [...current, ...added]);
+    } catch (error) {
+      setActionError(errorText(error, "Unable to attach this image"));
+    }
+  }
+
+  function handleImageInput(event: ChangeEvent<HTMLInputElement>) {
+    void addComposerImages(Array.from(event.target.files ?? []));
+    event.target.value = "";
+  }
+
+  function insertPastedText(value: string) {
+    if (!value) return;
+    const textarea = composerRef.current;
+    if (!textarea) {
+      setComposer((current) => current + value);
+      return;
+    }
+    const start = textarea.selectionStart ?? composer.length;
+    const end = textarea.selectionEnd ?? start;
+    setComposer((current) => `${current.slice(0, start)}${value}${current.slice(end)}`);
+    window.requestAnimationFrame(() => {
+      const cursor = start + value.length;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && AGENT_IMAGE_MEDIA_TYPES.has(item.type))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    void addComposerImages(imageFiles);
+    const text = event.clipboardData.getData("text/plain");
+    insertPastedText(text);
+  }
+
+  async function retryMessage(message: AgentMessage) {
     const responseIndex = selectedMessages.findIndex((item) => item.message_id === message.message_id);
     if (responseIndex < 0) return;
     for (let index = responseIndex - 1; index >= 0; index -= 1) {
       const candidate = selectedMessages[index];
       if (candidate.role === "USER") {
-        void sendMessage(candidate.content);
+        if (candidate.attachments.length === 0) {
+          void sendMessage(candidate.content);
+          return;
+        }
+        try {
+          const attachments = await Promise.all(
+            candidate.attachments.map(restoreImageAttachment),
+          );
+          void sendMessage(candidate.content, attachments);
+        } catch (error) {
+          setActionError(errorText(error, "Unable to reload the attached image."));
+        }
         return;
       }
     }
@@ -502,14 +805,31 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   async function retryFailedTurn() {
     if (!selectedId || !latestTurn || latestTurn.status !== "FAILED" || actionBusy) return;
     setActionError(null);
-    const completed = await retryStream(
+    await retryStream(
       selectedId,
       latestTurn.turn_id,
       (message) => setActionError(message),
     );
-    if (completed) {
+    await reloadDurableConversation(selectedId);
+    await loadConversations();
+  }
+
+  async function reconnectCurrentTurn() {
+    if (!selectedId || !latestTurn || !durableTurnActive || selectedStreaming) return;
+    setActionBusy(`reconnect:${latestTurn.turn_id}`);
+    setActionError(null);
+    try {
+      await reconnectTurn(
+        selectedId,
+        latestTurn.turn_id,
+        latestTurn.status === "WAITING_TOOL" ? "tool" : "waiting",
+      );
       await reloadDurableConversation(selectedId);
-      await loadConversations();
+    } catch (error) {
+      setActionError(errorText(error, "Unable to reconnect to this turn"));
+      await reloadDurableConversation(selectedId);
+    } finally {
+      setActionBusy(null);
     }
   }
 
@@ -659,8 +979,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       selectedId,
       latestTurn.turn_id,
       latestTurn.status === "WAITING_TOOL" ? "tool" : "waiting",
-    ).then((completed) => {
-      if (completed) void reloadDurableConversation(selectedId);
+    ).then(() => {
+      void reloadDurableConversation(selectedId);
     });
     return () => abortReconnect(selectedId);
   }, [
@@ -673,10 +993,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     reloadDurableConversation,
     selectedId,
   ]);
-  async function sendMessage(contentOverride?: string) {
+  async function sendMessage(
+    contentOverride?: string,
+    attachmentsOverride?: AgentImageInput[],
+  ) {
     const content = (contentOverride ?? composer).trim();
+    const outgoingImages = attachmentsOverride ?? composerImages;
     if (
-      !content
+      (!content && outgoingImages.length === 0)
       || actionBusy
       || disabledReason
       || !selectedProviderId
@@ -703,7 +1027,10 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       }
     }
     if (!conversationId || isStreaming(conversationId)) return;
-    if (contentOverride === undefined) setComposer("");
+    if (contentOverride === undefined) {
+      setComposer("");
+      setComposerImages([]);
+    }
     setEditingMessageId(null);
     setActionError(null);
     const optimistic: AgentMessage = {
@@ -711,6 +1038,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       conversation_id: conversationId,
       role: "USER",
       content,
+      attachments: [],
       sequence: null,
       created_at: new Date().toISOString(),
     };
@@ -718,18 +1046,20 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       ...current,
       [conversationId]: [...(current[conversationId] ?? []), optimistic],
     }));
-    const completed = await streamMessage({
+    await streamMessage({
       conversationId,
       content,
+      attachments: outgoingImages.map(({ data_url, name }) => ({
+        data_url,
+        name,
+      })),
       ephemeralContext,
       providerId: selectedProviderId || undefined,
       modelName: selectedModelName || undefined,
       reasoningEffort: selectedReasoningEffort || undefined,
     });
-    if (completed) {
-      await reloadDurableConversation(conversationId);
-      await loadConversations();
-    }
+    await reloadDurableConversation(conversationId);
+    await loadConversations();
   }
 
   async function decidePendingAction(decision: "confirm" | "reject") {
@@ -880,7 +1210,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     && !actionBusy
     && selectedProviderId
     && (selectedProviderId === "auto" || selectedModelName)
-    && composer.trim(),
+    && (composer.trim() || composerImages.length > 0),
   );
   const statusTone = disabledReason ? "attention" : "ready";
 
@@ -1023,6 +1353,15 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               </button>
             </div>
 
+            {visibleFailureNotice && !durableTurnActive && !selectedStreaming && (
+              <AgentFailureNotification
+                disabled={Boolean(disabledReason || selectedStreaming || actionBusy)}
+                notice={visibleFailureNotice}
+                onDismiss={dismissFailureNotice}
+                onRetry={() => void retryFailedTurn()}
+              />
+            )}
+
             <div className="agent-rail-scroll" aria-live="polite">
               {!!runtimeComponents.length && !historyOpen && !preferencesOpen && (
                 <details className="agent-component-status">
@@ -1148,16 +1487,16 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                     <div className="agent-rail-tool-state"><Wrench aria-hidden="true" size={13} /> {selectedStream?.phase === "tool" ? "Tool call in progress…" : "Waiting for Agent…"}</div>
                   )}
                   {!selectedStreaming && durableTurnActive && (
-                    <div className="agent-rail-tool-state"><Wrench aria-hidden="true" size={13} /> {latestTurn?.status === "WAITING_TOOL" ? "Tool work continues on the server…" : "This turn continues on the server…"}</div>
+                    <div className="agent-rail-tool-state">
+                      <Wrench aria-hidden="true" size={13} />
+                      <span>{latestTurn?.status === "WAITING_TOOL" ? "Tool work continues on the server…" : "This turn continues on the server…"}</span>
+                      <button disabled={actionBusy !== null} onClick={() => void reconnectCurrentTurn()} type="button">Reconnect</button>
+                    </div>
                   )}
-                  {!durableTurnActive && latestTurn?.status === "FAILED" && latestTurn.error_code && (
+                  {!durableTurnActive && !failureNotice && latestTurn?.status === "FAILED" && latestTurn.error_code && (
                     <div className="agent-rail-error agent-turn-failed" role="status">
                       <span>Last Turn Failed · {latestTurn.error_code}</span>
-                      <button
-                        disabled={Boolean(disabledReason || selectedStreaming || actionBusy)}
-                        onClick={() => void retryFailedTurn()}
-                        type="button"
-                      >
+                      <button disabled={Boolean(disabledReason || selectedStreaming || actionBusy)} onClick={() => void retryFailedTurn()} type="button">
                         <RefreshCw aria-hidden="true" size={11} /> Retry Turn
                       </button>
                     </div>
@@ -1196,7 +1535,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   {messagesError && <div className="agent-rail-error" role="alert">{messagesError}</div>}
                   {actionError && <div className="agent-rail-error" role="alert">{actionError}</div>}
                   {statusError && <div className="agent-rail-error" role="status">{statusError}</div>}
-                  {selectedStream?.error && <div className="agent-rail-error" role="alert">{selectedStream.error}</div>}
+                  {selectedStream?.error && !failureNotice && <div className="agent-rail-error" role="alert">{selectedStream.error}</div>}
                 </>
               )}
             </div>
@@ -1205,10 +1544,26 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               {editingMessageId && (
                 <div className="agent-composer-editing" role="status">
                   Editing an earlier prompt. Send creates a new durable turn.
-                  <button aria-label="Cancel Editing" onClick={() => { setEditingMessageId(null); setComposer(""); }} type="button">Cancel</button>
+                  <button aria-label="Cancel Editing" onClick={() => { setEditingMessageId(null); setComposer(""); setComposerImages([]); }} type="button">Cancel</button>
                 </div>
               )}
               <div className="agent-rail-composer-frame">
+                {composerImages.length > 0 && (
+                  <div className="agent-composer-images" aria-label="Attached Images">
+                    {composerImages.map((image) => (
+                      <div className="agent-composer-image" key={image.id}>
+                        <img alt={image.name || "Image to send"} src={image.data_url} />
+                        <button
+                          aria-label={`Remove ${image.name || "attached image"}`}
+                          onClick={() => setComposerImages((current) => current.filter((item) => item.id !== image.id))}
+                          type="button"
+                        >
+                          <X aria-hidden="true" size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   aria-label="Message Agent"
                   disabled={Boolean(disabledReason) || selectedStreaming || durableTurnActive || actionBusy !== null}
@@ -1216,6 +1571,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   onCompositionEnd={() => setComposerComposing(false)}
                   onCompositionStart={() => setComposerComposing(true)}
                   onKeyDown={handleComposerKeyDown}
+                  onPaste={handleComposerPaste}
                   placeholder={disabledReason ?? (durableTurnActive ? "Current turn is still running…" : "Ask Agent…")}
                   rows={3}
                   ref={composerRef}
@@ -1226,6 +1582,26 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 )}
                 <div className="agent-rail-composer-footer">
                   <div className="agent-composer-options">
+                    <input
+                      accept="image/png,image/jpeg"
+                      aria-label="Choose Images"
+                      className="agent-image-file-input"
+                      multiple
+                      onChange={handleImageInput}
+                      ref={imageInputRef}
+                      type="file"
+                    />
+                    <button
+                      aria-label="Attach Images"
+                      className="agent-composer-attach"
+                      disabled={selectedStreaming || durableTurnActive || actionBusy !== null}
+                      onClick={() => imageInputRef.current?.click()}
+                      title="Attach PNG or JPEG images"
+                      type="button"
+                    >
+                      <ImagePlus aria-hidden="true" size={13} />
+                      <span>Image</span>
+                    </button>
                     <label className="agent-model-select agent-provider-select">
                       <span className="sr-only">Agent Provider</span>
                       <select

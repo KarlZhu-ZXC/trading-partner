@@ -6,9 +6,16 @@ import httpx
 import pytest
 
 from application.ports.agent_model_provider import ModelMessage, ModelRequest
-from domain.common.errors import ProviderRateLimitError, ProviderTimeoutError
+from domain.common.errors import (
+    ProviderRateLimitError,
+    ProviderRequestRejectedError,
+    ProviderTimeoutError,
+)
 from infrastructure.config.llm import LLMEndpointConfig
+from infrastructure.providers.llm.anthropic_messages_codec import AnthropicMessagesCodec
+from infrastructure.providers.llm.chat_completions_codec import ChatCompletionsCodec
 from infrastructure.providers.llm.openai_compatible import OpenAICompatibleModelProvider
+from infrastructure.providers.llm.responses_codec import ResponsesCodec
 
 
 def _config(**overrides: object) -> LLMEndpointConfig:
@@ -20,6 +27,24 @@ def _config(**overrides: object) -> LLMEndpointConfig:
     }
     values.update(overrides)
     return LLMEndpointConfig(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_provider_maps_http_400_to_nonretryable_request_rejected() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "must-not-export"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleModelProvider(_config(), client=client)
+
+    with pytest.raises(ProviderRequestRejectedError) as caught:
+        await provider.complete(ModelRequest())
+
+    assert caught.value.code == "PROVIDER_REQUEST_REJECTED"
+    assert caught.value.retryable is False
+    assert caught.value.details == {"status_code": 400}
+    assert "must-not-export" not in repr(caught.value)
+    await provider.aclose()
 
 
 @pytest.mark.asyncio
@@ -47,6 +72,54 @@ async def test_provider_posts_chat_payload_and_decodes_text() -> None:
     assert captured["authorization"] == "Bearer unit-secret"
     assert captured["payload"]["model"] == "unit-model"  # type: ignore[index]
     await provider.aclose()
+
+
+def test_multimodal_content_is_encoded_for_chat_completions() -> None:
+    payload = ChatCompletionsCodec.encode(
+        ModelRequest(
+            messages=(
+                ModelMessage(
+                    role="user",
+                    content=(
+                        {"type": "text", "text": "Inspect this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,abc="},
+                        },
+                    ),
+                ),
+            )
+        ),
+        model="vision-model",
+    )
+    assert payload["messages"][0]["content"][1]["image_url"]["url"].startswith(  # type: ignore[index]
+        "data:image/png"
+    )
+
+
+def test_multimodal_content_is_translated_for_responses_and_messages() -> None:
+    request = ModelRequest(
+        messages=(
+            ModelMessage(
+                role="user",
+                content=(
+                    {"type": "text", "text": "Inspect this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc="},
+                    },
+                ),
+            ),
+        )
+    )
+    responses = ResponsesCodec.encode(request, model="vision-model")
+    messages = AnthropicMessagesCodec.encode(
+        request,
+        model="vision-model",
+        max_output_tokens=1000,
+    )
+    assert responses["input"][0]["content"][1]["type"] == "input_image"  # type: ignore[index]
+    assert messages["messages"][0]["content"][1]["type"] == "image"  # type: ignore[index]
 
 
 @pytest.mark.asyncio

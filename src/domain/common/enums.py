@@ -19,6 +19,9 @@ class Market(StrEnum):
     DCE = "DCE"
     OTC = "OTC"
     LME = "LME"
+    # Non-market infrastructure such as LLM routing receipts. This must never
+    # be used as an Instrument market identity.
+    GLOBAL = "GLOBAL"
 
 
 class AssetType(StrEnum):
@@ -307,6 +310,12 @@ class VendorId(StrEnum):
     SCHWAB = "schwab"
     MOOMOO = "moomoo"
     MANUAL_CSV = "manual_csv"
+    # Server-side LLM endpoints; kept separate from market-data vendors while
+    # sharing admission/circuit/route-receipt infrastructure.
+    BAILIAN = "bailian"
+    DEEPSEEK = "deepseek"
+    OPENCODE_ZEN = "opencode_zen"
+    OPENCODE_GO = "opencode_go"
 
     # Instrument resolution sources
     LOCAL_MASTER = "local_master"
@@ -480,6 +489,15 @@ class DecisionType(StrEnum):
     EXIT_INTENT = "exit_intent"
     AVOID = "avoid"
     RESEARCH_MORE = "research_more"
+
+
+class DecisionScenario(StrEnum):
+    """The four strategy_v1 decision contexts used by the Phase 4 journal."""
+
+    UPSIDE = "UPSIDE"
+    SIDEWAYS = "SIDEWAYS"
+    PULLBACK = "PULLBACK"
+    INVALIDATION = "INVALIDATION"
 
 
 class JournalEntryType(StrEnum):

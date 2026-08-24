@@ -29,8 +29,13 @@ from application.services._research_support import (
     normalize_idempotency_key,
     require_confirm_reviewer,
 )
-from domain.common.enums import ConfirmationMode, DecisionType, ResearchSearchEntityType
-from domain.common.errors import DuplicateIdempotencyKey, InputValidationError
+from domain.common.enums import (
+    ConfirmationMode,
+    DecisionScenario,
+    DecisionType,
+    ResearchSearchEntityType,
+)
+from domain.common.errors import DuplicateIdempotencyKey, InputValidationError, InvalidResearchLink
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
 from domain.research.models import DecisionRecord
@@ -49,6 +54,47 @@ class DecisionRecordService:
         self._id_generator = id_generator
         self._redactor = secret_redactor
 
+    def list_review_due(
+        self,
+        *,
+        now: datetime | None = None,
+        subject_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[DecisionRecordDTO, ...]:
+        """Read the bounded set of currently due, still-live Decisions.
+
+        This is intentionally a direct durable read for the ReviewItem
+        materializer.  It does not append an audit record, refresh a Provider,
+        or reconcile ReviewItems itself; callers decide whether a successful
+        page is complete enough to mark the source fully observed.
+        """
+
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise InputValidationError(
+                "limit must be an int in [1, 500]",
+                details={"field": "limit", "limit": limit},
+            )
+        subject_id_n: str | None
+        if subject_id is None:
+            subject_id_n = None
+        else:
+            subject_id_n = subject_id.strip()
+            if not subject_id_n:
+                raise InputValidationError(
+                    "subject_id must be non-blank when provided",
+                    details={"field": "subject_id"},
+                )
+        cutoff = require_aware_datetime(
+            now if now is not None else self._clock.now(), field_name="now"
+        )
+        with self._uow_factory() as uow:
+            values = uow.decisions.list_review_due(
+                now=cutoff,
+                subject_id=subject_id_n,
+                limit=limit,
+            )
+        return tuple(DecisionRecordDTO.from_domain(value) for value in values)
+
     def append(
         self,
         *,
@@ -66,6 +112,12 @@ class DecisionRecordService:
         supersedes_decision_id: str | None,
         position_context_snapshot_id: str | None,
         idempotency_key: str,
+        strategy_code: str | None = None,
+        strategy_version: str | None = None,
+        scenario: DecisionScenario | str | None = None,
+        trade_plan_id: str | None = None,
+        trade_plan_version: int | None = None,
+        review_due_at: datetime | None = None,
     ) -> ToolEnvelope[DecisionRecordDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
@@ -82,6 +134,74 @@ class DecisionRecordService:
             title_r = redact_required_text(title, self._redactor, field="title")
             rationale_r = redact_required_text(rationale, self._redactor, field="rationale")
             decided = require_aware_datetime(decided_at, field_name="decided_at")
+
+            def optional_text(value: str | None, *, field: str, max_len: int) -> str | None:
+                if value is None:
+                    return None
+                if not isinstance(value, str):
+                    raise InputValidationError(
+                        f"{field} must be a string when provided",
+                        details={"field": field, "type": type(value).__name__},
+                    )
+                normalized = value.strip()
+                if not normalized:
+                    raise InputValidationError(
+                        f"{field} must be non-blank when provided",
+                        details={"field": field},
+                    )
+                if len(normalized) > max_len:
+                    raise InputValidationError(
+                        f"{field} length must be <= {max_len}",
+                        details={"field": field, "length": len(normalized), "max": max_len},
+                    )
+                return normalized
+
+            strategy_code_n = optional_text(strategy_code, field="strategy_code", max_len=128)
+            strategy_version_n = optional_text(
+                strategy_version, field="strategy_version", max_len=128
+            )
+            if scenario is None:
+                scenario_n = None
+            else:
+                try:
+                    scenario_n = (
+                        scenario
+                        if isinstance(scenario, DecisionScenario)
+                        else DecisionScenario(scenario)
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise InputValidationError(
+                        "scenario must be one of UPSIDE, SIDEWAYS, PULLBACK, INVALIDATION",
+                        details={"field": "scenario", "value": str(scenario)},
+                    ) from exc
+
+            plan_id_n: str | None
+            if trade_plan_id is None:
+                plan_id_n = None
+            else:
+                plan_id_n = trade_plan_id.strip()
+                if not plan_id_n:
+                    raise InputValidationError(
+                        "trade_plan_id must be non-blank when provided",
+                        details={"field": "trade_plan_id"},
+                    )
+            if (plan_id_n is None) != (trade_plan_version is None):
+                raise InputValidationError(
+                    "trade_plan_id and trade_plan_version must be provided together",
+                    details={"field": "trade_plan_id/trade_plan_version", "rule": "pair"},
+                )
+            if trade_plan_version is not None and (
+                type(trade_plan_version) is not int or trade_plan_version < 1
+            ):
+                raise InputValidationError(
+                    "trade_plan_version must be a positive integer",
+                    details={"field": "trade_plan_version"},
+                )
+            review_due = (
+                require_aware_datetime(review_due_at, field_name="review_due_at")
+                if review_due_at is not None
+                else None
+            )
 
             primary: str | None
             if primary_instrument_id is None:
@@ -133,6 +253,12 @@ class DecisionRecordService:
                 report_ids=reports,
                 supersedes_decision_id=supersedes,
                 position_context_snapshot_id=snapshot_id,
+                strategy_code=strategy_code_n,
+                strategy_version=strategy_version_n,
+                scenario=scenario_n,
+                trade_plan_id=plan_id_n,
+                trade_plan_version=trade_plan_version,
+                review_due_at=review_due,
             )
 
             with self._uow_factory() as uow:
@@ -152,6 +278,12 @@ class DecisionRecordService:
                         report_ids=existing.report_ids,
                         supersedes_decision_id=existing.supersedes_decision_id,
                         position_context_snapshot_id=(existing.position_context_snapshot_id),
+                        strategy_code=existing.strategy_code,
+                        strategy_version=existing.strategy_version,
+                        scenario=existing.scenario,
+                        trade_plan_id=existing.trade_plan_id,
+                        trade_plan_version=existing.trade_plan_version,
+                        review_due_at=existing.review_due_at,
                     )
                     if existing_sha != payload_sha:
                         raise DuplicateIdempotencyKey(
@@ -181,6 +313,30 @@ class DecisionRecordService:
                         },
                     )
 
+                if plan_id_n is not None and trade_plan_version is not None:
+                    plan = uow.trade_plans.get_version(plan_id_n, trade_plan_version)
+                    if plan is None:
+                        raise InvalidResearchLink(
+                            "referenced Trade Plan version does not exist",
+                            details={
+                                "entity_type": "trade_plan",
+                                "trade_plan_id": plan_id_n,
+                                "trade_plan_version": trade_plan_version,
+                                "subject_id": subject_id_n,
+                            },
+                        )
+                    if plan.subject_id != subject_id_n:
+                        raise InvalidResearchLink(
+                            "Trade Plan does not belong to the same Research Subject",
+                            details={
+                                "entity_type": "trade_plan",
+                                "trade_plan_id": plan_id_n,
+                                "trade_plan_version": trade_plan_version,
+                                "subject_id": subject_id_n,
+                                "plan_subject_id": plan.subject_id,
+                            },
+                        )
+
                 validate_decision_references(
                     uow,
                     subject_id=subject_id_n,
@@ -209,6 +365,12 @@ class DecisionRecordService:
                     supersedes_decision_id=supersedes,
                     position_context_snapshot_id=snapshot_id,
                     schema_version=schema_version(),
+                    strategy_code=strategy_code_n,
+                    strategy_version=strategy_version_n,
+                    scenario=scenario_n,
+                    trade_plan_id=plan_id_n,
+                    trade_plan_version=trade_plan_version,
+                    review_due_at=review_due,
                 )
                 # Frozen order: business → Research Subject cache → Search → Audit → commit.
                 uow.decisions.add(
@@ -226,6 +388,8 @@ class DecisionRecordService:
                 linked = list(revisions) + list(evidence) + list(reports)
                 if supersedes is not None:
                     linked.append(supersedes)
+                if plan_id_n is not None:
+                    linked.append(plan_id_n)
                 uow.audit.append(
                     "phase1c.decision.recorded",
                     audit_summary(

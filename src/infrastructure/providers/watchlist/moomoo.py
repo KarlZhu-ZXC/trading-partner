@@ -20,7 +20,9 @@ from application.ports.watchlist_source_provider import WatchlistSourceProvider
 from domain.common.enums import AssetType, Market
 from domain.common.errors import DataContractError, ProviderNotConfigured, ProviderUnavailableError
 from domain.common.values import build_instrument_id
+from domain.instruments.normalize import canonical_us_index_symbol
 from domain.watchlist.enums import WatchlistSource
+from infrastructure.providers.moomoo_opend import ensure_moomoo_opend_running
 from infrastructure.providers.moomoo_rate_limiter import (
     MoomooOpenDOperation,
     OpenDRequestLimiter,
@@ -89,6 +91,7 @@ def _default_context_factory(host: str, port: int) -> _WatchlistContext:
     except ImportError as exc:
         raise ProviderNotConfigured("Moomoo SDK is unavailable") from exc
     moomoo.SysConfig.enable_console_log(False)
+    ensure_moomoo_opend_running(host, port)
     context = moomoo.OpenQuoteContext(host=host, port=port)
     return _SdkWatchlistContext(context, moomoo.ModifyUserSecurityOp)
 
@@ -169,7 +172,12 @@ def _parse_code_instrument_id(
     if not symbol:
         return None, None
     if prefix == "US":
-        return build_instrument_id(asset_type, Market.US, symbol.upper()), "US"
+        canonical_symbol = (
+            canonical_us_index_symbol(symbol)
+            if asset_type is AssetType.INDEX
+            else symbol.upper()
+        )
+        return build_instrument_id(asset_type, Market.US, canonical_symbol), "US"
     if prefix in {"SH", "SZ"}:
         return (
             build_instrument_id(

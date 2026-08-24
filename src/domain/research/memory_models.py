@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from domain.common.enums import (
     ConfirmationMode,
+    DecisionScenario,
     DecisionType,
     EvidenceOrigin,
     EvidenceQuality,
@@ -392,6 +393,12 @@ class DecisionRecord:
     supersedes_decision_id: str | None
     position_context_snapshot_id: str | None
     schema_version: int
+    strategy_code: str | None = None
+    strategy_version: str | None = None
+    scenario: DecisionScenario | None = None
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = None
+    review_due_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_entity_id(self.decision_id, field="decision_id", prefix=EntityIdPrefix.DECISION)
@@ -445,6 +452,44 @@ class DecisionRecord:
             )
         if self.primary_instrument_id is not None:
             _require_non_blank_str(self.primary_instrument_id, field="primary_instrument_id")
+        if self.strategy_code is not None:
+            _require_bounded_str(
+                self.strategy_code,
+                field="strategy_code",
+                min_len=1,
+                max_len=128,
+            )
+        if self.strategy_version is not None:
+            _require_bounded_str(
+                self.strategy_version,
+                field="strategy_version",
+                min_len=1,
+                max_len=128,
+            )
+        if self.scenario is not None and not isinstance(self.scenario, DecisionScenario):
+            raise DataContractError(
+                "scenario must be DecisionScenario",
+                details={"type": type(self.scenario).__name__},
+            )
+        _require_optional_entity_id(
+            self.trade_plan_id,
+            field="trade_plan_id",
+            prefix=EntityIdPrefix.TRADE_PLAN,
+        )
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise DataContractError(
+                "trade_plan_id and trade_plan_version must be provided together",
+                details={"field": "trade_plan_id/trade_plan_version", "rule": "pair"},
+            )
+        if self.trade_plan_version is not None and (
+            type(self.trade_plan_version) is not int or self.trade_plan_version < 1
+        ):
+            raise DataContractError(
+                "trade_plan_version must be a positive integer",
+                details={"field": "trade_plan_version"},
+            )
+        if self.review_due_at is not None:
+            require_aware_datetime(self.review_due_at, field_name="review_due_at")
         _require_id_tuple(
             self.thesis_revision_ids,
             field="thesis_revision_ids",

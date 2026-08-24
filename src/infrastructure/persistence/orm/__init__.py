@@ -1,6 +1,10 @@
 """Register and export the complete SQLAlchemy ORM metadata graph."""
 
 from infrastructure.persistence.metadata import Base
+from infrastructure.persistence.orm.activity_annotation import (
+    ActivityAnnotationRow,
+    TransactionDecisionLinkRow,
+)
 from infrastructure.persistence.orm.agent import (
     AgentChannelBindingRow,
     AgentChannelCursorRow,
@@ -52,9 +56,15 @@ from infrastructure.persistence.orm.monitoring import (
     NotificationOutboxRow,
 )
 from infrastructure.persistence.orm.operations import (
+    BehaviorActionObservationRow,
+    BehaviorReviewRunRow,
     BrokerOrderIntentRow,
+    DailyEquitySnapshotRow,
     IndustryMetricObservationRow,
+    JournalActivationRow,
+    OperationalJobRunRow,
     PostMarketSyncRunRow,
+    TradeCycleOverrideRevisionRow,
 )
 from infrastructure.persistence.orm.portfolio_risk import (
     AccountPositionRow,
@@ -120,6 +130,8 @@ from infrastructure.persistence.orm.transactions import (
 
 __all__ = [
     "Base",
+    "BehaviorActionObservationRow",
+    "BehaviorReviewRunRow",
     "AgentConversationRow",
     "AgentChannelBindingRow",
     "AgentMessageRow",
@@ -131,6 +143,7 @@ __all__ = [
     "AgentPreferencesRow",
     "AgentPreferencesRevisionRow",
     "BrokerOrderIntentRow",
+    "DailyEquitySnapshotRow",
     "JsonStringTuple",
     "SchemaVersionRow",
     "SystemAuditLogRow",
@@ -160,6 +173,7 @@ __all__ = [
     "ResearchEventRow",
     "DecisionRecordRow",
     "JournalEntryRow",
+    "JournalActivationRow",
     "AccountSnapshotRow",
     "AccountPositionRow",
     "PortfolioSnapshotRow",
@@ -186,6 +200,8 @@ __all__ = [
     "WorkflowRunFactArtifactRow",
     "AccountActivityCoverageReceiptRow",
     "AccountTransactionRow",
+    "ActivityAnnotationRow",
+    "TransactionDecisionLinkRow",
     "FuturesProductRow",
     "FuturesProductVersionRow",
     "FuturesContractRow",
@@ -194,11 +210,13 @@ __all__ = [
     "ContinuousSeriesDefinitionRow",
     "ContinuousContractMappingRow",
     "IndustryMetricObservationRow",
+    "OperationalJobRunRow",
     "PostMarketSyncRunRow",
     "TradeRetroPlanSnapshotRow",
     "TradeRetroReviewRevisionRow",
     "TradeRetroRunRow",
     "TradeRetroExportReceiptRow",
+    "TradeCycleOverrideRevisionRow",
     "JudgmentScorecardRunRow",
     "ReviewItemRow",
     "ReviewItemActionRow",

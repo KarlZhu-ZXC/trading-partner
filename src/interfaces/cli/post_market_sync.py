@@ -8,10 +8,16 @@ import json
 import sys
 from collections.abc import Sequence
 from contextlib import suppress
+from datetime import UTC
 
-from application.dto.post_market_sync import PostMarketSyncDisposition
+from application.dto.operational_job import OperationalJobRunDTO
+from application.dto.post_market_sync import (
+    PostMarketSyncDisposition,
+    PostMarketSyncResultDTO,
+)
+from application.services.operational_job_runtime import OperationalJobOutcome
 from bootstrap import build_default_application
-from domain.operations.enums import PostMarketSyncRunStatus
+from domain.operations.enums import OperationalJobStatus, PostMarketSyncRunStatus
 
 _PROGRESS_INTERVAL_SECONDS = 15
 
@@ -62,17 +68,57 @@ async def _run(command: str = "run") -> int:
         return 1
     progress = asyncio.create_task(_progress(command))
     try:
-        run_result = (
-            await container.operations.post_market_sync.run_if_due()
-            if command == "run"
-            else await container.operations.post_market_sync.catch_up_latest_due()
+        async def operation() -> OperationalJobOutcome[PostMarketSyncResultDTO]:
+            value = (
+                await container.operations.post_market_sync.run_if_due()
+                if command == "run"
+                else await container.operations.post_market_sync.catch_up_latest_due()
+            )
+            if value.disposition is not PostMarketSyncDisposition.EXECUTED:
+                return OperationalJobOutcome(
+                    status=OperationalJobStatus.SKIPPED,
+                    result_code=f"POST_MARKET_SYNC_{value.disposition.value}",
+                    value=value,
+                )
+            failed = value.run_status is not PostMarketSyncRunStatus.SUCCEEDED
+            return OperationalJobOutcome(
+                status=(OperationalJobStatus.FAILED if failed else OperationalJobStatus.SUCCEEDED),
+                result_code=(
+                    "POST_MARKET_SYNC_FAILED" if failed else "POST_MARKET_SYNC_SUCCEEDED"
+                ),
+                error_code="POST_MARKET_SYNC_RUN_FAILED" if failed else None,
+                value=value,
+            )
+
+        hour = container.context.clock.now().astimezone(UTC).strftime("%Y%m%dT%H")
+        execution = await container.operations.jobs.execute(
+            job_name=f"post_market.{command.replace('-', '_')}",
+            idempotency_key=f"post-market:{command}:{hour}",
+            operation=operation,
+            lease_seconds=900,
         )
-        payload = run_result.model_dump(mode="json")
-        ok = run_result.run_status in {None, PostMarketSyncRunStatus.SUCCEEDED}
-        print(json.dumps({"ok": ok, **payload}, ensure_ascii=False, sort_keys=True))
-        if run_result.disposition is not PostMarketSyncDisposition.EXECUTED:
-            return 0
-        return 0 if run_result.run_status is PostMarketSyncRunStatus.SUCCEEDED else 1
+        payload = (
+            execution.value.model_dump(mode="json") if execution.value is not None else {}
+        )
+        ok = execution.run.status in {
+            OperationalJobStatus.SUCCEEDED,
+            OperationalJobStatus.SKIPPED,
+        }
+        print(
+            json.dumps(
+                {
+                    "ok": ok,
+                    **payload,
+                    "operational_job": OperationalJobRunDTO.from_domain(
+                        execution.run
+                    ).model_dump(mode="json"),
+                    "invoked": execution.invoked,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0 if ok else 1
     finally:
         progress.cancel()
         with suppress(asyncio.CancelledError):

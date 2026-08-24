@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, RefreshButton, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, PageActionMenu, displayJson, formatBytes, formatDate } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -122,9 +123,10 @@ export default function OperationsPage() {
         : "A manual start creates exactly one authorization flow.";
 
   return (
-    <ConsoleShell active="operations">
+    <ConsoleShell active="operations" pageActions={<PageActionMenu ariaLabel="Operations Page Actions" items={[
+      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload local operational state", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
+    ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
-        <div className="toolbar"><p>These controls call deterministic local services directly without Codex or an LLM. External sync, notification, and deletion actions require explicit confirmation.</p><RefreshButton onClick={result.refresh} loading={result.loading} /></div>
         <Card className="action-console" kicker="OPERATIONS" title="Common Actions">
           <div className="action-grid">
             <div><strong>Monitoring & Sync</strong><span>Run only what is due without forcing duplicate Runs.</span><div><ActionButton onClick={() => runAction("monitor_run_due")} busy={busy === "monitor_run_due"}>Run Due Monitors</ActionButton><ActionButton onClick={() => runAction("post_market_sync_due", "This connects to configured US account and Watchlist sources. Run the due post-market sync?")} busy={busy === "post_market_sync_due"}>Run Post-Market Sync</ActionButton><ActionButton onClick={() => runAction("post_market_sync_catch_up", "This reruns the latest US market session without a successful receipt. Continue?")} busy={busy === "post_market_sync_catch_up"}>Catch Up Latest Session</ActionButton></div></div>

@@ -24,7 +24,7 @@
 | 14 | 显式、非事实型长期偏好 | COMPLETE | owner-scoped、版本化、CAS/幂等/history/reset；仅语言、密度、来源、风险表达与图表，事实/状态字段被拒绝 |
 | 15 | 真正 token streaming | COMPLETE | Chat Completions/Responses SSE 增量、工具 delta、usage/source/request ID、发出后不重试及 final-only fallback 完成 |
 | 16 | Auto 模型路由与只读故障转移 | COMPLETE | 显式 Auto、确定性 fast/complex route reason；仅安全 read/search 在未输出前对 timeout/rate/unavailable 单次 failover |
-| 17 | 真实 Agent 行为评测集 | COMPLETE | 14 case 全部真实执行 Runtime 并逐项断言；另含 schema repair 与关键源码 SHA-256 fingerprint 门禁 |
+| 17 | 真实 Agent 行为评测集 | COMPLETE | 15 case 全部真实执行 Runtime 并逐项断言，含统一 Attention Inbox；另含 schema repair 与关键源码 SHA-256 fingerprint 门禁 |
 
 ## 横向完成门
 
@@ -39,12 +39,14 @@
 
 ## 最终验收证据
 
-- Python 全量：`2321 passed`；Ruff 全仓、`mypy src` 通过。
-- Console：Next production build、ESLint、`21/21` 渲染与交互测试通过。
-- 行为评测：`uv run trading-partner-agent eval` 为 `passed=true`、`14/14`，schema repair
+- 本清单在 2026-08-13 完成时的 Python 基线为 `2389 passed`；2026-08-20 技术平台
+  升级后的当前全量为 `2442 passed`，Ruff 全仓、`mypy src` 通过。
+- Console：Next production build、ESLint、`41/41` 渲染与交互测试通过。
+- 行为评测：`uv run trading-partner-agent eval` 为 `passed=true`、`15/15`，schema repair
   通过并输出 prompt/runtime/capability/action/model-provider fingerprint manifest。
-- 迁移：本地与隔离 wheel 均到 `0050_agent_preferences`；隔离 wheel smoke 输出
-  `ISOLATED_WHEEL_SMOKE_OK`，公开 MCP 仍精确为 27 个。
+- 本清单完成时迁移头为 `0050_agent_preferences`；当前本地与隔离 wheel 均到
+  `0056_decision_review_due_items`。隔离 wheel smoke 输出 `ISOLATED_WHEEL_SMOKE_OK`，
+  公开 MCP 仍精确为 27 个。
 - Secret scan：Gitleaks 扫描当前 Git 历史及未提交 diff/untracked 文件无泄露。
 - 有界真实 Provider smoke：Bailian `qwen3.8-max` 完成
   `tp_capability_search → market_data_get/quote → token stream → durable COMPLETED`，并保存

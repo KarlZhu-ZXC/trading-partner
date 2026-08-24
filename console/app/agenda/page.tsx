@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { CalendarPlus, Eye, RefreshCw, Send } from "lucide-react";
 import {
   ErrorNote,
   Paginator,
@@ -11,7 +12,7 @@ import {
   DataBoundary,
   Empty,
   FieldLabel,
-  RefreshButton,
+  PageActionMenu,
   RequiredMark,
   formatDate,
   shortId,
@@ -804,19 +805,13 @@ export default function CatalystAgendaPage() {
   };
 
   return (
-    <ConsoleShell active="agenda">
+    <ConsoleShell active="agenda" pageActions={<PageActionMenu ariaLabel="Catalyst Agenda Page Actions" items={[
+      { id: "create", label: "Create Agenda Item", description: "Open a new append-only Catalyst item", icon: <CalendarPlus aria-hidden="true" />, onSelect: () => { void beginCreate(); } },
+      { id: "preview", label: summaryBusy === "preview" ? "Preparing Preview…" : "Preview Daily Summary", description: "Render the read-only mobile summary", icon: <Eye aria-hidden="true" />, disabled: summaryBusy !== null, onSelect: () => { void previewSummary(); } },
+      { id: "send", label: summaryBusy === "send" ? "Queueing Summary…" : "Queue Daily Summary", description: "Create the durable notification request", icon: <Send aria-hidden="true" />, disabled: summaryBusy !== null, onSelect: () => { void sendSummary(); } },
+      { id: "refresh", label: agendaApi.loading ? "Refreshing…" : "Refresh", description: "Reload durable Catalyst Agenda data", icon: <RefreshCw aria-hidden="true" className={agendaApi.loading ? "spin" : undefined} />, disabled: agendaApi.loading, onSelect: agendaApi.refresh },
+    ]} />}>
       <DataBoundary loading={agendaApi.loading} error={agendaApi.error}>
-        <div className="page-actions">
-          <RefreshButton onClick={agendaApi.refresh} loading={agendaApi.loading} />
-          <ActionButton onClick={() => { void beginCreate(); }}>Create Agenda Item</ActionButton>
-          <ActionButton busy={summaryBusy === "preview"} onClick={() => { void previewSummary(); }}>
-            Preview Daily Summary
-          </ActionButton>
-          <ActionButton busy={summaryBusy === "send"} onClick={() => { void sendSummary(); }}>
-            Queue Daily Summary
-          </ActionButton>
-        </div>
-
         {message && <p className="card-note">{message}</p>}
         {syncMessage && <p className="card-note">{syncMessage}</p>}
         {summaryMessage && <p className="card-note">{summaryMessage}</p>}
@@ -932,7 +927,7 @@ export default function CatalystAgendaPage() {
             Every action creates an append-only version. Only an explicitly confirmed LINK_OUTCOME may move an UPCOMING item to OCCURRED after its durable Event, Report, or Evidence passes ownership and visibility checks.
           </p>
 
-          <div className="agenda-toolbar">
+          <div className="workspace-controls agenda-toolbar">
             <label>
               <span>Time Bucket</span>
               <select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value as (typeof TIME_FILTERS)[number])}>

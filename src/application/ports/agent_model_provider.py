@@ -15,6 +15,7 @@ from typing import Any, Literal, Protocol
 
 type ModelRole = Literal["system", "user", "assistant", "tool"]
 type ModelReasoningEffort = Literal["low", "medium", "high", "max"]
+type ModelContent = str | tuple[Mapping[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +38,7 @@ class ModelMessage:
     """One provider-neutral conversation message."""
 
     role: ModelRole
-    content: str | None = None
+    content: ModelContent | None = None
     tool_calls: tuple[ModelToolCall, ...] = ()
     tool_call_id: str | None = None
     name: str | None = None
@@ -115,6 +116,9 @@ class ModelRequest:
     reasoning_effort: str | None = None
     max_output_tokens: int | None = None
     native_web_search: bool = False
+    json_output: bool = False
+    response_schema_name: str | None = None
+    response_schema: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +167,7 @@ class ModelCatalogItem:
 
     id: str
     reasoning_efforts: tuple[ModelReasoningEffort, ...] = ()
+    reasoning_supported: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
