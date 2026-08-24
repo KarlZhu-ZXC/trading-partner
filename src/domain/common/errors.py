@@ -51,6 +51,13 @@ class ProviderRateLimitError(TradingPartnerError):
     default_retryable = True
 
 
+class ProviderQuotaExceededError(TradingPartnerError):
+    """Provider plan or pay-as-you-go allowance is exhausted."""
+
+    default_code = "PROVIDER_QUOTA_EXCEEDED"
+    default_retryable = False
+
+
 class ProviderAdmissionTimeoutError(TradingPartnerError):
     """Local admission queue budget expired before a provider slot was free."""
 
@@ -86,6 +93,12 @@ class InvalidInstrument(TradingPartnerError):
 class DataContractError(TradingPartnerError):
     default_code = "DATA_CONTRACT_ERROR"
     default_retryable = False
+
+
+class ProviderRequestRejectedError(DataContractError):
+    """Provider understood the request but rejected its supported shape/policy."""
+
+    default_code = "PROVIDER_REQUEST_REJECTED"
 
 
 class CalendarOutOfRange(TradingPartnerError):
@@ -239,6 +252,31 @@ class ReviewItemNotFound(TradingPartnerError):
 
 class ReviewItemVersionConflict(TradingPartnerError):
     default_code = "REVIEW_ITEM_VERSION_CONFLICT"
+    default_retryable = False
+
+
+class ActivityAnnotationNotFound(TradingPartnerError):
+    default_code = "ACTIVITY_ANNOTATION_NOT_FOUND"
+    default_retryable = False
+
+
+class ActivityAnnotationVersionConflict(TradingPartnerError):
+    default_code = "ACTIVITY_ANNOTATION_VERSION_CONFLICT"
+    default_retryable = False
+
+
+class TradeCycleOverrideNotFound(TradingPartnerError):
+    default_code = "TRADE_CYCLE_OVERRIDE_NOT_FOUND"
+    default_retryable = False
+
+
+class TradeCycleOverrideVersionConflict(TradingPartnerError):
+    default_code = "TRADE_CYCLE_OVERRIDE_VERSION_CONFLICT"
+    default_retryable = False
+
+
+class InvalidTradeCycleOverride(TradingPartnerError):
+    default_code = "INVALID_TRADE_CYCLE_OVERRIDE"
     default_retryable = False
 
 

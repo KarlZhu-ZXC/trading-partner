@@ -49,6 +49,7 @@ from domain.portfolio.models import (
     AccountTransaction,
     ProviderAccountActivityCoverage,
 )
+from infrastructure.providers.moomoo_opend import ensure_moomoo_opend_running
 from infrastructure.providers.moomoo_rate_limiter import (
     MoomooOpenDOperation,
     OpenDRequestLimiter,
@@ -76,6 +77,7 @@ def _default_factory(host: str, port: int) -> _ReadContext:
     # The SDK otherwise writes connection ids and context object identities to
     # stderr. Adapter failures remain typed; raw SDK diagnostics stay internal.
     moomoo.SysConfig.enable_console_log(False)
+    ensure_moomoo_opend_running(host, port)
     return cast(_ReadContext, moomoo.OpenSecTradeContext(host=host, port=port))
 
 

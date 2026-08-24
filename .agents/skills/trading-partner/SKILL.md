@@ -16,6 +16,9 @@ Keep calls and explanations bounded; never copy the product specification into c
 - Trust `data` only when `ok=true`. Preserve `as_of`, `fetched_at`, `freshness`,
   `degraded`, `sources`, `warnings`, and typed `errors`.
 - Never invent a quote, balance, fill, event, or missing field.
+- When maintaining the local Console, keep MCP transport compaction separate from
+  Console completeness: BFF page reads use the same validated capabilities without
+  the 15 KiB projection. Never render `_truncated` as a domain row or action target.
 
 ## Tool routing
 
@@ -86,11 +89,36 @@ must retain their token/perpetual/CFD identity and basis warnings.
   clarification.
 - Journal, decision, watchlist, policy, Monitor, review, and agenda writes retain
   their idempotency/version/actor gates.
+- Structured Phase 4A Decisions may bind `strategy_code`, one of `UPSIDE` /
+  `SIDEWAYS` / `PULLBACK` / `INVALIDATION`, an exact same-Subject Trade Plan
+  version, and an aware review due time. These fields are intent metadata, not an
+  order authorization. An elapsed due time uses the existing durable ReviewItem
+  path; a later Decision closes it automatically only when it explicitly
+  supersedes that exact Decision. Failed/bounded reads never prove closure.
 
 ## Accounts, monitoring, and orders
 
 - `account_get` and ordinary portfolio/risk reads are durable-only. Call
   `external_state_sync` only when the user explicitly asks to refresh upstream.
+- `portfolio_analyze/trade_cycles` is a deterministic long-only projection over
+  durable transactions, grouped by account + Instrument + native currency. Treat
+  OPEN/CLOSED/UNRESOLVED, coverage, missing fee/price, oversell, and re-entry
+  warnings as part of the result; it never refreshes a broker or creates an order.
+  SGOV is `CASH_MANAGEMENT`; do not include it in active-trade win-rate claims.
+- `portfolio_analyze/performance_series` returns native-currency TWR, MWR/XIRR,
+  and drawdown only when durable equity/cash-flow boundaries support them.
+- `portfolio_analyze/behavior_summary` exposes numerator, denominator, exclusions,
+  and exact refs without an aggregate score. Do not infer exact Decision coverage
+  from Instrument and time alone.
+- `portfolio_analyze/unlinked_activity` reads unmatched Broker trades. Use
+  `research_memory_append/activity_annotation` only after an explicit user choice
+  to link the exact activity or mark it unplanned/cash-management/correction.
+- Preview Cycle split/merge/relink with
+  `portfolio_analyze/trade_cycle_override_preview` before an explicitly confirmed
+  `research_memory_append/trade_cycle_override`. Use `journal_timeline`,
+  `daily_equity`, and `behavior_review_history` for closed-loop reads.
+- When an order preview follows an exact Decision/Plan, pass its case, Decision,
+  and Plan version. These links improve the Journal chain but never authorize submit.
 - Preserve native currencies and stale/missing coverage; never infer FX, NAV, cash,
   or transaction completeness.
 - Deterministic Monitor rules remain valid when optional LLM judgment fails.

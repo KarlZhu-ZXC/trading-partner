@@ -190,6 +190,10 @@ class BrokerOrderIntentPreviewInput(_DTO):
     limit_offset: Decimal | None = Field(default=None, gt=0)
     idempotency_key: str = Field(min_length=1, max_length=200)
     preview_ttl_seconds: int = Field(default=120, ge=30, le=300)
+    case_id: str | None = Field(default=None, min_length=1, max_length=128)
+    decision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    trade_plan_id: str | None = Field(default=None, min_length=1, max_length=128)
+    trade_plan_version: int | None = Field(default=None, ge=1)
 
     @field_validator("instrument_id")
     @classmethod
@@ -201,6 +205,10 @@ class BrokerOrderIntentPreviewInput(_DTO):
 
     @model_validator(mode="after")
     def _closed_order_contract(self) -> BrokerOrderIntentPreviewInput:
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise ValueError("trade_plan_id and trade_plan_version must be provided together")
+        if any((self.decision_id, self.trade_plan_id)) and self.case_id is None:
+            raise ValueError("Decision or Trade Plan context requires case_id")
         if self.session is not BrokerOrderSession.NORMAL:
             if self.order_type is not BrokerOrderType.LIMIT:
                 raise ValueError("extended-hours sessions accept LIMIT orders only")
@@ -305,6 +313,13 @@ class BrokerOrderIntentDTO(_DTO):
     status: str
     provider_status: str | None
     submitted_at: datetime | None
+    broker_order_id: str | None = None
+    rejection_code: str | None = None
+    updated_at: datetime | None = None
+    case_id: str | None = None
+    decision_id: str | None = None
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = None
     blocker_codes: tuple[str, ...] = ()
     execution_effect: bool
     exact_order_payload: dict[str, object]
@@ -353,6 +368,13 @@ class BrokerOrderIntentDTO(_DTO):
             status=value.status.value,
             provider_status=value.provider_status,
             submitted_at=value.submitted_at,
+            broker_order_id=value.broker_order_id,
+            rejection_code=value.rejection_code,
+            updated_at=value.updated_at,
+            case_id=value.subject_id,
+            decision_id=value.decision_id,
+            trade_plan_id=value.trade_plan_id,
+            trade_plan_version=value.trade_plan_version,
             blocker_codes=blocker_codes,
             execution_effect=execution_effect,
             exact_order_payload=dict(value.order_payload),

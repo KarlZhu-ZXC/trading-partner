@@ -13,8 +13,9 @@ from application.services.instrument_master_service import InstrumentMasterServi
 from application.services.instrument_resolve_service import InstrumentResolveService
 from domain.common.enums import AssetType, Market
 from domain.common.errors import InvalidInstrument, TradingPartnerError
-from domain.common.values import parse_instrument_id
+from domain.common.values import build_instrument_id, parse_instrument_id
 from domain.instruments.models import Instrument
+from domain.instruments.normalize import canonical_us_index_symbol
 
 _DISCOVERABLE_ASSETS: dict[Market, frozenset[AssetType]] = {
     Market.A_SHARE: frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX}),
@@ -37,28 +38,32 @@ class InstrumentAccessService:
         self._resolver = resolver
 
     async def get(self, instrument_id: str, *, as_of: datetime) -> Instrument:
+        # Older Moomoo Watchlist rows used index:US:.SPX/.NDX/.IXIC, and
+        # directory discovery could cache Yahoo's caret form. Normalize those
+        # compatibility identities before Master/cache/provider access.
+        canonical_instrument_id = _canonicalize_instrument_id(instrument_id)
         try:
-            return self._master.get(instrument_id)
+            return self._master.get(canonical_instrument_id)
         except InvalidInstrument:
             pass
 
         try:
-            asset_type, market, _symbol = parse_instrument_id(instrument_id)
+            asset_type, market, _symbol = parse_instrument_id(canonical_instrument_id)
         except TradingPartnerError as exc:
             raise InvalidInstrument(
                 "instrument not found",
-                details={"instrument_id": instrument_id},
+                details={"instrument_id": canonical_instrument_id},
             ) from exc
 
         if asset_type not in _DISCOVERABLE_ASSETS.get(market, frozenset()):
             raise InvalidInstrument(
                 "instrument not found",
-                details={"instrument_id": instrument_id},
+                details={"instrument_id": canonical_instrument_id},
             )
 
         envelope = await self._resolver.resolve_dynamic(
             market=market,
-            query=instrument_id,
+            query=canonical_instrument_id,
             asset_type_hint=asset_type,
             as_of=as_of,
         )
@@ -73,7 +78,7 @@ class InstrumentAccessService:
                 )
             raise InvalidInstrument(
                 "instrument not found",
-                details={"instrument_id": instrument_id},
+                details={"instrument_id": canonical_instrument_id},
             )
 
         return self._master.get(envelope.data.instrument.instrument_id)
@@ -87,3 +92,15 @@ class InstrumentAccessService:
         if instrument_id is None:
             return None
         return await self.get(instrument_id, as_of=as_of)
+
+
+def _canonicalize_instrument_id(instrument_id: str) -> str:
+    """Return the canonical public identity for known legacy US index forms."""
+    try:
+        asset_type, market, symbol = parse_instrument_id(instrument_id)
+    except TradingPartnerError:
+        return instrument_id
+    if market is not Market.US or asset_type is not AssetType.INDEX:
+        return instrument_id
+    canonical_symbol = canonical_us_index_symbol(symbol)
+    return build_instrument_id(asset_type, market, canonical_symbol)

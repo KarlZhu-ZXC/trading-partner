@@ -9,3 +9,9 @@ paths = [
   '''^console/dist/''',
   '''(?:^|/)__pycache__/''',
 ]
+regexes = [
+  # Stable synthetic Attention key used only by a unit-test assertion.
+  '''^broker-unresolved-order_1$''',
+  # Stable synthetic Phase 4 acceptance idempotency keys; never Provider credentials.
+  '''^phase4-(?:order-submit|activation)$''',
+]

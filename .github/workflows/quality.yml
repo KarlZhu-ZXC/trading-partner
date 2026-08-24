@@ -82,6 +82,8 @@ jobs:
       - name: Console lint and render tests
         working-directory: console
         run: |
+          npx playwright install --with-deps chromium
+          npm run check:contracts
           npm run lint
           npm test
 

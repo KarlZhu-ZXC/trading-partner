@@ -124,7 +124,7 @@ function requiredFieldFindings(file) {
       if (!ts.isJsxElement(parent)) continue;
       const tag = tagName(parent);
       const markup = parent.getText(tree);
-      if (tag === "Field" && hasAttribute(parent, "required")) return true;
+      if (["Field", "FormField"].includes(tag) && hasAttribute(parent, "required")) return true;
       if (tag === "label" && (markup.includes("required-mark") || /<FieldLabel\s+required(?:=|\s|>)/.test(markup))) return true;
     }
     const prefix = source.slice(Math.max(0, node.getStart() - 300), node.getStart());

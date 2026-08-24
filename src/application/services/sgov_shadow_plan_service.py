@@ -113,7 +113,7 @@ class SgovShadowPlanService:
                 automation_enabled=auto_execute,
             )
         if now >= session.close_at:
-            return SgovShadowPlanDTO(
+            closed_result = SgovShadowPlanDTO(
                 disposition=SgovShadowPlanDisposition.SKIPPED_WINDOW_CLOSED,
                 phase=SgovShadowPlanPhase.COMPLETION,
                 market_session_date=session.session_date,
@@ -122,6 +122,19 @@ class SgovShadowPlanService:
                 warning_codes=("SGOV_SHADOW_PLAN_WINDOW_CLOSED",),
                 automation_enabled=auto_execute,
                 execution_due=auto_execute,
+            )
+            return (
+                await self._enqueue(
+                    closed_result,
+                    session=session,
+                    key=self._idempotency_key(
+                        session,
+                        SgovShadowPlanPhase.COMPLETION,
+                        auto_execute=auto_execute,
+                    ),
+                )
+                if auto_execute
+                else closed_result
             )
         result = await self._calculate(
             disposition=SgovShadowPlanDisposition.EXECUTED,
@@ -133,6 +146,10 @@ class SgovShadowPlanService:
         )
         if auto_execute and phase is SgovShadowPlanPhase.COMPLETION:
             result = await self._execute_completion(result, session=session)
+        if auto_execute and phase is SgovShadowPlanPhase.PASSIVE_BID:
+            # Preparation remains durable and idempotent, but the user receives
+            # one notification only after the completion decision is made.
+            return result
         return await self._enqueue(result, session=session, key=key)
 
     async def preview_now(self) -> SgovShadowPlanDTO:
@@ -455,6 +472,8 @@ class SgovShadowPlanService:
 
     @staticmethod
     def notification_body(result: SgovShadowPlanDTO) -> str:
+        if result.automation_enabled:
+            return SgovShadowPlanService._compact_automation_notification_body(result)
         generated = (
             result.generated_at.astimezone(_NEW_YORK).strftime("%Y-%m-%d %H:%M:%S ET")
             if result.generated_at is not None
@@ -503,58 +522,12 @@ class SgovShadowPlanService:
                     "不建议根据该报价挂 bid 或追 ask。",
                 )
             )
-        elif (
-            result.automation_enabled
-            and result.phase is SgovShadowPlanPhase.COMPLETION
-        ):
-            submitted_count = sum(
-                item.outcome is SgovAutoOrderOutcome.SUBMITTED for item in result.orders
-            )
-            reconcile_count = sum(
-                item.outcome is SgovAutoOrderOutcome.RECONCILIATION_REQUIRED
-                for item in result.orders
-            )
-            lines.append(
-                f"自动执行：已提交 {submitted_count} 笔；待核对 {reconcile_count} 笔。"
-            )
-            for order in result.orders:
-                label = {
-                    SgovAutoOrderOutcome.SUBMITTED: "✅ 已提交",
-                    SgovAutoOrderOutcome.RECONCILIATION_REQUIRED: "⚠️ 待核对",
-                    SgovAutoOrderOutcome.FAILED: "⛔ 未提交",
-                    SgovAutoOrderOutcome.SKIPPED: "⏭️ 跳过",
-                }[order.outcome]
-                details = (
-                    ", ".join(order.error_codes)
-                    if order.error_codes
-                    else (order.provider_status or order.durable_status or "—")
-                )
-                lines.append(
-                    f"{label} · {order.account_ref} · {order.quantity} 股 @ "
-                    f"${order.limit_price} · {details}"
-                )
-                if order.order_intent_id is not None:
-                    lines.append(f"订单意图：{order.order_intent_id}")
-            if reconcile_count:
-                lines.append("待核对订单不会自动重试，请以 Schwab 订单记录为准。")
         elif result.phase is SgovShadowPlanPhase.COMPLETION:
             lines.extend(
                 (
                     f"完成阶段：若仍未成交且仍需今日部署，"
                     f"用当前 ask ${preview.quote.ask} 作为 BUY LIMIT。",
                     "不使用旧 bid+0.01；必须以本次刷新后的 ask 为准。",
-                )
-            )
-        elif result.automation_enabled:
-            deadline = (
-                result.completion_check_at.astimezone(_NEW_YORK).strftime("%H:%M ET")
-                if result.completion_check_at is not None
-                else "收盘前5分钟"
-            )
-            lines.extend(
-                (
-                    "当前仅做准备检查；尚未提交订单。",
-                    f"自动买入检查时间：{deadline}，届时重新刷新账户与 ask。",
                 )
             )
         else:
@@ -591,12 +564,78 @@ class SgovShadowPlanService:
                 f"${preview.total_estimated_notional}",
             )
         )
-        if result.automation_enabled and result.phase is SgovShadowPlanPhase.COMPLETION:
-            lines.append("边界：仅 SGOV BUY LIMIT · DAY · NORMAL；不卖出、不撤改。")
-        elif result.automation_enabled:
-            lines.append("准备阶段未下单；其他任何实盘操作仍需逐单确认。")
+        lines.append("仅为 Shadow 购买计划；未提交、修改或撤销任何订单。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _compact_automation_notification_body(result: SgovShadowPlanDTO) -> str:
+        """Render the one final SGOV automation card sent to Telegram."""
+
+        date_label = (
+            result.market_session_date.isoformat()
+            if result.market_session_date is not None
+            else "—"
+        )
+        if result.preview is None:
+            lines = [
+                f"SGOV · 自动买入结果 · {date_label}",
+                "状态：BLOCKED",
+                f"阶段：{_blocked_stage_label(result.blocked_stage)}",
+                f"错误：{', '.join(result.error_codes or ('UNKNOWN',))}",
+            ]
+            if result.provider_diagnostics:
+                lines.append(
+                    "诊断："
+                    + ", ".join(
+                        f"{item.error_code}/{item.provider}"
+                        for item in result.provider_diagnostics
+                    )
+                )
+            return "\n".join(lines)
+
+        submitted = sum(
+            item.outcome is SgovAutoOrderOutcome.SUBMITTED for item in result.orders
+        )
+        reconciling = sum(
+            item.outcome is SgovAutoOrderOutcome.RECONCILIATION_REQUIRED
+            for item in result.orders
+        )
+        failed = sum(
+            item.outcome in {SgovAutoOrderOutcome.FAILED, SgovAutoOrderOutcome.SKIPPED}
+            for item in result.orders
+        )
+        if reconciling:
+            status = "RECONCILIATION_REQUIRED"
+        elif submitted and failed:
+            status = "PARTIAL"
+        elif submitted:
+            status = "SUBMITTED"
         else:
-            lines.append("仅为 Shadow 购买计划；未提交、修改或撤销任何订单。")
+            status = "BLOCKED"
+        lines = [
+            f"SGOV · 自动买入结果 · {date_label}",
+            f"状态：{status}",
+        ]
+        for order in result.orders:
+            details = ", ".join(order.error_codes) or order.provider_status or order.durable_status
+            line = (
+                f"{order.account_ref}：{order.outcome.value} · "
+                f"{order.quantity} 股 @ ${order.limit_price}"
+            )
+            if details:
+                line += f" · {details}"
+            lines.append(line)
+            if (
+                order.outcome is SgovAutoOrderOutcome.RECONCILIATION_REQUIRED
+                and order.order_intent_id is not None
+            ):
+                lines.append(f"待核对意图：{order.order_intent_id}")
+        if result.error_codes:
+            lines.append("错误：" + ", ".join(result.error_codes))
+        if reconciling:
+            lines.append("待核对订单不会自动重试。")
+        if not result.orders and not result.error_codes:
+            lines.append("未生成可执行订单。")
         return "\n".join(lines)
 
     @staticmethod

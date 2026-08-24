@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from application.dto.account_transactions import (
@@ -12,29 +13,60 @@ from application.dto.account_transactions import (
     AccountGetTransactionsInput,
     AccountTransactionDTO,
     AccountTransactionsDTO,
+    TradeCycleDTO,
+    TradeCycleProjectionDTO,
+    TradeCycleQueryInput,
 )
+from application.dto.behavior import BehaviorSummaryDTO, BehaviorSummaryQueryInput
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
+from application.dto.performance import (
+    PerformanceSeriesCollectionDTO,
+    PerformanceSeriesDTO,
+    PerformanceSeriesQueryInput,
+)
 from application.dto.performance_attribution import (
     PerformanceAttributionDTO,
     PerformanceAttributionInput,
 )
 from application.dto.tool_envelope import SourceReference, ToolEnvelope, WarningInfo
+from application.dto.trade_cycle_overrides import (
+    TradeCycleOverrideImpactDTO,
+    TradeCycleOverrideRevisionDTO,
+)
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.account_transaction_provider import AccountTransactionProvider
 from application.ports.account_transaction_repository import AccountTransactionRepository
+from application.ports.activity_annotation_repository import ActivityAnnotationRepository
 from application.ports.clock import Clock
+from application.ports.daily_equity_repository import DailyEquityRepository
 from application.ports.id_generator import IdGenerator
+from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
+from application.ports.trade_cycle_override_repository import TradeCycleOverrideRepository
+from application.services.behavior_summary_calculator import BehaviorSummaryCalculator
 from application.services.performance_attribution_calculator import (
     PerformanceAttributionCalculator,
 )
+from application.services.performance_calculator import PerformanceCalculator
+from application.services.trade_cycle_calculator import TradeCycleCalculator
 from domain.attribution.enums import AttributionStatus
 from domain.attribution.models import PerformanceAttribution
 from domain.common.enums import Freshness, SourceRole, VendorId
 from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
-from domain.portfolio.enums import AccountActivityCoverageStatus
-from domain.portfolio.models import AccountActivityCoverageReceipt
+from domain.performance.enums import DailyEquityCoverageStatus, PerformanceStatus
+from domain.portfolio.enums import (
+    AccountActivityCoverageStatus,
+    ActivityAnnotationStatus,
+    TradeCycleClassification,
+    TradeCycleQuality,
+)
+from domain.portfolio.models import AccountActivityCoverageReceipt, TradeCycleProjection
+from domain.portfolio.trade_cycle_overrides import (
+    TradeCycleOverrideProjection,
+    apply_trade_cycle_overrides,
+)
+from domain.research.models import DecisionRecord
 
 _PROVIDER_WARNING_MESSAGES = {
     "SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN": (
@@ -105,6 +137,36 @@ _ATTRIBUTION_WARNING_MESSAGES = {
     ),
 }
 
+_TRADE_CYCLE_WARNING_MESSAGES = {
+    "TRADE_CYCLE_INPUTS_UNAVAILABLE": "No durable trade activities matched the cycle request.",
+    "TRADE_CYCLE_COVERAGE_INCOMPLETE": (
+        "Durable activity receipts do not prove the complete requested cycle window."
+    ),
+    "TRADE_CYCLE_RESULTS_TRUNCATED": "The Trade Cycle result reached the requested limit.",
+    "SELL_WITHOUT_OPEN_LONG": "A sell appeared without a reconstructed open long cycle.",
+    "OVERSELL_SHORT_UNSUPPORTED": (
+        "A sell exceeded the reconstructed long quantity; short projection is unsupported."
+    ),
+    "TRADE_PRICE_UNAVAILABLE": "A cycle activity has no executable trade price.",
+    "TRANSACTION_FEES_UNAVAILABLE": "Net cycle P/L is unavailable because a fee is missing.",
+}
+
+_PERFORMANCE_SERIES_WARNING_MESSAGES = {
+    "PERFORMANCE_SERIES_INPUTS_UNAVAILABLE": (
+        "No durable account equity series matched the request."
+    ),
+    "INPUT_COVERAGE_INCOMPLETE": "Durable snapshots or external cash-flow coverage is incomplete.",
+    "PERIOD_START_VALUATION_UNAVAILABLE": (
+        "The exact period-start account valuation is unavailable."
+    ),
+    "PERIOD_END_VALUATION_UNAVAILABLE": "The exact period-end account valuation is unavailable.",
+    "VALUATION_SNAPSHOTS_UNAVAILABLE": "No durable broker net-assets snapshots are available.",
+    "EQUITY_VALUE_UNAVAILABLE": "A broker net-assets value is missing and was not reconstructed.",
+    "TWR_CASH_FLOW_BOUNDARY_MISSING": "An external cash flow lacks an exact valuation boundary.",
+    "XIRR_MULTIPLE_ROOTS": "MWR/XIRR has multiple roots and is not reported.",
+    "XIRR_NO_SIGN_CHANGE": "MWR/XIRR cannot be computed without a cash-flow sign change.",
+}
+
 
 class AccountTransactionCoordinator:
     def __init__(
@@ -115,6 +177,10 @@ class AccountTransactionCoordinator:
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
+        research_uow_factory: Callable[[], ResearchUnitOfWork] | None = None,
+        activity_annotations: ActivityAnnotationRepository | None = None,
+        trade_cycle_overrides: TradeCycleOverrideRepository | None = None,
+        daily_equity: DailyEquityRepository | None = None,
     ) -> None:
         self._providers = dict(providers)
         self._repository = repository
@@ -122,7 +188,164 @@ class AccountTransactionCoordinator:
         self._clock = clock
         self._ids = id_generator
         self._redactor = secret_redactor
+        self._research_uow_factory = research_uow_factory
+        self._activity_annotations = activity_annotations
+        self._trade_cycle_overrides = trade_cycle_overrides
+        self._daily_equity = daily_equity
         self._attribution = PerformanceAttributionCalculator()
+        self._trade_cycles = TradeCycleCalculator()
+        self._performance_series = PerformanceCalculator()
+        self._behavior = BehaviorSummaryCalculator()
+
+    def _effective_cycles(
+        self, projection: TradeCycleProjection
+    ) -> TradeCycleOverrideProjection:
+        revisions = (
+            self._trade_cycle_overrides.list(root_cycle_id=None, limit=None)
+            if self._trade_cycle_overrides is not None
+            else ()
+        )
+        return apply_trade_cycle_overrides(projection, revisions)
+
+    def _classify_cycles(self, projection: TradeCycleProjection) -> TradeCycleProjection:
+        if self._activity_annotations is None:
+            return projection
+        latest = self._activity_annotations.list_latest(limit=None)
+        by_key = {item.transaction_key: item for item in latest}
+        warnings = set(projection.warning_codes)
+        cycles = []
+        for cycle in projection.cycles:
+            annotations = tuple(
+                item
+                for activity_id in cycle.activity_ids
+                if (item := by_key.get((cycle.provider, cycle.account_ref, activity_id)))
+                is not None
+            )
+            explicit = {item.classification for item in annotations if item.classification}
+            if len(explicit) > 1:
+                classification = TradeCycleClassification.UNCLASSIFIED
+                cycle_warnings = tuple(
+                    sorted({*cycle.warning_codes, "ACTIVITY_CLASSIFICATION_CONFLICT"})
+                )
+                warnings.add("ACTIVITY_CLASSIFICATION_CONFLICT")
+            elif explicit:
+                classification = next(iter(explicit))
+                cycle_warnings = cycle.warning_codes
+            elif any(
+                item.status is ActivityAnnotationStatus.CASH_MANAGEMENT
+                for item in annotations
+            ):
+                classification = TradeCycleClassification.CASH_MANAGEMENT
+                cycle_warnings = cycle.warning_codes
+            elif any(
+                item.status is ActivityAnnotationStatus.TRANSFER_OR_CORPORATE_ACTION
+                for item in annotations
+            ):
+                classification = TradeCycleClassification.TRANSFER_OR_ADMIN
+                cycle_warnings = cycle.warning_codes
+            else:
+                classification = cycle.classification
+                cycle_warnings = cycle.warning_codes
+            cycles.append(
+                replace(
+                    cycle,
+                    classification=classification,
+                    warning_codes=cycle_warnings,
+                )
+            )
+        return replace(
+            projection,
+            cycles=tuple(cycles),
+            warning_codes=tuple(sorted(warnings)),
+            status=(
+                TradeCycleQuality.INCOMPLETE
+                if "ACTIVITY_CLASSIFICATION_CONFLICT" in warnings
+                else projection.status
+            ),
+        )
+
+    def get_behavior_summary(
+        self, request: BehaviorSummaryQueryInput
+    ) -> ToolEnvelope[BehaviorSummaryDTO]:
+        """Calculate an explainable, no-score behavior cohort from durable facts."""
+
+        request_id = self._ids.new(EntityIdPrefix.REQ)
+        now = self._clock.now()
+        try:
+            transactions = self._repository.list(
+                providers=request.providers,
+                start=None,
+                end=now,
+                limit=None,
+            )
+            transactions = tuple(
+                item
+                for item in transactions
+                if (not request.account_refs or item.account_ref in request.account_refs)
+                and (
+                    not request.instrument_ids
+                    or item.instrument_id in request.instrument_ids
+                )
+            )
+            projection = self._trade_cycles.calculate(
+                transactions=transactions,
+                as_of=now,
+                coverage_status=AccountActivityCoverageStatus.INCOMPLETE,
+                limit=500,
+                coverage_warning_codes=("TRADE_CYCLE_COVERAGE_INCOMPLETE",),
+            )
+            projection = self._classify_cycles(projection)
+            decisions: tuple[DecisionRecord, ...] = ()
+            if request.case_id is not None:
+                if self._research_uow_factory is None:
+                    raise RuntimeError("behavior summary research context is unavailable")
+                with self._research_uow_factory() as uow:
+                    decisions = uow.decisions.list_by_subject(request.case_id)
+            effective = self._effective_cycles(projection)
+            summary = self._behavior.calculate(
+                cycles=effective.effective_projection.cycles,
+                decisions=decisions,
+                activity_annotations=(
+                    self._activity_annotations.list_latest(
+                        providers=request.providers,
+                        account_refs=request.account_refs,
+                        limit=None,
+                    )
+                    if self._activity_annotations is not None
+                    else None
+                ),
+                strategy_code=request.strategy_code,
+                strategy_version=request.strategy_version,
+                horizon=request.horizon,
+                instrument_ids=request.instrument_ids,
+                currency=request.currency,
+                classifications=request.classifications,
+                minimum_sample_size=request.minimum_sample_size,
+            )
+            return ToolEnvelope.success(
+                request_id=request_id,
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                freshness=Freshness.UNKNOWN,
+                sources=(),
+                data=BehaviorSummaryDTO.from_domain(summary),
+                degraded=False,
+                warnings=(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                to_error_info(exc, self._redactor)
+                if isinstance(exc, TradingPartnerError)
+                else to_error_info_from_exception(exc, self._redactor)
+            )
+            return ToolEnvelope.failure(
+                request_id=request_id,
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                errors=(error,),
+            )
 
     async def get_transactions(
         self, request: AccountGetTransactionsInput
@@ -520,5 +743,307 @@ class AccountTransactionCoordinator:
                 market=None,
                 as_of=request.end,
                 fetched_at=now,
+                errors=(error,),
+            )
+
+    def get_trade_cycles(
+        self, request: TradeCycleQueryInput
+    ) -> ToolEnvelope[TradeCycleProjectionDTO]:
+        """Project long-only Trade Cycles from durable activities only."""
+
+        request_id = self._ids.new(EntityIdPrefix.REQ)
+        as_of = request.end or self._clock.now()
+        try:
+            transactions = self._repository.list(
+                providers=request.providers,
+                start=None,
+                end=request.end,
+                limit=None,
+            )
+            transactions = tuple(
+                item
+                for item in transactions
+                if (not request.account_refs or item.account_ref in request.account_refs)
+                and (
+                    not request.instrument_ids
+                    or item.instrument_id in request.instrument_ids
+                )
+            )
+            account_refs = tuple(sorted({item.account_ref for item in transactions}))
+            coverage = self._repository.list_coverage(
+                providers=request.providers,
+                account_refs=request.account_refs or account_refs,
+                limit=500,
+            )
+            coverage_complete = bool(account_refs)
+            for account_ref in account_refs:
+                account_transactions = tuple(
+                    item for item in transactions if item.account_ref == account_ref
+                )
+                earliest_activity = min(
+                    item.occurred_at for item in account_transactions
+                )
+                boundary = (
+                    min(request.start, earliest_activity)
+                    if request.start is not None
+                    else earliest_activity
+                )
+                account_providers = {item.provider for item in account_transactions}
+                matching = tuple(
+                    item
+                    for item in coverage
+                    if item.account_ref == account_ref
+                    and item.provider in account_providers
+                )
+                if not any(
+                    item.status is AccountActivityCoverageStatus.COMPLETE
+                    and item.effective_start <= boundary
+                    and item.effective_end >= as_of
+                    for item in matching
+                ):
+                    coverage_complete = False
+                    break
+            coverage_status = (
+                AccountActivityCoverageStatus.COMPLETE
+                if coverage_complete
+                else AccountActivityCoverageStatus.INCOMPLETE
+            )
+            coverage_warnings = (
+                ()
+                if coverage_complete
+                else ("TRADE_CYCLE_COVERAGE_INCOMPLETE",)
+            )
+            projection = self._trade_cycles.calculate(
+                transactions=transactions,
+                as_of=as_of,
+                coverage_status=coverage_status,
+                start=request.start,
+                limit=request.limit,
+                coverage_warning_codes=coverage_warnings,
+            )
+            projection = self._classify_cycles(projection)
+            override_projection = self._effective_cycles(projection)
+            effective_projection = override_projection.effective_projection
+            warnings = tuple(
+                WarningInfo(
+                    code=code,
+                    message=_TRADE_CYCLE_WARNING_MESSAGES.get(
+                        code, "Trade Cycle projection is incomplete."
+                    ),
+                    details={},
+                )
+                for code in effective_projection.warning_codes
+            )
+            data = TradeCycleProjectionDTO.from_domain(effective_projection).model_copy(
+                update={
+                    "algorithm_cycles": tuple(
+                        TradeCycleDTO.from_domain(item) for item in projection.cycles
+                    ),
+                    "override_revisions": tuple(
+                        TradeCycleOverrideRevisionDTO.from_domain(item).model_dump(mode="json")
+                        for item in override_projection.applied_revisions
+                    ),
+                    "override_impacts": tuple(
+                        TradeCycleOverrideImpactDTO.from_domain(item).model_dump(mode="json")
+                        for item in override_projection.impacts
+                    ),
+                }
+            )
+            return ToolEnvelope.success(
+                request_id=request_id,
+                market=None,
+                as_of=as_of,
+                fetched_at=self._clock.now(),
+                freshness=Freshness.UNKNOWN,
+                sources=(),
+                data=data,
+                degraded=bool(warnings),
+                warnings=warnings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                to_error_info(exc, self._redactor)
+                if isinstance(exc, TradingPartnerError)
+                else to_error_info_from_exception(exc, self._redactor)
+            )
+            return ToolEnvelope.failure(
+                request_id=request_id,
+                market=None,
+                as_of=as_of,
+                fetched_at=self._clock.now(),
+                errors=(error,),
+            )
+
+    def project_trade_cycles_for_override(
+        self, request: TradeCycleQueryInput
+    ) -> TradeCycleProjection:
+        """Build the immutable algorithm projection used to validate a manual override."""
+
+        transactions = self._repository.list(
+            providers=request.providers,
+            start=None,
+            end=request.end,
+            limit=None,
+        )
+        transactions = tuple(
+            item
+            for item in transactions
+            if (not request.account_refs or item.account_ref in request.account_refs)
+            and (not request.instrument_ids or item.instrument_id in request.instrument_ids)
+        )
+        projection = self._trade_cycles.calculate(
+            transactions=transactions,
+            as_of=request.end or self._clock.now(),
+            coverage_status=AccountActivityCoverageStatus.INCOMPLETE,
+            start=request.start,
+            limit=request.limit,
+            coverage_warning_codes=("TRADE_CYCLE_COVERAGE_INCOMPLETE",),
+        )
+        return self._classify_cycles(projection)
+
+    def get_performance_series(
+        self, request: PerformanceSeriesQueryInput
+    ) -> ToolEnvelope[PerformanceSeriesCollectionDTO]:
+        """Calculate native-currency TWR/MWR/drawdown from durable facts only."""
+
+        request_id = self._ids.new(EntityIdPrefix.REQ)
+        try:
+            latest = tuple(
+                item
+                for item in self._snapshots.latest_accounts()
+                if (not request.providers or item.provider in request.providers)
+                and (not request.account_refs or item.account_ref in request.account_refs)
+            )
+            snapshots = tuple(
+                history
+                for account in latest
+                for history in self._snapshots.list_account_history(
+                    account_ref=account.account_ref,
+                    start=request.start,
+                    end=request.end,
+                )
+                if history.provider is account.provider
+            )
+            daily_coverage_complete = True
+            if self._daily_equity is not None:
+                daily_values = self._daily_equity.list(
+                    account_refs=request.account_refs,
+                    start=request.start,
+                    end=request.end,
+                    limit=None,
+                )
+                source_ids = {item.source_snapshot_id for item in daily_values}
+                snapshots = tuple(item for item in snapshots if item.snapshot_id in source_ids)
+                daily_coverage_complete = bool(daily_values) and all(
+                    item.coverage_status is DailyEquityCoverageStatus.COMPLETE
+                    and item.quality_status is DailyEquityCoverageStatus.COMPLETE
+                    and item.equity_value is not None
+                    for item in daily_values
+                )
+            transactions = self._repository.list(
+                providers=request.providers,
+                start=request.start,
+                end=request.end,
+                limit=None,
+            )
+            if request.account_refs:
+                transactions = tuple(
+                    item for item in transactions if item.account_ref in request.account_refs
+                )
+            account_refs = tuple(sorted({item.account_ref for item in latest}))
+            receipts = self._repository.list_coverage(
+                providers=request.providers,
+                account_refs=request.account_refs or account_refs,
+                limit=500,
+            )
+            coverage_complete = bool(account_refs) and daily_coverage_complete
+            for account in latest:
+                if not any(
+                    receipt.provider is account.provider
+                    and receipt.account_ref == account.account_ref
+                    and receipt.status is AccountActivityCoverageStatus.COMPLETE
+                    and receipt.effective_start <= request.start
+                    and receipt.effective_end >= request.end
+                    for receipt in receipts
+                ):
+                    coverage_complete = False
+                    break
+            cycle_transactions = self._repository.list(
+                providers=request.providers,
+                start=None,
+                end=request.end,
+                limit=None,
+            )
+            if request.account_refs:
+                cycle_transactions = tuple(
+                    item
+                    for item in cycle_transactions
+                    if item.account_ref in request.account_refs
+                )
+            cycle_projection = self._trade_cycles.calculate(
+                transactions=cycle_transactions,
+                as_of=request.end,
+                coverage_status=(
+                    AccountActivityCoverageStatus.COMPLETE
+                    if coverage_complete
+                    else AccountActivityCoverageStatus.INCOMPLETE
+                ),
+                start=request.start,
+                limit=500,
+                coverage_warning_codes=(
+                    () if coverage_complete else ("TRADE_CYCLE_COVERAGE_INCOMPLETE",)
+                ),
+            )
+            cycle_projection = self._classify_cycles(cycle_projection)
+            effective_cycles = self._effective_cycles(cycle_projection)
+            series = self._performance_series.calculate_all(
+                snapshots=snapshots,
+                transactions=transactions,
+                cycles=effective_cycles.effective_projection,
+                start=request.start,
+                end=request.end,
+                coverage_status=(
+                    PerformanceStatus.COMPLETE
+                    if coverage_complete
+                    else PerformanceStatus.INCOMPLETE
+                ),
+            )
+            warning_codes = {code for item in series for code in item.warning_codes}
+            if not series:
+                warning_codes.add("PERFORMANCE_SERIES_INPUTS_UNAVAILABLE")
+            warnings = tuple(
+                WarningInfo(
+                    code=code,
+                    message=_PERFORMANCE_SERIES_WARNING_MESSAGES.get(
+                        code, "Performance series is incomplete."
+                    ),
+                    details={},
+                )
+                for code in sorted(warning_codes)
+            )
+            return ToolEnvelope.success(
+                request_id=request_id,
+                market=None,
+                as_of=request.end,
+                fetched_at=self._clock.now(),
+                freshness=Freshness.UNKNOWN,
+                sources=(),
+                data=PerformanceSeriesCollectionDTO(
+                    series=tuple(PerformanceSeriesDTO.from_domain(item) for item in series)
+                ),
+                degraded=bool(warnings),
+                warnings=warnings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                to_error_info(exc, self._redactor)
+                if isinstance(exc, TradingPartnerError)
+                else to_error_info_from_exception(exc, self._redactor)
+            )
+            return ToolEnvelope.failure(
+                request_id=request_id,
+                market=None,
+                as_of=request.end,
+                fetched_at=self._clock.now(),
                 errors=(error,),
             )

@@ -124,7 +124,7 @@ export default function OverviewPage() {
               </div>
             ) : null}
           </Card>
-          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue Summary" subtitle="Lifecycle metrics from the Decision Workbench" action={<Link className="text-link" href="/decision-workbench">Open Decision Workbench →</Link>}>
+          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue Summary" subtitle="Lifecycle metrics from the Journal workflow" action={<Link className="text-link" href="/decision-workbench">Open Journal →</Link>}>
             <div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
               <span>Open<strong>{String(Number(reviewMetrics.open_count ?? 0) + Number(reviewMetrics.acknowledged_count ?? 0))}</strong></span>
               <span>Overdue<strong>{String(reviewMetrics.overdue_count ?? 0)}</strong></span>
@@ -133,7 +133,7 @@ export default function OverviewPage() {
               <span>Median Close<strong>{durationLabel(reviewMetrics.median_open_to_close_seconds)}</strong><small>n={String(reviewMetrics.closure_sample_size ?? 0)}</small></span>
               <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
             </div>
-            <div className="attention-clear"><span aria-hidden="true">{unresolvedReviewCount === 0 ? "✓" : "→"}</span><div><strong>{unresolvedReviewCount === 0 ? "No Unresolved Review Items" : `${unresolvedReviewCount} Items Need Review`}</strong><small>Acknowledge, schedule, and resolve items in the Decision Workbench so the Home page stays a concise overview.</small></div></div>
+            <div className="attention-clear"><span aria-hidden="true">{unresolvedReviewCount === 0 ? "✓" : "→"}</span><div><strong>{unresolvedReviewCount === 0 ? "No Unresolved Review Items" : `${unresolvedReviewCount} Items Need Review`}</strong><small>Acknowledge, schedule, and resolve items in Journal so the Home page stays a concise overview.</small></div></div>
           </Card>
           <Card
             className="span-12"

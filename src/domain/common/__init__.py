@@ -21,10 +21,13 @@ from domain.common.enums import (
     VendorId,
 )
 from domain.common.errors import (
+    ActivityAnnotationNotFound,
+    ActivityAnnotationVersionConflict,
     CalendarOutOfRange,
     ConfigurationError,
     DataContractError,
     InvalidInstrument,
+    InvalidTradeCycleOverride,
     MigrationError,
     NoMarketData,
     PartialDataError,
@@ -36,12 +39,16 @@ from domain.common.errors import (
     ProviderTimeoutError,
     ProviderUnavailableError,
     StaleMarketData,
+    TradeCycleOverrideNotFound,
+    TradeCycleOverrideVersionConflict,
     TradingPartnerError,
 )
 from domain.common.ids import EntityIdPrefix
 
 __all__ = [
     "AdjustmentMethod",
+    "ActivityAnnotationNotFound",
+    "ActivityAnnotationVersionConflict",
     "AliasType",
     "AppEnvironment",
     "AssetType",
@@ -58,6 +65,7 @@ __all__ = [
     "Freshness",
     "HealthState",
     "InvalidInstrument",
+    "InvalidTradeCycleOverride",
     "LogLevel",
     "Market",
     "MigrationError",
@@ -75,6 +83,8 @@ __all__ = [
     "SourceRole",
     "StaleMarketData",
     "TradingPartnerError",
+    "TradeCycleOverrideNotFound",
+    "TradeCycleOverrideVersionConflict",
     "TradingSession",
     "VendorId",
 ]

@@ -15,6 +15,7 @@ from application.dto.research import (
 from domain.common.enums import (
     AssetType,
     ConfirmationMode,
+    DecisionScenario,
     DecisionType,
     EvidenceStance,
     EvidenceType,
@@ -44,6 +45,7 @@ EVIDENCE_ID_UUID7_PATTERN = rf"^evidence_{_UUID7}$"
 EVENT_ID_UUID7_PATTERN = rf"^event_{_UUID7}$"
 REV_ID_UUID7_PATTERN = rf"^rev_{_UUID7}$"
 SNAPSHOT_ID_UUID7_PATTERN = rf"^snapshot_{_UUID7}$"
+TRADE_PLAN_ID_UUID7_PATTERN = rf"^trade_plan_{_UUID7}$"
 
 # Frozen Journal related-entity wire types → strict ``<prefix>_<uuid7>`` patterns.
 # Type strings mirror C4b2 ``JOURNAL_RELATED_ENTITY_TYPES``; no domain enum exists.
@@ -643,13 +645,25 @@ class DecisionRecordAppendInput(BaseModel):
         default=None, pattern=SNAPSHOT_ID_UUID7_PATTERN
     )
     idempotency_key: str = Field(min_length=1, max_length=128)
+    strategy_code: str | None = Field(default=None, min_length=1, max_length=128)
+    strategy_version: str | None = Field(default=None, min_length=1, max_length=128)
+    scenario: DecisionScenario | None = None
+    trade_plan_id: str | None = Field(default=None, pattern=TRADE_PLAN_ID_UUID7_PATTERN)
+    trade_plan_version: int | None = Field(default=None, ge=1)
+    review_due_at: datetime | None = None
 
     @field_validator("thesis_revision_ids", "evidence_ids", "report_ids", mode="before")
     @classmethod
     def _id_tuples(cls, value: object) -> object:
         return _coerce_tuple(value)
 
-    @field_validator("title", "rationale", "idempotency_key")
+    @field_validator(
+        "title",
+        "rationale",
+        "idempotency_key",
+        "strategy_code",
+        "strategy_version",
+    )
     @classmethod
     def _nonblank_stripped(cls, value: str) -> str:
         stripped = value.strip()
@@ -664,6 +678,22 @@ class DecisionRecordAppendInput(BaseModel):
             return require_aware_datetime(value, field_name="decided_at")
         except DataContractError as exc:
             raise ValueError(exc.message) from exc
+
+    @field_validator("review_due_at")
+    @classmethod
+    def _review_due_at_aware(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            return require_aware_datetime(value, field_name="review_due_at")
+        except DataContractError as exc:
+            raise ValueError(exc.message) from exc
+
+    @model_validator(mode="after")
+    def _trade_plan_pair(self) -> Self:
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise ValueError("trade_plan_id and trade_plan_version must be provided together")
+        return self
 
     @field_validator("thesis_revision_ids")
     @classmethod

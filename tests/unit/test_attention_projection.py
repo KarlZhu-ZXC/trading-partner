@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from application.services.attention_projection import (
     merge_attention_items,
     next_read_for,
     project_data_quality_issue,
+    project_pending_candidate,
     project_review_item,
     project_unresolved_broker,
     sort_attention_items,
@@ -33,7 +35,7 @@ from domain.attention.enums import (
     AttentionStatus,
     AttentionTrackingKind,
 )
-from domain.common.enums import HealthState
+from domain.common.enums import CandidateStatus, HealthState
 
 
 def _now() -> datetime:
@@ -111,12 +113,44 @@ def test_merge_prefers_review_item_over_live_duplicate() -> None:
         review_item_id="review_item_1",
         status=AttentionStatus.ACKNOWLEDGED,
     )
-    live = _item(key="agenda-overdue-1")
+    live = _item(key="agenda-overdue-1").model_copy(
+        update={
+            "title": "Current escalation",
+            "detail": "Current durable source detail",
+            "severity": AttentionSeverity.ERROR,
+            "recommended_action": "INSPECT_CURRENT_SOURCE",
+        }
+    )
     extra = _item(key="research-candidate-1")
     merged = merge_attention_items(review_items=(review,), live_items=(live, extra))
     assert [item.key for item in merged] == ["agenda-overdue-1", "research-candidate-1"]
     assert merged[0].tracking_kind == AttentionTrackingKind.REVIEW_ITEM.value
     assert merged[0].status == AttentionStatus.ACKNOWLEDGED.value
+    assert merged[0].review_item_id == "review_item_1"
+    assert merged[0].title == "Current escalation"
+    assert merged[0].detail == "Current durable source detail"
+    assert merged[0].severity == AttentionSeverity.ERROR.value
+    assert merged[0].recommended_action == "INSPECT_CURRENT_SOURCE"
+
+
+def test_expired_candidate_is_not_presented_as_confirmable() -> None:
+    item = project_pending_candidate(
+        SimpleNamespace(
+            status=CandidateStatus.PROPOSED,
+            kind="thesis_revision",
+            candidate_id="candidate_expired",
+            subject_id="case_1",
+            proposed_by_rationale="Old proposal",
+            proposed_at=_now() - timedelta(days=2),
+            expires_at=_now() - timedelta(days=1),
+        ),  # type: ignore[arg-type]
+        now=_now(),
+    )
+    assert item is not None
+    assert item.recommended_action == "RECONCILE_EXPIRED_CANDIDATE"
+    assert item.severity == AttentionSeverity.ERROR.value
+    assert "expired" in item.title.lower()
+    assert "CONFIRM" not in item.recommended_action
 
 
 def test_sort_orders_error_then_overdue_then_attention() -> None:
@@ -160,6 +194,7 @@ def test_assemble_counts_before_limit_and_does_not_mix_resolved_history() -> Non
     )
     assert digest.scope == AttentionScope.GLOBAL.value
     assert digest.total_count == 4
+    assert digest.total_count_is_lower_bound is True
     assert digest.returned_count == 2
     assert digest.truncated is True
     assert digest.metrics.open_count == 4
@@ -180,6 +215,7 @@ def test_assemble_subject_scope_sets_matching_ids() -> None:
         coverage=(),
     )
     assert digest.scope == AttentionScope.SUBJECT.value
+    assert digest.total_count_is_lower_bound is False
     assert digest.subject_id == digest.case_id == "case_1"
     assert [item.key for item in digest.items] == ["keep"]
 

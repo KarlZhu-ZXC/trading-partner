@@ -18,6 +18,10 @@ from domain.portfolio.enums import (
     AccountPositionSide,
     AccountTransactionKind,
     AccountTransactionSide,
+    ActivityAnnotationStatus,
+    TradeCycleClassification,
+    TradeCycleQuality,
+    TradeCycleStatus,
 )
 
 FROZEN_PORTFOLIO_MODEL_NAMES: tuple[str, ...] = (
@@ -165,6 +169,108 @@ class AccountTransaction:
         require_aware_datetime(self.occurred_at, field_name="occurred_at")
         _text(self.source_type, "source_type", 128)
         _text(self.mapping_version, "mapping_version", 64)
+
+    @property
+    def transaction_key(self) -> tuple[VendorId, str, str]:
+        """Exact natural key shared by activity annotations."""
+
+        return (self.provider, self.account_ref, self.provider_transaction_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityAnnotation:
+    """Append-only human annotation for one normalized account transaction.
+
+    The broker fact is deliberately represented only by its exact natural key;
+    no annotation field can alter the immutable ``AccountTransaction`` row.
+    Each revision repeats that key and carries a monotonically increasing
+    version.  ``TransactionDecisionLink`` is a compatibility alias for this
+    model (the first implementation used both names for the same boundary).
+    """
+
+    annotation_id: str
+    provider: VendorId
+    account_ref: str
+    provider_transaction_id: str
+    version: int
+    status: ActivityAnnotationStatus
+    actor: str
+    authorization_note: str
+    idempotency_key: str
+    created_at: datetime
+    decision_id: str | None = None
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = None
+    subject_id: str | None = None
+    note: str | None = None
+    classification: TradeCycleClassification | None = None
+    order_intent_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.annotation_id.startswith("activity_annotation_"):
+            raise DataContractError("annotation_id must use activity_annotation_ prefix")
+        if not isinstance(self.provider, VendorId):
+            raise DataContractError("annotation provider is invalid")
+        _text(self.account_ref, "account_ref", 128)
+        _text(self.provider_transaction_id, "provider_transaction_id", 256)
+        if type(self.version) is not int or self.version < 1:
+            raise DataContractError("annotation version must be positive")
+        if not isinstance(self.status, ActivityAnnotationStatus):
+            raise DataContractError("annotation status is invalid")
+        if self.classification is not None and not isinstance(
+            self.classification, TradeCycleClassification
+        ):
+            raise DataContractError("annotation classification is invalid")
+        for field_name, value, maximum in (
+            ("decision_id", self.decision_id, 128),
+            ("trade_plan_id", self.trade_plan_id, 128),
+            ("subject_id", self.subject_id, 128),
+            ("order_intent_id", self.order_intent_id, 128),
+        ):
+            if value is not None:
+                _text(value, field_name, maximum)
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise DataContractError("trade_plan_id and trade_plan_version must be paired")
+        if self.trade_plan_version is not None and (
+            type(self.trade_plan_version) is not int or self.trade_plan_version < 1
+        ):
+            raise DataContractError("trade_plan_version must be positive")
+        if self.note is not None:
+            _text(self.note, "note", 2_000)
+        _text(self.actor, "actor", 128)
+        _text(self.authorization_note, "authorization_note", 4_000)
+        _text(self.idempotency_key, "idempotency_key", 200)
+        require_aware_datetime(self.created_at, field_name="created_at")
+
+        has_link = self.decision_id is not None or self.trade_plan_id is not None
+        if self.status is ActivityAnnotationStatus.LINKED_DECISION_PLAN and not has_link:
+            raise DataContractError(
+                "LINKED_DECISION_PLAN requires a decision_id or exact Trade Plan version"
+            )
+        if self.status is not ActivityAnnotationStatus.LINKED_DECISION_PLAN and has_link:
+            raise DataContractError(
+                "non-linked activity annotation cannot carry decision or Trade Plan links"
+            )
+        if has_link and self.subject_id is None:
+            raise DataContractError("linked activity annotation requires subject_id")
+
+    @property
+    def link_status(self) -> ActivityAnnotationStatus:
+        """Compatibility spelling for callers using TransactionDecisionLink."""
+
+        return self.status
+
+    @property
+    def transaction_key(self) -> tuple[VendorId, str, str]:
+        return (self.provider, self.account_ref, self.provider_transaction_id)
+
+    @property
+    def revision_id(self) -> str:
+        return self.annotation_id
+
+
+# The two terms intentionally describe one minimal append-only record.
+TransactionDecisionLink = ActivityAnnotation
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,8 +477,7 @@ class PortfolioEnrichment:
         if any(not isinstance(item, PortfolioEnrichedExposure) for item in self.exposures):
             raise DataContractError("enriched exposures are invalid")
         for instrument_id in (
-            self.missing_classification_instrument_ids
-            + self.missing_valuation_instrument_ids
+            self.missing_classification_instrument_ids + self.missing_valuation_instrument_ids
         ):
             parse_instrument_id(instrument_id)
 
@@ -489,3 +594,99 @@ class PortfolioSimulation:
         _text(self.currency, "currency", 16)
         if self.execution_effect is not False:
             raise DataContractError("portfolio simulation must not execute")
+
+
+@dataclass(frozen=True, slots=True)
+class TradeCycle:
+    """One deterministic, long-only projection over normalized trade activities."""
+
+    cycle_id: str
+    account_ref: str
+    provider: VendorId
+    instrument_id: str | None
+    currency: str | None
+    activity_ids: tuple[str, ...]
+    opened_at: datetime | None
+    closed_at: datetime | None
+    status: TradeCycleStatus
+    classification: TradeCycleClassification
+    opening_count: int
+    add_count: int
+    reduce_count: int
+    ending_quantity: Decimal | None
+    gross_realized_pnl: Decimal | None
+    net_realized_pnl: Decimal | None
+    maximum_deployed_capital: Decimal | None
+    holding_duration_seconds: int | None
+    reentry_of_cycle_id: str | None
+    quality: TradeCycleQuality
+    warning_codes: tuple[str, ...]
+    algorithm_version: str = "trade_cycle_v1"
+
+    def __post_init__(self) -> None:
+        _text(self.cycle_id, "cycle_id", 160)
+        _text(self.account_ref, "account_ref", 128)
+        if not isinstance(self.provider, VendorId):
+            raise DataContractError("trade cycle provider is invalid")
+        if self.instrument_id is not None:
+            parse_instrument_id(self.instrument_id)
+        if self.currency is not None:
+            _text(self.currency, "currency", 16)
+        if not isinstance(self.activity_ids, tuple) or not self.activity_ids:
+            raise DataContractError("trade cycle activity_ids must be non-empty")
+        _warnings(self.activity_ids)
+        for field_name in ("opened_at", "closed_at"):
+            value = getattr(self, field_name)
+            if value is not None:
+                require_aware_datetime(value, field_name=field_name)
+        if (
+            self.opened_at is not None
+            and self.closed_at is not None
+            and self.closed_at < self.opened_at
+        ):
+            raise DataContractError("trade cycle closed_at precedes opened_at")
+        if not isinstance(self.status, TradeCycleStatus):
+            raise DataContractError("trade cycle status is invalid")
+        if not isinstance(self.classification, TradeCycleClassification):
+            raise DataContractError("trade cycle classification is invalid")
+        if not isinstance(self.quality, TradeCycleQuality):
+            raise DataContractError("trade cycle quality is invalid")
+        for field_name in ("opening_count", "add_count", "reduce_count"):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise DataContractError(f"{field_name} must be a nonnegative int")
+        _decimal(self.ending_quantity, "ending_quantity", nonnegative=True)
+        _decimal(self.gross_realized_pnl, "gross_realized_pnl")
+        _decimal(self.net_realized_pnl, "net_realized_pnl")
+        _decimal(self.maximum_deployed_capital, "maximum_deployed_capital", nonnegative=True)
+        if self.holding_duration_seconds is not None and (
+            type(self.holding_duration_seconds) is not int or self.holding_duration_seconds < 0
+        ):
+            raise DataContractError("holding_duration_seconds must be a nonnegative int")
+        if self.reentry_of_cycle_id is not None:
+            _text(self.reentry_of_cycle_id, "reentry_of_cycle_id", 160)
+        _warnings(self.warning_codes)
+        _text(self.algorithm_version, "algorithm_version", 64)
+
+
+@dataclass(frozen=True, slots=True)
+class TradeCycleProjection:
+    """Rebuildable collection of trade cycles and ledger-quality facts."""
+
+    cycles: tuple[TradeCycle, ...]
+    status: TradeCycleQuality
+    coverage_status: AccountActivityCoverageStatus
+    warning_codes: tuple[str, ...]
+    algorithm_version: str = "trade_cycle_v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.cycles, tuple) or any(
+            not isinstance(item, TradeCycle) for item in self.cycles
+        ):
+            raise DataContractError("trade cycle projection cycles are invalid")
+        if not isinstance(self.status, TradeCycleQuality):
+            raise DataContractError("trade cycle projection status is invalid")
+        if not isinstance(self.coverage_status, AccountActivityCoverageStatus):
+            raise DataContractError("trade cycle projection coverage status is invalid")
+        _warnings(self.warning_codes)
+        _text(self.algorithm_version, "algorithm_version", 64)

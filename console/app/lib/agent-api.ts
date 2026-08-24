@@ -3,11 +3,12 @@
 import { authenticatedFetch, getJson, responseErrorMessage, sendJsonMethod } from "./api";
 import { getAgentPageContext } from "./agent-page-context";
 import { textStrict as text } from "./coerce";
+import type { AgentEphemeralContextContract } from "./generated/contracts";
 
 /**
  * The Agent API is deliberately kept in one module.  The backend is allowed
- * to add an envelope around these records without forcing the Chat workspace
- * to know which transport shape was selected.
+ * to add an envelope around these records without forcing the Agent Rail to
+ * know which transport shape was selected.
  */
 export const AGENT_API_ROUTES = {
   status: "/api/agent/status",
@@ -20,6 +21,8 @@ export const AGENT_API_ROUTES = {
     `/api/agent/conversations/${encodeURIComponent(conversationId)}`,
   messages: (conversationId: string) =>
     `/api/agent/conversations/${encodeURIComponent(conversationId)}/messages`,
+  attachment: (conversationId: string, attachmentId: string) =>
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}`,
   receipts: (conversationId: string) =>
     `/api/agent/conversations/${encodeURIComponent(conversationId)}/receipts`,
   turns: (conversationId: string) =>
@@ -41,6 +44,22 @@ export const AGENT_API_ROUTES = {
 } as const;
 
 export type AgentRecord = Record<string, unknown>;
+
+export type AgentImageAttachment = AgentRecord & {
+  attachment_id: string;
+  media_type: "image/png" | "image/jpeg";
+  byte_size: number;
+  sha256: string;
+  width: number;
+  height: number;
+  original_name: string | null;
+  url: string;
+};
+
+export type AgentImageInput = {
+  data_url: string;
+  name: string | null;
+};
 
 export type AgentStatus = AgentRecord & {
   enabled: boolean;
@@ -71,6 +90,7 @@ export type AgentModelOption = AgentRecord & {
   reasoning_effort: string | null;
   reasoning_efforts: string[];
   native_web_search: string;
+  web_search_available: boolean;
   is_default: boolean;
 };
 
@@ -87,6 +107,7 @@ export type AgentProviderModelCatalog = AgentRecord & {
   api_style: string;
   reasoning_mode: string;
   native_web_search: string;
+  web_search_available: boolean;
   fetched_at: string | null;
   cached: boolean;
   models: AgentProviderModelOption[];
@@ -107,6 +128,7 @@ export type AgentMessage = AgentRecord & {
   content: string;
   sequence: number | null;
   created_at: string | null;
+  attachments: AgentImageAttachment[];
 };
 
 export type AgentReceipt = AgentRecord & {
@@ -122,6 +144,20 @@ export type AgentReceipt = AgentRecord & {
   error_codes: string[];
 };
 
+export type AgentFailureNotice = AgentRecord & {
+  schema_version: number;
+  kind: string;
+  title: string;
+  code: string;
+  provider_id: string | null;
+  model: string | null;
+  http_status: number | null;
+  retryable: boolean | null;
+  attempts: number | null;
+  explanation: string;
+  next_action: string;
+};
+
 export type AgentTurn = AgentRecord & {
   turn_id: string;
   conversation_id: string;
@@ -129,6 +165,12 @@ export type AgentTurn = AgentRecord & {
   assistant_message_id: string | null;
   status: string;
   error_code: string | null;
+  model_id: string | null;
+  model: string | null;
+  error_http_status: number | null;
+  error_retryable: boolean | null;
+  error_attempts: number | null;
+  failure_notice: AgentFailureNotice | null;
   started_at: string | null;
   updated_at: string | null;
   completed_at: string | null;
@@ -193,18 +235,7 @@ export type AgentStreamEvent = {
  * are intentionally bounded by the caller before they cross the stream
  * boundary and are never treated as a source of truth by the Agent runtime.
  */
-export type AgentEphemeralContext = {
-  location?: string;
-  selection?: string;
-  content_excerpt?: string;
-  route_hash?: string;
-  surface?: string;
-  selected_subject_id?: string;
-  selected_monitor_id?: string;
-  selected_run_id?: string;
-  active_tab?: string;
-  workbench_subject_id?: string;
-};
+export type AgentEphemeralContext = AgentEphemeralContextContract;
 
 const EPHEMERAL_LOCATION_LIMIT = 256;
 const EPHEMERAL_SELECTION_LIMIT = 1_200;
@@ -340,6 +371,34 @@ function parseMessage(value: unknown): AgentMessage | null {
   const messageId = idFor(source, "message_id", "id");
   if (!messageId) return null;
   const rawRole = text(source.role, "ASSISTANT").toUpperCase();
+  const attachments = arrayFrom(source.attachments)
+    .map((item) => {
+      const attachment = asRecord(item);
+      const attachmentId = text(attachment.attachment_id);
+      const mediaType = text(attachment.media_type);
+      const url = text(attachment.url);
+      if (
+        !attachmentId
+        || (mediaType !== "image/png" && mediaType !== "image/jpeg")
+        || !url.startsWith("/api/agent/conversations/")
+        || !url.includes("/attachments/")
+      ) return null;
+      return {
+        ...attachment,
+        attachment_id: attachmentId,
+        media_type: mediaType,
+        byte_size: typeof attachment.byte_size === "number" ? attachment.byte_size : 0,
+        sha256: text(attachment.sha256),
+        width: typeof attachment.width === "number" ? attachment.width : 0,
+        height: typeof attachment.height === "number" ? attachment.height : 0,
+        original_name: typeof attachment.original_name === "string"
+          ? attachment.original_name
+          : null,
+        url,
+      } satisfies AgentImageAttachment;
+    })
+    .filter((item): item is AgentImageAttachment => item !== null)
+    .slice(0, 4);
   return {
     ...source,
     message_id: messageId,
@@ -352,6 +411,7 @@ function parseMessage(value: unknown): AgentMessage | null {
         : "",
     sequence: typeof source.sequence === "number" ? source.sequence : null,
     created_at: typeof source.created_at === "string" ? source.created_at : null,
+    attachments,
   };
 }
 
@@ -415,10 +475,45 @@ export function parseTurn(value: unknown): AgentTurn | null {
     assistant_message_id: typeof source.assistant_message_id === "string" ? source.assistant_message_id : null,
     status: text(source.status, "FAILED").toUpperCase(),
     error_code: typeof source.error_code === "string" ? source.error_code : null,
+    model_id: typeof source.model_id === "string" ? source.model_id : null,
+    model: typeof source.model === "string" ? source.model : null,
+    error_http_status: typeof source.error_http_status === "number"
+      ? source.error_http_status
+      : null,
+    error_retryable: typeof source.error_retryable === "boolean"
+      ? source.error_retryable
+      : null,
+    error_attempts: typeof source.error_attempts === "number"
+      ? source.error_attempts
+      : null,
+    failure_notice: parseAgentFailureNotice(source.failure_notice),
     started_at: typeof source.started_at === "string" ? source.started_at : null,
     updated_at: typeof source.updated_at === "string" ? source.updated_at : null,
     completed_at: typeof source.completed_at === "string" ? source.completed_at : null,
     version: typeof source.version === "number" ? source.version : 1,
+  };
+}
+
+export function parseAgentFailureNotice(value: unknown): AgentFailureNotice | null {
+  const source = asRecord(value);
+  const code = text(source.code);
+  const title = text(source.title);
+  const explanation = text(source.explanation);
+  const nextAction = text(source.next_action);
+  if (!code || !title || !explanation || !nextAction) return null;
+  return {
+    ...source,
+    schema_version: typeof source.schema_version === "number" ? source.schema_version : 1,
+    kind: text(source.kind, "agent_runtime_error"),
+    title,
+    code,
+    provider_id: typeof source.provider_id === "string" ? source.provider_id : null,
+    model: typeof source.model === "string" ? source.model : null,
+    http_status: typeof source.http_status === "number" ? source.http_status : null,
+    retryable: typeof source.retryable === "boolean" ? source.retryable : null,
+    attempts: typeof source.attempts === "number" ? source.attempts : null,
+    explanation,
+    next_action: nextAction,
   };
 }
 
@@ -529,6 +624,7 @@ export async function fetchAgentStatus(signal?: AbortSignal): Promise<AgentStatu
         ? model.reasoning_efforts.filter((value): value is string => typeof value === "string")
         : [],
       native_web_search: text(model.native_web_search, "disabled"),
+      web_search_available: model.web_search_available === true,
       is_default: model.is_default === true,
     } satisfies AgentModelOption];
   });
@@ -594,6 +690,7 @@ export async function fetchAgentProviderModels(
     api_style: text(source.api_style),
     reasoning_mode: text(source.reasoning_mode, "none"),
     native_web_search: text(source.native_web_search, "disabled"),
+    web_search_available: source.web_search_available === true,
     fetched_at: typeof source.fetched_at === "string" ? source.fetched_at : null,
     cached: source.cached === true,
     models,
@@ -754,6 +851,7 @@ export async function streamAgentMessage(
   modelId?: string,
   model?: string,
   reasoningEffort?: string,
+  attachments?: AgentImageInput[],
 ): Promise<void> {
   const body: Record<string, unknown> = {
     content,
@@ -763,6 +861,7 @@ export async function streamAgentMessage(
   if (modelId) body.model_id = modelId;
   if (model) body.model = model;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;
+  if (attachments?.length) body.attachments = attachments;
   const response = await authenticatedFetch(AGENT_API_ROUTES.stream(conversationId), {
     method: "POST",
     headers: {
@@ -779,13 +878,23 @@ async function consumeAgentStream(
   response: Response,
   onEvent: (event: AgentStreamEvent) => void,
 ): Promise<void> {
-  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  if (!response.ok) {
+    const error = new Error(await responseErrorMessage(response)) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
   if (!response.body) throw new Error("The Agent stream returned no body");
 
   // Importing the small parser here keeps the API adapter usable in tests and
   // avoids shipping a second parser implementation in the React workspace.
   const { createSseParser } = await import("./sse.mjs");
-  const parser = createSseParser({ onEvent });
+  let terminal = false;
+  const parser = createSseParser({
+    onEvent: (event: AgentStreamEvent) => {
+      if (["completed", "cancelled", "failed"].includes(event.event)) terminal = true;
+      onEvent(event);
+    },
+  });
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   try {
@@ -799,6 +908,13 @@ async function consumeAgentStream(
     }
   } finally {
     reader.releaseLock();
+  }
+  if (!terminal) {
+    const error = new Error("The Agent stream ended before a durable terminal event") as Error & {
+      retryable?: boolean;
+    };
+    error.retryable = true;
+    throw error;
   }
 }
 

@@ -1,5 +1,31 @@
 """Application DTOs for Tool Envelope and MCP responses."""
 
+from application.dto.activity_annotations import (
+    ActivityAnnotationAppendInput,
+    ActivityAnnotationDTO,
+    UnlinkedActivityDTO,
+    UnlinkedActivityInboxDTO,
+    UnlinkedActivityListDTO,
+)
+from application.dto.behavior import (
+    BehaviorCohortDTO,
+    BehaviorMetricDTO,
+    BehaviorSummaryDTO,
+    BehaviorSummaryQueryInput,
+)
+from application.dto.behavior_review import (
+    BehaviorActionInputDTO,
+    BehaviorActionObservationDTO,
+    BehaviorReviewCohortDTO,
+    BehaviorReviewRunDTO,
+    BehaviorReviewRunInput,
+)
+from application.dto.daily_equity import (
+    DailyEquityMaterializationInput,
+    DailyEquityMaterializationReceiptDTO,
+    DailyEquitySnapshotDTO,
+    JournalActivationDTO,
+)
 from application.dto.health import HealthStatusDTO
 from application.dto.instrument import InstrumentDTO, InstrumentResolveResultDTO
 from application.dto.market import (
@@ -31,6 +57,13 @@ from application.dto.tool_envelope import (
     ToolEnvelope,
     WarningInfo,
 )
+from application.dto.trade_cycle_overrides import (
+    TradeCycleOverrideAppendInput,
+    TradeCycleOverrideImpactDTO,
+    TradeCycleOverridePreviewDTO,
+    TradeCycleOverrideProjectionDTO,
+    TradeCycleOverrideRevisionDTO,
+)
 from application.dto.watchlist_source import (
     WatchlistSourceGroup,
     WatchlistSourceGroupType,
@@ -39,6 +72,21 @@ from application.dto.watchlist_source import (
 
 __all__ = [
     "CacheEntry",
+    "ActivityAnnotationAppendInput",
+    "ActivityAnnotationDTO",
+    "BehaviorCohortDTO",
+    "BehaviorMetricDTO",
+    "BehaviorSummaryDTO",
+    "BehaviorSummaryQueryInput",
+    "BehaviorActionInputDTO",
+    "BehaviorActionObservationDTO",
+    "BehaviorReviewCohortDTO",
+    "BehaviorReviewRunDTO",
+    "BehaviorReviewRunInput",
+    "DailyEquityMaterializationInput",
+    "DailyEquityMaterializationReceiptDTO",
+    "DailyEquitySnapshotDTO",
+    "JournalActivationDTO",
     "CircuitCallPermit",
     "ErrorInfo",
     "HealthStatusDTO",
@@ -60,7 +108,15 @@ __all__ = [
     "SourceReference",
     "TechnicalIndicatorsDTO",
     "ToolDataPolicy",
+    "TradeCycleOverrideAppendInput",
+    "TradeCycleOverrideImpactDTO",
+    "TradeCycleOverridePreviewDTO",
+    "TradeCycleOverrideProjectionDTO",
+    "TradeCycleOverrideRevisionDTO",
     "ToolEnvelope",
     "VerifiedMarketSnapshotDTO",
     "WarningInfo",
+    "UnlinkedActivityDTO",
+    "UnlinkedActivityInboxDTO",
+    "UnlinkedActivityListDTO",
 ]

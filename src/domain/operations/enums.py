@@ -12,3 +12,11 @@ class PostMarketSyncRunStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
+
+
+class OperationalJobStatus(StrEnum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    SKIPPED = "SKIPPED"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"

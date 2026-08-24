@@ -30,6 +30,7 @@ from application.ports.provider_cache_codec import ProviderCacheCodec
 from application.ports.provider_health_store import ProviderHealthStore
 from application.ports.provider_route_history_store import ProviderRouteHistoryStore
 from application.ports.provider_router_settings import ProviderRouterSettings
+from application.ports.telemetry import NOOP_TELEMETRY, Telemetry
 from domain.common.enums import (
     CacheDisposition,
     CircuitState,
@@ -115,6 +116,7 @@ class ProviderRouterEngine:
         clock: Clock,
         id_generator: IdGenerator | None = None,
         settings: ProviderRouterSettings,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._registry = registry
         self._cache_store = cache_store
@@ -125,8 +127,58 @@ class ProviderRouterEngine:
         self._clock = clock
         self._id_generator = id_generator
         self._settings = settings
+        self._telemetry = telemetry or NOOP_TELEMETRY
 
     async def execute[T](
+        self,
+        *,
+        market: Market,
+        category: DataCategory,
+        chain: tuple[VendorId, ...],
+        criticality: DataCriticality,
+        call: Callable[[CategoryProvider], Awaitable[ProviderSuccess[T]]],
+        operation_name: str,
+        request_fingerprint: str,
+        instrument: Instrument | None,
+        as_of: datetime,
+        bypass_cache: bool,
+        cache_codec: ProviderCacheCodec[T] | None,
+        result_validator: Callable[[ProviderSuccess[T]], None] | None,
+    ) -> RouterExecutionResult[T]:
+        with self._telemetry.start_span(
+            "provider.route",
+            {
+                "tp.market": market.value,
+                "tp.category": category.value,
+                "tp.criticality": criticality.value,
+                "tp.operation": operation_name,
+                "tp.chain_length": len(chain),
+                "tp.bypass_cache": bypass_cache,
+            },
+        ) as span:
+            result = await self._execute(
+                market=market,
+                category=category,
+                chain=chain,
+                criticality=criticality,
+                call=call,
+                operation_name=operation_name,
+                request_fingerprint=request_fingerprint,
+                instrument=instrument,
+                as_of=as_of,
+                bypass_cache=bypass_cache,
+                cache_codec=cache_codec,
+                result_validator=result_validator,
+            )
+            span.set_attribute("tp.status", "ok" if result.ok else "failed")
+            span.set_attribute("tp.attempt_count", len(result.attempts))
+            if result.meta is not None:
+                span.set_attribute("tp.selected_vendor", result.meta.vendor.value)
+            if result.error is not None:
+                span.set_attribute("tp.error_code", result.error.code)
+            return result
+
+    async def _execute[T](
         self,
         *,
         market: Market,

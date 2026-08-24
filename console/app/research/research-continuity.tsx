@@ -190,7 +190,7 @@ function ResearchMemoryWorkspace({ subject, onWrite, busy }: { subject: Dict; on
   async function load() {
     setLoading(true); setError(null);
     try {
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "research_memory_get", arguments: { request: { operation: "timeline", case_id: subjectId, limit: 100 } } });
+      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "research_memory_get", arguments: { request: { operation: "timeline", case_id: subjectId, limit: 100 } }, preserve_full_result: true });
       setTimeline(envelopeData<Dict>((response.result ?? response) as Dict));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Failed to load timeline"); }
     finally { setLoading(false); }
@@ -244,7 +244,7 @@ function WorkflowWorkspace({ subject }: { subject: Dict }) {
     if (operation === "portfolio_review") { request.account_snapshot_ids = []; request.risk_lookback_sessions = 126; request.max_risk_instruments = 12; }
     try {
       if (operation === "peer_comparison" && split(peers).length === 0) { throw new Error("Peer Comparison requires at least one same-market instrument."); }
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "research_workflow_run", arguments: { request }, confirmation: "research_workflow_run" });
+      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "research_workflow_run", arguments: { request }, confirmation: "research_workflow_run", preserve_full_result: true });
       setResult(response);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Workflow failed"); }
     finally { setRunning(null); }
@@ -265,7 +265,7 @@ function ChallengeWorkspace({ subject }: { subject: Dict }) {
   async function invoke(toolName: string, request: Dict, confirmation?: string) {
     setBusy(true); setError(null);
     try {
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: toolName, arguments: { request }, confirmation });
+      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: toolName, arguments: { request }, confirmation, preserve_full_result: true });
       const envelope = (response.result ?? response) as Dict;
       const data = envelopeData<Dict>(envelope);
       const next = data?.review && typeof data.review === "object" ? data.review as Dict : data;

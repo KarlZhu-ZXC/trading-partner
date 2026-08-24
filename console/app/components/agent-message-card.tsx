@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { authenticatedFetch } from "../lib/api";
-import type { AgentMessage, AgentReceipt } from "../lib/agent-api";
+import type { AgentImageAttachment, AgentMessage, AgentReceipt } from "../lib/agent-api";
 import { AgentMessageContent } from "./agent-message-content";
 
 type Dict = Record<string, unknown>;
@@ -134,6 +134,59 @@ export function AgentArtifactGallery({ urls }: { urls: string[] }) {
   );
 }
 
+function AgentImagePreview({ attachment }: { attachment: AgentImageAttachment }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let currentObjectUrl: string | null = null;
+    setObjectUrl(null);
+    setFailed(false);
+    void authenticatedFetch(attachment.url, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        if (blob.type !== attachment.media_type) throw new Error("Unexpected image type");
+        currentObjectUrl = URL.createObjectURL(blob);
+        setObjectUrl(currentObjectUrl);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+    };
+  }, [attachment.media_type, attachment.url]);
+
+  return (
+    <figure className={`agent-message-image${failed ? " failed" : ""}`}>
+      {objectUrl ? (
+        <img
+          alt={attachment.original_name || "Attached image"}
+          height={attachment.height}
+          src={objectUrl}
+          width={attachment.width}
+        />
+      ) : (
+        <figcaption>{failed ? "Image preview unavailable" : "Loading image preview…"}</figcaption>
+      )}
+    </figure>
+  );
+}
+
+export function AgentImageGallery({ attachments }: { attachments: AgentImageAttachment[] }) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="agent-message-images" aria-label="Attached Images">
+      {attachments.map((attachment) => (
+        <AgentImagePreview attachment={attachment} key={attachment.attachment_id} />
+      ))}
+    </div>
+  );
+}
+
 export function AgentReceiptCard({ receipt }: { receipt: AgentReceipt }) {
   return (
     <article className="agent-rail-receipt">
@@ -206,6 +259,7 @@ export function AgentMessageCard({
           </div>
         </div>
       </header>
+      <AgentImageGallery attachments={message.attachments} />
       <AgentMessageContent content={message.content} />
       <AgentArtifactGallery urls={artifactUrls} />
       {!!sourceUrls.length && (

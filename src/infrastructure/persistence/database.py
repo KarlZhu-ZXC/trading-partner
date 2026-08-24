@@ -49,6 +49,12 @@ def _enable_sqlite_foreign_keys(
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=30000")
+        # WAL lets Console, Telegram, and scheduled readers continue while one
+        # short writer transaction commits. SQLite remains the local-first
+        # database; this is not a move toward a remote server dependency.
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA wal_autocheckpoint=1000")
     finally:
         cursor.close()
 

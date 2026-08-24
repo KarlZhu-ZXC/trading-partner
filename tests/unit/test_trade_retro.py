@@ -15,9 +15,13 @@ from application.dto.trade_retro import (
     TradeRetroHistoryInput,
     TradeRetroReviewInput,
 )
-from application.services.trade_retro_service import TradeRetroService
+from application.services.trade_retro_service import (
+    TradeRetroService,
+    _llm_failure_warning_code,
+)
 from conftest import FixedClock, SequentialIdGenerator
 from domain.common.enums import ResearchSubjectStatus, VendorId
+from domain.common.errors import ProviderUnavailableError
 from domain.portfolio.enums import (
     AccountActivityCoverageStatus,
     AccountTransactionKind,
@@ -34,6 +38,16 @@ from interfaces.cli import trade_retro as trade_retro_cli
 from interfaces.cli.trade_retro import _markdown_section, _weekly_windows
 
 NOW = datetime(2026, 8, 9, 8, tzinfo=UTC)
+
+
+def test_trade_retro_llm_failure_warning_preserves_safe_typed_code() -> None:
+    assert (
+        _llm_failure_warning_code(ProviderUnavailableError("safe"))
+        == "TRADE_RETRO_LLM_PROVIDER_UNAVAILABLE_ERROR"
+    )
+    assert _llm_failure_warning_code(RuntimeError("unsafe")) == (
+        "TRADE_RETRO_LLM_UNEXPECTED_ERROR"
+    )
 
 
 class _CliEnvelope:
@@ -73,7 +87,24 @@ class _CliRetroService:
 
 class _CliContainer:
     def __init__(self, service: _CliRetroService) -> None:
-        self.services = SimpleNamespace(trade_retro=service)
+        self.behavior_requests: list[Any] = []
+        self.services = SimpleNamespace(
+            trade_retro=service,
+            review_items=SimpleNamespace(list_open=lambda **_kwargs: ()),
+            account_transactions=SimpleNamespace(
+                get_trade_cycles=lambda _request: SimpleNamespace(
+                    ok=True, data=SimpleNamespace(cycles=())
+                )
+            ),
+            behavior_reviews=SimpleNamespace(
+                run=lambda request: (
+                    self.behavior_requests.append(request)
+                    or SimpleNamespace(
+                        model_dump=lambda **_kwargs: {"status": "COMPLETE"}
+                    )
+                )
+            ),
+        )
         self.closed = False
 
     async def aclose(self) -> None:
@@ -156,6 +187,46 @@ async def test_trade_retro_weekly_runs_exports_and_prepares_next_window(
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["export"]["ok"] is True
+    assert payload["behavior_review"]["status"] == "COMPLETE"
+    review = container.behavior_requests[0]
+    assert review.period_end - review.period_start == timedelta(days=7)
+
+
+@pytest.mark.asyncio
+async def test_trade_retro_weekly_accepts_explicit_rerun_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service = _CliRetroService()
+    container = _CliContainer(service)
+    monkeypatch.setattr(lifecycle, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        trade_retro_cli,
+        "_weekly_windows",
+        lambda: (
+            datetime(2026, 8, 3, tzinfo=UTC),
+            datetime(2026, 8, 8, tzinfo=UTC),
+            datetime(2026, 8, 10, tzinfo=UTC),
+            datetime(2026, 8, 15, tzinfo=UTC),
+        ),
+    )
+
+    assert (
+        await trade_retro_cli.run(
+            [
+                "weekly",
+                "--idempotency-key",
+                "retro-rerun-test",
+                "--export-obsidian",
+            ]
+        )
+        == 0
+    )
+    assert service.calls[0][1]["idempotency_key"] == "retro-rerun-test"
+    assert service.calls[1][1]["idempotency_key"] == "retro-rerun-test-obsidian"
+    assert service.calls[2][1]["idempotency_key"] == "retro-rerun-test-plan"
+    assert container.behavior_requests[0].idempotency_key == "retro-rerun-test-behavior"
+    assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
 @pytest.mark.asyncio

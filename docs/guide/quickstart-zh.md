@@ -79,7 +79,7 @@ MCP 进程。
 核心 MCP 启动不要求任何密钥。只有使用对应能力时，才在生成的
 `runtime.env` 中增加配置：
 
-- Alpha Vantage、FRED、SEC、百炼等属于可选 Provider；
+- Alpha Vantage、FRED、SEC、百炼、DeepSeek 与 OpenCode Go 等属于可选 Provider；
 - Schwab、Moomoo OpenD 和手动 CSV 属于可选账户来源；
 - Telegram 属于可选通知出口；
 - 未配置、限流、延迟或不可达必须以 warning 或 typed error 暴露，不能用其他

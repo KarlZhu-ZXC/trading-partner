@@ -55,6 +55,17 @@ class ChatCompletionsCodec:
             payload["reasoning_effort"] = request.reasoning_effort
         if request.reasoning_mode == "thinking":
             payload["thinking"] = {"type": "enabled"}
+        if request.response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.response_schema_name or "structured_response",
+                    "strict": True,
+                    "schema": dict(request.response_schema),
+                },
+            }
+        elif request.json_output:
+            payload["response_format"] = {"type": "json_object"}
         return payload
 
     @staticmethod
@@ -229,9 +240,7 @@ def encode_request(
 ) -> dict[str, object]:
     """Functional alias used by small adapters and tests."""
 
-    return ChatCompletionsCodec.encode(
-        request, model=model, max_output_tokens=max_output_tokens
-    )
+    return ChatCompletionsCodec.encode(request, model=model, max_output_tokens=max_output_tokens)
 
 
 def decode_response(payload: Mapping[str, Any]) -> ModelResponse:

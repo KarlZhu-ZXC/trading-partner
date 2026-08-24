@@ -7,7 +7,11 @@ from datetime import date, datetime
 
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
-from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
+from domain.operations.enums import (
+    OperationalJobStatus,
+    PostMarketSyncRunStatus,
+    PostMarketSyncStepStatus,
+)
 
 
 def _unique_codes(values: tuple[str, ...], *, field: str) -> None:
@@ -17,6 +21,62 @@ def _unique_codes(values: tuple[str, ...], *, field: str) -> None:
         raise DataContractError(f"{field} must be unique")
     if any(not value or not value.strip() or len(value) > 128 for value in values):
         raise DataContractError(f"{field} contains an invalid value")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalJobRun:
+    job_run_id: str
+    job_name: str
+    idempotency_key: str
+    status: OperationalJobStatus
+    attempt: int
+    lease_owner_hash: str
+    lease_expires_at: datetime
+    heartbeat_at: datetime
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    result_code: str | None = None
+    error_code: str | None = None
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        for field_name, value, maximum in (
+            ("job_run_id", self.job_run_id, 160),
+            ("job_name", self.job_name, 96),
+            ("idempotency_key", self.idempotency_key, 160),
+            ("lease_owner_hash", self.lease_owner_hash, 64),
+        ):
+            if not value.strip() or len(value) > maximum:
+                raise DataContractError(f"{field_name} must be bounded nonblank text")
+        if self.attempt < 1 or self.version < 1:
+            raise DataContractError("Operational Job attempt/version must be positive")
+        for time_name, time_value in (
+            ("lease_expires_at", self.lease_expires_at),
+            ("heartbeat_at", self.heartbeat_at),
+            ("started_at", self.started_at),
+            ("updated_at", self.updated_at),
+        ):
+            require_aware_datetime(time_value, field_name=time_name)
+        if self.completed_at is not None:
+            require_aware_datetime(self.completed_at, field_name="completed_at")
+        terminal = self.status is not OperationalJobStatus.RUNNING
+        if terminal != (self.completed_at is not None):
+            raise DataContractError("Operational Job terminal state/time mismatch")
+        if self.status is OperationalJobStatus.SUCCEEDED and self.error_code is not None:
+            raise DataContractError("Successful Operational Job cannot carry an error")
+        if (
+            self.status
+            in {OperationalJobStatus.FAILED, OperationalJobStatus.INTERRUPTED}
+            and not self.error_code
+        ):
+            raise DataContractError("Failed/interrupted Operational Job requires error_code")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalJobClaim:
+    run: OperationalJobRun
+    claimed: bool
 
 
 @dataclass(frozen=True, slots=True)

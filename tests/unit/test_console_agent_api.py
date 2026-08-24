@@ -43,6 +43,7 @@ from domain.agent.models import (
     arguments_digest,
 )
 from domain.agent.models import AgentToolReceipt as DurableReceipt
+from domain.common.errors import ProviderRateLimitError
 from infrastructure.system.clock import SystemClock
 from infrastructure.system.id_generator import Uuid7IdGenerator
 from interfaces.console import api
@@ -175,6 +176,9 @@ class _Repository:
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: Any = None,
         now: Any = None,
     ) -> AgentTurn:
@@ -185,6 +189,9 @@ class _Repository:
             status=status,
             assistant_message_id=assistant_message_id,
             error_code=error_code,
+            error_http_status=error_http_status,
+            error_retryable=error_retryable,
+            error_attempts=error_attempts,
             completed_at=completed_at,
             updated_at=now or current.updated_at,
             version=current.version + 1,
@@ -238,6 +245,7 @@ class _CatalogModel(_Model):
             models=(
                 ModelCatalogItem(id="configured-model"),
                 ModelCatalogItem(id="catalog/model", reasoning_efforts=("high", "max")),
+                ModelCatalogItem(id="plain-model", reasoning_supported=False),
             ),
             fetched_at=datetime(2026, 8, 13, tzinfo=UTC),
             cached=True,
@@ -248,6 +256,15 @@ class _FailureModel(_Model):
     async def complete(self, request: Any) -> ModelResponse:
         _ = request
         raise RuntimeError("api_key=secret https://secret.example/v1")
+
+
+class _RateLimitFailureModel(_Model):
+    async def complete(self, request: Any) -> ModelResponse:
+        _ = request
+        raise ProviderRateLimitError(
+            "upstream response body must-not-export",
+            details={"status_code": 429, "attempts": 2},
+        )
 
 
 class _Gateway:
@@ -520,8 +537,10 @@ async def test_console_lists_provider_models_and_forwards_exact_selection() -> N
     assert [item["id"] for item in catalog.json()["models"]] == [
         "configured-model",
         "catalog/model",
+        "plain-model",
     ]
     assert catalog.json()["models"][1]["reasoning_efforts"] == ["high", "max"]
+    assert catalog.json()["models"][2]["reasoning_efforts"] == []
     assert "must-not-leak" not in encoded
     assert "secret.example" not in encoded
     assert response.status_code == 200
@@ -549,6 +568,25 @@ async def test_console_turn_history_is_readable_after_refresh() -> None:
             updated_at=now,
         )
     )
+    failed_at = now + timedelta(seconds=1)
+    repository.create_turn(
+        AgentTurn(
+            turn_id="agent_turn_console_failed",
+            conversation_id=conversation_id,
+            user_message_id="agent_message_missing_failed_user",
+            channel=AgentChannel.CONSOLE,
+            status=AgentTurnStatus.FAILED,
+            model_id="opencode_zen",
+            model="hy3-free",
+            error_code="PROVIDER_UNAVAILABLE_ERROR",
+            error_http_status=503,
+            error_retryable=True,
+            error_attempts=1,
+            started_at=failed_at,
+            updated_at=failed_at,
+            completed_at=failed_at,
+        )
+    )
     headers = {"X-Trading-Partner-Console-Token": "test-token"}
     transport = httpx.ASGITransport(app=api.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
@@ -557,7 +595,11 @@ async def test_console_turn_history_is_readable_after_refresh() -> None:
             headers=headers,
         )
     assert response.status_code == 200
-    assert response.json()["latest_turn"]["turn_id"] == "agent_turn_console"
+    latest = response.json()["latest_turn"]
+    assert latest["turn_id"] == "agent_turn_console_failed"
+    assert latest["failure_notice"]["http_status"] == 503
+    assert latest["failure_notice"]["provider_id"] == "opencode_zen"
+    assert latest["failure_notice"]["model"] == "hy3-free"
 
 
 @pytest.mark.asyncio
@@ -804,9 +846,10 @@ def test_agent_status_metadata_is_secret_safe() -> None:
             "api_style": "responses",
             "reasoning_mode": "effort",
             "reasoning_effort": None,
-            "reasoning_efforts": ["low", "medium", "high", "max"],
-            "native_web_search": "disabled",
-            "is_default": True,
+                "reasoning_efforts": ["low", "medium", "high", "max"],
+                "native_web_search": "disabled",
+                "web_search_available": False,
+                "is_default": True,
         }
     ]
     assert "secret.example" not in encoded
@@ -939,6 +982,26 @@ async def test_sse_tool_events_and_failures_are_bounded() -> None:
     assert failed_turn.status is AgentTurnStatus.FAILED
     failed_payload = next(item for item in failed.text.split("\n\n") if "event: failed" in item)
     assert json.loads(failed_payload.split("data: ", 1)[1])["turn_id"] == failed_turn.turn_id
+
+    rate_model = _RateLimitFailureModel([])
+    rate_repository, conversation_id = _client_state(enabled=True, model=rate_model)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        limited = await client.post(
+            f"/api/agent/conversations/{conversation_id}/messages/stream",
+            headers=headers,
+            json={"content": "限流问题"},
+        )
+    limited_payload = next(
+        item for item in limited.text.split("\n\n") if "event: failed" in item
+    )
+    limited_wire = json.loads(limited_payload.split("data: ", 1)[1])
+    assert limited_wire["notification"]["code"] == "PROVIDER_RATE_LIMIT_ERROR"
+    assert limited_wire["notification"]["http_status"] == 429
+    assert limited_wire["notification"]["retryable"] is True
+    assert limited_wire["notification"]["attempts"] == 2
+    assert "must-not-export" not in limited.text
+    persisted = next(iter(rate_repository.turns.values()))
+    assert persisted.error_http_status == 429
 
 
 @pytest.mark.asyncio

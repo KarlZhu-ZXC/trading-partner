@@ -908,6 +908,31 @@ def test_search_page_extra_and_frozen() -> None:
         page.total = 1  # type: ignore[misc]
 
 
+def test_search_page_lower_bound_requires_more_even_when_candidates_are_exhausted() -> None:
+    page = ResearchSearchPageDTO(
+        items=(_evidence_hit(),),
+        total=1,
+        limit=20,
+        offset=0,
+        has_more=True,
+        search_mode="hybrid",
+        semantic_model="local-test-model",
+        total_is_lower_bound=True,
+    )
+    assert page.has_more is True
+    with pytest.raises(ValidationError, match="has_more"):
+        ResearchSearchPageDTO(
+            items=page.items,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_more=False,
+            search_mode=page.search_mode,
+            semantic_model=page.semantic_model,
+            total_is_lower_bound=True,
+        )
+
+
 # --- JournalSearchPageDTO ---
 
 

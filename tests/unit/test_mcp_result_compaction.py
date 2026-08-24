@@ -118,6 +118,24 @@ def test_compact_mcp_result_leaves_image_blocks_untouched() -> None:
     assert len(text.encode()) <= MCP_TEXT_CONTENT_MAX_BYTES
 
 
+def test_compact_mcp_result_enforces_one_aggregate_text_budget() -> None:
+    first = json.dumps(_huge_envelope())
+    second = json.dumps({**_huge_envelope(), "request_id": "req_second"})
+    result = compact_mcp_result(
+        [
+            {"type": "text", "text": first},
+            {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
+            {"type": "text", "text": second},
+        ],
+        capability="monitor_read",
+        arguments={"request": {"operation": "dashboard"}},
+    )
+    text_blocks = [item["text"] for item in result if item.get("type") == "text"]
+    assert sum(len(item.encode()) for item in text_blocks) <= MCP_TEXT_CONTENT_MAX_BYTES
+    assert all(json.loads(item)["_truncated"] is True for item in text_blocks)
+    assert result[1]["type"] == "image"
+
+
 @pytest.mark.asyncio
 async def test_closed_variant_invalid_does_not_call_application() -> None:
     container = _container()

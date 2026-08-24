@@ -45,6 +45,7 @@ from domain.cross_asset.cme_identity import (
     yahoo_symbol_for_cme_instrument,
 )
 from domain.instruments.models import Instrument
+from domain.instruments.normalize import yahoo_symbol_for_us_index
 from domain.market.freshness import classify_freshness
 from domain.market.models import MarketBar
 from domain.market.session import infer_session_basic
@@ -351,6 +352,8 @@ class YahooFinanceAdapter:
                     "instrument symbol must be non-blank",
                     details={"field": "symbol", "rule": "non_blank"},
                 )
+            if instrument.asset_type is AssetType.INDEX:
+                return yahoo_symbol_for_us_index(symbol)
             return symbol
         if instrument.market is Market.KR:
             symbol = instrument.symbol.strip().upper()

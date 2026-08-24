@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -191,6 +193,13 @@ def test_order_contract_supports_stop_limit_and_trailing_but_not_extended_stops(
         )
 
 
+def test_order_research_context_requires_subject_and_exact_plan_pair() -> None:
+    with pytest.raises(ValidationError, match="requires case_id"):
+        _preview_request(decision_id="decision_1")
+    with pytest.raises(ValidationError, match="must be provided together"):
+        _preview_request(case_id="case_1", trade_plan_id="trade_plan_1")
+
+
 @pytest.mark.asyncio
 async def test_aapl_limit_preview_submits_exactly_once(tmp_path) -> None:
     provider = _Provider()
@@ -230,6 +239,46 @@ async def test_aapl_limit_preview_submits_exactly_once(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_order_preview_rejects_cross_subject_research_context_before_provider_use(
+    tmp_path,
+) -> None:
+    class ResearchUow:
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        subjects = SimpleNamespace(get=lambda _case_id: object())
+        decisions = SimpleNamespace(
+            get=lambda _decision_id: SimpleNamespace(
+                subject_id="case_other", primary_instrument_id="equity:US:AAPL"
+            )
+        )
+        trade_plans = SimpleNamespace(get_version=lambda *_args: None)
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'linked-orders.db'}")
+    Base.metadata.create_all(engine)
+    service = BrokerOrderService(
+        SqlAlchemyBrokerOrderRepository(engine),
+        _Provider(),
+        _Quote(),
+        _Audit(),
+        FixedClock(NOW),
+        SequentialIdGenerator(),
+        DefaultSecretRedactor(),
+        ResearchUow,
+    )
+
+    result = await service.preview(
+        _preview_request(case_id="case_expected", decision_id="decision_1")
+    )
+
+    assert result.ok is False
+    assert result.errors[0].code == "INVALID_RESEARCH_LINK"
+
+
+@pytest.mark.asyncio
 async def test_uncertain_submit_is_persisted_and_never_retried(tmp_path) -> None:
     provider = _Provider(uncertain=True)
     service = _service(tmp_path, provider)
@@ -252,6 +301,9 @@ async def test_uncertain_submit_is_persisted_and_never_retried(tmp_path) -> None
     assert provider.place_calls == 1
     assert replay.errors[0].code == "BROKER_ORDER_STATE_CONFLICT"
     assert [item.order_intent_id for item in service.list_unresolved()] == [
+        preview.data.order_intent_id
+    ]
+    assert [item.order_intent_id for item in service.list_recent()] == [
         preview.data.order_intent_id
     ]
 

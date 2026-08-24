@@ -59,6 +59,41 @@ async def test_yahoo_discovers_us_equity() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_symbol", "expected_symbol", "expected_id"),
+    (
+        ("^GSPC", "SPX", "index:US:SPX"),
+        ("^NDX", "NDX", "index:US:NDX"),
+        ("^IXIC", "IXIC", "index:US:IXIC"),
+    ),
+)
+async def test_yahoo_discovers_us_index_with_provider_caret_as_bare_identity(
+    provider_symbol: str,
+    expected_symbol: str,
+    expected_id: str,
+) -> None:
+    transport = _Transport(
+        (
+            f'{{"quotes":[{{"symbol":"{provider_symbol}",'
+            f'"longname":"{expected_symbol} Index","quoteType":"INDEX",'
+            '"exchange":"NIM","exchangeTimezoneName":"America/New_York"}]}'
+        ).encode()
+    )
+    adapter = YahooInstrumentDirectoryAdapter(transport, clock=FixedClock(NOW))
+
+    result = await adapter.lookup(
+        market=Market.US,
+        query=expected_symbol,
+        asset_type_hint=AssetType.INDEX,
+        as_of=NOW,
+    )
+
+    instrument = result.value[0]
+    assert instrument.instrument_id == expected_id
+    assert instrument.symbol == expected_symbol
+
+
+@pytest.mark.asyncio
 async def test_yahoo_discovers_korean_equity_with_canonical_bare_code() -> None:
     transport = _Transport(
         b'{"quotes":[{"symbol":"005930.KS","longname":"Samsung Electronics Co., Ltd.",'

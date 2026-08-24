@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, RefreshButton, displayJson } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, PageActionMenu, displayJson } from "../components/ui";
 import { postApi, useApi } from "../lib/api";
 
 type Capability = {
@@ -194,7 +195,9 @@ export default function CapabilitiesPage() {
   }
 
   return (
-    <ConsoleShell active="capabilities">
+    <ConsoleShell active="capabilities" pageActions={<PageActionMenu ariaLabel="Capabilities Page Actions" items={[
+      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload the public MCP capability inventory", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
+    ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
         <MarketLens />
         {selected && (
@@ -221,10 +224,9 @@ export default function CapabilitiesPage() {
             </div>
           </Card>
         )}
-        <div className="toolbar capability-toolbar">
+        <div className="workspace-controls capability-toolbar">
           <div className="search-box"><span>⌕</span><input aria-label="Search Capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools, operations, or descriptions…" /></div>
           <div className="toolbar-count"><strong>{filtered.length}</strong> / {result.data?.count ?? 0} tools</div>
-          <RefreshButton onClick={result.refresh} loading={result.loading} />
         </div>
         <div className="capability-groups">
           {[...groups.entries()].map(([group, capabilities]) => (

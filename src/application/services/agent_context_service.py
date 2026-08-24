@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+
+from application.ports.agent_attachment_store import AgentAttachmentStore
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from application.ports.agent_model_provider import ModelMessage, ModelRequest
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
+from domain.agent.attachments import AGENT_IMAGE_MAX_TOTAL_BYTES
 from domain.agent.enums import AgentConversationStatus, AgentMessageRole
-from domain.agent.models import AgentConversation
+from domain.agent.models import AgentConversation, AgentMessage
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 
@@ -23,6 +27,7 @@ class AgentContextService:
         id_generator: IdGenerator,
         recent_message_limit: int = 12,
         summary_threshold: int = 24,
+        attachment_store: AgentAttachmentStore | None = None,
     ) -> None:
         if recent_message_limit < 1 or summary_threshold < recent_message_limit:
             raise ValueError("invalid Agent context bounds")
@@ -31,6 +36,39 @@ class AgentContextService:
         self._id_generator = id_generator
         self._recent_message_limit = recent_message_limit
         self._summary_threshold = summary_threshold
+        self._attachment_store = attachment_store
+
+    def _message_content(
+        self,
+        item: AgentMessage,
+        included_attachment_ids: frozenset[str],
+    ) -> str | tuple[dict[str, object], ...]:
+        if not item.attachments:
+            return item.content
+        parts: list[dict[str, object]] = []
+        if item.content:
+            parts.append({"type": "text", "text": item.content})
+        for attachment in item.attachments:
+            if attachment.attachment_id not in included_attachment_ids:
+                parts.append(
+                    {
+                        "type": "text",
+                        "text": "[image attachment omitted from this context window]",
+                    }
+                )
+                continue
+            if self._attachment_store is None:
+                raise DataContractError("Agent image attachment storage is unavailable")
+            encoded = base64.b64encode(self._attachment_store.read(attachment)).decode("ascii")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{attachment.media_type};base64,{encoded}",
+                    },
+                }
+            )
+        return tuple(parts)
 
     def create_conversation(
         self,
@@ -88,9 +126,22 @@ class AgentContextService:
                     ),
                 )
             )
+        included_attachment_ids: set[str] = set()
+        remaining_image_bytes = AGENT_IMAGE_MAX_TOTAL_BYTES
+        for item in reversed(recent):
+            for attachment in reversed(item.attachments):
+                if attachment.byte_size <= remaining_image_bytes:
+                    included_attachment_ids.add(attachment.attachment_id)
+                    remaining_image_bytes -= attachment.byte_size
+        included = frozenset(included_attachment_ids)
         for item in recent:
             if item.role is AgentMessageRole.USER:
-                messages.append(ModelMessage(role="user", content=item.content))
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=self._message_content(item, included),
+                    )
+                )
             else:
                 messages.append(ModelMessage(role="assistant", content=item.content))
         return messages
@@ -104,7 +155,11 @@ class AgentContextService:
         if len(messages) <= self._summary_threshold:
             return None
         through_sequence = messages[-1].sequence
-        transcript = "\n".join(f"{item.role.value}: {item.content}" for item in messages)
+        transcript = "\n".join(
+            f"{item.role.value}: {item.content}"
+            + (f" [image attachments: {len(item.attachments)}]" if item.attachments else "")
+            for item in messages
+        )
         prompt = (
             "请把以下对话压缩成简体中文摘要，只保留用户目标、明确偏好、未解决问题和"
             "引用 ID。不得把价格、持仓、成交、研究状态或模型推断写成当前事实。"

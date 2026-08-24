@@ -21,6 +21,9 @@ dependencies = [
     "alembic>=1.13",
     "uuid6>=2024.7.10",
     "httpx>=0.28.1",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
     "yfinance>=1.4.1,<2",
     "exchange-calendars>=4.5,<5",
     "ta-lib>=0.6.8,<0.7",
@@ -34,6 +37,7 @@ accounts-moomoo = ["moomoo-api>=10.9,<11"]
 accounts-schwab = ["schwab-py>=1.5,<2"]
 chart = ["matplotlib>=3.10,<4"]
 company-pdf = ["pypdf>=5.0,<7"]
+semantic-search = ["fastembed>=0.7,<1"]
 console = [
     "fastapi>=0.115,<1",
     "uvicorn>=0.32,<1",

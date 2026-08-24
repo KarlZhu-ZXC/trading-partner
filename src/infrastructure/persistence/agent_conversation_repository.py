@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from application.ports.agent_conversation_repository import AgentConversationRepository
+from domain.agent.attachments import AgentImageAttachment
 from domain.agent.enums import (
     AgentChannel,
     AgentConversationStatus,
@@ -84,6 +86,18 @@ def _binding(row: AgentChannelBindingRow) -> AgentChannelBinding:
 
 
 def _message(row: AgentMessageRow) -> AgentMessage:
+    attachments: tuple[AgentImageAttachment, ...] = ()
+    if row.attachments_json:
+        try:
+            raw_attachments = json.loads(row.attachments_json)
+        except (TypeError, ValueError) as error:
+            raise PersistenceError("Agent message image metadata is invalid") from error
+        if not isinstance(raw_attachments, list):
+            raise PersistenceError("Agent message image metadata is not a list")
+        try:
+            attachments = tuple(AgentImageAttachment.from_dict(item) for item in raw_attachments)
+        except DataContractError as error:
+            raise PersistenceError("Agent message image metadata is invalid") from error
     return AgentMessage(
         message_id=row.message_id,
         conversation_id=row.conversation_id,
@@ -95,6 +109,7 @@ def _message(row: AgentMessageRow) -> AgentMessage:
         model=row.model,
         request_id=row.request_id,
         model_receipt_json=row.model_receipt_json,
+        attachments=attachments,
         created_at=datetime.fromisoformat(row.created_at),
     )
 
@@ -109,7 +124,13 @@ def _turn(row: AgentTurnRow) -> AgentTurn:
         status=AgentTurnStatus(row.status),
         error_code=row.error_code,
         model_id=row.model_id,
+        model=row.model,
         reasoning_effort=row.reasoning_effort,
+        error_http_status=row.error_http_status,
+        error_retryable=(
+            bool(row.error_retryable) if row.error_retryable is not None else None
+        ),
+        error_attempts=row.error_attempts,
         started_at=datetime.fromisoformat(row.started_at),
         updated_at=datetime.fromisoformat(row.updated_at),
         completed_at=(
@@ -147,6 +168,19 @@ def _cursor(row: AgentChannelCursorRow) -> AgentChannelCursor:
 
 
 def _same_message(left: AgentMessage, right: AgentMessage) -> bool:
+    def attachment_signature(value: AgentMessage) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                item.media_type,
+                item.byte_size,
+                item.sha256,
+                item.width,
+                item.height,
+                item.original_name,
+            )
+            for item in value.attachments
+        )
+
     return (
         left.conversation_id == right.conversation_id
         and left.role is right.role
@@ -156,6 +190,7 @@ def _same_message(left: AgentMessage, right: AgentMessage) -> bool:
         and left.model == right.model
         and left.request_id == right.request_id
         and left.model_receipt_json == right.model_receipt_json
+        and attachment_signature(left) == attachment_signature(right)
     )
 
 
@@ -431,6 +466,11 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
                     sequence=sequence,
                     role=value.role.value,
                     content=value.content,
+                    attachments_json=json.dumps(
+                        [item.as_dict() for item in value.attachments],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                     channel=value.channel.value if value.channel else None,
                     external_message_ref=value.external_message_ref,
                     model=value.model,
@@ -554,7 +594,13 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
             status=value.status.value,
             error_code=value.error_code,
             model_id=value.model_id,
+            model=value.model,
             reasoning_effort=value.reasoning_effort,
+            error_http_status=value.error_http_status,
+            error_retryable=(
+                int(value.error_retryable) if value.error_retryable is not None else None
+            ),
+            error_attempts=value.error_attempts,
             started_at=value.started_at.isoformat(),
             updated_at=value.updated_at.isoformat(),
             completed_at=value.completed_at.isoformat() if value.completed_at else None,
@@ -614,6 +660,9 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: datetime | None = None,
         now: datetime | None = None,
     ) -> AgentTurn:
@@ -629,6 +678,20 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
             not isinstance(error_code, str) or _SAFE_ERROR_CODE.fullmatch(error_code) is None
         ):
             raise DataContractError("error_code must be text or null")
+        if error_http_status is not None and (
+            isinstance(error_http_status, bool)
+            or not isinstance(error_http_status, int)
+            or not 100 <= error_http_status <= 599
+        ):
+            raise DataContractError("error_http_status must be an HTTP status or null")
+        if error_retryable is not None and type(error_retryable) is not bool:
+            raise DataContractError("error_retryable must be a boolean or null")
+        if error_attempts is not None and (
+            isinstance(error_attempts, bool)
+            or not isinstance(error_attempts, int)
+            or not 1 <= error_attempts <= 100
+        ):
+            raise DataContractError("error_attempts must be bounded or null")
         timestamp = _now(now)
         terminal = status in {
             AgentTurnStatus.COMPLETED,
@@ -651,6 +714,11 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
                     status=status.value,
                     assistant_message_id=assistant_message_id,
                     error_code=error_code,
+                    error_http_status=error_http_status,
+                    error_retryable=(
+                        int(error_retryable) if error_retryable is not None else None
+                    ),
+                    error_attempts=error_attempts,
                     completed_at=completed_value,
                     updated_at=timestamp.isoformat(),
                     version=AgentTurnRow.version + 1,
