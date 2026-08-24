@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
+from infrastructure.persistence.database import create_engine_from_url
 from infrastructure.persistence.operational_maintenance import SqliteOperationalMaintenance
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +33,7 @@ def test_status_backup_and_expired_cache_prune(
     database = tmp_path / "source.db"
     url = f"sqlite:///{database}"
     _migrate(url, monkeypatch)
-    engine = create_engine(url)
+    engine = create_engine_from_url(url)
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -70,6 +71,13 @@ def test_status_backup_and_expired_cache_prune(
     assert status.provider_cache_total == 2
     assert status.provider_cache_expired == 1
     assert status.validation_artifact_files == 1
+    assert status.sqlite_journal_mode == "wal"
+    assert status.sqlite_synchronous == "NORMAL"
+    assert status.sqlite_busy_timeout_ms == 30_000
+    assert status.sqlite_wal_autocheckpoint_pages == 1_000
+    assert status.sqlite_wal_busy == 0
+    assert status.sqlite_wal_log_frames is not None
+    assert status.sqlite_wal_checkpointed_frames is not None
     assert any(item.table == "provider_cache" and item.rows == 2 for item in status.table_counts)
 
     preview = service.prune_expired_cache(retention_days=30, dry_run=True)

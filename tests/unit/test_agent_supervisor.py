@@ -24,6 +24,45 @@ def test_console_launchd_plists_are_loopback_and_keepalive(tmp_path: Path) -> No
     assert "8765" in api["ProgramArguments"]
 
 
+def test_console_lan_launchd_uses_owner_only_password_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRADING_PARTNER_CONSOLE_LAN_PASSWORD", "test-lan-password-123456")
+    password_file = agent._ensure_console_lan_password(tmp_path)
+    web = agent._console_web_payload(
+        tmp_path,
+        Path("/opt/homebrew/bin/node"),
+        lan_password_file=password_file,
+        lan_port=3000,
+    )
+
+    assert password_file.read_text(encoding="utf-8").strip() == "test-lan-password-123456"
+    assert password_file.stat().st_mode & 0o777 == 0o600
+    assert web["ProgramArguments"][1].endswith("console/scripts/start-lan.mjs")
+    assert web["ProgramArguments"][-1] == "start"
+    assert web["EnvironmentVariables"] == {
+        "TRADING_PARTNER_CONSOLE_LAN_PASSWORD_FILE": str(password_file),
+        "TRADING_PARTNER_CONSOLE_LAN_PORT": "3000",
+    }
+    assert "test-lan-password-123456" not in str(web)
+
+
+def test_console_lan_password_file_preserves_existing_password(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / agent.CONSOLE_LAN_PASSWORD_RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text("short-password\n", encoding="utf-8")
+
+    result = agent._ensure_console_lan_password(tmp_path)
+
+    assert result == path
+    assert path.read_text(encoding="utf-8").strip() == "short-password"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_supervisor_status_parses_safe_launchctl_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

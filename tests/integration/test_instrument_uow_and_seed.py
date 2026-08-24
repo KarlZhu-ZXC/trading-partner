@@ -57,7 +57,7 @@ RUNTIME_SEED_ALIAS_COUNT = 8
 PHASE1D_MINIMUM_SEED_INSTRUMENT_COUNT = 8
 PHASE1D_MINIMUM_SEED_ALIAS_COUNT = 6
 PHASE1F_SEED_TS = "2026-07-18T00:00:00+00:00"
-_HEADS = frozenset({"0051_moomoo_margin_semantics"})
+_HEADS = frozenset({"0063_agent_image_attachments"})
 
 
 def _enable_fk(engine: Engine) -> None:
@@ -370,7 +370,7 @@ def test_downgrade_to_0002_and_reupgrade_reseeds(
 
     Uses absolute revision ``0002_phase1b_research_state`` (not relative ``-1``)
     so intermediate steps stay stable; current migration head is
-    0051_moomoo_margin_semantics.
+    0063_agent_image_attachments.
     """
     db_path = tmp_path / "reseed.db"
     database_url = f"sqlite:///{db_path}"

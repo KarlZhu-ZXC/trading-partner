@@ -169,8 +169,12 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert defaults.bailian_model == "qwen3.8-max"
     assert defaults.llm_reasoning_effort == "max"
     assert defaults.bailian_web_search_enabled is True
+    assert defaults.tavily_web_search_enabled is True
+    assert defaults.tavily_search_depth == "basic"
     assert defaults.llm_output_language == "zh-CN"
     assert defaults.deepseek_model == "deepseek-v4-flash"
+    assert defaults.opencode_go_model == "deepseek-v4-flash"
+    assert defaults.opencode_zen_model == "gpt-5.6-luna"
 
     with pytest.raises(ValidationError, match="BAILIAN_API_KEY"):
         _base_settings(monitor_judgment_enabled=True)
@@ -179,6 +183,10 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
         bailian_api_key="test-bailian-secret",
     )
     assert enabled.bailian_base_url.startswith("https://token-plan.")
+    assert enabled.resolved_monitor_judgment_config is not None
+    assert enabled.resolved_monitor_judgment_config.model == "deepseek-v4-flash-0731"
+    assert enabled.resolved_monitor_judgment_config.api_style == "chat_completions"
+    assert enabled.resolved_agent_llm_configs["bailian"].model == "qwen3.8-max"
 
     with pytest.raises(ValidationError, match="DEEPSEEK_API_KEY"):
         _base_settings(monitor_judgment_enabled=True, llm_provider="deepseek")
@@ -189,6 +197,29 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     )
     assert deepseek.deepseek_base_url == "https://api.deepseek.com"
     assert deepseek.deepseek_model == "deepseek-v4-flash"
+
+    with pytest.raises(ValidationError, match="OPENCODE_GO_API_KEY"):
+        _base_settings(monitor_judgment_enabled=True, llm_provider="opencode_go")
+    opencode_go = _base_settings(
+        monitor_judgment_enabled=True,
+        llm_provider="opencode_go",
+        opencode_go_api_key="test-opencode-go-secret",
+    )
+    assert opencode_go.resolved_llm_provider_id == "opencode_go"
+    assert opencode_go.resolved_llm_config is not None
+    assert opencode_go.resolved_llm_config.base_url == "https://opencode.ai/zen/go/v1"
+    assert "test-opencode-go-secret" not in repr(opencode_go)
+
+    opencode_zen = _base_settings(
+        monitor_judgment_enabled=True,
+        llm_provider="opencode_zen",
+        opencode_go_api_key="shared-opencode-secret",
+    )
+    assert opencode_zen.resolved_llm_provider_id == "opencode_zen"
+    assert opencode_zen.resolved_llm_config is not None
+    assert opencode_zen.resolved_llm_config.base_url == "https://opencode.ai/zen/v1"
+    assert opencode_zen.resolved_llm_config.api_key == "shared-opencode-secret"
+    assert "shared-opencode-secret" not in repr(opencode_zen)
 
 
 def test_monitor_judgment_fallback_is_explicit_and_reuses_bailian_endpoint() -> None:
@@ -204,7 +235,7 @@ def test_monitor_judgment_fallback_is_explicit_and_reuses_bailian_endpoint() -> 
         monitor_judgment_enabled=True,
         bailian_api_key="test-bailian-secret",
         monitor_judgment_fallback_provider="bailian",
-        monitor_judgment_fallback_model="deepseek-v4-flash-0731",
+        monitor_judgment_fallback_model="qwen3.8-max",
         monitor_judgment_reasoning_effort="high",
         monitor_judgment_fallback_reasoning_effort="max",
     )
@@ -212,7 +243,7 @@ def test_monitor_judgment_fallback_is_explicit_and_reuses_bailian_endpoint() -> 
     assert fallback is not None
     assert fallback.api_style == "responses"
     assert fallback.base_url == settings.bailian_base_url
-    assert fallback.model == "deepseek-v4-flash-0731"
+    assert fallback.model == "qwen3.8-max"
     assert fallback.reasoning_effort == "max"
     assert fallback.native_web_search == "disabled"
 
@@ -225,8 +256,25 @@ def test_monitor_judgment_fallback_requires_a_complete_distinct_pair() -> None:
             monitor_judgment_enabled=True,
             bailian_api_key="test-bailian-secret",
             monitor_judgment_fallback_provider="bailian",
-            monitor_judgment_fallback_model="qwen3.8-max",
+            monitor_judgment_fallback_model="deepseek-v4-flash-0731",
         )
+
+
+def test_monitor_judgment_accepts_opencode_go_fallback() -> None:
+    settings = _base_settings(
+        monitor_judgment_enabled=True,
+        bailian_api_key="test-bailian-secret",
+        opencode_go_api_key="test-opencode-go-secret",
+        monitor_judgment_fallback_provider="opencode_go",
+        monitor_judgment_fallback_model="qwen3.8-max",
+    )
+
+    fallback = settings.resolved_monitor_judgment_fallback_config
+
+    assert fallback is not None
+    assert fallback.base_url == "https://opencode.ai/zen/go/v1"
+    assert fallback.model == "qwen3.8-max"
+    assert fallback.native_web_search == "disabled"
 
 
 def test_agent_generic_llm_config_wins_without_legacy_field_mixing() -> None:
@@ -278,16 +326,21 @@ def test_agent_model_catalog_exposes_each_configured_legacy_endpoint() -> None:
         llm_provider="bailian",
         bailian_api_key="bailian-secret",
         deepseek_api_key="deepseek-secret",
+        opencode_api_key="shared-opencode-secret",
     )
 
     configs = settings.resolved_agent_llm_configs
 
-    assert tuple(configs) == ("bailian", "deepseek")
+    assert tuple(configs) == ("bailian", "deepseek", "opencode_go", "opencode_zen")
     assert configs["bailian"].model == "qwen3.8-max"
-    assert configs["bailian"].native_web_search == "responses_web_search"
-    assert configs["bailian"].native_web_extractor == "responses_web_extractor"
+    assert configs["bailian"].native_web_search == "disabled"
+    assert configs["bailian"].native_web_extractor == "disabled"
     assert configs["deepseek"].model == "deepseek-v4-flash"
     assert configs["deepseek"].native_web_search == "disabled"
+    assert configs["opencode_go"].model == "deepseek-v4-flash"
+    assert configs["opencode_go"].native_web_search == "disabled"
+    assert configs["opencode_zen"].model == "gpt-5.6-luna"
+    assert configs["opencode_zen"].api_key == configs["opencode_go"].api_key
     assert settings.default_agent_llm_id == "bailian"
 
 
@@ -331,13 +384,21 @@ def test_env_example_contains_required_keys() -> None:
         "BAILIAN_API_KEY=",
         "BAILIAN_MODEL=qwen3.8-max",
         "BAILIAN_WEB_SEARCH_ENABLED=true",
+        "TAVILY_WEB_SEARCH_ENABLED=true",
+        "TAVILY_API_KEY=",
+        "TAVILY_SEARCH_DEPTH=basic",
+        "TAVILY_TIMEOUT_SECONDS=30",
         "DEEPSEEK_API_KEY=",
         "DEEPSEEK_BASE_URL=https://api.deepseek.com",
         "DEEPSEEK_MODEL=deepseek-v4-flash",
+        "OPENCODE_GO_API_KEY=",
+        "OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1",
+        "OPENCODE_GO_MODEL=deepseek-v4-flash",
         "LLM_REASONING_EFFORT=max",
         "LLM_OUTPUT_LANGUAGE=zh-CN",
-        "MONITOR_JUDGMENT_FALLBACK_PROVIDER=",
-        "MONITOR_JUDGMENT_FALLBACK_MODEL=",
+        "MONITOR_JUDGMENT_MODEL=deepseek-v4-flash-0731",
+        "MONITOR_JUDGMENT_FALLBACK_PROVIDER=bailian",
+        "MONITOR_JUDGMENT_FALLBACK_MODEL=qwen3.8-max",
         "MONITOR_JUDGMENT_REASONING_EFFORT=",
         "MONITOR_JUDGMENT_FALLBACK_REASONING_EFFORT=",
     ):
@@ -376,6 +437,7 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
         telegram_chat_id="123456789",
         bailian_api_key="REAL_BAILIAN_SECRET",
         deepseek_api_key="REAL_DEEPSEEK_SECRET",
+        tavily_api_key="REAL_TAVILY_SECRET",
     )
     redacted = settings.redacted_dict()
     assert redacted["alpha_vantage_api_keys"] == "***REDACTED***"
@@ -389,10 +451,12 @@ def test_redacted_dict_hides_secrets_and_non_secret_fields() -> None:
     assert redacted["telegram_chat_id"] == "***REDACTED***"
     assert redacted["bailian_api_key"] == "***REDACTED***"
     assert redacted["deepseek_api_key"] == "***REDACTED***"
+    assert redacted["tavily_api_key"] == "***REDACTED***"
     assert "general-secret" not in repr(settings)
     assert "REAL_TELEGRAM_TOKEN" not in repr(settings)
     assert "REAL_BAILIAN_SECRET" not in repr(settings)
     assert "REAL_DEEPSEEK_SECRET" not in repr(settings)
+    assert "REAL_TAVILY_SECRET" not in repr(settings)
     assert redacted["provider_timeout_default_seconds"] == 30.0
     assert redacted["provider_timeout_market_seconds"] == 15.0
     assert redacted["provider_retry_max_attempts"] == 2

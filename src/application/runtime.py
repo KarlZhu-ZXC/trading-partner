@@ -7,13 +7,19 @@ from dataclasses import dataclass
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
+from application.ports.telemetry import NOOP_TELEMETRY, Telemetry
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.activity_annotation_service import ActivityAnnotationService
 from application.services.attention_query_service import AttentionQueryService
+from application.services.behavior_review_service import BehaviorReviewService
 from application.services.broker_order_service import BrokerOrderService
 from application.services.cash_sweep_shadow_service import CashSweepShadowService
 from application.services.catalyst_agenda_service import CatalystAgendaService
 from application.services.challenge_review_service import ChallengeReviewService
+from application.services.daily_equity_materialization_service import (
+    DailyEquityMaterializationService,
+)
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
 from application.services.health_service import HealthService
@@ -35,6 +41,7 @@ from application.services.review_item_service import ReviewItemService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
+from application.services.trade_cycle_override_service import TradeCycleOverrideService
 from application.services.trade_retro_service import TradeRetroService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
@@ -69,6 +76,10 @@ class ApplicationServices:
     research_context: ResearchContextBuilder
     challenge: ChallengeReviewService
     account_transactions: AccountTransactionCoordinator
+    activity_annotations: ActivityAnnotationService
+    trade_cycle_overrides: TradeCycleOverrideService
+    behavior_reviews: BehaviorReviewService
+    daily_equity: DailyEquityMaterializationService
     workflows: ResearchWorkflowOrchestrator
     historical_validation: HistoricalValidationService
     watchlist: WatchlistHubService
@@ -88,3 +99,4 @@ class RuntimeContext:
     clock: Clock
     id_generator: IdGenerator
     secret_redactor: SecretRedactor
+    telemetry: Telemetry = NOOP_TELEMETRY

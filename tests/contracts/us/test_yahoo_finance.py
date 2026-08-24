@@ -64,6 +64,29 @@ def _future_instrument() -> Instrument:
     )
 
 
+@pytest.mark.parametrize(
+    ("symbol", "yahoo_symbol"),
+    (("SPX", "^GSPC"), ("NDX", "^NDX"), ("IXIC", "^IXIC")),
+)
+def test_yahoo_maps_canonical_us_indexes_to_chart_symbols(
+    symbol: str,
+    yahoo_symbol: str,
+) -> None:
+    adapter = YahooFinanceAdapter(RecordingTransport(body=b"{}"), clock=CLOCK)
+    instrument = Instrument(
+        instrument_id=f"index:US:{symbol}",
+        symbol=symbol,
+        name=symbol,
+        market=Market.US,
+        exchange="INDEX",
+        currency="USD",
+        timezone="America/New_York",
+        asset_type=AssetType.INDEX,
+    )
+
+    assert adapter._require_chart_instrument(instrument) == yahoo_symbol
+
+
 def _kr_instrument() -> Instrument:
     return Instrument(
         instrument_id="equity:KR:005930",

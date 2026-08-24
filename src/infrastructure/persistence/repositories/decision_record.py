@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
-from domain.common.enums import ConfirmationMode, DecisionType
+from domain.common.enums import ConfirmationMode, DecisionScenario, DecisionType
 from domain.common.errors import InvalidResearchLink, ResearchMemoryNotFound
 from domain.research.models import DecisionRecord
 from infrastructure.persistence.orm import DecisionRecordRow
 from infrastructure.persistence.repositories import append_only as _append_only  # noqa: F401
 from infrastructure.persistence.repositories._mapping import (
     dt_from_db,
+    dt_opt_from_db,
+    dt_opt_to_db,
     dt_to_db,
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
@@ -46,6 +48,12 @@ def _to_domain(row: DecisionRecordRow) -> DecisionRecord:
         supersedes_decision_id=row.supersedes_decision_id,
         position_context_snapshot_id=row.position_context_snapshot_id,
         schema_version=row.schema_version,
+        strategy_code=row.strategy_code,
+        strategy_version=row.strategy_version,
+        scenario=DecisionScenario(row.scenario) if row.scenario is not None else None,
+        trade_plan_id=row.trade_plan_id,
+        trade_plan_version=row.trade_plan_version,
+        review_due_at=dt_opt_from_db(row.review_due_at, field_name="review_due_at"),
     )
 
 
@@ -74,6 +82,12 @@ def _to_row(
         idempotency_key=idempotency_key,
         idempotency_payload_sha256=idempotency_payload_sha256,
         schema_version=decision.schema_version,
+        strategy_code=decision.strategy_code,
+        strategy_version=decision.strategy_version,
+        scenario=decision.scenario.value if decision.scenario is not None else None,
+        trade_plan_id=decision.trade_plan_id,
+        trade_plan_version=decision.trade_plan_version,
+        review_due_at=dt_opt_to_db(decision.review_due_at),
     )
 
 
@@ -176,3 +190,42 @@ class SqlAlchemyDecisionRecordRepository:
             DecisionRecordRow.decision_id.asc(),
         )
         return tuple(_to_domain(row) for row in self._session.scalars(stmt).all())
+
+    def list_review_due(
+        self,
+        *,
+        now: datetime,
+        subject_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[DecisionRecord, ...]:
+        """Return due Decisions not replaced by a later exact superseder.
+
+        ``review_due_at`` is a point-in-time reminder on an append-only
+        DecisionRecord.  A successor only clears the reminder when it names
+        the exact Decision through ``supersedes_decision_id``; unrelated
+        later Decisions must not hide it.  Callers deliberately receive a
+        bounded page so they can keep ReviewItem reconciliation conservative
+        when the bound is reached.
+        """
+
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("limit must be an int in [1, 500]")
+        successor = DecisionRecordRow.__table__.alias("decision_successor")
+        statement = select(DecisionRecordRow).where(
+            DecisionRecordRow.review_due_at.is_not(None),
+            DecisionRecordRow.review_due_at <= dt_to_db(now),
+            ~exists(
+                select(1).where(
+                    successor.c.supersedes_decision_id == DecisionRecordRow.decision_id,
+                    successor.c.recorded_at > DecisionRecordRow.recorded_at,
+                )
+            ),
+        )
+        if subject_id is not None:
+            statement = statement.where(DecisionRecordRow.subject_id == subject_id)
+        statement = statement.order_by(
+            DecisionRecordRow.review_due_at.asc(),
+            DecisionRecordRow.recorded_at.asc(),
+            DecisionRecordRow.decision_id.asc(),
+        ).limit(limit)
+        return tuple(_to_domain(row) for row in self._session.scalars(statement).all())

@@ -8,6 +8,7 @@ import json
 import os
 import plistlib
 import re
+import secrets
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -43,6 +44,7 @@ CONSOLE_API_LABEL = "com.trading-partner.console-api"
 CONSOLE_WEB_LABEL = "com.trading-partner.console-web"
 CONSOLE_API_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{CONSOLE_API_LABEL}.plist"
 CONSOLE_WEB_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{CONSOLE_WEB_LABEL}.plist"
+CONSOLE_LAN_PASSWORD_RELATIVE_PATH = Path("data") / "secrets" / "console-lan-password"
 
 
 def _project_root() -> Path:
@@ -102,19 +104,37 @@ def _console_api_payload(project_root: Path, uv_path: Path) -> dict[str, Any]:
     }
 
 
-def _console_web_payload(project_root: Path, node_path: Path) -> dict[str, Any]:
+def _console_web_payload(
+    project_root: Path,
+    node_path: Path,
+    *,
+    lan_password_file: Path | None = None,
+    lan_port: int = 3000,
+) -> dict[str, Any]:
     log_dir = project_root / "data" / "logs"
     console_root = project_root / "console"
-    next_cli = console_root / "node_modules" / "next" / "dist" / "bin" / "next"
-    return {
-        "Label": CONSOLE_WEB_LABEL,
-        "ProgramArguments": [
+    if lan_password_file is None:
+        program_arguments = [
             str(node_path),
-            str(next_cli),
+            str(console_root / "node_modules" / "next" / "dist" / "bin" / "next"),
             "start",
             "--hostname",
             "127.0.0.1",
-        ],
+        ]
+        environment: dict[str, str] | None = None
+    else:
+        program_arguments = [
+            str(node_path),
+            str(console_root / "scripts" / "start-lan.mjs"),
+            "start",
+        ]
+        environment = {
+            "TRADING_PARTNER_CONSOLE_LAN_PASSWORD_FILE": str(lan_password_file),
+            "TRADING_PARTNER_CONSOLE_LAN_PORT": str(lan_port),
+        }
+    payload: dict[str, Any] = {
+        "Label": CONSOLE_WEB_LABEL,
+        "ProgramArguments": program_arguments,
         "WorkingDirectory": str(console_root),
         "RunAtLoad": True,
         "KeepAlive": True,
@@ -124,6 +144,35 @@ def _console_web_payload(project_root: Path, node_path: Path) -> dict[str, Any]:
         "StandardOutPath": str(log_dir / "console-web.stdout.log"),
         "StandardErrorPath": str(log_dir / "console-web.stderr.log"),
     }
+    if environment is not None:
+        payload["EnvironmentVariables"] = environment
+    return payload
+
+
+def _ensure_console_lan_password(project_root: Path) -> Path:
+    path = project_root / CONSOLE_LAN_PASSWORD_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    if path.exists():
+        if not path.is_file() or path.is_symlink():
+            raise SystemExit("Console LAN password path must be a regular file")
+        password = path.read_text(encoding="utf-8").strip()
+        if len(password) < 1:
+            password = os.environ.get(
+                "TRADING_PARTNER_CONSOLE_LAN_PASSWORD"
+            ) or secrets.token_urlsafe(24)
+            if len(password) < 1:
+                raise SystemExit("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must not be empty")
+            path.write_text(f"{password}\n", encoding="utf-8")
+        path.chmod(0o600)
+        return path
+    password = os.environ.get("TRADING_PARTNER_CONSOLE_LAN_PASSWORD") or secrets.token_urlsafe(24)
+    if len(password) < 1:
+        raise SystemExit("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must not be empty")
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(f"{password}\n")
+    return path
 
 
 def _domain() -> str:
@@ -230,6 +279,7 @@ def _build_poller(
         repository=repository,
         clock=container.context.clock,
         id_generator=container.context.id_generator,
+        attachment_store=getattr(container.resources, "agent_attachment_store", None),
     )
     preferences_service = AgentPreferencesService(
         container.operations.agent_preferences,
@@ -245,7 +295,14 @@ def _build_poller(
         id_generator=container.context.id_generator,
         system_prompt=build_agent_system_prompt(),
         pending_action_gateway=action_gateway,
+        attachment_store=getattr(container.resources, "agent_attachment_store", None),
+        web_search_provider=getattr(
+            container.resources,
+            "agent_web_search_provider",
+            None,
+        ),
         preferences_service=preferences_service,
+        telemetry=container.context.telemetry,
         turn_lock_factory=getattr(container.resources, "agent_turn_lock_factory", None),
     )
     client = build_telegram_agent_client(container)
@@ -441,7 +498,7 @@ def supervisor_status_snapshot() -> dict[str, object]:
         }
 
 
-def console_install() -> int:
+def console_install(*, lan: bool = False, lan_port: int = 3000) -> int:
     root = _project_root()
     uv = shutil.which("uv")
     npm = shutil.which("npm")
@@ -452,6 +509,9 @@ def console_install() -> int:
         )
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     _ensure_console_build(root)
+    if not 1024 <= lan_port <= 65535:
+        raise SystemExit("Console LAN port must be in [1024,65535]")
+    lan_password_file = _ensure_console_lan_password(root) if lan else None
     _install_job(
         CONSOLE_API_LABEL,
         CONSOLE_API_PLIST_PATH,
@@ -461,12 +521,20 @@ def console_install() -> int:
         _install_job(
             CONSOLE_WEB_LABEL,
             CONSOLE_WEB_PLIST_PATH,
-            _console_web_payload(root, Path(node)),
+            _console_web_payload(
+                root,
+                Path(node),
+                lan_password_file=lan_password_file,
+                lan_port=lan_port,
+            ),
         )
     except SystemExit:
         _run_launchctl("bootout", _domain(), CONSOLE_API_LABEL, check=False)
         raise
-    print("installed local Console supervisor (api + web)")
+    mode = "LAN-authenticated web" if lan else "loopback web"
+    print(f"installed local Console supervisor (api + {mode})")
+    if lan_password_file is not None:
+        print(f"LAN password file: {lan_password_file}")
     return 0
 
 
@@ -535,6 +603,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     telegram.add_argument("command", choices=("run", "install", "status", "restart", "uninstall"))
     console = root.add_parser("console", help="Local Console supervisor")
     console.add_argument("command", choices=("install", "status", "restart", "uninstall"))
+    console.add_argument(
+        "--lan",
+        action="store_true",
+        help="Install the Web Console on 0.0.0.0 with password authentication",
+    )
+    console.add_argument(
+        "--lan-port",
+        type=int,
+        default=3000,
+        help="Authenticated LAN Web port (default: 3000)",
+    )
     combined = root.add_parser("all", help="Local Console and Telegram supervisor")
     combined.add_argument("command", choices=("install", "status", "restart", "uninstall"))
     evaluation = root.add_parser("eval", help="Run the deterministic Agent behavior catalog")
@@ -559,7 +638,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         "uninstall": uninstall,
     }
     console_handlers = {
-        "install": console_install,
+        "install": lambda: console_install(
+            lan=bool(getattr(args, "lan", False)),
+            lan_port=int(getattr(args, "lan_port", 3000)),
+        ),
         "status": console_status,
         "restart": console_restart,
         "uninstall": console_uninstall,

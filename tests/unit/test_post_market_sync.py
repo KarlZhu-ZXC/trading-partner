@@ -21,9 +21,10 @@ from application.dto.schwab_oauth import (
     SchwabOAuthHealthState,
 )
 from application.ports.market_session_calendar import MarketSession
+from application.services.operational_job_runtime import OperationalJobExecution
 from application.services.post_market_sync_service import PostMarketSyncService
 from domain.operations.enums import PostMarketSyncRunStatus
-from domain.operations.models import PostMarketSyncRun
+from domain.operations.models import OperationalJobRun, PostMarketSyncRun
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.system.process_file_lock import ProcessFileLock
 from interfaces.cli import post_market_sync as post_market_sync_cli
@@ -119,6 +120,60 @@ class _Watchlist:
         )
 
 
+class _Transactions:
+    def __init__(self, calls: list[str], *, ok: bool = True) -> None:
+        self.calls = calls
+        self.ok = ok
+
+    async def get_transactions(self, request: object) -> SimpleNamespace:
+        self.calls.append("transactions")
+        return SimpleNamespace(
+            ok=self.ok,
+            errors=() if self.ok else (SimpleNamespace(code="TRANSACTION_READ_FAILED"),),
+        )
+
+
+class _Annotations:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def sync_unlinked(self, *, limit: int) -> None:
+        assert limit == 500
+        self.calls.append("unlinked")
+
+
+class _SnapshotRepository:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def get_account(self, snapshot_id: str) -> object:
+        self.calls.append("read-snapshot")
+        return SimpleNamespace(snapshot_id=snapshot_id)
+
+
+class _TransactionRepository:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def list(self, **_kwargs: object) -> tuple[object, ...]:
+        self.calls.append("read-transactions")
+        return ()
+
+
+class _DailyEquity:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def get_activation(self) -> None:
+        return None
+
+    def activate(self, **_kwargs: object) -> None:
+        self.calls.append("activate-journal")
+
+    def materialize(self, **_kwargs: object) -> None:
+        self.calls.append("daily-equity")
+
+
 class _ResultService:
     def __init__(self, result: Any) -> None:
         self.result = result
@@ -144,8 +199,35 @@ class _ResultService:
 
 class _CliContainer:
     def __init__(self, lock_path: Path, result: Any) -> None:
+        now = datetime(2026, 7, 17, 20, 10, tzinfo=UTC)
         self.resources = SimpleNamespace(post_market_sync_lock=ProcessFileLock(lock_path))
-        self.operations = SimpleNamespace(post_market_sync=_ResultService(result))
+        self.context = SimpleNamespace(clock=_Clock(now))
+
+        class Jobs:
+            async def execute(self, **kwargs: Any) -> OperationalJobExecution[Any]:
+                outcome = await kwargs["operation"]()
+                run = OperationalJobRun(
+                    job_run_id="operational_job_run_test",
+                    job_name=kwargs["job_name"],
+                    idempotency_key=kwargs["idempotency_key"],
+                    status=outcome.status,
+                    attempt=1,
+                    lease_owner_hash="a" * 32,
+                    lease_expires_at=now,
+                    heartbeat_at=now,
+                    started_at=now,
+                    updated_at=now,
+                    completed_at=now,
+                    result_code=outcome.result_code,
+                    error_code=outcome.error_code,
+                    version=2,
+                )
+                return OperationalJobExecution(run=run, invoked=True, value=outcome.value)
+
+        self.operations = SimpleNamespace(
+            post_market_sync=_ResultService(result),
+            jobs=Jobs(),
+        )
         self.aclose_calls = 0
 
     async def aclose(self) -> None:
@@ -232,6 +314,59 @@ async def test_success_is_idempotent_for_same_session() -> None:
     assert second.disposition is PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED
     assert calls == ["portfolio", "watchlist"]
     assert repository.value is not None and repository.value.attempt_count == 1
+
+
+async def test_success_syncs_transactions_and_materializes_unlinked_before_watchlist() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    calls: list[str] = []
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(date(2026, 7, 17), close_at)),
+        repository=_Repository(),
+        portfolio=_Portfolio(calls),
+        transactions=_Transactions(calls),
+        activity_annotations=_Annotations(calls),
+        account_snapshots=_SnapshotRepository(calls),
+        transaction_repository=_TransactionRepository(calls),
+        daily_equity=_DailyEquity(calls),
+        watchlist=_Watchlist(calls),
+        clock=_Clock(datetime(2026, 7, 17, 20, 10, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+
+    result = await service.run_if_due()
+
+    assert result.run_status is PostMarketSyncRunStatus.SUCCEEDED
+    assert calls == [
+        "portfolio",
+        "transactions",
+        "unlinked",
+        "activate-journal",
+        "read-snapshot",
+        "read-transactions",
+        "daily-equity",
+        "watchlist",
+    ]
+
+
+async def test_transaction_failure_is_visible_and_does_not_claim_complete_run() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    calls: list[str] = []
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(date(2026, 7, 17), close_at)),
+        repository=_Repository(),
+        portfolio=_Portfolio(calls),
+        transactions=_Transactions(calls, ok=False),
+        activity_annotations=_Annotations(calls),
+        watchlist=_Watchlist(calls),
+        clock=_Clock(datetime(2026, 7, 17, 20, 10, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+
+    result = await service.run_if_due()
+
+    assert result.run_status is PostMarketSyncRunStatus.PARTIAL
+    assert "TRANSACTION_READ_FAILED" in result.error_codes
+    assert calls == ["portfolio", "transactions", "watchlist"]
 
 
 async def test_runs_portfolio_before_exact_watchlist_sync_and_persists_receipt() -> None:

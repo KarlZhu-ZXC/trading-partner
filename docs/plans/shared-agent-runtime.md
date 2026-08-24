@@ -39,7 +39,7 @@ Console 适合深度研究、来源回执、图表、Research Subject/Thesis/Tra
 - 不把 Agent 做成新的公开 MCP 工具，不增加当前 27 个 MCP schema。
 - 不让模型直接连接数据库、券商、文件系统或任意 HTTP 地址。
 - 不把对话记忆当作价格、持仓、成交或研究状态的事实来源。
-- 不因开启 Telegram/Console Chat 自动开放写入或真实下单。
+- 不因开启 Telegram/Console Agent Rail 自动开放写入或真实下单。
 - 不在服务端复制 Codex；Codex 仍是功能最完整的外部 MCP Host。
 - 不绑定 Qwen、DeepSeek 或某一家平台的模型名和 Provider 名。
 
@@ -66,10 +66,14 @@ LLM_MAX_OUTPUT_TOKENS=8000
 更换模型时只替换 `.env`。`LLM_API_STYLE`、`LLM_REASONING_MODE` 和
 `LLM_NATIVE_WEB_SEARCH` 描述协议能力，而不是厂商品牌。
 
-现有 `BAILIAN_*`、`DEEPSEEK_*` 和 `LLM_PROVIDER` 在一个兼容周期内仍可读取；新文档
-只推荐通用 `LLM_*`。Composite Monitor、Trade Retro 与 Agent 默认共享同一通用模型
-配置，避免三个地方分别切换模型。兼容变量不再决定新代码分支，只在 Settings 边界
-归一化成一个 `LLMEndpointConfig`。
+现有 `BAILIAN_*`、`DEEPSEEK_*`、`OPENCODE_ZEN_*`、`OPENCODE_GO_*` 和
+`LLM_PROVIDER` 可并列提供
+Console Agent Provider；通用 `LLM_*` 仍用于一个自定义的 OpenAI-compatible 端点。
+OpenCode Zen 与 Go 是独立 Provider、独立模型目录与计费路径，但默认共用一个 OpenCode
+账户 API key，并允许 Provider 专用 key 覆盖。Go 的同一订阅目录包含
+Responses、Chat Completions 与 Messages 三种协议，
+在基础设施边界按经过 allowlist 的模型 ID 分流；API key 不从 OpenCode 的本地
+`auth.json` 隐式读取。
 
 ### Web Search 约束
 
@@ -77,6 +81,7 @@ LLM_MAX_OUTPUT_TOKENS=8000
 - 实际是否使用、来源 URL 和时间必须形成回执。
 - 不支持原生搜索的模型仍可调用 Trading Partner 的 news、filings、FRED、Reddit、
   Moomoo、Polymarket 等既有 Provider；不得暗示执行了通用网页搜索。
+- OpenCode Zen / Go 在本集成中不发布原生 Web Search；Monitor 只解释确定性 feature snapshot。
 - 网页只能补充背景，不能覆盖工具返回的价格、持仓、成交、点位或数量。
 
 ## 4. 模型看到的工具面
@@ -89,6 +94,7 @@ Agent 不直接加载 27 个公共 MCP schema。模型初始只看到四个稳�
 | `tp_read` | 调用一个已发现的只读/Provider-read 能力 | 是 |
 | `tp_propose` | 创建 Thesis、Trade Plan 或研究候选；不使其生效 | 是，仅创建候选 |
 | `tp_prepare_action` | 固化一个需要确认的动作，不执行 | 否 |
+| `tp_web_search` | 通过服务端 Tavily sidecar 搜索公开网页，返回摘要与来源 | 是，只读 |
 
 `tp_capability_search` 按需返回一个或少量精确 schema；`tp_read` / `tp_propose` 再由现有 Pydantic
 闭合 DTO 完整校验。这样模型上下文不会再次膨胀为 27 个大 schema，同时应用层仍是
@@ -96,7 +102,8 @@ Agent 不直接加载 27 个公共 MCP schema。模型初始只看到四个稳�
 
 Proposal 本身就是未生效候选，因此不再先生成一层 Pending Action。候选的
 Confirm / Reject / Withdraw 仍是独立、显式的人类决策；其他有效写入继续使用
-`tp_prepare_action`。
+`tp_prepare_action`。当服务端 Tavily Web Search sidecar 可用时，所有模型还会获得
+`tp_web_search`；任何回答模型都不会接收 sidecar 的 API key，搜索也不会额外调用百炼模型。
 
 第一阶段自动允许：
 
@@ -219,7 +226,7 @@ idempotency 和 actor gate。Agent 不得把“我建议确认”当成用户确
 ## 8. Console 形态
 
 Agent 是所有 Console 工作台页面共用的右侧栏，不是需要离开当前业务页面的独立目的地。
-`/chat` 仅保留为开发/诊断入口，不出现在主导航：
+`/chat` 仅作为兼容入口重定向到 `/?agent=open`，不再维护第二套 Agent workspace：
 
 - 左栏：现有 Console 主导航；
 - 中栏：当前 Research、Monitor、Portfolio、Retro 等正式工作台；
@@ -300,8 +307,7 @@ src/interfaces/cli/agent.py
 src/interfaces/console/agent_api.py
 
 console/app/chat/
-  page.tsx
-  chat-workspace.tsx
+  page.tsx  # compatibility redirect to /?agent=open
 console/app/components/agent-rail.tsx
 ```
 
@@ -439,7 +445,7 @@ build、wheel smoke、Gitleaks。新增测试应替换重复 schema 测试，不
   过滤非文本模型，具体模型与思考强度在运行时再次校验，目录失败时安全降级到配置默认模型；
 - 回复使用安全 React 结构化渲染，支持标题、列表、代码、表格、外部链接与 durable entity
   deep link，不使用 `dangerouslySetInnerHTML`；右侧栏也可显式生成 Telegram handoff 与归档会话；
-- `evals/agent-behavior.v1.json` 固化 14 个 Agent 专属回归场景，持续约束 durable-first、
+- `evals/agent-behavior.v1.json` 固化 15 个 Agent 专属回归场景，持续约束 durable-first、
   provenance、Pending Action、断线恢复、缺数、prompt injection、带来源的 Web Search 和真实订单拒绝。
 
 ## 17. 2026-08 Agent 17 项成熟度收口（已完成）

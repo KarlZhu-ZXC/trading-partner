@@ -48,6 +48,7 @@ class EntityIdPrefix(StrEnum):
     AGENT_CONVERSATION = "agent_conversation"
     AGENT_BINDING = "agent_binding"
     AGENT_MESSAGE = "agent_message"
+    AGENT_ATTACHMENT = "agent_attachment"
     AGENT_TURN = "agent_turn"
     AGENT_TOOL_RECEIPT = "agent_tool_receipt"
     AGENT_PENDING_ACTION = "agent_pending_action"
@@ -56,6 +57,9 @@ class EntityIdPrefix(StrEnum):
     AGENT_PREFERENCES = "agent_preferences"
     AGENT_PREFERENCE_REVISION = "agent_preference_revision"
     REVIEW_ITEM = "review_item"
+    ACTIVITY_ANNOTATION = "activity_annotation"
+    TRADE_CYCLE_OVERRIDE = "trade_cycle_override"
+    OPERATIONAL_JOB_RUN = "operational_job_run"
     # Phase 3A append-only futures definition identity prefixes.
     FUTURES_PRODUCT = "futures_product"
     FUTURES_PRODUCT_VERSION = "futures_product_version"

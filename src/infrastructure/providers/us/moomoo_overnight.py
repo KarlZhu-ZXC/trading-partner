@@ -38,6 +38,7 @@ from domain.instruments.models import Instrument
 from domain.market.freshness import classify_freshness
 from domain.market.session import is_us_overnight_session
 from domain.us_market.models import USCommunityHeatSnapshot, USQuote
+from infrastructure.providers.moomoo_opend import ensure_moomoo_opend_running
 from infrastructure.providers.moomoo_rate_limiter import (
     MoomooOpenDOperation,
     OpenDRequestLimiter,
@@ -92,6 +93,7 @@ def _default_context_factory(host: str, port: int) -> _SnapshotContext:
     except ImportError as exc:
         raise ProviderNotConfigured("Moomoo SDK is unavailable") from exc
     moomoo.SysConfig.enable_console_log(False)
+    ensure_moomoo_opend_running(host, port)
     return _SdkSnapshotContext(
         moomoo.OpenQuoteContext(host=host, port=port),
         moomoo.RET_OK,

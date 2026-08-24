@@ -679,8 +679,9 @@ without replacing deterministic rules. The policy stores a Playbook, up to 12
 reference Instruments, relative-strength pairs, and explicit user-confirmed state.
 The runtime derives 1h/4h/1d/3d returns, session alignment, rule states, and
 provenance before a selectable server-side LLM call. Alibaba Cloud Model Studio
-`qwen3.8-max` is the default, while the retained DeepSeek Provider remains available
-through `LLM_PROVIDER=deepseek`. Optional Bailian built-in web search may add current macro-event context; usage and bounded
+`deepseek-v4-flash-0731` is the default Monitor model through Chat Completions with
+JSON Object output; `qwen3.8-max` remains the Bailian Responses fallback. This does not
+change the Console Agent's default model. Optional Bailian built-in web search may add current macro-event context; usage and bounded
 source URLs are persisted, but market/account facts remain deterministic-only.
 Chinese explanations, evidence IDs, and quantity ranges are validated; non-aligned
 divergence actions are downgraded to WAIT, and unchanged

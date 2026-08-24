@@ -104,6 +104,12 @@ class SqlAlchemyReviewItemRepository:
                             version=1,
                         )
                         session.add(row)
+                        # ReviewItemOccurrenceRow has no ORM relationship to its
+                        # parent, so SQLAlchemy cannot reliably infer insert order
+                        # from object dependencies alone. Flush the new parent
+                        # before its FK child; concurrent source-key creation still
+                        # falls through the existing bounded retry path.
+                        session.flush([row])
                         session.add(
                             ReviewItemOccurrenceRow(
                                 review_item_id=row.review_item_id,

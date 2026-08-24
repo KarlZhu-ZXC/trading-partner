@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
+import application.services.attention_query_service as attention_query_module
 from application.dto.attention import AttentionQueryInput
 from application.dto.review_item import ReviewItemDTO
 from application.services.attention_query_service import AttentionQueryService
@@ -19,6 +22,9 @@ class _ReviewItems:
     def __init__(self) -> None:
         self.reconcile_calls = 0
         self.open: tuple[ReviewItemDTO, ...] = ()
+        self.metric_open_count = 0
+        self.metric_acknowledged_count = 0
+        self.observed_at: datetime | None = None
 
     def reconcile(self, *args: object, **kwargs: object) -> None:
         self.reconcile_calls += 1
@@ -30,7 +36,14 @@ class _ReviewItems:
         return self.open
 
     def latest_observed_at(self) -> datetime | None:
-        return None
+        return self.observed_at
+
+    def metrics(self, *, subject_id: str | None = None) -> SimpleNamespace:
+        _ = subject_id
+        return SimpleNamespace(
+            open_count=self.metric_open_count,
+            acknowledged_count=self.metric_acknowledged_count,
+        )
 
 
 class _Candidates:
@@ -123,3 +136,57 @@ def test_health_summary_does_not_impersonate_full_inbox() -> None:
     assert summary.coverage_status == AttentionCoverageState.UNKNOWN.value
     assert summary.catalyst_sync_receipt_missing is True
     assert summary.open_review_item_count == 0
+
+
+def test_health_summary_keeps_data_quality_failure_unknown() -> None:
+    service, _reviews = _service()
+
+    def boom() -> None:
+        raise RuntimeError("quality unavailable")
+
+    service._data_quality = SimpleNamespace(check=boom)  # type: ignore[method-assign]
+    summary = service.health_summary()
+    assert summary.coverage_status == AttentionCoverageState.UNKNOWN.value
+    assert summary.catalyst_sync_receipt_missing is None
+    assert "ATTENTION_DATA_QUALITY_UNAVAILABLE" in summary.limitation_codes
+
+
+def test_review_item_limit_is_disclosed_as_partial() -> None:
+    reviews = _ReviewItems()
+    reviews.metric_open_count = 501
+    service, _reviews = _service(reviews)
+    digest = service.list_digest(AttentionQueryInput())
+    coverage = next(item for item in digest.coverage if item.source == "review_items")
+    assert coverage.state == "PARTIAL"
+    assert digest.total_count_is_lower_bound is True
+    assert "ATTENTION_REVIEW_ITEMS_TRUNCATED" in coverage.limitation_codes
+    assert "ATTENTION_REVIEW_ITEMS_TRUNCATED" in digest.limitations
+
+
+def test_health_summary_marks_old_materialization_partial() -> None:
+    reviews = _ReviewItems()
+    reviews.observed_at = datetime(2026, 8, 15, 12, tzinfo=UTC)
+    service, _reviews = _service(reviews)
+    summary = service.health_summary()
+    assert summary.coverage_status == AttentionCoverageState.PARTIAL.value
+    assert "ATTENTION_REVIEW_ITEMS_STALE" in summary.limitation_codes
+
+
+def test_source_failure_log_never_contains_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _reviews = _service()
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        attention_query_module._LOGGER,
+        "warning",
+        lambda _template, *args: calls.append(args),
+    )
+
+    def boom(**kwargs: object) -> None:
+        raise RuntimeError("api_key=must-not-log")
+
+    service._broker_orders = SimpleNamespace(list_unresolved=boom)  # type: ignore[method-assign]
+    service.list_digest(AttentionQueryInput())
+    assert ("broker_orders", "RuntimeError") in calls
+    assert "must-not-log" not in repr(calls)

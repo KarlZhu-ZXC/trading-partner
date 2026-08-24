@@ -17,7 +17,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import application.services._research_reference_validation as _reference_validation
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
-from domain.common.enums import ConfirmationMode, DecisionType, JournalEntryType
+from domain.common.enums import (
+    ConfirmationMode,
+    DecisionScenario,
+    DecisionType,
+    JournalEntryType,
+)
 from domain.common.errors import InputValidationError
 from domain.common.time import ensure_utc, require_aware_datetime
 from domain.research.models import (
@@ -414,6 +419,12 @@ def compute_decision_idempotency_payload_sha256(
     report_ids: tuple[str, ...],
     supersedes_decision_id: str | None,
     position_context_snapshot_id: str | None,
+    strategy_code: str | None = None,
+    strategy_version: str | None = None,
+    scenario: DecisionScenario | None = None,
+    trade_plan_id: str | None = None,
+    trade_plan_version: int | None = None,
+    review_due_at: datetime | None = None,
 ) -> str:
     """Canonical SHA-256 of redacted/normalized Decision caller payload (§8.6)."""
     if not isinstance(decision_type, DecisionType):
@@ -443,6 +454,34 @@ def compute_decision_idempotency_payload_sha256(
         "thesis_revision_ids": sorted(thesis_revision_ids),
         "title": title,
     }
+    # Preserve the original Phase 1C digest for legacy records that have no
+    # Phase 4A fields. Once any structured field is supplied, include the full
+    # optional set so changing any one field is an idempotency conflict.
+    if any(
+        value is not None
+        for value in (
+            strategy_code,
+            strategy_version,
+            scenario,
+            trade_plan_id,
+            trade_plan_version,
+            review_due_at,
+        )
+    ):
+        payload.update(
+            {
+                "review_due_at": (
+                    _datetime_to_utc_z(review_due_at) if review_due_at is not None else None
+                ),
+                "scenario": (
+                    scenario.value if isinstance(scenario, DecisionScenario) else scenario
+                ),
+                "strategy_code": strategy_code,
+                "strategy_version": strategy_version,
+                "trade_plan_id": trade_plan_id,
+                "trade_plan_version": trade_plan_version,
+            }
+        )
     return _canonical_payload_sha256(payload)
 
 

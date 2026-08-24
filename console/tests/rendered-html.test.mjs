@@ -92,7 +92,8 @@ test("restores the persisted sidebar width before paint and keeps it in sync", a
   assert.match(layoutSource, /matchMedia\("\(max-width: 1100px\)"\)/);
   assert.match(layoutSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed"/);
   assert.match(layoutSource, /document\.documentElement\.classList\.toggle\("agent-rail-collapsed"/);
-  assert.match(shellSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed", overlayViewport \|\| storedCollapsed\)/);
+  assert.match(shellSource, /agentRequested/);
+  assert.match(shellSource, /nextSidebarCollapsed/);
   assert.match(shellSource, /document\.documentElement\.classList\.toggle\("sidebar-collapsed", next\)/);
   assert.match(styles, /html\.sidebar-collapsed \.app-shell \{ --sidebar-width:76px; \}/);
   assert.match(styles, /html\.agent-rail-collapsed \.app-shell \{ --agent-rail-width:0px; \}/);
@@ -127,16 +128,15 @@ test("provides independent Obsidian-style navigation and Agent panel toggles", a
   assert.match(styles, /\.page-level-actions \{[^}]*align-self:center;/);
 });
 
-test("places Research before Monitors in primary navigation", async () => {
+test("keeps the primary navigation focused on the Journal workflow", async () => {
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.match(shellSource, /CONSOLE_PAGE_LABELS/);
-  assert.match(shellSource, /"decision-workbench": "Workbench"/);
+  assert.match(shellSource, /"decision-workbench": "Journal"/);
   assert.match(shellSource, /const label = CONSOLE_PAGE_LABELS\[item\.key\]/);
   assert.match(shellSource, /<h1>\{CONSOLE_PAGE_LABELS\[active\]\}<\/h1>/);
   assert.ok(shellSource.indexOf('href: "/decision-workbench"') < shellSource.indexOf('href: "/research"'));
   assert.ok(shellSource.indexOf('href: "/research"') < shellSource.indexOf('href: "/monitors"'));
-  assert.ok(shellSource.indexOf('href: "/research"') < shellSource.indexOf('href: "/scorecards"'));
-  assert.ok(shellSource.indexOf('href: "/scorecards"') < shellSource.indexOf('href: "/monitors"'));
+  assert.doesNotMatch(shellSource, /href: "\/(?:agenda|scorecards|retro)"/);
 });
 
 test("automatically authenticates Console writes with a restart-safe session token", async () => {
@@ -159,16 +159,19 @@ test("keeps the data API on loopback while LAN mode uses authenticated same-orig
   assert.match(proxySource, /path\[0\] === "api"/);
   assert.match(proxySource, /`api\/\$\{path\.join\("\/"\)\}`/);
   assert.doesNotMatch(proxySource, /request\.headers\.get\(["'](?:origin|cookie|x-forwarded)/i);
-  assert.match(authSource, /LAN_PASSWORD_MIN_LENGTH = 16/);
+  assert.match(authSource, /LAN_PASSWORD_MIN_LENGTH = 1/);
   assert.match(authSource, /HMAC/);
   assert.match(startSource, /"--hostname", "0\.0\.0\.0"/);
+  assert.match(startSource, /TRADING_PARTNER_CONSOLE_LAN_PASSWORD_FILE/);
+  assert.match(startSource, /metadata\.mode & 0o077/);
+  assert.match(startSource, /TRADING_PARTNER_CONSOLE_LAN_PASSWORD: password/);
   assert.doesNotMatch(startSource, /NEXT_PUBLIC_TRADING_PARTNER_CONSOLE_LAN_PASSWORD/);
 });
 
   test("renders all primary local-console routes", async () => {
     for (const [route, heading] of [
       ["/monitors", "Monitors"],
-      ["/decision-workbench", "Workbench"],
+      ["/decision-workbench", "Journal"],
       ["/research", "Research"],
       ["/agenda", "Catalyst Agenda"],
       ["/scorecards", "Scorecards"],
@@ -176,7 +179,6 @@ test("keeps the data API on loopback while LAN mode uses authenticated same-orig
       ["/portfolio", "Portfolio"],
       ["/retro", "Trade Retro"],
       ["/operations", "Operations"],
-      ["/chat", "Agent Chat"],
     ]) {
     const response = await render(route);
     assert.equal(response.status, 200);
@@ -184,7 +186,29 @@ test("keeps the data API on loopback while LAN mode uses authenticated same-orig
     }
   });
 
-test("decision workbench aggregates durable stages without replacing specialist pages", async () => {
+test("specialist pages share compact Header actions while Overview remains independent", async () => {
+  for (const path of [
+    "research/page.tsx",
+    "portfolio/page.tsx",
+    "decision-workbench/page.tsx",
+    "monitors/page.tsx",
+    "agenda/page.tsx",
+    "retro/page.tsx",
+    "scorecards/page.tsx",
+    "operations/page.tsx",
+    "capabilities/page.tsx",
+  ]) {
+    const source = await readFile(new URL(`../app/${path}`, import.meta.url), "utf8");
+    assert.match(source, /PageActionMenu/, path);
+  }
+  const overviewSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(overviewSource, /PageActionMenu/);
+  const chatSource = await readFile(new URL("../app/chat/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(chatSource, /PageActionMenu/);
+  assert.match(chatSource, /redirect\("\/\?agent=open"\)/);
+});
+
+test("journal reuses durable workflow stages without replacing specialist pages", async () => {
   const source = await readFile(new URL("../app/decision-workbench/page.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/decision-workbench/);
   assert.equal((source.match(/useApi<Dict>/g) ?? []).length, 1);
@@ -194,7 +218,54 @@ test("decision workbench aggregates durable stages without replacing specialist 
   assert.match(source, /"Acknowledge"/);
   assert.match(source, />Resolve</);
   assert.match(source, /INCOMPLETE/);
-  assert.match(source, /No Provider refresh, automatic confirmation, position change, or order execution/);
+  assert.match(source, /This does not submit or authorize an order/);
+  assert.match(source, /Record Decision/);
+  assert.match(source, /research_memory_append/);
+  assert.match(source, /confirmation: "research_memory_append"/);
+  assert.match(source, /\["watch", "no_action", "research_more"\]\.includes\(decisionAction\)/);
+  assert.match(source, /strategy_code: "strategy_v1"/);
+  assert.match(source, /scenario: decisionScenario/);
+  assert.match(source, /trade_plan_id: planLinkReady \? planId : null/);
+  assert.match(source, /trade_plan_version: planLinkReady \? planVersion : null/);
+  assert.match(source, /review_due_at: reviewDueAt/);
+  assert.match(source, /futureDateInput\(7\)/);
+  assert.match(source, /Invalidation cannot initiate, add, or hold under strategy_v1/);
+  assert.match(source, /Initiate or Add requires an exact current Trade Plan/);
+  assert.match(source, /query\.get\("capture"\) === "decision"/);
+  assert.match(source, /query\.get\("supersedes_decision_id"\)/);
+  assert.match(source, /supersedes_decision_id: supersedesDecisionId/);
+  assert.match(source, /workbenchApi\.data\?\.timeline/);
+  assert.match(source, /workbenchApi\.data\?\.trade_cycles/);
+  assert.match(source, /Latest Trade Cycle/);
+  assert.match(source, /JOURNAL_TABS/);
+  assert.match(source, /Journal Sections/);
+  assert.match(source, /journal-panel-timeline/);
+  assert.match(source, /journal-panel-cycles/);
+  assert.match(source, /journal-panel-behavior/);
+  assert.match(source, /Unlinked Activity/);
+  assert.match(source, /Save Classification/);
+  assert.match(source, /Link Current Decision & Plan/);
+  assert.match(source, /BehaviorPanel/);
+  assert.match(source, /All Metrics, Denominators & Exclusions/);
+  assert.match(source, /Split, Merge, or Relink Cycles/);
+  assert.match(source, /Preview Impact/);
+  assert.match(source, /Apply Revision/);
+  assert.match(source, /Run Weekly Review/);
+  assert.match(source, /NEW, PERSISTENT, RESOLVED, and RECURRED/);
+  assert.ok(source.indexOf("DATA CONFIDENCE") < source.indexOf("Year-To-Date Returns"));
+  assert.ok(source.indexOf("Year-To-Date Returns") < source.indexOf("Income, Fees & Closed Cycles"));
+  assert.ok(source.indexOf("Income, Fees & Closed Cycles") < source.indexOf("Current Cohort"));
+  assert.ok(source.indexOf("Current Cohort") < source.indexOf("Needs Attention"));
+  assert.match(source, /journal-panel-reviews/);
+  assert.match(source, /journalTimelineRows/);
+  assert.match(source, /<Paginator step=\{cyclePageSize\}/);
+  assert.match(source, /Recent Decisions/);
+  assert.match(source, /1 · DECIDE/);
+  assert.match(source, /2 · OBSERVE/);
+  assert.match(source, /3 · EXECUTE/);
+  assert.match(source, /4 · REVIEW/);
+  assert.doesNotMatch(source, /title="Catalyst Agenda"/);
+  assert.doesNotMatch(source, /title="Judgment Scorecard"/);
   assert.match(source, /research#subject-/);
   assert.match(source, /href="\/monitors"/);
   assert.match(source, /href="\/retro"/);
@@ -208,7 +279,7 @@ test("agenda route uses the durable Catalyst Agenda write contract", async () =>
 
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   const source = await readFile(new URL("../app/agenda/page.tsx", import.meta.url), "utf8");
-  assert.match(shellSource, /href: "\/agenda"/);
+  assert.doesNotMatch(shellSource, /href: "\/agenda"/);
   assert.match(source, /\/api\/agenda/);
   assert.match(source, /\/api\/agenda\/summary-preview/);
   assert.match(source, /\/api\/agenda\/summary-send/);
@@ -255,6 +326,13 @@ test("portfolio displays valuation-only Snapshot Price and title-cases table hea
   assert.match(source, /label="Market Value \(Not NAV\)"/);
   assert.doesNotMatch(source, /label="Snapshot price"/);
   assert.match(source, /title="Portfolio Exposure"/);
+  assert.match(source, /exposurePositionSummaries/);
+  assert.match(source, /sortedExposureItems/);
+  assert.match(source, /DEFAULT_POSITION_SORT: PositionSort = \{ key: "market_value", direction: "desc" \}/);
+  assert.match(source, /portfolio-exposure-position/);
+  assert.match(source, /<dt>Quantity<\/dt>/);
+  assert.match(source, /<dt>Cost<\/dt>/);
+  assert.ok((source.match(/preserve_full_result: true/g) ?? []).length >= 2);
   assert.match(source, /Portfolio Total Value/);
   assert.match(source, /Gross Position Value/);
   assert.match(source, /gross exposure—not account NAV or long\/short net exposure/);
@@ -272,7 +350,7 @@ test("scorecards route uses judgment scorecard source-contract calls", async () 
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   const source = await readFile(new URL("../app/scorecards/page.tsx", import.meta.url), "utf8");
 
-  assert.match(shellSource, /href: "\/scorecards"/);
+  assert.doesNotMatch(shellSource, /href: "\/scorecards"/);
   assert.match(shellSource, /Scorecards/);
   assert.match(source, /\/api\/scorecards/);
   assert.match(source, /window\.location\.search/);
@@ -297,6 +375,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/research/);
+  assert.match(source, /decision-workbench\?subject_id=.*capture=decision/);
   assert.match(source, /including archived/i);
   assert.match(source, /const SUBJECT_STATUSES = \["draft", "active", "archived"\]/);
   assert.match(source, /const \[status, setStatus\] = useState\("ACTIVE"\)/);
@@ -311,10 +390,10 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(entitySource, /entity-filter-results/);
   assert.doesNotMatch(source, /research-browser-range/);
   assert.doesNotMatch(source, /research-browser-footer/);
-  assert.match(source, /ResearchPageActions/);
-  assert.match(source, /page-action-menu/);
-  assert.match(source, /pageActions=\{<ResearchPageActions/);
-  assert.match(source, /Open Research Page Actions/);
+  assert.match(source, /PageActionMenu/);
+  assert.match(source, /pageActions=\{<PageActionMenu/);
+  assert.match(source, /ariaLabel="Research Page Actions"/);
+  assert.match(styles, /page-action-menu/);
   assert.doesNotMatch(source, /className="toolbar research-toolbar"/);
   assert.match(entitySource, /EntityBrowser/);
   assert.match(source, /Filter by Research Subject Status/);
@@ -378,6 +457,8 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.doesNotMatch(shellSource, /eyebrow:\s*string/);
   assert.match(source, /INSTRUMENT SELECTION/);
   assert.match(source, /candidateInstrumentId/);
+  assert.match(source, /instrument_resolve[^\n]*preserve_full_result: true/);
+  assert.ok((continuitySource.match(/preserve_full_result: true/g) ?? []).length >= 3);
   assert.match(source, /instrument_resolve/);
   assert.match(source, /role="combobox"/);
   assert.match(source, /candidate-instrument-suggestions/);
@@ -407,6 +488,12 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.doesNotMatch(source, />Select</);
   assert.doesNotMatch(source, /proposeCandidateStatus/);
   assert.match(source, /research-candidate-decision/);
+  assert.match(source, /CandidateReviewDetails/);
+  assert.match(source, /Complete Proposal Payload/);
+  assert.match(source, /Why This Change Was Proposed/);
+  assert.match(source, /Candidate ID/);
+  assert.match(source, /Confirmation Mode/);
+  assert.match(source, /candidate\._truncated !== true/);
   assert.match(source, /Confirm Candidate/);
   assert.match(source, /Reject Candidate/);
   assert.match(source, /Withdraw Proposal/);
@@ -430,7 +517,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.ok(source.indexOf('className="research-thesis-facts"') < source.indexOf('className="research-latest-revision"'));
   assert.match(source, /parent_thesis_id/);
   assert.match(source, /rival_thesis_ids/);
-  assert.match(source, /decideCandidate\(item, "withdraw"\)/);
+  assert.match(source, /onDecision=\{decideCandidate\}/);
   assert.match(source, /#subject-/);
   assert.match(source, /\^#case-/);
   assert.match(source, /\/api\/monitors\?run_limit=1&event_limit=1/);
@@ -506,6 +593,10 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   assert.match(monitorsSource, /Archiving…/);
   assert.match(monitorsSource, /monitor-list-panel/);
   assert.match(monitorsSource, /Monitor Library/);
+  assert.match(monitorsSource, /dashboardEnvelope\._truncated === true/);
+  assert.match(monitorsSource, /item\._truncated !== true/);
+  assert.match(editorSource, /instrument_resolve/);
+  assert.match(editorSource, /preserve_full_result: true/);
   assert.match(monitorsSource, /<EntityBrowser/);
   assert.match(monitorsSource, /entity-filter-notice/);
   assert.match(monitorsSource, /HorizontalTabs/);
@@ -535,7 +626,17 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /\/api\/portfolio\?transaction_limit=500&coverage_limit=100/);
   assert.match(portfolioSource, /Holdings/);
   assert.match(portfolioSource, /Activity/);
+  assert.match(portfolioSource, /Trade Cycles/);
+  assert.match(portfolioSource, /tradeCyclesEnvelope/);
+  assert.match(portfolioSource, /cyclePageSize = 6/);
+  assert.match(portfolioSource, /<Paginator step=\{cyclePageSize\}/);
   assert.match(portfolioSource, /Performance/);
+  assert.match(portfolioSource, /Return Series/);
+  assert.match(portfolioSource, /Time-Weighted Return/);
+  assert.match(portfolioSource, /Money-Weighted Return/);
+  assert.match(portfolioSource, /Income Return/);
+  assert.match(portfolioSource, /Fee Drag/);
+  assert.match(portfolioSource, /Closed Cycle Returns/);
   assert.match(portfolioSource, /Risk/);
   assert.match(portfolioSource, /external_state_sync/);
   assert.doesNotMatch(portfolioSource, /watchlist_manage/);
@@ -558,6 +659,7 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /className=\{`sort-indicator\$\{active \? " active" : ""\}`\}/);
   assert.match(styles, /\.portfolio-desktop-table \.sort-header[^}]*min-height:44px/);
   assert.match(styles, /\.sort-indicator \{[^}]*width:20px;[^}]*height:24px/);
+  assert.match(styles, /\.trade-cycle-list/);
   assert.match(portfolioSource, /execution_effect/);
   assert.match(portfolioSource, /resultEnvelope = envelope\(invocationResult\(response\)\)/);
   assert.doesNotMatch(portfolioSource, /\/api\/accounts/);
@@ -582,14 +684,14 @@ test("keeps the default console UI copy English-only", async () => {
   }
 });
 
-test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
+test("legacy Chat route redirects to the shared Agent Rail", async () => {
   const response = await render("/chat");
   assert.equal(response.status, 200);
+  assert.match(response.url, /\/?\?agent=open$/);
   const html = await response.text();
-  assert.match(html, /Agent Chat/);
-  assert.match(html, /Confirmation-Gated Agent Runtime/);
+  assert.match(html, /Overview/);
 
-  const workspace = await readFile(new URL("../app/chat/chat-workspace.tsx", import.meta.url), "utf8");
+  const chatPageSource = await readFile(new URL("../app/chat/page.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
   const conversationSource = await readFile(new URL("../app/lib/use-agent-conversation.ts", import.meta.url), "utf8");
   const streamSource = await readFile(new URL("../app/lib/agent-stream.ts", import.meta.url), "utf8");
@@ -597,6 +699,8 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
   const pageContextSource = await readFile(new URL("../app/lib/agent-page-context.ts", import.meta.url), "utf8");
   const apiSource = await readFile(new URL("../app/lib/agent-api.ts", import.meta.url), "utf8");
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
+  assert.match(chatPageSource, /redirect\("\/\?agent=open"\)/);
+  assert.match(shellSource, /agentRequested/);
   assert.doesNotMatch(shellSource, /label: "Chat"/);
   assert.match(shellSource, /AgentRail/);
   assert.match(railSource, /Agent Rail/);
@@ -629,6 +733,12 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
   assert.match(railSource, /Editing an earlier prompt/);
   assert.match(railSource, /void sendMessage\(candidate\.content\)/);
   assert.match(railSource, /Retry Turn/);
+  assert.match(railSource, /Agent Provider Error Notification/);
+  assert.match(railSource, /Dismiss Provider Error Notification/);
+  assert.match(railSource, /trading-partner-agent-dismissed-failures/);
+  assert.match(railSource, /HTTP Status/);
+  assert.match(railSource, /Retryable/);
+  assert.match(streamSource, /parseAgentFailureNotice/);
   assert.match(railSource, /Agent Preferences/);
   assert.match(railSource, /PRESENTATION ONLY/);
   assert.match(railSource, /Web Search Background/);
@@ -649,12 +759,6 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
   assert.match(messageContentSource, /agent-message-table-wrap/);
   assert.match(messageContentSource, /agent-entity-link/);
   assert.match(pageContextSource, /navigation-only context/);
-  assert.match(workspace, /Continue in Telegram/);
-  assert.match(workspace, /One-Time Code/);
-  assert.match(workspace, /\/continue/);
-  assert.match(workspace, /nativeEvent\.isComposing/);
-  assert.match(workspace, /Stop Waiting/);
-  assert.doesNotMatch(workspace, /dangerouslySetInnerHTML/);
   assert.match(apiSource, /messages\/stream/);
   assert.match(apiSource, /turns.*cancel/s);
   assert.match(apiSource, /turns.*stream/s);
@@ -674,8 +778,7 @@ test("Chat exposes the confirmation-gated Agent stream boundary", async () => {
   assert.doesNotMatch(apiSource, /Navigation context \(untrusted\)/);
   assert.match(apiSource, /confirmation_token/);
   assert.match(apiSource, /message_id: idFor\(source, "message_id"\)/);
-  assert.match(workspace, /Confirm Exact Action/);
-  assert.doesNotMatch(workspace, /localStorage.*confirmation/i);
+  assert.doesNotMatch(railSource, /localStorage.*confirmation/i);
 });
 
 test("keeps the Agent rail width and focus mode accessible and durable", async () => {

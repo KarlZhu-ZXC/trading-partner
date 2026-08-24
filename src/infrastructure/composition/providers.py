@@ -19,6 +19,7 @@ from domain.common.enums import VendorId
 from domain.watchlist.enums import WatchlistSource
 from infrastructure.config.settings import AppSettings
 from infrastructure.config.vendor_chain import YamlVendorChainConfig
+from infrastructure.observability.tracing import get_telemetry
 from infrastructure.persistence.provider_state_backend import build_provider_state_backend
 from infrastructure.persistence.reddit_state_store import build_reddit_state_store
 from infrastructure.providers.a_share.cls import CLSAShareAdapter
@@ -63,6 +64,7 @@ from infrastructure.providers.cross_asset.weekend_reference import (
     HyperliquidClUsdcWeekendAdapter,
     WeekendReferenceFallbackSpotAdapter,
 )
+from infrastructure.providers.llm.routed import LLMResilienceController
 from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDRateLimiter
 from infrastructure.providers.registry import VendorRegistry
 from infrastructure.providers.router_engine import ProviderRouterEngine
@@ -120,6 +122,7 @@ class ProviderInfrastructure:
     manual_account: ManualCsvAccountAdapter
     account_providers: dict[VendorId, AccountProvider]
     watchlist_source: WatchlistSourceProvider
+    llm_resilience: LLMResilienceController
 
 
 def enabled_account_provider_order(
@@ -543,25 +546,37 @@ def build_provider_infrastructure(
             )
 
     state_backend = build_provider_state_backend(engine, clock, secret_redactor)
+    rate_limiter = ProviderRateLimiter(
+        state_backend.rate_limit_store,
+        clock,
+        max_wait_seconds=settings.provider_rate_limit_max_wait_seconds,
+    )
+    circuit_breaker = CircuitBreaker(
+        clock,
+        failure_threshold=settings.circuit_failure_threshold,
+        recovery_timeout_seconds=settings.circuit_recovery_timeout_seconds,
+        half_open_max_calls=settings.circuit_half_open_max_calls,
+    )
     router_engine = ProviderRouterEngine(
         registry=registry,
         cache_store=state_backend.cache_store,
         health_store=state_backend.health_store,
         route_history_store=state_backend.route_history_store,
-        rate_limiter=ProviderRateLimiter(
-            state_backend.rate_limit_store,
-            clock,
-            max_wait_seconds=settings.provider_rate_limit_max_wait_seconds,
-        ),
-        circuit_breaker=CircuitBreaker(
-            clock,
-            failure_threshold=settings.circuit_failure_threshold,
-            recovery_timeout_seconds=settings.circuit_recovery_timeout_seconds,
-            half_open_max_calls=settings.circuit_half_open_max_calls,
-        ),
+        rate_limiter=rate_limiter,
+        circuit_breaker=circuit_breaker,
         clock=clock,
         id_generator=id_generator,
         settings=settings,
+        telemetry=get_telemetry(),
+    )
+    llm_resilience = LLMResilienceController(
+        rate_limiter=rate_limiter,
+        circuit_breaker=circuit_breaker,
+        route_history=state_backend.route_history_store,
+        clock=clock,
+        id_generator=id_generator,
+        max_wait_seconds=settings.provider_rate_limit_max_wait_seconds,
+        circuit_breaker_enabled=settings.enable_circuit_breaker,
     )
     return ProviderInfrastructure(
         registry=registry,
@@ -587,4 +602,5 @@ def build_provider_infrastructure(
             VendorId.MANUAL_CSV: manual_account,
         },
         watchlist_source=watchlist_source,
+        llm_resilience=llm_resilience,
     )

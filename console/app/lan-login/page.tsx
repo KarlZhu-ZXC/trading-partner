@@ -52,13 +52,13 @@ export default function LanLoginPage() {
             id="lan-password"
             minLength={16}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder="16 characters or longer"
+            placeholder="Enter LAN password"
             required
             type="password"
             value={password}
           />
           {error ? <p className="lan-login-error" role="alert">{error}</p> : null}
-          <button disabled={submitting || password.length < 16} type="submit">
+          <button disabled={submitting || password.length < 1} type="submit">
             {submitting ? "Unlocking…" : "Unlock Console"}
             <ArrowRight aria-hidden="true" />
           </button>

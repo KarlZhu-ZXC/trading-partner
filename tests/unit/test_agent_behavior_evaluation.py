@@ -11,10 +11,16 @@ from interfaces.cli.agent_behavior_evaluation import run_catalog
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PRIVATE_AGENT_TOOLS = frozenset(
-    {"tp_capability_search", "tp_read", "tp_propose", "tp_prepare_action"}
+    {
+        "tp_capability_search",
+        "tp_read",
+        "tp_propose",
+        "tp_prepare_action",
+        "tp_web_search",
+    }
 )
 EXPECTED_CATEGORIES = {
-    "fact_read": 4,
+    "fact_read": 5,
     "action_gate": 3,
     "recovery": 2,
     "safety": 5,
@@ -26,10 +32,10 @@ def test_agent_behavior_catalog_is_a_closed_safety_regression_contract() -> None
         (PROJECT_ROOT / "evals" / "agent-behavior.v1.json").read_text(encoding="utf-8")
     )
     assert payload["schema_version"] == 1
-    assert payload["web_search_policy"] == "enabled_when_supported"
+    assert payload["web_search_policy"] == "enabled_for_all_models_via_sidecar_or_native"
     assert payload["broker_order_policy"] == "forbidden"
     cases = payload["cases"]
-    assert len(cases) == 14
+    assert len(cases) == 15
     assert Counter(item["category"] for item in cases) == EXPECTED_CATEGORIES
     assert len({item["id"] for item in cases}) == len(cases)
     for item in cases:
@@ -39,7 +45,7 @@ def test_agent_behavior_catalog_is_a_closed_safety_regression_contract() -> None
         forbidden = set(item["forbidden_behaviors"])
         assert {"fabricated_fact", "real_order"} <= forbidden
         if item["id"] == "agent_web_search_with_sources":
-            assert "use_native_web_search_when_supported" in item["required_behaviors"]
+            assert "use_web_search_for_all_models_when_needed" in item["required_behaviors"]
             assert "web_search" not in forbidden
         else:
             assert "web_search" in forbidden
@@ -52,6 +58,8 @@ def test_agent_prompt_keeps_the_catalogs_core_safety_contract() -> None:
     assert "mode=prepare_action" in AGENT_SYSTEM_PROMPT
     assert "mode=propose" in AGENT_SYSTEM_PROMPT
     assert "Web Search" in AGENT_SYSTEM_PROMPT
+    assert "investment_case_read/attention" in AGENT_SYSTEM_PROMPT
+    assert "不能替代完整 Inbox" in AGENT_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
@@ -59,7 +67,7 @@ async def test_agent_behavior_catalog_executes_against_the_real_runtime() -> Non
     receipt = await run_catalog()
 
     assert receipt["passed"] is True
-    assert receipt["case_count"] == 14
+    assert receipt["case_count"] == 15
     assert receipt["schema_repair"]["passed"] is True
     assert set(receipt["fingerprint_manifest"]) >= {
         "evals/agent-behavior.v1.json",

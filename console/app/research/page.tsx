@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ArrowDown, EllipsisVertical, Plus, RefreshCw, Search } from "lucide-react";
+import { ArrowDown, Plus, RefreshCw, Search } from "lucide-react";
 import {
   ActionButton,
   Badge,
@@ -16,6 +16,7 @@ import {
   FormActions,
   FormField,
   HorizontalTabs,
+  PageActionMenu,
   TextInputDialog,
   displayJson,
   formatDate,
@@ -60,55 +61,6 @@ const RESEARCH_PAGE_SIZE = {
   getSize: (width: number) => { const outerWidth = width + 34; return outerWidth >= 900 ? 6 : outerWidth >= 720 ? 5 : outerWidth >= 560 ? 4 : outerWidth >= 420 ? 3 : outerWidth >= 300 ? 2 : 1; },
   target: "container" as const,
 };
-
-function ResearchPageActions({
-  creating,
-  refreshing,
-  onCreate,
-  onRefresh,
-}: {
-  creating: boolean;
-  refreshing: boolean;
-  onCreate: () => void;
-  onRefresh: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function closeOnOutsidePointer(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    window.addEventListener("pointerdown", closeOnOutsidePointer);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnOutsidePointer);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  return (
-    <div className="page-action-menu" ref={rootRef}>
-      <button className="page-action-trigger" type="button" aria-label="Open Research Page Actions" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <EllipsisVertical aria-hidden="true" />
-      </button>
-      {open ? (
-        <div className="page-action-list" role="menu" aria-label="Research Page Actions">
-          <button type="button" role="menuitem" onClick={() => { onCreate(); setOpen(false); }}>
-            <Plus aria-hidden="true" /><span><strong>{creating ? "Close Create" : "Create Research Subject"}</strong><small>Open the Research Subject editor</small></span>
-          </button>
-          <button type="button" role="menuitem" disabled={refreshing} onClick={() => { onRefresh(); setOpen(false); }}>
-            <RefreshCw aria-hidden="true" className={refreshing ? "spin" : undefined} /><span><strong>{refreshing ? "Refreshing…" : "Refresh"}</strong><small>Reload durable Research data</small></span>
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -425,9 +377,61 @@ function ThesisRelationshipList({ theses, revisions, assumptions, invalidations,
   return <div className="research-thesis-list">{roots.map((thesis) => renderThesis(thesis, 0))}</div>;
 }
 
-function PendingCandidate({ candidate, subjectStatus, onConfirm, onReject, onWithdraw, busy }: { candidate: Dict; subjectStatus: string; onConfirm: (candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) => void; onReject: (candidate: Dict) => void; onWithdraw: (candidate: Dict) => void; busy: boolean }) {
+const CANDIDATE_NARRATIVE_FIELDS = ["statement", "rationale", "invalidation_check_note", "summary", "notes", "thesis_hint", "selection_reason"];
+
+function candidateFieldLabel(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function candidateTitle(kind: string, payload: Dict): string {
+  if (kind === "trade_plan") return `Trade Plan · ${shortId(payload.instrument_id)}`;
+  if (kind === "thesis_revision") return `Thesis Revision · ${text(payload.title, "Untitled Thesis")}`;
+  if (kind === "watchlist_item") return `Instrument · ${text(payload.display_name, shortId(payload.instrument_id))}`;
+  if (kind === "subject_status_change" || kind === "case_status_change") return `Research Subject Status · ${text(payload.new_status, "UNKNOWN").toUpperCase()}`;
+  return candidateFieldLabel(kind || "Candidate Proposal");
+}
+
+function CandidateCollection({ name, items }: { name: string; items: unknown[] }) {
+  return <details className="research-candidate-collection" open><summary>{candidateFieldLabel(name)} · {items.length}</summary><div>{items.map((item, index) => {
+    const value = item && typeof item === "object" ? item as Dict : null;
+    if (!value) return <article key={`${name}-${index}`}><strong>{text(item)}</strong></article>;
+    const description = text(value.description, text(value.statement, text(value.condition_code, `${candidateFieldLabel(name)} ${index + 1}`)));
+    const condition = [value.metric_key, value.comparator, value.threshold].filter((entry) => entry !== null && entry !== undefined && entry !== "").map(String).join(" ");
+    const context = [value.phase, value.mode, value.fact_type, value.instrument_id, value.observable, value.severity].filter((entry) => entry !== null && entry !== undefined && entry !== "").map(String).join(" · ");
+    return <article key={`${name}-${index}`}><strong>{description}</strong>{context && <small>{context}</small>}{condition && <code>{condition}</code>}{value.basis ? <p><span>Basis</span>{text(value.basis)}</p> : null}{value.falsifiability ? <p><span>Falsifiability</span>{text(value.falsifiability)}</p> : null}</article>;
+  })}</div></details>;
+}
+
+function CandidateReviewDetails({ candidate, payload, kind }: { candidate: Dict; payload: Dict; kind: string }) {
+  const collectionEntries = Object.entries(payload).filter(([, value]) => Array.isArray(value) && value.length > 0) as Array<[string, unknown[]]>;
+  const scalarItems = Object.entries(payload)
+    .filter(([key, value]) => key !== "kind" && !CANDIDATE_NARRATIVE_FIELDS.includes(key) && !Array.isArray(value) && (value === null || typeof value !== "object"))
+    .map(([key, value]) => ({ label: candidateFieldLabel(key), value: value === null || value === "" ? "—" : typeof value === "boolean" ? (value ? "Yes" : "No") : String(value) }));
+  const narratives = CANDIDATE_NARRATIVE_FIELDS.map((key) => [key, payload[key]] as const).filter(([, value]) => typeof value === "string" && value.trim());
+  return <section className="research-candidate-review" aria-label="Candidate Review Details">
+    <DescriptionList columns={4} items={[
+      { label: "Candidate ID", value: text(candidate.candidate_id) },
+      { label: "Proposal Type", value: candidateFieldLabel(kind) },
+      { label: "Proposed", value: formatDate(candidate.proposed_at) },
+      { label: "Expires", value: formatDate(candidate.expires_at) },
+      { label: "Proposed By", value: text(candidate.proposed_by, "unknown") },
+      { label: "Confirmation Mode", value: text(candidate.confirmation_mode, "UNKNOWN").toUpperCase() },
+      { label: "Subject", value: shortId(candidate.subject_id) },
+      { label: "Thesis", value: shortId(candidate.thesis_id) },
+    ]} />
+    {text(candidate.proposed_by_rationale, "") ? <div className="research-candidate-rationale"><span>Why This Change Was Proposed</span><p>{text(candidate.proposed_by_rationale, "")}</p></div> : null}
+    {scalarItems.length > 0 && <DescriptionList columns={4} className="research-candidate-payload-facts" items={scalarItems} />}
+    {narratives.length > 0 && <div className="research-candidate-narratives">{narratives.map(([key, value]) => <section key={key}><span>{candidateFieldLabel(key)}</span><p>{String(value)}</p></section>)}</div>}
+    {collectionEntries.map(([name, items]) => <CandidateCollection key={name} name={name} items={items} />)}
+    <details className="research-candidate-raw"><summary>Complete Proposal Payload</summary><pre>{displayJson(payload)}</pre></details>
+  </section>;
+}
+
+function PendingCandidate({ candidate, subjectStatus, onDecision, busy }: { candidate: Dict; subjectStatus: string; onDecision: (candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) => Promise<void>; busy: boolean }) {
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectionError, setRejectionError] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const rejectionInputRef = useRef<HTMLInputElement>(null);
   const payload = candidate.payload && typeof candidate.payload === "object" ? candidate.payload as Dict : {};
   const kind = text(payload.kind, text(candidate.kind, "thesis_revision"));
   const isSubjectStatus = kind === "subject_status_change" || kind === "case_status_change";
@@ -436,8 +440,21 @@ function PendingCandidate({ candidate, subjectStatus, onConfirm, onReject, onWit
     ? `${subjectStatus.toUpperCase()} → ${text(payload.new_status, "UNKNOWN").toUpperCase()}`
     : isInstrumentCandidate
       ? payload.action === "create" ? `Add Instrument: ${text(payload.display_name)} · ${text(payload.instrument_id)}` : `Instrument Update: ${text(payload.new_status).toUpperCase()}${payload.selection_reason ? ` · ${text(payload.selection_reason)}` : ""}`
-      : text(payload.statement, text(payload.title, "Candidate revision"));
-  return <article className="research-candidate"><header><div><strong>{text(candidate.candidate_id)}</strong><small>{kind} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => onConfirm(candidate, "confirm")} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><input required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { if (!rejectionReason.trim()) { setRejectionError("A rejection reason is required."); return; } onReject({ ...candidate, rejectionReason }); }} busy={busy}>Reject Candidate</ActionButton><button className="research-withdraw-button" type="button" disabled={busy} onClick={() => onWithdraw(candidate)}>Withdraw Proposal</button></div></section></div></article>;
+      : text(payload.statement, text(payload.title, candidateTitle(kind, payload)));
+  async function submit(action: "confirm" | "reject" | "withdraw") {
+    setDecisionError(null);
+    if (action === "reject" && !rejectionReason.trim()) {
+      setRejectionError("A rejection reason is required.");
+      rejectionInputRef.current?.focus();
+      return;
+    }
+    try {
+      await onDecision(candidate, action, action === "reject" ? rejectionReason.trim() : undefined);
+    } catch (cause) {
+      setDecisionError(cause instanceof Error ? cause.message : "Candidate decision failed.");
+    }
+  }
+  return <article className="research-candidate"><header><div><strong>{candidateTitle(kind, payload)}</strong><small>{text(candidate.candidate_id)} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><CandidateReviewDetails candidate={candidate} payload={payload} kind={kind} /><ErrorNote role="alert">{decisionError}</ErrorNote><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => { void submit("confirm"); }} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><input ref={rejectionInputRef} required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { void submit("reject"); }} busy={busy}>Reject Candidate</ActionButton><button className="research-withdraw-button" type="button" disabled={busy} onClick={() => { void submit("withdraw"); }}>Withdraw Proposal</button></div></section></div></article>;
 }
 
 function ResearchSubjectDetail({
@@ -473,7 +490,11 @@ function ResearchSubjectDetail({
     ...additionalInstrumentCandidates
       .map((candidate) => ({ instrumentId: text(candidate.instrument_id, `${text(candidate.market)}:${text(candidate.symbol)}`), displayName: text(candidate.display_name, shortId(candidate.instrument_id)), status: "INSTRUMENT" })),
   ];
-  const pendingCandidates = listOf<Dict>(state, "pending_candidates");
+  const pendingCandidates = listOf<Dict>(state, "pending_candidates").filter((candidate) => (
+    candidate._truncated !== true
+    && typeof candidate.candidate_id === "string"
+    && candidate.candidate_id.length > 0
+  ));
   const liveTheses = theses.filter((thesis) => ["active", "strengthened", "weakened"].includes(text(thesis.status, "").toLowerCase()));
   const continuitySignals = [
     ...(String(researchSubject.status).toLowerCase() === "active" && liveTheses.length === 0
@@ -563,7 +584,7 @@ function ResearchSubjectDetail({
       setCandidateResolving(true);
       setCandidateResolveMessage(null);
       try {
-        const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "instrument_resolve", arguments: { market: candidateMarket, query } });
+        const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "instrument_resolve", arguments: { market: candidateMarket, query }, preserve_full_result: true });
         if (cancelled) return;
         const suggestions = instrumentSuggestions(resultEnvelope(response));
         setCandidateSuggestions(suggestions);
@@ -750,10 +771,8 @@ function ResearchSubjectDetail({
     const request: Dict = { operation: "candidate", candidate_id: text(candidate.candidate_id), action, reviewed_by: "user", submitted_via: "direct" };
     if (action === "reject") request.rejection_reason = reason;
     else request.review_note = action === "withdraw" ? "User withdrew the candidate from the local Research workspace" : "Confirmed from the local Research workspace";
-    try {
-      await onWrite("research_judgment_confirm", request, "research_judgment_confirm");
-      onRefresh();
-    } catch { /* onWrite keeps the local error visible */ }
+    await onWrite("research_judgment_confirm", request, "research_judgment_confirm");
+    onRefresh();
   }
 
   async function proposeInstrumentCandidate() {
@@ -798,7 +817,7 @@ function ResearchSubjectDetail({
     <div className="research-detail-stack">
       <HorizontalTabs className="research-section-nav" items={RESEARCH_MODULES.map((module) => ({ id: module.key, label: module.label, attention: module.key === "overview" && pendingCandidates.length > 0, suffix: module.key === "overview" && pendingCandidates.length > 0 ? <span className="horizontal-tab-count" aria-label={`${pendingCandidates.length} Pending Candidates`}>{pendingCandidates.length}</span> : undefined }))} value={activeModule} onChange={selectModule} ariaLabel="Research Subject Modules" idPrefix="research-tab" panelIdPrefix="research-panel" />
       <section id="research-panel-overview" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-overview" hidden={activeModule !== "overview"}>
-      <Card id="research-section-overview" className="research-subject-detail" kicker={text(researchSubject.subject_type, "RESEARCH SUBJECT").replaceAll("_", " ").toUpperCase()} title={text(researchSubject.title, "Unnamed Research Subject")} action={<div className="research-detail-actions"><Badge value={text(researchSubject.status, "UNKNOWN").toUpperCase()} /><button className="close-button" type="button" onClick={() => { setDetailError(null); setSubjectEditor((value) => !value); }}>{subjectEditor ? "Close Editor" : "Edit Research Subject"}</button>{String(researchSubject.status).toLowerCase() === "draft" && <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void activateSubject(); }}>Start Tracking</button>}{String(researchSubject.status).toLowerCase() === "archived" ? <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void restoreSubject(); }}>Restore to Draft</button> : <button className="close-button warning-text" type="button" disabled={busy} onClick={archiveSubject}>Archive</button>}</div>}>
+      <Card id="research-section-overview" className="research-subject-detail" kicker={text(researchSubject.subject_type, "RESEARCH SUBJECT").replaceAll("_", " ").toUpperCase()} title={text(researchSubject.title, "Unnamed Research Subject")} action={<div className="research-detail-actions"><Badge value={text(researchSubject.status, "UNKNOWN").toUpperCase()} /><Link className="close-button" href={`/decision-workbench?subject_id=${encodeURIComponent(text(researchSubject.subject_id))}&capture=decision`}>Record Decision</Link><button className="close-button" type="button" onClick={() => { setDetailError(null); setSubjectEditor((value) => !value); }}>{subjectEditor ? "Close Editor" : "Edit Research Subject"}</button>{String(researchSubject.status).toLowerCase() === "draft" && <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void activateSubject(); }}>Start Tracking</button>}{String(researchSubject.status).toLowerCase() === "archived" ? <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void restoreSubject(); }}>Restore to Draft</button> : <button className="close-button warning-text" type="button" disabled={busy} onClick={archiveSubject}>Archive</button>}</div>}>
         <DescriptionList columns={3} items={[{ label: "Instruments", value: instrumentInventory.length === 0 ? "—" : <span className="research-overview-instruments">{instrumentInventory.map((instrument) => <span key={`${instrument.status}-${instrument.instrumentId}`}><strong>{instrument.displayName}</strong><small>{instrument.status}</small></span>)}</span> }, { label: "Created", value: formatDate(researchSubject.created_at) }, { label: "Updated", value: formatDate(researchSubject.updated_at) }]} />
         <p className="research-summary">{text(researchSubject.summary, "No Research Subject summary.")}</p>
         <div className="research-tags" aria-label="Research Subject Tags">{tags.length === 0 ? <span className="muted">No Tags</span> : tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
@@ -809,7 +828,7 @@ function ResearchSubjectDetail({
       <Card id="research-section-continuity" className="research-continuity-check" kicker="RESEARCH HEALTH" title="Health Check" action={continuitySignals.length > 0 ? <Badge value={`${continuitySignals.length} OPEN`} /> : undefined}>
         {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core Judgment Controls Are Present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => signal.key === "candidates" ? <button className="continuity-checklist-action" type="button" key={signal.key} onClick={() => goToSection("research-section-review")}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div><span className="continuity-action-copy">Open Queue <ArrowDown aria-hidden="true" /></span></button> : <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
       </Card>
-      {pendingCandidates.length > 0 && <Card id="research-section-review" className="research-candidates-card" kicker="DECISION REQUIRED" title="Pending Candidates" description="Confirm, reject, or withdraw each exact proposal." action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onConfirm={(item, action) => { void decideCandidate(item, action); }} onReject={(item) => { void decideCandidate(item, "reject", text(item.rejectionReason)); }} onWithdraw={(item) => { void decideCandidate(item, "withdraw"); }} />)}</Card>}
+      {pendingCandidates.length > 0 && <Card id="research-section-review" className="research-candidates-card" kicker="DECISION REQUIRED" title="Pending Candidates" description="Review the complete proposed change, then confirm, reject, or withdraw that exact Candidate." action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onDecision={decideCandidate} />)}</Card>}
       <details className="research-raw"><summary>View This Research Subject&apos;s Durable State</summary><pre>{displayJson(state)}</pre></details>
       </section>
       <section id="research-panel-instruments" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-instruments" hidden={activeModule !== "instruments"}>
@@ -947,7 +966,10 @@ export default function ResearchPage() {
   }
 
   return (
-    <ConsoleShell active="research" pageActions={<ResearchPageActions creating={subjectEditor} refreshing={result.loading} onCreate={() => { setSubjectDraft(EMPTY_SUBJECT_DRAFT); setSubjectEditorError(null); setSubjectEditor((value) => !value); }} onRefresh={result.refresh} />}>
+    <ConsoleShell active="research" pageActions={<PageActionMenu ariaLabel="Research Page Actions" items={[
+      { id: "create", label: subjectEditor ? "Close Create" : "Create Research Subject", description: "Open the Research Subject editor", icon: <Plus aria-hidden="true" />, onSelect: () => { setSubjectDraft(EMPTY_SUBJECT_DRAFT); setSubjectEditorError(null); setSubjectEditor((value) => !value); } },
+      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload durable Research data", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
+    ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
         <div className="research-page">
           <div className="research-master-detail">

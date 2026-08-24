@@ -11,6 +11,9 @@
 > Reviewed and revised: 2026-08-16. This version corrects the composition-root
 > direction, retains the actively used DeepSeek Provider, separates Provider
 > guard risks, and adds measurable acceptance criteria.
+>
+> Current F9 state (2026-08-21): the standalone Chat workspace was removed.
+> Agent Rail is the only conversation UI; `/chat` is a compatibility redirect.
 
 ## Part A — Deferred defect follow-ups
 
@@ -19,7 +22,7 @@ are folded into the slimming work below and should be executed one by one:
 
 | ID | Item | Folded into |
 |---|---|---|
-| D1 | Extract one shared Agent conversation/controller implementation; keep Chat and Agent Rail as thin shells instead of making either shell own the other | F9 |
+| D1 | Keep one Agent conversation/controller and one Agent Rail UI; retain `/chat` only as a compatibility redirect | F9 |
 | D2 | Classify native dialogs into validation, required input, and destructive confirmation; replace each class with the correct accessible component without weakening a gate | F6 |
 | D3 | Determine whether Tailwind supplies anything beyond reset/preflight; remove it only after proving no generated utility is required, otherwise document the dependency | F7 |
 
@@ -194,7 +197,7 @@ the public alias entry point.
 
 `text()` exists 9× in three behavior families (dashboard `"—"` fallback:
 research/portfolio/agenda/scorecards/research-continuity; agent strict `""`:
-agent-rail/chat-workspace/agent-api; loose `String()`:
+agent-rail/agent-api; loose `String()`:
 decision-workbench/retro). `asDict` 10×, string-list helpers 7×, envelope
 unwrapping 7×. Migrate families A and B to shared exports; leave the two loose
 variants in place (decision-workbench numbers would change display if unified).
@@ -283,7 +286,7 @@ defensive parsing and SSE consumption separate.
 
 | ID | Candidate | Evidence | Note |
 |---|---|---|---|
-| F9 | Chat page vs Agent Rail: two entry shells over one agent surface | chat-workspace 830 lines vs agent-rail 1,555 with diverged `StreamSnapshot` types and stale "read-only milestone" copy (chat:345) | Extract shared `agent-stream` primitives and `useAgentConversation`; keep route and rail shells thin, with neither importing the other |
+| F9 | Historical Chat page vs Agent Rail duplication | Initial baseline: chat-workspace 830 lines vs agent-rail 1,555 with diverged `StreamSnapshot` types and stale "read-only milestone" copy | Keep shared `agent-stream`/`useAgentConversation`, remove the standalone Chat shell, and make `/chat` redirect to Agent Rail |
 | F10 | DeepSeek LLM Provider | Actively configured as a selectable Provider and Monitor fallback; current tests cover `deepseek-v4-flash` and `deepseek-v4-flash-0731` | **KEEP. Remove this deletion candidate.** Consolidate only protocol-neutral OpenAI-compatible transport code; retain Provider identity, settings, reasoning limits, fallback receipts, and tests |
 | F11 | Home "Attention Queue" vs Decision Workbench Review Queue | home renders attention notices while the workbench owns acknowledge/resolve | Layered by design; evaluate whether the home summary should just deep-link instead of re-rendering its own queue view |
 
@@ -430,7 +433,7 @@ decision-workbench/retro coercers, agent-api's typed `asRecord`, and
 | F5 | Completed; Agenda buckets are computed before pagination by the backend and both pages format the same projection | 20 focused Agenda/API/Console tests |
 | F6 | Completed; 27 native dialogs reduced to zero without removing lifecycle, due-evaluation, OAuth, resolution-note, or archive gates | 37 Console tests and dialog convention coverage |
 | F7 | Completed; no utility-class dependency existed, explicit preflight-equivalent reset added, both Tailwind packages and 18 transitive packages removed | Production build, 37 Console tests, typecheck/lint, zero npm audit findings |
-| F9 | Completed with shared stream reducer and `useAgentConversation`; Chat and Agent Rail remain independent shells | Production build, 37 Console tests, typecheck/lint |
+| F9 | Completed with one Agent Rail shell plus shared stream reducer and `useAgentConversation`; standalone Chat workspace removed and `/chat` redirects | Production build, Console tests, typecheck/lint |
 | F10 | KEEP decision confirmed; DeepSeek Provider identity and fallback behavior remain intact | No deletion performed |
 | F11 | Completed; Home is summary/deep-link only and Decision Workbench remains the sole Review Queue action owner | Console rendered tests |
 

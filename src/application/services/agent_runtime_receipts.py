@@ -87,6 +87,10 @@ def model_receipt_json(
     api_style: str | None = None,
     capability_search_audits: list[dict[str, object]] | None = None,
     evidence_manifest: str | None = None,
+    answer_envelope: str | None = None,
+    trace_id: str | None = None,
+    additional_web_search_used: bool = False,
+    additional_web_source_urls: tuple[str, ...] = (),
 ) -> str:
     usage = aggregate_usage(responses)
     latency_ms = aggregate_latency(responses)
@@ -96,10 +100,18 @@ def model_receipt_json(
         "model_calls": len(responses),
         "tool_rounds": tool_rounds,
         "usage": asdict(usage) if usage is not None else None,
-        "web_search_used": any(item.web_search_used for item in responses),
+        "web_search_used": (
+            additional_web_search_used
+            or any(item.web_search_used for item in responses)
+        ),
         "web_extractor_used": any(item.web_extractor_used for item in responses),
         "web_source_urls": list(
-            dict.fromkeys(url for item in responses for url in item.web_source_urls)
+            dict.fromkeys(
+                (
+                    *(url for item in responses for url in item.web_source_urls),
+                    *additional_web_source_urls,
+                )
+            )
         )[:20],
         "request_id": response.request_id,
         "latency_ms": latency_ms,
@@ -125,6 +137,10 @@ def model_receipt_json(
         "evidence_manifest": (
             json.loads(evidence_manifest) if isinstance(evidence_manifest, str) else None
         ),
+        "answer_envelope": (
+            json.loads(answer_envelope) if isinstance(answer_envelope, str) else None
+        ),
+        "trace_id": trace_id,
     }
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded.encode("utf-8")) <= 16_384:
@@ -144,6 +160,21 @@ def model_receipt_json(
             "size_bytes": len(raw_manifest),
             "sha256": hashlib.sha256(raw_manifest).hexdigest(),
         }
+    answer = value.get("answer_envelope")
+    if answer is not None:
+        raw_answer = json.dumps(
+            answer,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(raw_answer) > 8_192:
+            value["answer_envelope"] = {
+                "schema_version": 1,
+                "truncated": True,
+                "size_bytes": len(raw_answer),
+                "sha256": hashlib.sha256(raw_answer).hexdigest(),
+            }
 
     def bounded_list(key: str, limit: int) -> list[Any]:
         raw = value.get(key)
@@ -177,6 +208,8 @@ def model_receipt_json(
             "api_style",
             "artifact_urls",
             "evidence_manifest",
+            "answer_envelope",
+            "trace_id",
         )
     }
     return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

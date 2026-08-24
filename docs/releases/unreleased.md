@@ -1,5 +1,135 @@
 # Unreleased
 
+- Added persistent authenticated LAN mode to the Console supervisor. `console
+  install --lan` generates/reuses an owner-only password file, stores only its path
+  in launchd, keeps the API loopback-only, and makes normal Console restarts bring up
+  the LAN Web automatically.
+
+- Every configured Agent model now has default Web Search access through the private
+  read-only `tp_web_search` tool backed by a server-owned Tavily Search sidecar.
+  Answer models never receive the sidecar key, no additional Bailian model call is made,
+  queries persist only as hashes, source
+  URLs remain bounded, and web context cannot override canonical Trading Partner facts.
+
+- Composite Monitor judgment now defaults independently to Bailian
+  `deepseek-v4-flash-0731` over Chat Completions with JSON Object output and one
+  bounded structure-only repair. Bailian `qwen3.8-max` is the Responses fallback;
+  Console Agent model defaults are unchanged.
+
+- Agent Provider failures now render as durable, dedicated Console notifications with
+  the exact internal error code, safe HTTP status, Provider/model identity,
+  retryability, bounded attempt count, and a fixed human explanation. Migration
+  `0054_agent_turn_failure_metadata` restores the same notification after refresh while
+  excluding URLs, payloads, headers, response bodies, exception text, and credentials.
+  HTTP 400/422 now map to non-retryable `PROVIDER_REQUEST_REJECTED`; 401 and 403
+  render distinct authentication versus model-access guidance. OpenCode Zen free
+  chat models that reject reasoning no longer receive it, while Ox Alpha Free
+  (`x-preview-f-free`) exposes its verified `low`/`high`/`max` effort levels.
+  The notification is pinned above the conversation scroll region and has a local,
+  persistent dismiss control that does not mutate the durable failed turn.
+
+- Documented Phase 4 as the planned Trading Journal product loop: Decision/NO_ACTION,
+  order lifecycle, broker activity, deterministic Trade Cycles, trustworthy native-currency
+  performance, strategy-linked behavior review, and one new Console Journal workspace without
+  expanding the 27-tool public MCP surface or execution authority.
+
+- Started the Phase 4A reuse-first Console slice by turning the existing Decision Workbench into
+  `Journal`. Six module cards now form four workflow components—Decide, Observe, Execute, and
+  Review—using the existing Research, Monitor/Catalyst, durable Position/Transaction, Portfolio
+  Performance, Trade Retro, and Scorecard services. Agenda, Scorecards, and Retro remain intact as
+  specialist deep links but no longer occupy primary navigation. Journal can append a compact
+  strategy_v1 Decision/NO_ACTION through the existing Decision Record contract without authorizing
+  an order.
+
+- Extended the existing Decision Record with nullable structured Phase 4A metadata instead of
+  adding another decision module: Strategy code/version, one four-scenario context, exact same-
+  Subject Trade Plan ID/version, and aware review due time. The fields participate in idempotency,
+  persist through migration `0055`, remain backward-compatible with historical records, and have
+  no execution effect. Journal also reuses the Research Timeline to show recent Decisions directly.
+  Elapsed review due times now reuse the existing ReviewItem/Attention lifecycle: an exact later
+  superseding Decision or explicit manual resolution closes the item, while failed or bounded reads
+  never infer closure. Migration `0056` safely widens the existing ReviewItem source vocabulary.
+
+- Added the Phase 4B Trade Cycle first slice by reusing durable Account Transactions and FIFO
+  semantics. `portfolio_analyze/trade_cycles` reconstructs long-only OPEN/CLOSED/UNRESOLVED cycles,
+  scale-ins, reductions, closures, and per-account/native-currency re-entry without persistence or
+  Provider access. Missing fees/prices, oversells, orphan sells, incomplete coverage, and truncation
+  stay explicit. Journal now renders the latest real Cycle instead of a placeholder. The public MCP
+  remains 27 tools and compact input-schema bytes decreased from 26,135 to 26,116.
+
+- Completed the next Journal loop slices without adding a public tool: append-only Unlinked
+  Activity annotations and ReviewItems, deterministic native-currency TWR/MWR-XIRR/drawdown,
+  and no-score behavior cohorts with explicit denominators and exclusions. The Journal can
+  classify an exact unmatched trade in one save, Portfolio renders return coverage, and the
+  post-market job now synchronizes transactions and materializes Unlinked Activity before the
+  Watchlist refresh. Follow-up slices add durable Daily Equity/Journal activation, mandatory
+  preview plus append-only Cycle split/merge/relink, period action recurrence, a unified
+  Decision→Order→Activity timeline, and optional exact Decision/Plan links on order previews.
+  Migration head is `0063_agent_image_attachments`; the 27-tool compact surface remains
+  below its schema budget.
+
+- Added a no-live-side-effect Phase 4 acceptance flow and Journal Playwright flow. The backend
+  test uses one temporary database to prove Decision/Plan-linked fake order preview+submit,
+  exact Fill annotation, CLOSED active Cycle, Daily Equity/TWR, behavior coverage, recurrence,
+  and FULL_CHAIN Timeline output. This uncovered and fixed the persisted Behavior Review DTO
+  hydration boundary (`from_attributes=True`).
+
+- Separated local Console completeness from MCP transport size limits. The shared
+  capability registry now exposes a validation-identical `invoke_uncompacted` path
+  for loopback BFF reads, while public MCP and the explicit Capability Workbench
+  retain 15 KiB compaction. Portfolio, Watchlist, Research, Monitors, Workbench,
+  Agenda, Retro, Scorecards, Operations, and Overview no longer lose durable rows
+  to `_truncated` markers.
+
+- Monitor Library now reads the complete validated local dashboard instead of the
+  MCP transport-compacted projection. XAUUSD, light-oil, and later Monitor
+  definitions are no longer omitted after the first large dashboard items;
+  truncation markers are filtered and surfaced as an explicit error if encountered.
+
+- Research Pending Candidates now use complete, validated local state instead of
+  MCP transport-compacted payloads. Each approval card shows proposal identity,
+  audit metadata, scalar changes, narratives, Conditions/Assumptions/Invalidations,
+  and the complete payload before Confirm/Reject/Withdraw; truncation markers are
+  never rendered as Candidates, and decision errors stay on the owning card.
+
+- Portfolio Exposure Instrument cells now show durable aggregate Quantity and
+  quantity-weighted average Cost, order exposure groups by Weight descending, and
+  default each Accounts & Holdings table to Market Value descending.
+
+- Added separate first-class OpenCode Zen and OpenCode Go support for the shared Agent and
+  composite Monitor judgment runtime. They share one account credential by default while
+  retaining separate Base URLs, model directories, optional key overrides, and route receipts.
+  Go now includes `muse-spark-1.2-contributor`; models route
+  through Responses, Chat Completions, or Messages according to a closed protocol map.
+  Neither Provider advertises native Web Search, and unknown future model IDs
+  remain hidden, and subscription/entitlement failures stay typed and secret-safe.
+  Composite Monitor requests now use one schema-bound function call on compatible Chat
+  Completions routes and strict JSON Schema on Responses routes, fall back to JSON-object
+  mode only after an explicit structure-parameter rejection, project only declared fields,
+  and permit one locally revalidated structure-only repair.
+
+- Completed the 2026-08 technical platform upgrade: secret-safe OpenTelemetry,
+  Playwright browser gates, SQLite WAL diagnostics, durable Operational Job leases,
+  generated Pydantic→TypeScript contracts, shared Agent-LLM resilience routing, typed
+  Agent answer blocks, and optional local-only FTS5/vector hybrid Research Search. Public MCP
+  remains 27 tools and all execution confirmation boundaries are unchanged.
+
+- Hardened the shared Agent decision loop: Chinese daily-attention intents route to
+  `investment_case_read/attention`; incomplete source windows are explicitly partial;
+  expired Candidates are not presented as confirmable; Auto failover has a hard
+  read-only tool surface; Console streams recover through bounded durable replay;
+  model/reasoning choices persist per Provider; and legacy `/chat` opens the Agent Rail.
+- Re-ran the current checkout through a real FastMCP stdio child process on 2026-08-20.
+  The 27-tool host completed `system_health → attention → exact next_read` with no writes.
+
+- Standardized specialist Console layouts on the Research workspace pattern while
+  leaving the Overview home layout unchanged. Portfolio, Workbench, Monitors,
+  Catalyst Agenda, Trade Retro, Scorecards, Operations, and Capabilities now collect
+  infrequent page actions in the shared vertical Header menu; view filters remain in
+  compact control bars, and all existing confirmation boundaries are preserved.
+  Overview remains excluded. The legacy `/chat` route now redirects to the shared
+  Agent Rail instead of maintaining a second conversation implementation.
+
 - Recorded the 2026-08-17 MCP host decision-loop read-only smoke. Current
   source checkout passed; the already-connected Grok stdio process was still
   pre-PR3 and must be reloaded.
@@ -83,3 +213,6 @@
 - Provider model selection now fetches each configured Provider's live model directory
   and reasoning-effort choices. Web Search remains enabled by default where supported;
   no opt-in toggle or autonomous broker-order path was added.
+- Added bounded Console Agent PNG/JPEG attachments with paste support, private
+  owner-checked storage, durable message metadata, context replay, and provider-neutral
+  multimodal protocol translation. Telegram remains text-only.

@@ -9,9 +9,15 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from application.dto.account_transactions import TradeCycleQueryInput
+from application.dto.behavior_review import (
+    BehaviorActionInputDTO,
+    BehaviorReviewRunInput,
+)
 from application.dto.tool_envelope import ToolEnvelope
 from application.dto.trade_retro import TradeRetroHistoryInput
 from application.services.trade_retro_schedule import trade_retro_weekly_windows
+from domain.behavior_review.enums import BehaviorReviewPeriodKind
 from interfaces.cli._lifecycle import application_container
 
 
@@ -106,6 +112,10 @@ async def run(argv: list[str] | None = None) -> int:
     )
     weekly.add_argument("--no-llm", action="store_true")
     weekly.add_argument("--export-obsidian", action="store_true")
+    weekly.add_argument(
+        "--idempotency-key",
+        help="Explicit run key for an authorized rerun; default is the stable weekly key.",
+    )
     args = parser.parse_args(argv)
 
     async with application_container() as container:
@@ -131,7 +141,10 @@ async def run(argv: list[str] | None = None) -> int:
                 )
             elif args.command == "weekly":
                 review_start, review_end, prepare_start, prepare_end = _weekly_windows()
-                run_key = _week_key("retro-run", review_start)
+                rerun_key = args.idempotency_key.strip() if args.idempotency_key else None
+                if args.idempotency_key is not None and not rerun_key:
+                    parser.error("--idempotency-key must not be blank")
+                run_key = rerun_key or _week_key("retro-run", review_start)
                 run_envelope = await container.services.trade_retro.run(
                     start=review_start,
                     end=review_end,
@@ -147,7 +160,59 @@ async def run(argv: list[str] | None = None) -> int:
                 prepare_envelope = container.services.trade_retro.prepare(
                     start=prepare_start,
                     end=prepare_end,
-                    idempotency_key=_week_key("retro-plan", prepare_start),
+                    idempotency_key=(
+                        f"{rerun_key}-plan"
+                        if rerun_key is not None
+                        else _week_key("retro-plan", prepare_start)
+                    ),
+                )
+                behavior_end = review_start + timedelta(days=7)
+                try:
+                    review_items = container.services.review_items.list_open(limit=500)
+                    action_items = tuple(
+                        BehaviorActionInputDTO(
+                            action_text=item.detail or item.title,
+                            review_item_source_keys=(item.source_key,),
+                        )
+                        for item in review_items
+                        if item.source_type == "TRADE_RETRO"
+                    )
+                    source_complete = len(review_items) < 500
+                    source_error = (
+                        None if source_complete else "REVIEW_ITEM_SOURCE_LIMIT_REACHED"
+                    )
+                except Exception:  # noqa: BLE001 - failed reads never imply resolution
+                    action_items = ()
+                    source_complete = False
+                    source_error = "REVIEW_ITEM_SOURCE_UNAVAILABLE"
+                cycles = container.services.account_transactions.get_trade_cycles(
+                    TradeCycleQueryInput(start=review_start, end=behavior_end, limit=500)
+                )
+                behavior_review = container.services.behavior_reviews.run(
+                    BehaviorReviewRunInput(
+                        period_kind=BehaviorReviewPeriodKind.WEEKLY,
+                        period_start=review_start,
+                        period_end=behavior_end,
+                        strategy_code="strategy_v1",
+                        cycle_ids=(
+                            tuple(item.cycle_id for item in cycles.data.cycles)
+                            if cycles.ok and cycles.data is not None
+                            else ()
+                        ),
+                        retro_run_ids=(
+                            (run_envelope.data.run_id,)
+                            if run_envelope.ok and run_envelope.data is not None
+                            else ()
+                        ),
+                        action_items=action_items,
+                        source_read_complete=source_complete,
+                        source_error_code=source_error,
+                        idempotency_key=(
+                            f"{rerun_key}-behavior"
+                            if rerun_key is not None
+                            else _week_key("behavior-review", review_start)
+                        ),
+                    )
                 )
                 ok = run_envelope.ok and prepare_envelope.ok and (
                     export_envelope is None or export_envelope.ok
@@ -163,6 +228,7 @@ async def run(argv: list[str] | None = None) -> int:
                                 else None
                             ),
                             "prepare": prepare_envelope.model_dump(mode="json"),
+                            "behavior_review": behavior_review.model_dump(mode="json"),
                         },
                         ensure_ascii=False,
                         sort_keys=True,

@@ -198,6 +198,7 @@ export function MonitorEditor({
       const response = await postApi<Dict>("/api/tools/invoke", {
         tool_name: "instrument_resolve",
         arguments: { market, query: symbolQuery.trim() },
+        preserve_full_result: true,
       });
       const envelope = response.result as Dict | undefined;
       const data = envelope?.data as Dict | undefined;

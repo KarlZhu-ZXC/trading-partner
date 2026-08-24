@@ -10,7 +10,11 @@ import pytest
 from sqlalchemy import create_engine
 
 import interfaces.console.api as console_api
+from application.dto.activity_annotations import ActivityAnnotationDTO
 from application.services.review_item_service import ReviewItemService
+from domain.common.enums import VendorId
+from domain.common.errors import ActivityAnnotationVersionConflict
+from domain.portfolio.enums import ActivityAnnotationStatus
 from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
 from domain.review_item.models import ReviewItemProjection
 from infrastructure.persistence.metadata import Base
@@ -43,6 +47,132 @@ def test_console_bff_canonicalizes_legacy_subject_transport_fields() -> None:
             "linked_subject_ids": ["case_002"],
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_console_full_result_invocation_keeps_validated_grouped_request() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Registry:
+        async def invoke_uncompacted(
+            self,
+            capability: str,
+            arguments: dict[str, Any],
+            *,
+            confirmation: str | None = None,
+        ) -> dict[str, Any]:
+            assert confirmation is None
+            calls.append((capability, arguments))
+            return {"ok": True, "data": {"pending_candidates": []}}
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(capability_registry=_Registry()))
+    )
+    result = await console_api._invoke_capability(
+        request,
+        "research_judgment_get",
+        {"request": {"operation": "state", "case_id": "case_001"}},
+        preserve_full_result=True,
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        (
+            "research_judgment_get",
+            {"request": {"operation": "state", "case_id": "case_001"}},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_monitor_library_preserves_full_dashboard_result(monkeypatch: Any) -> None:
+    calls: list[tuple[str, str, bool]] = []
+
+    async def fake_invoke(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+        preserve_full_result: bool = False,
+    ) -> dict[str, Any]:
+        assert confirmation is None
+        operation = arguments["request"]["operation"]
+        calls.append((tool_name, operation, preserve_full_result))
+        key = "items" if operation == "dashboard" else operation
+        return {"ok": True, "data": {key: []}, "warnings": [], "errors": []}
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get("/api/monitors?run_limit=1&event_limit=1")
+
+    assert response.status_code == 200
+    assert calls == [
+        ("monitor_read", "dashboard", True),
+        ("monitor_read", "runs", True),
+        ("monitor_read", "events", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_workbench_compacts_by_default_and_owned_reads_opt_into_full_result(
+    monkeypatch: Any,
+) -> None:
+    calls: list[bool] = []
+
+    async def fake_invoke(
+        _request: Any,
+        _tool_name: str,
+        _arguments: dict[str, Any],
+        *,
+        confirmation: str | None = None,
+        preserve_full_result: bool = False,
+    ) -> dict[str, Any]:
+        assert confirmation is None
+        calls.append(preserve_full_result)
+        return {"ok": True, "data": {"items": []}}
+
+    monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
+    monkeypatch.setattr(console_api, "build_default_application", _Container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        compact = await client.post(
+            "/api/tools/invoke",
+            json={"tool_name": "research_memory_get", "arguments": {}},
+            headers=headers,
+        )
+        full = await client.post(
+            "/api/tools/invoke",
+            json={
+                "tool_name": "research_memory_get",
+                "arguments": {},
+                "preserve_full_result": True,
+            },
+            headers=headers,
+        )
+
+    assert compact.status_code == 200
+    assert full.status_code == 200
+    assert calls == [False, True]
 
 
 def test_workflow_attention_projects_overdue_agenda_and_open_retro_only() -> None:
@@ -240,6 +370,11 @@ def test_scorecard_attention_marks_consecutive_gap_as_persistent() -> None:
 
 
 class _Container:
+    def __init__(self) -> None:
+        self.context = SimpleNamespace(
+            clock=SimpleNamespace(now=lambda: datetime(2026, 8, 21, 12, tzinfo=UTC))
+        )
+
     async def aclose(self) -> None:
         return None
 
@@ -329,6 +464,20 @@ class _AgendaContainer:
         now: datetime | None = None,
     ) -> None:
         self.services = SimpleNamespace(
+            decisions=SimpleNamespace(list_review_due=lambda **_kwargs: ()),
+            broker_orders=SimpleNamespace(list_recent=lambda **_kwargs: ()),
+            behavior_reviews=SimpleNamespace(history=lambda **_kwargs: ()),
+            activity_annotations=SimpleNamespace(
+                list_annotations=lambda **_kwargs: (),
+                list_unlinked=lambda **_kwargs: SimpleNamespace(
+                    model_dump=lambda **_dump_kwargs: {
+                        "activities": [],
+                        "has_more": False,
+                        "observed_complete": True,
+                        "limitation_codes": [],
+                    }
+                )
+            ),
             review_items=SimpleNamespace(
                 reconcile=lambda *_args, **_kwargs: (),
                 list_open=lambda **_kwargs: (),
@@ -365,6 +514,250 @@ async def _console_headers(client: httpx.AsyncClient) -> dict[str, str]:
         "Origin": "http://127.0.0.1:3000",
         "X-Trading-Partner-Console-Token": response.json()["token"],
     }
+
+
+class _ActivityAnnotationService:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.requests: list[Any] = []
+
+    def append_revision(self, request: Any) -> ActivityAnnotationDTO:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return ActivityAnnotationDTO(
+            annotation_id="activity_annotation_00000000-0000-7000-8000-000000000001",
+            provider=request.provider,
+            account_ref=request.account_ref,
+            provider_transaction_id=request.provider_transaction_id,
+            version=1,
+            status=request.status,
+            decision_id=request.decision_id,
+            trade_plan_id=request.trade_plan_id,
+            trade_plan_version=request.trade_plan_version,
+            subject_id=request.subject_id,
+            note=request.note,
+            actor=request.actor,
+            authorization_note=request.authorization_note,
+            idempotency_key=request.idempotency_key,
+            created_at=datetime(2026, 8, 21, 12, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_activity_annotation_console_route_requires_session_and_appends_exact_request(
+    monkeypatch: Any,
+) -> None:
+    service = _ActivityAnnotationService()
+    container = _AgendaContainer()
+    container.services.activity_annotations = service
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    payload = {
+        "provider": "broker",
+        "account_ref": "acct-1",
+        "provider_transaction_id": "tx-1",
+        "status": "UNPLANNED",
+        "note": "External terminal activity.",
+        "expected_version": 0,
+        "idempotency_key": "console-annotation-1",
+        "authorization_note": "User classified the exact activity.",
+    }
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        unauthenticated = await client.post("/api/activity-annotations", json=payload)
+        headers = await _console_headers(client)
+        response = await client.post("/api/activity-annotations", json=payload, headers=headers)
+
+    assert unauthenticated.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["status"] == "UNPLANNED"
+    assert len(service.requests) == 1
+    request = service.requests[0]
+    assert request.provider is VendorId.BROKER
+    assert request.status is ActivityAnnotationStatus.UNPLANNED
+    assert request.actor == "user"
+
+
+@pytest.mark.asyncio
+async def test_activity_annotation_console_route_maps_validation_and_revision_conflicts(
+    monkeypatch: Any,
+) -> None:
+    service = _ActivityAnnotationService(ActivityAnnotationVersionConflict("stale revision"))
+    container = _AgendaContainer()
+    container.services.activity_annotations = service
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    headers_payload = {
+        "provider": "broker",
+        "account_ref": "acct-1",
+        "provider_transaction_id": "tx-1",
+        "status": "not-a-status",
+        "idempotency_key": "console-annotation-2",
+        "authorization_note": "User classified the exact activity.",
+    }
+    valid_payload = {**headers_payload, "status": "UNPLANNED"}
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        invalid = await client.post(
+            "/api/activity-annotations", json=headers_payload, headers=headers
+        )
+        conflict = await client.post(
+            "/api/activity-annotations", json=valid_payload, headers=headers
+        )
+
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "INPUT_VALIDATION_ERROR"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "ACTIVITY_ANNOTATION_VERSION_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_phase4_manual_cycle_and_behavior_review_writes_use_console_session(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 21, 12, tzinfo=UTC))
+    projection = object()
+    override_requests: list[Any] = []
+    behavior_requests: list[Any] = []
+    container.services.account_transactions = SimpleNamespace(
+        project_trade_cycles_for_override=lambda _request: projection
+    )
+    container.services.trade_cycle_overrides = SimpleNamespace(
+        preview_revision=lambda request, projection: (
+            override_requests.append(("preview", request, projection))
+            or SimpleNamespace(model_dump=lambda **_kwargs: {"impacts": []})
+        ),
+        append_revision=lambda request, projection: (
+            override_requests.append(("append", request, projection))
+            or SimpleNamespace(model_dump=lambda **_kwargs: {"version": 1})
+        ),
+    )
+    container.services.behavior_reviews = SimpleNamespace(
+        run=lambda request: (
+            behavior_requests.append(request)
+            or SimpleNamespace(model_dump=lambda **_kwargs: {"status": "COMPLETE"})
+        )
+    )
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api, "create_capability_registry", lambda _container: CompactCapabilityRegistry()
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    override = {
+        "root_cycle_id": "trade_cycle_1",
+        "operation": "SPLIT",
+        "cycle_ids": ["trade_cycle_1"],
+        "split_groups": [["tx-1"], ["tx-2"]],
+        "expected_version": 0,
+        "idempotency_key": "override-1",
+        "authorization_note": "User reviewed the exact split impact.",
+    }
+    review = {
+        "period_kind": "WEEKLY",
+        "period_start": "2026-08-10T00:00:00Z",
+        "period_end": "2026-08-17T00:00:00Z",
+        "subject_ids": ["case_1"],
+        "idempotency_key": "behavior-week-1",
+    }
+
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post("/api/trade-cycle-overrides/preview", json=override)
+        headers = await _console_headers(client)
+        preview = await client.post(
+            "/api/trade-cycle-overrides/preview", json=override, headers=headers
+        )
+        applied = await client.post("/api/trade-cycle-overrides", json=override, headers=headers)
+        reviewed = await client.post("/api/behavior-reviews", json=review, headers=headers)
+
+    assert denied.status_code == 403
+    assert preview.json() == {"impacts": []}
+    assert applied.json() == {"version": 1}
+    assert reviewed.json() == {"status": "COMPLETE"}
+    assert [item[0] for item in override_requests] == ["preview", "append"]
+    assert all(item[2] is projection for item in override_requests)
+    assert override_requests[1][1].actor == "user"
+    assert behavior_requests[0].period_kind.value == "WEEKLY"
+
+
+@pytest.mark.asyncio
+async def test_decision_workbench_preserves_unlinked_activity_read(monkeypatch: Any) -> None:
+    container = _AgendaContainer()
+    unlinked = {
+        "activities": [
+            {
+                "source_key": "UNLINKED_ACTIVITY:broker:acct-1:tx-1",
+                "transaction": {
+                    "provider": "broker",
+                    "account_ref": "acct-1",
+                    "provider_transaction_id": "tx-1",
+                    "kind": "trade",
+                    "instrument_id": "equity:US:AAPL",
+                },
+            }
+        ],
+        "has_more": False,
+        "observed_complete": True,
+        "limitation_codes": [],
+    }
+    container.services.activity_annotations.list_unlinked = lambda **_kwargs: SimpleNamespace(
+        model_dump=lambda **_dump_kwargs: unlinked
+    )
+
+    async def fake_subject_choices(
+        _request: Any,
+        *,
+        include_archived: bool,
+        selected_subject_id: str | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        assert include_archived is False
+        assert selected_subject_id is None
+        return [], {"total": 0, "page_size": 200, "ok": True}
+
+    async def fake_durable_call(
+        _request: Any,
+        tool_name: str,
+        _arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if tool_name == "account_get":
+            return {"ok": True, "data": {"accounts": [], "transactions": []}}
+        if tool_name == "portfolio_analyze":
+            return {"ok": True, "data": {"cycles": [], "runs": []}}
+        if tool_name == "research_judgment_get":
+            return {"ok": True, "data": {"runs": []}}
+        return {"ok": True, "data": {"items": []}}
+
+    monkeypatch.setattr(console_api, "_console_subject_choices", fake_subject_choices)
+    monkeypatch.setattr(console_api, "_durable_console_call", fake_durable_call)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(container=container),
+        )
+    )
+
+    result = await console_api.decision_workbench(request, subject_id=None)
+
+    assert result["unlinked_activity"] == unlinked
 
 
 @pytest.mark.asyncio
@@ -632,8 +1025,10 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         _ = confirmation
+        assert preserve_full_result is True
         request = arguments["request"]
         calls.append((tool_name, request))
         if tool_name == "watchlist_get" and request["operation"] == "groups":
@@ -673,6 +1068,9 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
     assert set(payload) == {
         "accounts",
         "transactions",
+        "trade_cycles",
+        "performance_series",
+        "daily_equity",
         "exposure",
         "coverage",
         "risk_policy",
@@ -681,6 +1079,16 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
     assert calls == [
         ("account_get", {"operation": "positions"}),
         ("account_get", {"operation": "transactions", "limit": 17}),
+        ("portfolio_analyze", {"operation": "trade_cycles", "limit": 200}),
+        (
+            "portfolio_analyze",
+            {
+                "operation": "performance_series",
+                "start": datetime(2026, 1, 1, tzinfo=UTC),
+                "end": datetime(2026, 8, 21, 12, tzinfo=UTC),
+            },
+        ),
+        ("portfolio_analyze", {"operation": "daily_equity", "limit": 500}),
         ("portfolio_analyze", {"operation": "exposure"}),
         ("portfolio_analyze", {"operation": "coverage", "limit": 23}),
         ("portfolio_risk_get", {"operation": "policy"}),
@@ -695,6 +1103,7 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
     monkeypatch: Any,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
+    full_result_calls: list[str] = []
     first_page = [{"case_id": "case_001", "title": "First", "status": "active"} for _ in range(200)]
     first_page[0] = {"case_id": "case_001", "title": "First", "status": "active"}
     second_page = [{"case_id": "case_201", "title": "Archived", "status": "archived"}]
@@ -705,9 +1114,12 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         _ = confirmation
         calls.append((tool_name, arguments))
+        if preserve_full_result:
+            full_result_calls.append(tool_name)
         if tool_name == "investment_case_read":
             offset = arguments["request"]["offset"]
             items = first_page if offset == 0 else second_page
@@ -768,6 +1180,9 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
         "include_watchlist": True,
     }
     assert state_calls[-1]["request"]["case_id"] == "case_201"
+    assert full_result_calls.count("investment_case_read") == 2
+    assert full_result_calls.count("research_judgment_get") == 201
+    assert set(full_result_calls) == {"investment_case_read", "research_judgment_get"}
 
 
 @pytest.mark.asyncio
@@ -782,8 +1197,10 @@ async def test_scorecard_console_reads_subjects_and_history_through_compact_capa
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         assert confirmation is None
+        assert preserve_full_result is True
         compact_request = arguments["request"]
         calls.append((tool_name, compact_request))
         if tool_name == "investment_case_read":
@@ -878,8 +1295,10 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         assert confirmation is None
+        assert preserve_full_result is True
         compact_request = arguments["request"]
         calls.append((tool_name, compact_request))
         if tool_name == "investment_case_read":
@@ -919,7 +1338,52 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
             return {"ok": True, "data": {"runs": []}}
         if tool_name == "research_memory_get":
             return {"ok": True, "data": {"items": []}}
+        if tool_name == "account_get":
+            if compact_request["operation"] == "positions":
+                return {
+                    "ok": True,
+                    "data": {
+                        "accounts": [
+                            {
+                                "account_ref": "account_001",
+                                "positions": [
+                                    {
+                                        "instrument_id": "equity:US:TTWO",
+                                        "quantity": "10",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                }
+            return {
+                "ok": True,
+                "data": {
+                    "transactions": [
+                        {
+                            "provider_transaction_id": "tx_001",
+                            "instrument_id": "equity:US:TTWO",
+                            "kind": "TRADE",
+                        }
+                    ]
+                },
+            }
         assert tool_name == "portfolio_analyze"
+        if compact_request["operation"] == "trade_cycles":
+            return {
+                "ok": True,
+                "data": {
+                    "cycles": [
+                        {
+                            "cycle_id": "trade_cycle_001",
+                            "instrument_id": "equity:US:TTWO",
+                            "status": "OPEN",
+                        }
+                    ]
+                },
+            }
+        if compact_request["operation"] == "behavior_summary":
+            return {"ok": True, "data": {"algorithm_version": "behavior_summary_v1"}}
         return {
             "ok": True,
             "data": {
@@ -964,6 +1428,9 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
     assert payload["subjects"][0]["state"]["data"]["theses"][0]["thesis_id"] == "thesis_001"
     assert payload["subjects"][1]["state"] is None
     assert payload["monitors"]["ok"] is False
+    assert payload["accounts"]["data"]["accounts"][0]["positions"][0]["quantity"] == "10"
+    assert payload["transactions"]["data"]["transactions"][0]["provider_transaction_id"] == "tx_001"
+    assert payload["trade_cycles"]["data"]["cycles"][0]["status"] == "OPEN"
     assert payload["partial_failures"] == ["monitors"]
     assert (
         calls.count(
@@ -988,6 +1455,25 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
             "limit": 100,
             "offset": 0,
             "filters": {"case_ids": ["case_001"]},
+        },
+    ) in calls
+    assert (
+        "research_memory_get",
+        {
+            "operation": "timeline",
+            "case_id": "case_001",
+            "entity_types": ["decision", "journal"],
+            "limit": 20,
+        },
+    ) in calls
+    assert ("account_get", {"operation": "positions"}) in calls
+    assert ("account_get", {"operation": "transactions", "limit": 500}) in calls
+    assert (
+        "portfolio_analyze",
+        {
+            "operation": "trade_cycles",
+            "instrument_ids": ["equity:US:TTWO"],
+            "limit": 100,
         },
     ) in calls
     assert all(name != "external_state_sync" for name, _request in calls)
@@ -1080,10 +1566,12 @@ async def test_retro_console_uses_the_canonical_completed_week_window(
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         assert tool_name == "portfolio_analyze"
         assert arguments == {"request": {"operation": "retro_history", "limit": 50}}
         assert confirmation is None
+        assert preserve_full_result is True
         return {"ok": True, "data": {"runs": []}}
 
     container = _AgendaContainer(now=datetime(2026, 8, 9, 8, tzinfo=UTC))
@@ -1127,8 +1615,10 @@ async def test_agenda_console_reads_durable_items_and_subject_choices_without_sy
         arguments: dict[str, Any],
         *,
         confirmation: str | None = None,
+        preserve_full_result: bool = False,
     ) -> dict[str, Any]:
         assert confirmation is None
+        assert preserve_full_result is True
         calls.append((tool_name, arguments["request"]))
         if tool_name == "research_memory_get":
             if arguments["request"]["operation"] == "timeline":

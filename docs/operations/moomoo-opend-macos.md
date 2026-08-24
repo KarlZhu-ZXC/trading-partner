@@ -7,9 +7,11 @@ configuration, runtime state, and logs are never committed to this repository.
 ## Local layout
 
 ```text
+/Applications/OpenD.app/    # searchable GUI application bundle
+/Applications/OpenD.xml -> $HOME/.trading-partner-opend/OpenD.xml
+
 $HOME/Library/Application Support/TradingPartner/
 ├── OpenD/
-│   ├── OpenD.app/
 │   └── OpenD.xml            # mode 0600; may contain login configuration
 └── logs/                    # mode 0700; files created as 0600
 
@@ -18,9 +20,10 @@ $HOME/Library/LaunchAgents/com.trading-partner.moomoo-opend.plist
 ```
 
 The no-space symlink is used only for OpenD's `-cfg_file` parser. API access is
-loopback-only on `127.0.0.1:11111`. The LaunchAgent uses `RunAtLoad`, `KeepAlive`,
-and `Umask=0077`; OpenD's internal monitor is disabled so launchd is the sole
-process supervisor.
+loopback-only on `127.0.0.1:11111`. The LaunchAgent remains registered with
+`RunAtLoad=false`, `KeepAlive=false`, and `Umask=0077`; OpenD's internal monitor
+is disabled. Moomoo-backed providers check the endpoint before opening an SDK
+context and start this LaunchAgent on demand when the local port is unavailable.
 
 ## Operations
 
@@ -29,7 +32,7 @@ process supervisor.
 launchctl print "gui/$(id -u)/com.trading-partner.moomoo-opend"
 lsof -nP -iTCP:11111 -sTCP:LISTEN
 
-# Restart and keep the task registered
+# Start or restart while keeping the task registered
 launchctl kickstart -k "gui/$(id -u)/com.trading-partner.moomoo-opend"
 
 # Stop/unload
@@ -40,10 +43,11 @@ launchctl bootstrap "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.trading-partner.moomoo-opend.plist"
 ```
 
-Listening on port 11111 is only transport readiness. After a restart, OpenD may
-need several additional seconds to restore quote and trade login. Operational
-checks must call `get_global_state()` and require `qot_logined=true`,
-`trd_logined=true`, and the expected server version before declaring it ready.
+Listening on port 11111 is only transport readiness. The first Moomoo-backed
+provider call starts OpenD if needed, then waits for `get_global_state()` to report
+both quote and trade login before creating its SDK context. After a restart, OpenD
+may need several additional seconds to restore those sessions. Operational checks
+must also require the expected server version before declaring it ready.
 
 ## Security and upgrades
 

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ErrorNote, Paginator, Badge, Card, DataBoundary, Empty, RefreshButton } from "../components/ui";
+import { RefreshCw, Sparkles } from "lucide-react";
+import { ErrorNote, Paginator, Badge, Card, DataBoundary, Empty, PageActionMenu } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
 import { textDash as text } from "../lib/coerce";
@@ -358,25 +359,15 @@ export default function JudgmentScorecardsPage() {
   }
 
   return (
-    <ConsoleShell active="scorecards">
+    <ConsoleShell active="scorecards" pageActions={<PageActionMenu ariaLabel="Scorecards Page Actions" items={[
+      { id: "generate", label: busy === "generate" ? "Generating…" : "Generate Scorecard", description: "Create a read-only scorecard for the selected Thesis", icon: <Sparkles aria-hidden="true" />, disabled: busy === "generate" || !canGenerate, onSelect: () => { void generate(); } },
+      { id: "refresh", label: scorecardsApi.loading ? "Refreshing…" : "Refresh", description: "Reload durable Judgment Scorecards", icon: <RefreshCw aria-hidden="true" className={scorecardsApi.loading ? "spin" : undefined} />, disabled: scorecardsApi.loading, onSelect: scorecardsApi.refresh },
+    ]} />}>
       <DataBoundary loading={scorecardsApi.loading} error={scorecardsApi.error}>
-        <div className="page-actions">
-          <RefreshButton loading={scorecardsApi.loading} onClick={scorecardsApi.refresh} />
-          <button
-            className="action-button"
-            disabled={busy === "generate" || !canGenerate}
-            onClick={() => {
-              void generate();
-            }}
-            type="button"
-          >
-            {busy === "generate" ? "Working..." : "Generate Scorecard"}
-          </button>
-        </div>
         <ErrorNote>{error}</ErrorNote>
         {message ? <p className="card-note">{message}</p> : null}
         <Card kicker="SCORECARD RUNS · READ-ONLY EVIDENCE" title="Judgment Scorecards">
-          <div className="scorecards-controls">
+          <div className="workspace-controls scorecards-controls">
             <label>
               <span>Subject</span>
               <select value={subjectId} onChange={(event) => { setSubjectId(event.target.value); setThesisId(""); setHistoryOffset(0); }}>

@@ -145,6 +145,10 @@ class BrokerOrderIntent:
     quote_price: Decimal | None
     estimated_notional: Decimal | None
     status: BrokerOrderIntentStatus
+    subject_id: str | None = None
+    decision_id: str | None = None
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = None
     submit_idempotency_key: str | None = None
     confirmed_by: str | None = None
     submitted_via: str | None = None

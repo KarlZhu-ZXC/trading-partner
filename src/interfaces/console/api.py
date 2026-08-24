@@ -14,14 +14,18 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from application import __version__
+from application.dto.account_transactions import TradeCycleQueryInput
+from application.dto.activity_annotations import ActivityAnnotationAppendInput
+from application.dto.behavior_review import BehaviorReviewRunInput
 from application.dto.catalyst_agenda_sync import (
     CatalystAgendaSyncInput,
 )
 from application.dto.monitoring import MonitorArchiveInput
 from application.dto.review_item import ReviewItemTransitionInput
+from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
 from application.services.attention_projection import (
     console_attention_payload,
     project_agenda_overdue_fields,
@@ -73,7 +77,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Trading Partner Local Console API",
-    description="Loopback-only operational UI and compact MCP capability execution.",
+    description="Loopback-only operational UI and validated MCP capability execution.",
     version=__version__,
     lifespan=_lifespan,
 )
@@ -141,11 +145,60 @@ class ToolInvokeRequest(_RequestModel):
     tool_name: str = Field(min_length=1, max_length=100)
     arguments: dict[str, Any] = Field(default_factory=dict)
     confirmation: str | None = Field(default=None, max_length=100)
+    preserve_full_result: bool = False
 
 
 class MonitorArchiveRequest(_RequestModel):
     expected_version: int = Field(ge=1)
     confirmation: Literal["monitor_archive"]
+
+
+class ActivityAnnotationRequest(_RequestModel):
+    provider: str = Field(min_length=1, max_length=64)
+    account_ref: str = Field(min_length=1, max_length=128)
+    provider_transaction_id: str = Field(min_length=1, max_length=256)
+    status: str = Field(min_length=1, max_length=64)
+    classification: str | None = Field(default=None, min_length=1, max_length=64)
+    order_intent_id: str | None = Field(default=None, min_length=1, max_length=128)
+    decision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    trade_plan_id: str | None = Field(default=None, min_length=1, max_length=128)
+    trade_plan_version: int | None = Field(default=None, ge=1)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
+    note: str | None = Field(default=None, min_length=1, max_length=2_000)
+    expected_version: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    authorization_note: str = Field(min_length=1, max_length=4_000)
+
+
+class TradeCycleOverrideRequest(_RequestModel):
+    root_cycle_id: str = Field(min_length=1, max_length=160)
+    operation: Literal["SPLIT", "MERGE", "RELINK"]
+    cycle_ids: tuple[str, ...]
+    activity_ids: tuple[str, ...] = ()
+    split_groups: tuple[tuple[str, ...], ...] = ()
+    target_cycle_id: str | None = Field(default=None, min_length=1, max_length=160)
+    note: str | None = Field(default=None, min_length=1, max_length=2_000)
+    expected_version: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    authorization_note: str = Field(min_length=1, max_length=4_000)
+
+
+class BehaviorReviewRequest(_RequestModel):
+    period_kind: Literal["WEEKLY", "MONTHLY", "QUARTERLY"]
+    period_start: datetime
+    period_end: datetime
+    strategy_code: str | None = Field(default="strategy_v1", min_length=1, max_length=128)
+    instrument_ids: tuple[str, ...] = ()
+    cycle_ids: tuple[str, ...] = ()
+    decision_ids: tuple[str, ...] = ()
+    retro_run_ids: tuple[str, ...] = ()
+    retro_review_ids: tuple[str, ...] = ()
+    review_item_source_keys: tuple[str, ...] = ()
+    subject_ids: tuple[str, ...] = ()
+    action_items: tuple[dict[str, Any], ...] = ()
+    source_read_complete: bool = True
+    source_error_code: str | None = Field(default=None, min_length=1, max_length=160)
+    idempotency_key: str = Field(min_length=1, max_length=200)
 
 
 ConsoleAction = Literal[
@@ -262,8 +315,15 @@ async def _invoke_capability(
     arguments: dict[str, Any],
     *,
     confirmation: str | None = None,
+    preserve_full_result: bool = False,
 ) -> Any:
     try:
+        if preserve_full_result:
+            return await _registry(request).invoke_uncompacted(
+                tool_name,
+                arguments,
+                confirmation=confirmation,
+            )
         return await _registry(request).invoke(
             tool_name,
             arguments,
@@ -288,7 +348,10 @@ async def _invoke_capability(
 
 @app.get("/api/health")
 async def health(request: Request) -> dict[str, Any]:
-    return cast(dict[str, Any], await _invoke_capability(request, "system_health", {}))
+    return cast(
+        dict[str, Any],
+        await _invoke_capability(request, "system_health", {}, preserve_full_result=True),
+    )
 
 
 @app.get("/api/capabilities")
@@ -310,6 +373,7 @@ async def invoke_tool(request: Request, payload: ToolInvokeRequest) -> dict[str,
         payload.tool_name,
         payload.arguments,
         confirmation=payload.confirmation,
+        preserve_full_result=payload.preserve_full_result,
     )
     return {
         "tool_name": payload.tool_name,
@@ -387,6 +451,7 @@ async def monitors(
                 request,
                 "monitor_read",
                 {"request": {"operation": "dashboard", "status": None}},
+                preserve_full_result=True,
             )
         ),
         "runs": _canonical_subject_transport(
@@ -394,6 +459,7 @@ async def monitors(
                 request,
                 "monitor_read",
                 {"request": {"operation": "runs", "limit": run_limit}},
+                preserve_full_result=True,
             )
         ),
         "events": _canonical_subject_transport(
@@ -401,6 +467,7 @@ async def monitors(
                 request,
                 "monitor_read",
                 {"request": {"operation": "events", "limit": event_limit}},
+                preserve_full_result=True,
             )
         ),
     }
@@ -432,6 +499,7 @@ async def accounts(request: Request) -> dict[str, Any]:
             request,
             "account_get",
             {"request": {"operation": "positions"}},
+            preserve_full_result=True,
         ),
     )
 
@@ -442,7 +510,7 @@ async def portfolio(
     transaction_limit: int = Query(default=500, ge=1, le=1000),
     coverage_limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
-    """Build the durable Portfolio Hub from compact read capabilities only."""
+    """Build the durable Portfolio Hub from complete validated read capabilities."""
 
     accounts_result = await _durable_console_call(
         request,
@@ -453,6 +521,35 @@ async def portfolio(
         request,
         "account_get",
         {"request": {"operation": "transactions", "limit": transaction_limit}},
+    )
+    trade_cycles_result = await _durable_console_call(
+        request,
+        "portfolio_analyze",
+        {"request": {"operation": "trade_cycles", "limit": 200}},
+    )
+    performance_now = _container(request).context.clock.now()
+    performance_series_result = await _durable_console_call(
+        request,
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "performance_series",
+                "start": performance_now.replace(
+                    month=1,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                ),
+                "end": performance_now,
+            }
+        },
+    )
+    daily_equity_result = await _durable_console_call(
+        request,
+        "portfolio_analyze",
+        {"request": {"operation": "daily_equity", "limit": 500}},
     )
     exposure_result = await _durable_console_call(
         request,
@@ -477,6 +574,9 @@ async def portfolio(
     return {
         "accounts": accounts_result,
         "transactions": transactions_result,
+        "trade_cycles": trade_cycles_result,
+        "performance_series": performance_series_result,
+        "daily_equity": daily_equity_result,
         "exposure": exposure_result,
         "coverage": coverage_result,
         "risk_policy": risk_policy_result,
@@ -494,6 +594,7 @@ async def trade_retro(request: Request) -> dict[str, Any]:
             request,
             "portfolio_analyze",
             {"request": {"operation": "retro_history", "limit": 50}},
+            preserve_full_result=True,
         ),
     )
     review_start, review_end, prepare_start, prepare_end = trade_retro_weekly_windows(
@@ -591,6 +692,45 @@ def _workflow_attention_items(
         ):
             items.append(_console_row(projected, href=f"/retro#retro-{run_id}"))
 
+    return items
+
+
+def _decision_review_attention_items(decisions: tuple[Any, ...]) -> list[dict[str, Any]]:
+    """Project due Decisions into stable ReviewItem source rows.
+
+    The decision id is both the durable source reference and the stable key
+    suffix.  A later exact superseder is intentionally handled by the
+    repository query, so this projector only receives still-live Decisions.
+    """
+
+    items: list[dict[str, Any]] = []
+    for decision in decisions:
+        decision_id = str(getattr(decision, "decision_id", ""))
+        subject_id = str(getattr(decision, "subject_id", ""))
+        due_at = getattr(decision, "review_due_at", None)
+        if not decision_id or not subject_id or not isinstance(due_at, datetime):
+            continue
+        title = str(getattr(decision, "title", "Decision review"))
+        items.append(
+            {
+                "key": f"decision-review-due-{decision_id}",
+                "source_type": ReviewItemSourceType.DECISION_REVIEW_DUE.value,
+                "source_ref": decision_id,
+                "subject_id": subject_id,
+                "title": f"Decision review due · {title}",
+                "detail": (
+                    "The Decision review deadline has passed and no later exact "
+                    "superseding Decision was recorded."
+                ),
+                "severity": "ATTENTION",
+                "recommended_action": "REVIEW_DECISION",
+                "href": (
+                    f"/decision-workbench?subject_id={subject_id}"
+                    f"&capture=decision&supersedes_decision_id={decision_id}"
+                ),
+                "due_at": due_at.isoformat(),
+            }
+        )
     return items
 
 
@@ -778,6 +918,11 @@ def _review_item_projection(item: dict[str, Any]) -> ReviewItemProjection | None
             severity=severity,
             recommended_action=str(item["recommended_action"]),
             href=str(item["href"]),
+            due_at=(
+                datetime.fromisoformat(str(item["due_at"]))
+                if item.get("due_at") is not None
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -844,6 +989,21 @@ async def _reconcile_review_items(
         authoritative_refs.update(_authoritative_review_refs(scorecards=scorecards))
 
     container = _container(request)
+    decision_limit = 100
+    try:
+        due_decisions = container.services.decisions.list_review_due(
+            now=container.context.clock.now(),
+            limit=decision_limit,
+        )
+    except Exception:  # noqa: BLE001 - failed reads must not auto-resolve
+        due_decisions = ()
+    else:
+        observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
+        raw_items.extend(_decision_review_attention_items(due_decisions))
+        # A result at the bound may omit a still-live Decision.  Keep the
+        # source observed for upserts, but never mark it fully observed.
+        if len(due_decisions) < decision_limit:
+            fully_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
     try:
         agent_actions = container.operations.agent_pending_actions.list_unresolved(
             now=container.context.clock.now(), limit=100
@@ -884,10 +1044,15 @@ async def _durable_console_call(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Invoke one compact read and preserve a per-capability failure envelope."""
+    """Invoke one complete local read and preserve a per-capability failure envelope."""
 
     try:
-        result = await _invoke_capability(request, tool_name, arguments)
+        result = await _invoke_capability(
+            request,
+            tool_name,
+            arguments,
+            preserve_full_result=True,
+        )
     except Exception as error:  # noqa: BLE001 - one failed tile must not hide the hub
         return _console_failure(request, error, "CONSOLE_DURABLE_CALL_FAILED")
     if isinstance(result, dict):
@@ -900,7 +1065,7 @@ async def _durable_console_call(
 
 
 async def _watchlist_envelopes(request: Request) -> dict[str, Any]:
-    """Read groups plus the active Moomoo ``All`` aggregate through compact MCP."""
+    """Read groups plus the active Moomoo ``All`` aggregate through validated tools."""
 
     groups = await _durable_console_call(
         request,
@@ -963,7 +1128,7 @@ def _research_state_failure(request: Request, error: Exception) -> dict[str, Any
 
 
 def _canonical_subject_transport(value: Any) -> Any:
-    """Translate compact MCP's frozen ``case_*`` fields for the internal Console BFF."""
+    """Translate public compatibility ``case_*`` fields for the internal Console BFF."""
 
     if isinstance(value, dict):
         aliases = {
@@ -983,11 +1148,12 @@ def _canonical_subject_transport(value: Any) -> Any:
 async def research(request: Request) -> dict[str, Any]:
     """Return every durable Research Subject and its current Thesis state.
 
-    This endpoint deliberately routes through the same compact capability
-    registry exposed to MCP.  It does not refresh providers, read repositories,
-    or create a second research API. Subject listing is paged at the public
-    maximum (200) and each state envelope is retained beside its subject so a
-    partial read remains visible and auditable in the UI.
+    This endpoint deliberately routes through the same validated capability
+    registry exposed to MCP. It does not refresh providers, read repositories,
+    or create a second research API. Subject listing remains compact and paged at
+    the public maximum (200). Each actionable state read preserves its full local
+    result so Candidate identities, Conditions, and review details cannot be
+    replaced by transport truncation markers.
     """
 
     page_size = 200
@@ -1007,6 +1173,7 @@ async def research(request: Request) -> dict[str, Any]:
                     "offset": offset,
                 }
             },
+            preserve_full_result=True,
         )
         if not isinstance(page, dict):
             page = {
@@ -1054,6 +1221,7 @@ async def research(request: Request) -> dict[str, Any]:
                             "include_watchlist": True,
                         }
                     },
+                    preserve_full_result=True,
                 )
             except Exception as error:  # noqa: BLE001 - preserve other subjects
                 state = _research_state_failure(request, error)
@@ -1142,18 +1310,129 @@ async def _console_subject_choices(
     return subjects, {"total": len(subjects), "page_size": page_size, "ok": read_ok}
 
 
+def _trade_cycle_override_input(
+    payload: TradeCycleOverrideRequest,
+) -> TradeCycleOverrideAppendInput:
+    return TradeCycleOverrideAppendInput.model_validate(
+        {**payload.model_dump(), "actor": "user", "algorithm_version": "trade_cycle_v1"}
+    )
+
+
+def _trade_cycle_override_projection(request: Request) -> Any:
+    return _container(request).services.account_transactions.project_trade_cycles_for_override(
+        TradeCycleQueryInput(limit=500)
+    )
+
+
+@app.post("/api/behavior-reviews")
+async def run_behavior_review(
+    request: Request, payload: BehaviorReviewRequest
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.behavior_reviews.run(
+            BehaviorReviewRunInput.model_validate(payload.model_dump())
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409 if "IDEMPOTENCY" in error.code else 422,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return value.model_dump(mode="json")
+
+
+@app.post("/api/trade-cycle-overrides/preview")
+async def preview_trade_cycle_override(
+    request: Request, payload: TradeCycleOverrideRequest
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.trade_cycle_overrides.preview_revision(
+            _trade_cycle_override_input(payload),
+            projection=_trade_cycle_override_projection(request),
+        )
+    except (ValidationError, ValueError, TradingPartnerError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INPUT_VALIDATION_ERROR", "message": str(error)},
+        ) from None
+    return value.model_dump(mode="json")
+
+
+@app.post("/api/trade-cycle-overrides")
+async def append_trade_cycle_override(
+    request: Request, payload: TradeCycleOverrideRequest
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.trade_cycle_overrides.append_revision(
+            _trade_cycle_override_input(payload),
+            projection=_trade_cycle_override_projection(request),
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=(
+                409
+                if "VERSION" in error.code or "IDEMPOTENCY" in error.code
+                else 422
+            ),
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return value.model_dump(mode="json")
+
+
+@app.post("/api/activity-annotations")
+async def append_activity_annotation(
+    request: Request, payload: ActivityAnnotationRequest
+) -> dict[str, Any]:
+    """Append one explicit activity classification or exact Decision/Plan link."""
+
+    try:
+        result = _container(request).services.activity_annotations.append_revision(
+            ActivityAnnotationAppendInput.model_validate(
+                {
+                    **payload.model_dump(),
+                    "actor": "user",
+                }
+            )
+        )
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INPUT_VALIDATION_ERROR",
+                "message": "Activity annotation input is invalid",
+            },
+        ) from None
+    except TradingPartnerError as error:
+        status_code = (
+            409
+            if error.code
+            in {
+                "ACTIVITY_ANNOTATION_VERSION_CONFLICT",
+                "IDEMPOTENCY_CONFLICT",
+                "DUPLICATE_IDEMPOTENCY_KEY",
+            }
+            else 422
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return result.model_dump(mode="json")
+
+
 @app.get("/api/decision-workbench")
 async def decision_workbench(
     request: Request,
     subject_id: str | None = Query(default=None, min_length=1, max_length=100),
+    classification: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> dict[str, Any]:
     """Aggregate one durable Research Subject decision loop for the Console.
 
     The endpoint deliberately performs no Provider refresh and no user/domain
     write. It may refresh the internal ReviewItem materialized projection. It
     loads state for only the selected Subject, then reads the independent
-    Monitor, Agenda, Retro, and Scorecard sections concurrently.  Each section
-    retains its own envelope so one failed read cannot blank the workbench.
+    Monitor, Agenda, account, transaction, Retro, and Scorecard sections
+    concurrently. Each section retains its own envelope so one failed read
+    cannot blank the workflow.
     """
 
     subjects, subject_list = await _console_subject_choices(
@@ -1208,8 +1487,56 @@ async def decision_workbench(
     if selected_subject_id is not None:
         agenda_request["filters"] = {"case_ids": [selected_subject_id]}
         scorecard_request["case_id"] = selected_subject_id
+    timeline_read = (
+        _durable_console_call(
+            request,
+            "research_memory_get",
+            {
+                "request": {
+                    "operation": "timeline",
+                    "case_id": selected_subject_id,
+                    "entity_types": ["decision", "journal"],
+                    "limit": 20,
+                }
+            },
+        )
+        if selected_subject_id is not None
+        else asyncio.sleep(0, result={"ok": True, "data": {"items": [], "total": 0}})
+    )
+    cycle_instrument_ids: list[str] = []
+    performance_now = _container(request).context.clock.now()
+    if selected is not None:
+        state_envelope = selected.get("state")
+        state_data = state_envelope.get("data") if isinstance(state_envelope, dict) else None
+        current_plan = (
+            state_data.get("current_trade_plan") if isinstance(state_data, dict) else None
+        )
+        instrument_id = (
+            current_plan.get("instrument_id") if isinstance(current_plan, dict) else None
+        )
+        if not isinstance(instrument_id, str) or not instrument_id:
+            subject_value = selected.get("subject")
+            instrument_id = (
+                subject_value.get("primary_instrument_id")
+                if isinstance(subject_value, dict)
+                else None
+            )
+        if isinstance(instrument_id, str) and instrument_id:
+            cycle_instrument_ids.append(instrument_id)
 
-    monitors_result, agenda_result, retro_result, scorecards_result = await asyncio.gather(
+    (
+        monitors_result,
+        agenda_result,
+        timeline_result,
+        accounts_result,
+        transactions_result,
+        trade_cycles_result,
+        daily_equity_result,
+        performance_series_result,
+        behavior_result,
+        retro_result,
+        scorecards_result,
+    ) = await asyncio.gather(
         _durable_console_call(
             request,
             "monitor_read",
@@ -1219,6 +1546,65 @@ async def decision_workbench(
             request,
             "research_memory_get",
             {"request": agenda_request},
+        ),
+        timeline_read,
+        _durable_console_call(
+            request,
+            "account_get",
+            {"request": {"operation": "positions"}},
+        ),
+        _durable_console_call(
+            request,
+            "account_get",
+            {"request": {"operation": "transactions", "limit": 500}},
+        ),
+        _durable_console_call(
+            request,
+            "portfolio_analyze",
+            {
+                "request": {
+                    "operation": "trade_cycles",
+                    "instrument_ids": cycle_instrument_ids,
+                    "limit": 100,
+                }
+            },
+        ),
+        _durable_console_call(
+            request,
+            "portfolio_analyze",
+            {"request": {"operation": "daily_equity", "limit": 500}},
+        ),
+        _durable_console_call(
+            request,
+            "portfolio_analyze",
+            {
+                "request": {
+                    "operation": "performance_series",
+                    "start": performance_now.replace(
+                        month=1,
+                        day=1,
+                        hour=0,
+                        minute=0,
+                        second=0,
+                        microsecond=0,
+                    ),
+                    "end": performance_now,
+                }
+            },
+        ),
+        _durable_console_call(
+            request,
+            "portfolio_analyze",
+            {
+                "request": {
+                    "operation": "behavior_summary",
+                    "case_id": selected_subject_id,
+                    "instrument_ids": cycle_instrument_ids,
+                    "strategy_code": "strategy_v1",
+                    "classifications": [classification] if classification else [],
+                    "minimum_sample_size": 3,
+                }
+            },
         ),
         _durable_console_call(
             request,
@@ -1234,18 +1620,53 @@ async def decision_workbench(
     sections = {
         "monitors": _canonical_subject_transport(monitors_result),
         "agenda": _canonical_subject_transport(agenda_result),
+        "timeline": _canonical_subject_transport(timeline_result),
+        "accounts": _canonical_subject_transport(accounts_result),
+        "transactions": _canonical_subject_transport(transactions_result),
+        "trade_cycles": _canonical_subject_transport(trade_cycles_result),
+        "behavior": _canonical_subject_transport(behavior_result),
+        "performance_series": _canonical_subject_transport(performance_series_result),
+        "daily_equity": _canonical_subject_transport(daily_equity_result),
         "retro": _canonical_subject_transport(retro_result),
         "scorecards": _canonical_subject_transport(scorecards_result),
     }
     if selected is not None and isinstance(selected.get("state"), dict):
         sections["research_state"] = selected["state"]
     partial_failures = [name for name, envelope in sections.items() if envelope.get("ok") is False]
+    try:
+        annotation_service = _container(request).services.activity_annotations
+        unlinked_activity = annotation_service.list_unlinked(limit=100).model_dump(mode="json")
+        activity_annotations = [
+            item.model_dump(mode="json")
+            for item in annotation_service.list_annotations(limit=500)
+        ]
+    except Exception:  # noqa: BLE001 - retain other durable Journal sections
+        unlinked_activity = {"activities": [], "observed_complete": False, "has_more": False}
+        activity_annotations = []
+        partial_failures.append("unlinked_activity")
+    try:
+        order_intents = [
+            item.model_dump(mode="json")
+            for item in _container(request).services.broker_orders.list_recent(limit=200)
+        ]
+    except Exception:  # noqa: BLE001 - retain source facts when order history fails
+        order_intents = []
+        partial_failures.append("order_intents")
+    try:
+        behavior_review_runs = [
+            item.model_dump(mode="json")
+            for item in _container(request).services.behavior_reviews.history(limit=50)
+        ]
+    except Exception:  # noqa: BLE001 - do not hide other review evidence
+        behavior_review_runs = []
+        partial_failures.append("behavior_reviews")
     if subject_list["ok"] is False:
         partial_failures.insert(0, "research_subjects")
     durable_review_items: tuple[Any, ...] = ()
     if selected_subject_id is not None:
         review_observed: set[ReviewItemSourceType] = set()
         authoritative_refs: set[tuple[ReviewItemSourceType, str]] = set()
+        review_fully_observed: set[ReviewItemSourceType] = set()
         review_raw: list[dict[str, Any]] = []
         if agenda_result.get("ok") is True:
             review_observed.add(ReviewItemSourceType.CATALYST_AGENDA)
@@ -1259,6 +1680,21 @@ async def decision_workbench(
             review_observed.add(ReviewItemSourceType.SCORECARD_GAP)
             review_raw.extend(_scorecard_attention_items(scorecards_result))
             authoritative_refs.update(_authoritative_review_refs(scorecards=scorecards_result))
+        decision_limit = 100
+        try:
+            due_decisions = _container(request).services.decisions.list_review_due(
+                now=_container(request).context.clock.now(),
+                subject_id=selected_subject_id,
+                limit=decision_limit,
+            )
+        except Exception:  # noqa: BLE001 - failed reads must not auto-resolve
+            due_decisions = ()
+            partial_failures.append("decision_review_due")
+        else:
+            review_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
+            review_raw.extend(_decision_review_attention_items(due_decisions))
+            if len(due_decisions) < decision_limit:
+                review_fully_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
         scoped_projections = tuple(
             projection
             for item in review_raw
@@ -1270,6 +1706,7 @@ async def decision_workbench(
                 scoped_projections,
                 observed_source_types=frozenset(review_observed),
                 authoritative_source_refs=frozenset(authoritative_refs),
+                fully_observed_source_types=frozenset(review_fully_observed),
                 subject_scope=selected_subject_id,
             )
             durable_review_items = _container(request).services.review_items.list_open(
@@ -1285,6 +1722,10 @@ async def decision_workbench(
         **{name: value for name, value in sections.items() if name != "research_state"},
         "partial_failures": partial_failures,
         "review_items": [item.model_dump(mode="json") for item in durable_review_items],
+        "unlinked_activity": unlinked_activity,
+        "activity_annotations": activity_annotations,
+        "order_intents": order_intents,
+        "behavior_review_runs": behavior_review_runs,
         "review_item_metrics": (
             _container(request)
             .services.review_items.metrics(subject_id=selected_subject_id)
@@ -1376,7 +1817,7 @@ async def scorecards(
 ) -> dict[str, Any]:
     """Return Research Subjects plus immutable Judgment Scorecard history.
 
-    Both reads stay behind the compact capability registry and remain durable-only.
+    Both reads stay behind the validated capability registry and remain durable-only.
     A failed history read is retained beside the independently readable Research
     Subjects so the Console can diagnose the exact boundary instead of hiding the
     whole page.
@@ -1552,11 +1993,17 @@ async def catalyst_agenda_summary_send(
 @app.get("/api/operations")
 async def operations(request: Request) -> dict[str, Any]:
     services = _container(request).operations
-    health = await _invoke_capability(request, "system_health", {})
+    health = await _invoke_capability(
+        request,
+        "system_health",
+        {},
+        preserve_full_result=True,
+    )
     monitor_dashboard = await _invoke_capability(
         request,
         "monitor_read",
         {"request": {"operation": "dashboard", "status": None}},
+        preserve_full_result=True,
     )
     return {
         "post_market_sync": services.post_market_sync.status().model_dump(mode="json"),
@@ -1626,6 +2073,7 @@ async def overview(request: Request) -> dict[str, Any]:
                 "offset": 0,
             }
         },
+        preserve_full_result=True,
     )
     subject_data = subject_page.get("data") if isinstance(subject_page, dict) else None
     subject_items = subject_data.get("items") if isinstance(subject_data, dict) else None
@@ -1736,16 +2184,18 @@ async def overview(request: Request) -> dict[str, Any]:
         # cards; the raw projection remains available for diagnostics/fallback.
         workflow_attention = []
     health, monitor_dashboard, recent_runs = await asyncio.gather(
-        _invoke_capability(request, "system_health", {}),
+        _invoke_capability(request, "system_health", {}, preserve_full_result=True),
         _invoke_capability(
             request,
             "monitor_read",
             {"request": {"operation": "dashboard", "status": None}},
+            preserve_full_result=True,
         ),
         _invoke_capability(
             request,
             "monitor_read",
             {"request": {"operation": "runs", "limit": 20}},
+            preserve_full_result=True,
         ),
     )
     return {

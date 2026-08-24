@@ -17,6 +17,7 @@ from pydantic import (
 
 from domain.common.enums import (
     ConfirmationMode,
+    DecisionScenario,
     DecisionType,
     EvidenceOrigin,
     EvidenceQuality,
@@ -192,6 +193,7 @@ def _validate_page_invariants(
     limit: int,
     offset: int,
     has_more: bool,
+    total_is_lower_bound: bool = False,
 ) -> None:
     if total < 0:
         raise ValueError("total must be >= 0")
@@ -205,7 +207,7 @@ def _validate_page_invariants(
     # Empty pages may have offset past total (end-of-results / over-seek).
     if items_len > 0 and offset + items_len > total:
         raise ValueError("offset + len(items) must be <= total when items is non-empty")
-    expected_has_more = offset + items_len < total
+    expected_has_more = offset + items_len < total or total_is_lower_bound
     if has_more is not expected_has_more:
         raise ValueError("has_more must equal (offset + len(items) < total)")
 
@@ -614,6 +616,12 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     supersedes_decision_id: str | None
     position_context_snapshot_id: str | None
     schema_version: int
+    strategy_code: str | None = Field(default=None, min_length=1, max_length=128)
+    strategy_version: str | None = Field(default=None, min_length=1, max_length=128)
+    scenario: DecisionScenario | None = None
+    trade_plan_id: str | None = None
+    trade_plan_version: int | None = Field(default=None, ge=1)
+    review_due_at: datetime | None = None
     execution_effect: Literal[False] = False
 
     @field_validator("decision_id")
@@ -671,6 +679,24 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
             value, field="position_context_snapshot_id", prefix=EntityIdPrefix.SNAPSHOT
         )
 
+    @field_validator("trade_plan_id")
+    @classmethod
+    def _trade_plan_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(
+            value, field="trade_plan_id", prefix=EntityIdPrefix.TRADE_PLAN
+        )
+
+    @field_validator("review_due_at")
+    @classmethod
+    def _review_due_at(cls, value: datetime | None) -> datetime | None:
+        return _optional_aware(value, field="review_due_at")
+
+    @model_validator(mode="after")
+    def _trade_plan_pair(self) -> Self:
+        if (self.trade_plan_id is None) != (self.trade_plan_version is None):
+            raise ValueError("trade_plan_id and trade_plan_version must be provided together")
+        return self
+
     @field_validator("schema_version", mode="before")
     @classmethod
     def _schema_version(cls, value: object) -> int:
@@ -695,6 +721,12 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
             supersedes_decision_id=decision.supersedes_decision_id,
             position_context_snapshot_id=decision.position_context_snapshot_id,
             schema_version=decision.schema_version,
+            strategy_code=decision.strategy_code,
+            strategy_version=decision.strategy_version,
+            scenario=decision.scenario,
+            trade_plan_id=decision.trade_plan_id,
+            trade_plan_version=decision.trade_plan_version,
+            review_due_at=decision.review_due_at,
             execution_effect=False,
         )
 
@@ -968,6 +1000,9 @@ class ResearchSearchPageDTO(_BaseResearchMemoryDTO):
     limit: int
     offset: int
     has_more: bool
+    search_mode: Literal["lexical", "hybrid"] = "lexical"
+    semantic_model: str | None = None
+    total_is_lower_bound: bool = False
 
     @model_validator(mode="after")
     def _pagination(self) -> Self:
@@ -977,6 +1012,7 @@ class ResearchSearchPageDTO(_BaseResearchMemoryDTO):
             limit=self.limit,
             offset=self.offset,
             has_more=self.has_more,
+            total_is_lower_bound=self.total_is_lower_bound,
         )
         return self
 

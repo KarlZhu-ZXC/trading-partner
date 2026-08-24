@@ -12,7 +12,8 @@ class ReviewItemRow(Base):
         UniqueConstraint("source_key", name="uq_review_items_source_key"),
         CheckConstraint(
             "source_type IN ('CATALYST_AGENDA','TRADE_RETRO','SCORECARD_GAP',"
-            "'AGENT_PENDING_ACTION','BROKER_ORDER_INTENT')",
+            "'AGENT_PENDING_ACTION','BROKER_ORDER_INTENT','DECISION_REVIEW_DUE',"
+            "'UNLINKED_ACTIVITY')",
             name="ck_review_items_source_type",
         ),
         CheckConstraint(

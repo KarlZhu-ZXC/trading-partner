@@ -29,8 +29,8 @@ def _register_portfolio_challenge_workflows(
         name="portfolio_analyze",
         description=(
             "Analyze durable portfolio exposure, activity coverage, native-currency "
-            "performance attribution, Trade Retro Run/review history, or one calculation-only "
-            "hypothetical addition."
+            "performance attribution, deterministic long-only Trade Cycles, Trade Retro "
+            "Run/review history, or one calculation-only hypothetical addition."
         ),
         variants=(
             _spec(
@@ -47,6 +47,46 @@ def _register_portfolio_challenge_workflows(
                 "performance_summary",
                 portfolio.portfolio_get_performance_summary,
                 _all_fields(portfolio.portfolio_get_performance_summary),
+            ),
+            _spec(
+                "performance_series",
+                portfolio.portfolio_get_performance_series,
+                _all_fields(portfolio.portfolio_get_performance_series),
+            ),
+            _spec(
+                "behavior_summary",
+                portfolio.portfolio_get_behavior_summary,
+                _all_fields(portfolio.portfolio_get_behavior_summary),
+            ),
+            _spec(
+                "unlinked_activity",
+                portfolio.portfolio_get_unlinked_activity,
+                _all_fields(portfolio.portfolio_get_unlinked_activity),
+            ),
+            _spec(
+                "journal_timeline",
+                portfolio.portfolio_get_journal_timeline,
+                _all_fields(portfolio.portfolio_get_journal_timeline),
+            ),
+            _spec(
+                "trade_cycle_override_preview",
+                portfolio.portfolio_preview_trade_cycle_override,
+                _all_fields(portfolio.portfolio_preview_trade_cycle_override),
+            ),
+            _spec(
+                "behavior_review_history",
+                portfolio.portfolio_get_behavior_review_history,
+                _all_fields(portfolio.portfolio_get_behavior_review_history),
+            ),
+            _spec(
+                "daily_equity",
+                portfolio.portfolio_get_daily_equity,
+                _all_fields(portfolio.portfolio_get_daily_equity),
+            ),
+            _spec(
+                "trade_cycles",
+                portfolio.portfolio_get_trade_cycles,
+                _all_fields(portfolio.portfolio_get_trade_cycles),
             ),
             _spec(
                 "simulate_addition",

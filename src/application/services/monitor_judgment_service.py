@@ -98,13 +98,21 @@ class MonitorJudgmentService:
             return None
         features, allowed_ids, signature = await self._features(monitor, observations)
         latest_receipt = self._repository.latest_judgment(monitor.monitor_id)
+        history = self._repository.list_judgments(monitor.monitor_id, 20)
         previous = next(
             (
                 item
-                for item in self._repository.list_judgments(monitor.monitor_id, 20)
+                for item in history
                 if item.status == "SUCCEEDED"
             ),
             None,
+        )
+        latest_stateful = next(
+            (item for item in history if item.status in {"SUCCEEDED", "FAILED"}),
+            latest_receipt
+            if latest_receipt is not None
+            and latest_receipt.status in {"SUCCEEDED", "FAILED"}
+            else None,
         )
         selected_provider = self._provider
         fallback_warning_codes: tuple[str, ...] = ()
@@ -261,11 +269,7 @@ class MonitorJudgmentService:
                 error_codes=(exc.code,),
                 created_at=self._clock.now(),
             )
-            changed = (
-                latest_receipt is None
-                or latest_receipt.status != "FAILED"
-                or latest_receipt.error_codes != judgment.error_codes
-            )
+            changed = latest_stateful is None or latest_stateful.status != "FAILED"
             event = (
                 self._event(monitor, judgment, MonitorEventType.JUDGMENT_UNAVAILABLE)
                 if changed
@@ -280,6 +284,15 @@ class MonitorJudgmentService:
             )
 
         changed = previous is None or previous.result_fingerprint != judgment.result_fingerprint
+        if (
+            changed
+            and not hard_transition
+            and latest_stateful is not None
+            and latest_stateful.status == "SUCCEEDED"
+            and previous is not None
+            and _neutral_judgment_equivalent(previous, judgment)
+        ):
+            changed = False
         actionable = judgment.conclusion not in {
             MonitorJudgmentConclusion.WATCH,
             MonitorJudgmentConclusion.HOLD,
@@ -603,8 +616,14 @@ class MonitorJudgmentService:
             quantity_min = min(quantity_min, quantity_max)
         else:
             quantity_min = quantity_max = 0
+        market_state = _canonical_weekend_market_state(
+            features,
+            quote_sessions_aligned=quote_sessions_aligned,
+            fallback=raw.market_state,
+        )
         return replace(
             raw,
+            market_state=market_state,
             divergence=divergence,
             conclusion=conclusion.value,
             quantity_min=quantity_min,
@@ -654,6 +673,7 @@ class MonitorJudgmentService:
             if monitor.primary_instrument_id is not None
             else monitor.name[:24]
         )
+        symbol = _judgment_symbol_label(symbol, judgment.warning_codes)
         body = "\n".join(
             (
                 f"监控：{monitor.name}",
@@ -952,6 +972,57 @@ def _hash(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
+
+
+def _neutral_judgment_equivalent(
+    previous: MonitorJudgment,
+    current: MonitorJudgment,
+) -> bool:
+    neutral = {
+        MonitorJudgmentConclusion.WATCH,
+        MonitorJudgmentConclusion.HOLD,
+        MonitorJudgmentConclusion.WAIT,
+    }
+    return bool(
+        previous.conclusion in neutral
+        and current.conclusion in neutral
+        and previous.urgency == current.urgency == "WATCH"
+        and previous.phase == current.phase
+        and previous.divergence == current.divergence
+        and not previous.quantity_max
+        and not current.quantity_max
+    )
+
+
+def _canonical_weekend_market_state(
+    features: dict[str, Any],
+    *,
+    quote_sessions_aligned: bool,
+    fallback: str,
+) -> str:
+    warnings = {str(item) for item in features.get("warning_codes", ())}
+    alignment = (
+        "GDX/GLD报价同窗。"
+        if quote_sessions_aligned
+        else "GDX/GLD美股报价非同窗或已收盘，只能观察，不能确认比值或严格背离。"
+    )
+    if "PAXG_USDC_WEEKEND_PROXY" in warnings:
+        return (
+            "周末参考：Binance PAXG/USDC（代币化黄金、USDC计价；"
+            "非XAUUSD OTC、非LBMA）。" + alignment
+        )
+    if "IG_WEEKEND_GOLD_CFD_FALLBACK" in warnings:
+        return "周末参考：IG Weekend Gold CFD（非LBMA现货）。" + alignment
+    return fallback
+
+
+def _judgment_symbol_label(symbol: str, warning_codes: tuple[str, ...]) -> str:
+    warnings = set(warning_codes)
+    if symbol == "XAUUSD" and "PAXG_USDC_WEEKEND_PROXY" in warnings:
+        return "XAUUSD（PAXG周末参考）"
+    if symbol == "XAUUSD" and "IG_WEEKEND_GOLD_CFD_FALLBACK" in warnings:
+        return "XAUUSD（IG周末金）"
+    return symbol
 
 
 def _state_number(state: dict[str, object], *keys: str) -> int:

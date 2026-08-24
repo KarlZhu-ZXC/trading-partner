@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -24,11 +25,22 @@ from domain.common.errors import (
 class _StructuredResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    urgency: str
+    urgency: Literal["WATCH", "ACTION", "URGENT"]
     phase: str = Field(max_length=100)
     market_state: str = Field(max_length=500)
-    divergence: str
-    conclusion: str
+    divergence: Literal["BULLISH", "BEARISH", "NONE"]
+    conclusion: Literal[
+        "WATCH",
+        "HOLD",
+        "REDUCE",
+        "WAIT",
+        "PREPARE_TO_BUY",
+        "BUY_SMALL",
+        "BUY",
+        "BUY_AGGRESSIVELY",
+        "PAUSE_BUYING",
+        "INVALIDATE",
+    ]
     quantity_min: int = Field(ge=0)
     quantity_max: int = Field(ge=0)
     summary: str = Field(min_length=1, max_length=1000)
@@ -88,6 +100,10 @@ object with exactly: urgency (WATCH|ACTION|URGENT), phase, market_state, diverge
 quantity_min, quantity_max, summary, evidence_feature_ids (max 3 IDs from the snapshot),
 next_trigger, invalidation. No markdown and no additional keys."""
 
+_STRUCTURE_REPAIR_PROMPT = """Your previous answer did not satisfy the required JSON contract.
+Return the same judgment again as exactly one valid JSON object with all required keys, no
+markdown, no code fence, no commentary, and no additional keys. Do not change or invent facts."""
+
 
 class DeepSeekMonitorJudgmentProvider:
     provider_name = "deepseek"
@@ -117,42 +133,58 @@ class DeepSeekMonitorJudgmentProvider:
         )
 
     async def judge(self, request: MonitorJudgmentRequest) -> MonitorJudgmentResponse:
+        request_messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "playbook": request.playbook,
+                        "confirmed_state": json.loads(request.confirmed_state_json),
+                        "features": json.loads(request.feature_snapshot_json),
+                        "allowed_feature_ids": request.allowed_feature_ids,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        ]
         request_payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "playbook": request.playbook,
-                            "confirmed_state": json.loads(request.confirmed_state_json),
-                            "features": json.loads(request.feature_snapshot_json),
-                            "allowed_feature_ids": request.allowed_feature_ids,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                },
-            ],
+            "messages": request_messages,
             "thinking": {"type": "enabled"},
             "reasoning_effort": self.reasoning_effort,
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_output_tokens,
         }
-        payload = await self._post(request_payload, retry=False)
         effective_effort = self.reasoning_effort
-        content = _content(payload)
-        if not content and self.reasoning_effort == "max":
-            effective_effort = "high"
-            payload = await self._post(
-                {**request_payload, "reasoning_effort": effective_effort}, retry=True
-            )
+        payload: dict[str, object] = {}
+        result: _StructuredResponse | None = None
+        validation_error: Exception | None = None
+        for attempt in range(2):
+            candidate = request_payload
+            if attempt == 1:
+                if effective_effort == "max":
+                    effective_effort = "high"
+                candidate = {
+                    **request_payload,
+                    "messages": [
+                        *request_messages,
+                        {"role": "user", "content": _STRUCTURE_REPAIR_PROMPT},
+                    ],
+                    "reasoning_effort": effective_effort,
+                }
+            payload = await self._post(candidate, retry=attempt == 1)
             content = _content(payload)
-        try:
-            result = _StructuredResponse.model_validate_json(content)
-        except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
-            raise DataContractError("DeepSeek returned an invalid Monitor judgment") from exc
+            try:
+                result = _StructuredResponse.model_validate_json(content)
+                break
+            except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
+                validation_error = exc
+        if result is None:
+            raise DataContractError(
+                "DeepSeek returned an invalid Monitor judgment"
+            ) from validation_error
         if result.quantity_max < result.quantity_min:
             raise DataContractError("DeepSeek returned inverted quantity bounds")
         return MonitorJudgmentResponse(
@@ -193,6 +225,12 @@ class DeepSeekMonitorJudgmentProvider:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+class BailianChatMonitorJudgmentProvider(DeepSeekMonitorJudgmentProvider):
+    """Bailian Chat Completions route with strict JSON-object output."""
+
+    provider_name = "bailian"
 
 
 def _content(payload: dict[str, object]) -> str:

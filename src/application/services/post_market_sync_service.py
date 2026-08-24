@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from application.dto.account_transactions import AccountGetTransactionsInput
 from application.dto.portfolio import AccountGetSnapshotInput
 from application.dto.post_market_sync import (
     PostMarketSyncDisposition,
@@ -12,16 +13,24 @@ from application.dto.post_market_sync import (
     PostMarketSyncStatusDTO,
 )
 from application.dto.schwab_oauth import SchwabOAuthHealthDTO
+from application.ports.account_snapshot_repository import AccountSnapshotRepository
+from application.ports.account_transaction_repository import AccountTransactionRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
 from application.ports.post_market_sync_run_repository import PostMarketSyncRunRepository
 from application.ports.schwab_oauth_health_provider import SchwabOAuthHealthProvider
+from application.services.account_transaction_coordinator import AccountTransactionCoordinator
+from application.services.activity_annotation_service import ActivityAnnotationService
+from application.services.daily_equity_materialization_service import (
+    DailyEquityMaterializationService,
+)
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
 from domain.common.ids import EntityIdPrefix
 from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 from domain.operations.models import PostMarketSyncRun
+from domain.performance.enums import DailyEquityMaterializationMode
 
 
 class PostMarketSyncService:
@@ -36,6 +45,11 @@ class PostMarketSyncService:
         id_generator: IdGenerator,
         delay_minutes: int = 10,
         schwab_oauth_health: SchwabOAuthHealthProvider | None = None,
+        transactions: AccountTransactionCoordinator | None = None,
+        activity_annotations: ActivityAnnotationService | None = None,
+        account_snapshots: AccountSnapshotRepository | None = None,
+        transaction_repository: AccountTransactionRepository | None = None,
+        daily_equity: DailyEquityMaterializationService | None = None,
     ) -> None:
         self._calendar = calendar
         self._repository = repository
@@ -45,6 +59,11 @@ class PostMarketSyncService:
         self._ids = id_generator
         self._delay = timedelta(minutes=delay_minutes)
         self._schwab_oauth_health = schwab_oauth_health
+        self._transactions = transactions
+        self._activity_annotations = activity_annotations
+        self._account_snapshots = account_snapshots
+        self._transaction_repository = transaction_repository
+        self._daily_equity = daily_equity
 
     async def run_if_due(self) -> PostMarketSyncResultDTO:
         now = self._clock.now()
@@ -182,20 +201,65 @@ class PostMarketSyncService:
     ) -> PostMarketSyncResultDTO:
         started_at = self._clock.now()
         portfolio = await self._portfolio.get_account_snapshot(AccountGetSnapshotInput())
+        transactions_ok = True
+        transaction_error_codes: list[str] = []
+        if self._transactions is not None:
+            transaction_result = await self._transactions.get_transactions(
+                AccountGetTransactionsInput(end=self._clock.now(), limit=1_000)
+            )
+            transactions_ok = transaction_result.ok
+            transaction_error_codes.extend(item.code for item in transaction_result.errors)
+            if transaction_result.ok and self._activity_annotations is not None:
+                try:
+                    self._activity_annotations.sync_unlinked(limit=500)
+                except Exception:  # noqa: BLE001 - source sync remains durable and retryable
+                    transactions_ok = False
+                    transaction_error_codes.append("UNLINKED_ACTIVITY_PROJECTION_FAILED")
+        if (
+            portfolio.ok
+            and portfolio.data is not None
+            and transactions_ok
+            and self._daily_equity is not None
+            and self._account_snapshots is not None
+            and self._transaction_repository is not None
+        ):
+            try:
+                if self._daily_equity.get_activation() is None:
+                    self._daily_equity.activate(
+                        actor="system",
+                        idempotency_key="phase4_post_market_activation_v1",
+                    )
+                snapshots = tuple(
+                    value
+                    for item in portfolio.data.snapshots
+                    if (value := self._account_snapshots.get_account(item.snapshot_id)) is not None
+                )
+                self._daily_equity.materialize(
+                    snapshots=snapshots,
+                    transactions=self._transaction_repository.list(
+                        providers=(), start=None, end=self._clock.now(), limit=None
+                    ),
+                    mode=DailyEquityMaterializationMode.PERSIST,
+                )
+            except Exception:  # noqa: BLE001 - incomplete projection must remain visible
+                transactions_ok = False
+                transaction_error_codes.append("DAILY_EQUITY_MATERIALIZATION_FAILED")
         watchlist = await self._watchlist.sync_all()
         completed_at = self._clock.now()
 
         portfolio_status = (
-            PostMarketSyncStepStatus.SUCCEEDED if portfolio.ok else PostMarketSyncStepStatus.FAILED
+            PostMarketSyncStepStatus.SUCCEEDED
+            if portfolio.ok and transactions_ok
+            else PostMarketSyncStepStatus.FAILED
         )
         watchlist_status = (
             PostMarketSyncStepStatus.SUCCEEDED if watchlist.ok else PostMarketSyncStepStatus.FAILED
         )
         status = (
             PostMarketSyncRunStatus.SUCCEEDED
-            if portfolio.ok and watchlist.ok
+            if portfolio_status is PostMarketSyncStepStatus.SUCCEEDED and watchlist.ok
             else PostMarketSyncRunStatus.FAILED
-            if not portfolio.ok and not watchlist.ok
+            if portfolio_status is PostMarketSyncStepStatus.FAILED and not watchlist.ok
             else PostMarketSyncRunStatus.PARTIAL
         )
         account_snapshot_ids = (
@@ -218,6 +282,7 @@ class PostMarketSyncService:
             dict.fromkeys(
                 [item.code for item in portfolio.errors]
                 + [item.code for item in watchlist.errors]
+                + transaction_error_codes
             )
         )
         if status is not PostMarketSyncRunStatus.SUCCEEDED and not errors:

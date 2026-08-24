@@ -30,6 +30,31 @@ def _message(value: ModelMessage | Mapping[str, Any]) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
+def _content(value: object) -> object:
+    if isinstance(value, str) or value is None:
+        return value
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise DataContractError("LLM Responses message content is invalid")
+    result: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise DataContractError("LLM Responses content part is invalid")
+        part_type = item.get("type")
+        if part_type == "text":
+            text = item.get("text")
+            if not isinstance(text, str):
+                raise DataContractError("LLM Responses text content is invalid")
+            result.append({"type": "input_text", "text": text})
+        elif part_type == "image_url":
+            image_url = item.get("image_url")
+            if not isinstance(image_url, Mapping) or not isinstance(image_url.get("url"), str):
+                raise DataContractError("LLM Responses image content is invalid")
+            result.append({"type": "input_image", "image_url": image_url["url"]})
+        else:
+            raise DataContractError("LLM Responses content part type is unsupported")
+    return result
+
+
 def _messages(values: Sequence[ModelMessage | Mapping[str, Any]]) -> list[dict[str, object]]:
     """Translate chat-style tool history to Responses input items."""
 
@@ -51,10 +76,14 @@ def _messages(values: Sequence[ModelMessage | Mapping[str, Any]]) -> list[dict[s
             continue
 
         calls = message.get("tool_calls")
-        if role == "assistant" and isinstance(calls, Sequence) and not isinstance(
-            calls, (str, bytes)
+        if (
+            role == "assistant"
+            and isinstance(calls, Sequence)
+            and not isinstance(calls, (str, bytes))
         ):
             assistant = {key: item for key, item in message.items() if key != "tool_calls"}
+            if "content" in assistant:
+                assistant["content"] = _content(assistant["content"])
             if assistant.get("content") not in (None, ""):
                 result.append(assistant)
             for index, raw_call in enumerate(calls):
@@ -81,6 +110,8 @@ def _messages(values: Sequence[ModelMessage | Mapping[str, Any]]) -> list[dict[s
                     }
                 )
             continue
+        if "content" in message:
+            message["content"] = _content(message["content"])
         result.append(message)
     return result
 
@@ -144,6 +175,17 @@ class ResponsesCodec:
             if request.reasoning_effort:
                 reasoning["effort"] = request.reasoning_effort
             payload["reasoning"] = reasoning
+        if request.response_schema is not None:
+            payload["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": request.response_schema_name or "structured_response",
+                    "strict": True,
+                    "schema": dict(request.response_schema),
+                }
+            }
+        elif request.json_output:
+            payload["text"] = {"format": {"type": "json_object"}}
         return payload
 
     @staticmethod
@@ -203,9 +245,7 @@ class ResponsesCodec:
             web_extractor_used=web_extractor_used,
             web_source_urls=tuple(source_urls[:MAX_WEB_SOURCE_URLS]),
             request_id=(
-                str(payload["id"])
-                if isinstance(payload.get("id"), str) and payload["id"]
-                else None
+                str(payload["id"]) if isinstance(payload.get("id"), str) and payload["id"] else None
             ),
         )
 
@@ -256,9 +296,7 @@ class ResponsesCodec:
                 if not all(isinstance(value, str) for value in (call_id, name, arguments)):
                     raise DataContractError("LLM Responses stream function item is invalid")
                 return ModelStreamChunk(
-                    tool_calls=(
-                        ModelToolCall(id=call_id, name=name, arguments=arguments),
-                    ),
+                    tool_calls=(ModelToolCall(id=call_id, name=name, arguments=arguments),),
                     model=model,
                     request_id=request_id,
                 )
@@ -388,9 +426,7 @@ def _usage(raw: object) -> ModelUsage | None:
         raise DataContractError("LLM Responses usage is invalid")
     return ModelUsage(
         input_tokens=_nonnegative_int(raw.get("input_tokens", raw.get("prompt_tokens"))),
-        output_tokens=_nonnegative_int(
-            raw.get("output_tokens", raw.get("completion_tokens"))
-        ),
+        output_tokens=_nonnegative_int(raw.get("output_tokens", raw.get("completion_tokens"))),
         total_tokens=_nonnegative_int(raw.get("total_tokens")),
         web_search_calls=_x_tool_count(raw, "web_search"),
         web_extractor_calls=_x_tool_count(raw, "web_extractor"),
