@@ -8,11 +8,14 @@
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
     "dev:lan": "node scripts/start-lan.mjs dev",
+    "generate:contracts": "node scripts/generate-contracts.mjs",
+    "check:contracts": "node scripts/generate-contracts.mjs --check",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "start:lan": "node scripts/start-lan.mjs start",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs && playwright test",
     "test:unit": "node --test tests/*.test.mjs",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
@@ -24,11 +27,13 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "10.8.0",
     "globals": "17.4.0",
+    "json-schema-to-typescript": "^15.0.4",
     "typescript": "5.9.3",
     "typescript-eslint": "8.65.0"
   },

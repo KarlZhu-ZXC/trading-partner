@@ -120,6 +120,14 @@ _REVIEW_ITEM_TABLES = {
     "review_item_actions",
     "review_item_occurrences",
 }
+_PHASE4_TABLES = {
+    "transaction_decision_links",
+    "trade_cycle_override_revisions",
+    "behavior_review_runs",
+    "behavior_action_observations",
+    "journal_activations",
+    "daily_equity_snapshots",
+}
 
 _PHASE3_TABLES = {
     "account_activity_coverage_receipts",
@@ -138,7 +146,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0051_moomoo_margin_semantics"})
+_HEAD_REVISIONS = frozenset({"0063_agent_image_attachments"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -251,6 +259,7 @@ def test_migration_round_trip(
     assert _BROKER_EXECUTION_TABLES.issubset(tables_after_first)
     assert _AGENT_RUNTIME_TABLES.issubset(tables_after_first)
     assert _REVIEW_ITEM_TABLES.issubset(tables_after_first)
+    assert _PHASE4_TABLES.issubset(tables_after_first)
     agenda_columns = {item["name"] for item in insp.get_columns("catalyst_agenda_versions")}
     assert {
         "case_id",
@@ -268,6 +277,35 @@ def test_migration_round_trip(
     assert {"instrument_id", "selection_reason"}.issubset(selection_columns)
     observation_columns = {item["name"] for item in insp.get_columns("monitor_run_observations")}
     assert "diagnostics_json" in observation_columns
+    agent_turn_columns = {item["name"] for item in insp.get_columns("agent_turns")}
+    assert {
+        "model",
+        "error_http_status",
+        "error_retryable",
+        "error_attempts",
+    }.issubset(agent_turn_columns)
+    decision_columns = {item["name"] for item in insp.get_columns("decision_records")}
+    assert {
+        "strategy_code",
+        "strategy_version",
+        "scenario",
+        "trade_plan_id",
+        "trade_plan_version",
+        "review_due_at",
+    }.issubset(decision_columns)
+    broker_order_columns = {
+        item["name"] for item in insp.get_columns("broker_order_intents")
+    }
+    assert {
+        "subject_id",
+        "decision_id",
+        "trade_plan_id",
+        "trade_plan_version",
+    }.issubset(broker_order_columns)
+    annotation_columns = {
+        item["name"] for item in insp.get_columns("transaction_decision_links")
+    }
+    assert {"classification", "order_intent_id"}.issubset(annotation_columns)
     assert "uq_watchlist_selected_per_case" in {
         item["name"] for item in insp.get_indexes("watchlist_items")
     }
@@ -498,6 +536,7 @@ def test_phase1d_migration_round_trip_preserves_1b_data(
     assert not _PHASE1D_TABLES.intersection(tables_mid)
     assert not _PHASE1C_TABLES.intersection(tables_mid)
     assert not _PHASE2_TABLES.intersection(tables_mid)
+    assert not _PHASE4_TABLES.intersection(tables_mid)
     assert _PHASE1B_TABLES.issubset(tables_mid)
     assert "schema_versions" in tables_mid
     assert "system_audit_log" in tables_mid

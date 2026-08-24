@@ -73,7 +73,9 @@ ETF, theme, macro question, catalyst, or portfolio concern—not only an equity.
   decisions, evidence, Catalyst Agenda, Judgment Scorecards, Challenge Reviews,
   and versioned Trade Plans.
 - **Portfolio context:** Schwab, Moomoo OpenD, or strict CSV holdings; durable
-  transactions, Watchlists, performance attribution, exposure, and Risk Engine v2.
+  transactions, append-only Cycle overrides, deterministic Trade Cycles, Daily Equity,
+  native-currency returns, behavior recurrence Reviews, Watchlists, performance attribution,
+  exposure, and Risk Engine v2.
 - **Market facts:** A-share, US, Korea Exchange, macro, company filings, sentiment,
   selected futures, and explicitly labelled OTC/cross-asset references.
 - **Monitoring:** deterministic facts plus optional bounded composite judgment,
@@ -172,7 +174,7 @@ for page-by-page detail, LAN mode, and scheduler setup.
 # Exact Watchlist refresh
 uv run trading-partner-watchlist-sync
 
-# Due-checked US post-market account and Watchlist refresh
+# Due-checked US post-market account, transaction, Unlinked Activity, and Watchlist refresh
 uv run trading-partner-post-market-sync
 
 # Freeze Trade Plans and Decision Records before a week, audit it after

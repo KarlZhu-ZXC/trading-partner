@@ -35,6 +35,7 @@ data/secrets/
 data/locks/
 data/artifacts/
 data/automation/
+data/agent/
 data/backups/
 data/research/hog_cycle/
 data/research/lidaxiao_bilibili/

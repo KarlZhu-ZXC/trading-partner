@@ -99,6 +99,10 @@ def test_account_repository_is_append_only_and_fingerprint_idempotent(tmp_path) 
 
     with engine.connect() as connection:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+        assert connection.execute(text("PRAGMA journal_mode")).scalar_one() == "wal"
+        assert connection.execute(text("PRAGMA synchronous")).scalar_one() == 1
+        assert connection.execute(text("PRAGMA busy_timeout")).scalar_one() == 30_000
+        assert connection.execute(text("PRAGMA wal_autocheckpoint")).scalar_one() == 1_000
 
     first = repository.append_account(_snapshot("snapshot_first"))
     replay = repository.append_account(_snapshot("snapshot_replayed"))

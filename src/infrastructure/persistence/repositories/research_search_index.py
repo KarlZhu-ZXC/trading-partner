@@ -6,9 +6,13 @@ Business rows remain append-only; only the rebuildable search projection mutates
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import math
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,6 +23,7 @@ from application.dto.research_memory import (
     ResearchSearchPageDTO,
     ResearchSearchQuery,
 )
+from application.ports.local_embedding_provider import LocalEmbeddingProvider
 from domain.common.enums import EvidenceStance, ResearchSearchEntityType
 from domain.common.errors import ResearchMemoryNotFound, SearchBackendUnavailable
 from infrastructure.persistence.orm import (
@@ -64,6 +69,9 @@ from infrastructure.persistence.repositories.subject_evidence_link import (
 )
 
 _SNIPPET_MAX = 800
+_EMBEDDING_TEXT_MAX = 12_000
+_RRF_K = 60
+_LOGGER = logging.getLogger(__name__)
 
 _ALL_ENTITY_TYPES: tuple[ResearchSearchEntityType, ...] = (
     ResearchSearchEntityType.EVIDENCE,
@@ -143,8 +151,16 @@ def _is_sqlite_backend_error(exc: BaseException) -> bool:
 class SqlAlchemyResearchSearchIndex:
     """Session-bound FTS + structured research search projection."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        embedding_provider: LocalEmbeddingProvider | None = None,
+        semantic_candidate_limit: int = 500,
+    ) -> None:
         self._session = session
+        self._embedding_provider = embedding_provider
+        self._semantic_candidate_limit = semantic_candidate_limit
 
     def index(
         self,
@@ -300,12 +316,36 @@ class SqlAlchemyResearchSearchIndex:
             )
 
         items = tuple(hits)
+        semantic_model: str | None = None
+        total_is_lower_bound = False
+        search_mode: Literal["lexical", "hybrid"] = "lexical"
+        if self._embedding_provider is not None and query.text is not None and query.offset == 0:
+            try:
+                semantic_items, semantic_truncated = self._semantic_hits(
+                    query,
+                    effective_types=effective_types,
+                )
+            except Exception as error:  # noqa: BLE001 - lexical search remains authoritative
+                _LOGGER.warning(
+                    "Local semantic search unavailable: error_type=%s",
+                    type(error).__name__,
+                )
+                semantic_items, semantic_truncated = (), False
+            if semantic_items:
+                items = self._rrf_merge(items, semantic_items, limit=query.limit)
+                total = max(total, len({item.entity_id for item in (*hits, *semantic_items)}))
+                semantic_model = self._embedding_provider.model_id
+                total_is_lower_bound = semantic_truncated
+                search_mode = "hybrid"
         return ResearchSearchPageDTO(
             items=items,
             total=total,
             limit=query.limit,
             offset=query.offset,
-            has_more=query.offset + len(items) < total,
+            has_more=query.offset + len(items) < total or total_is_lower_bound,
+            search_mode=search_mode,
+            semantic_model=semantic_model,
+            total_is_lower_bound=total_is_lower_bound,
         )
 
     def rebuild(self) -> int:
@@ -316,6 +356,11 @@ class SqlAlchemyResearchSearchIndex:
         self._session.execute(text("DELETE FROM research_search_document_cases"))
         self._session.execute(text("DELETE FROM research_search_document_instruments"))
         self._session.execute(text("DELETE FROM research_search_document_tags"))
+        if self._embedding_provider is not None:
+            self._session.execute(
+                text("DELETE FROM research_search_vectors WHERE model_id = :model_id"),
+                {"model_id": self._embedding_provider.model_id},
+            )
         self._session.execute(text("DELETE FROM research_search_documents"))
         self._session.flush()
 
@@ -514,8 +559,129 @@ class SqlAlchemyResearchSearchIndex:
                 ),
                 {"rowid": rowid, "topic_tag": tag},
             )
+        self._upsert_vector(projection)
         self._session.flush()
 
+    def _upsert_vector(self, projection: SearchDocumentProjection) -> None:
+        provider = self._embedding_provider
+        if provider is None:
+            return
+        content = "\n".join(
+            (projection.title_fts, projection.body_fts, projection.topic_tags_fts)
+        )[:_EMBEDDING_TEXT_MAX]
+        encoded = content.encode()
+        try:
+            vector = provider.embed((content,))[0]
+        except Exception as error:  # noqa: BLE001 - optional projection never blocks writes
+            _LOGGER.warning(
+                "Local semantic indexing unavailable: error_type=%s",
+                type(error).__name__,
+            )
+            return
+        self._session.execute(
+            text(
+                "INSERT INTO research_search_vectors("
+                "entity_type,entity_id,model_id,dimensions,vector_json,content_sha256,updated_at"
+                ") VALUES ("
+                ":entity_type,:entity_id,:model_id,:dimensions,:vector_json,:content_sha256,:updated_at"
+                ") ON CONFLICT(entity_type,entity_id,model_id) DO UPDATE SET "
+                "dimensions=excluded.dimensions,vector_json=excluded.vector_json,"
+                "content_sha256=excluded.content_sha256,updated_at=excluded.updated_at"
+            ),
+            {
+                "entity_type": projection.entity_type.value,
+                "entity_id": projection.entity_id,
+                "model_id": provider.model_id,
+                "dimensions": len(vector),
+                "vector_json": json.dumps(vector, separators=(",", ":")),
+                "content_sha256": hashlib.sha256(encoded).hexdigest(),
+                "updated_at": dt_to_db(projection.visible_at),
+            },
+        )
+
+    def _semantic_hits(
+        self,
+        query: ResearchSearchQuery,
+        *,
+        effective_types: tuple[ResearchSearchEntityType, ...],
+    ) -> tuple[tuple[ResearchSearchHitDTO, ...], bool]:
+        provider = self._embedding_provider
+        assert provider is not None and query.text is not None
+        where_sql, params = self._build_filters(
+            query=query,
+            effective_types=effective_types,
+            match_expr=None,
+        )
+        rows = self._session.execute(
+            text(
+                "SELECT d.entity_type,d.entity_id,v.vector_json "
+                "FROM research_search_documents d "
+                "JOIN research_search_vectors v ON v.entity_type=d.entity_type "
+                "AND v.entity_id=d.entity_id "
+                f"WHERE v.model_id=:semantic_model AND {where_sql} "
+                "ORDER BY d.visible_at DESC,d.entity_id ASC LIMIT :semantic_limit"
+            ),
+            {
+                **params,
+                "semantic_model": provider.model_id,
+                "semantic_limit": self._semantic_candidate_limit + 1,
+            },
+        ).all()
+        truncated = len(rows) > self._semantic_candidate_limit
+        query_vector = provider.embed((query.text,))[0]
+        ranked: list[tuple[float, str, str]] = []
+        for row in rows[: self._semantic_candidate_limit]:
+            try:
+                vector = tuple(float(item) for item in json.loads(str(row[2])))
+            except (TypeError, ValueError):
+                continue
+            similarity = self._cosine(query_vector, vector)
+            if similarity is not None:
+                ranked.append((similarity, str(row[0]), str(row[1])))
+        ranked.sort(key=lambda item: (-item[0], item[2]))
+        limit = max(50, query.limit * 4)
+        hits = tuple(
+            self._hydrate_hit(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                score=Decimal(str(-similarity)),
+                query=query,
+            )
+            for similarity, entity_type, entity_id in ranked[:limit]
+        )
+        return hits, truncated
+
+    @staticmethod
+    def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float | None:
+        if not left or len(left) != len(right):
+            return None
+        dot = sum(a * b for a, b in zip(left, right, strict=True))
+        left_norm = math.sqrt(sum(item * item for item in left))
+        right_norm = math.sqrt(sum(item * item for item in right))
+        if left_norm == 0 or right_norm == 0:
+            return None
+        value = dot / (left_norm * right_norm)
+        return value if math.isfinite(value) else None
+
+    @staticmethod
+    def _rrf_merge(
+        lexical: tuple[ResearchSearchHitDTO, ...],
+        semantic: tuple[ResearchSearchHitDTO, ...],
+        *,
+        limit: int,
+    ) -> tuple[ResearchSearchHitDTO, ...]:
+        values = {item.entity_id: item for item in (*lexical, *semantic)}
+        scores: dict[str, float] = {}
+        for ranked in (lexical, semantic):
+            for rank, item in enumerate(ranked, 1):
+                scores[item.entity_id] = scores.get(item.entity_id, 0.0) + 1 / (_RRF_K + rank)
+        ordered = sorted(scores, key=lambda entity_id: (-scores[entity_id], entity_id))[:limit]
+        return tuple(
+            values[entity_id].model_copy(
+                update={"score": Decimal(str(-scores[entity_id]))}
+            )
+            for entity_id in ordered
+        )
     def _delete_mappings(self, rowid: int) -> None:
         self._session.execute(
             text("DELETE FROM research_search_document_cases WHERE document_rowid = :rowid"),

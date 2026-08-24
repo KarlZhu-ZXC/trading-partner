@@ -1,0 +1,5 @@
+{
+  "generator": "pydantic-json-schema+json-schema-to-typescript",
+  "schema_sha256": "71b08e52e7c98d644ed3008a75546127ec718a26a15042ea8252beeb65bf7da3",
+  "type_count": 13
+}

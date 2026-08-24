@@ -121,6 +121,30 @@ historical databases, experiment orchestration, walk-forward testing, and bias
 analysis are optional future investments—not assumed next steps. They should be
 added only after repeated manual validations demonstrate real product value.
 
+### R4 — Phase 4 Trading Journal and behavior loop（4A reuse-first 已启动）
+
+Phase 4 不扩展市场广度，而是把现有 Research、Trade Plan、Broker activity、Portfolio
+Performance、Trade Retro 和 Review Queue 组织成一条可追溯的个人操作与学习主线：
+
+```text
+Decision / NO_ACTION
+  -> Order Intent / Order Result
+  -> Broker Transaction / Fill
+  -> Trade Cycle
+  -> Performance + Behavior Review
+  -> Next Decision Discipline
+```
+
+产品把现有 Decision Workbench 原地改造为顶层 Console `Journal`，迁移期保留 Portfolio、
+Trade Retro 和 Research 专业路由。Journal 不建立第二套交易事实；它引用 durable source，新增 append-only
+annotation、确定性 Trade Cycle、日频账户估值、可信收益率和行为 cohort。`strategy_v1` 的
+`UPSIDE`、`SIDEWAYS`、`PULLBACK`、`INVALIDATION` 与实际动作进入同一决策快照，
+`NO_ACTION` 也是正式记录。
+
+实施顺序固定为 4A Capture、4B Trade Cycle、4C Performance、4D Behavior Review。公共 MCP
+保持 27 个 grouped tools，订单确认和 SGOV 唯一 unattended exception 不变。完整系统、Console、
+迁移和验收合同见 [Phase 4 specification](../phases/phase4.md)。
+
 ## Deferred integrations
 
 - Additional brokers and A-share account execution feeds.

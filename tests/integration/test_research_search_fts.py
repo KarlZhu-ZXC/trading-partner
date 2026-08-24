@@ -64,6 +64,22 @@ A_SHARE_INSTRUMENT = "equity:A_SHARE:600519.SH"
 US_INSTRUMENT = "equity:US:NVDA"
 
 
+class _SemanticEmbedding:
+    model_id = "local-semantic-test-v1"
+
+    def embed(self, texts: object) -> tuple[tuple[float, ...], ...]:
+        values = tuple(texts)  # type: ignore[arg-type]
+        result: list[tuple[float, ...]] = []
+        for value in values:
+            lowered = str(value).casefold()
+            result.append(
+                (1.0, 0.0)
+                if any(term in lowered for term in ("semiconductor", "chip demand"))
+                else (0.0, 1.0)
+            )
+        return tuple(result)
+
+
 def _enable_fk(engine: Engine) -> None:
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn: object, _record: object) -> None:
@@ -1577,3 +1593,67 @@ def test_journal_entry_types_sql_filter_pagination_and_total(uow_factory) -> Non
         )
         assert by_type_only.total == 1
         assert by_type_only.items[0].entity_id == reflection.journal_id
+
+
+def test_optional_local_semantic_search_adds_recall_without_remote_provider(
+    engine: Engine,
+) -> None:
+    clock = FixedClock(NOW)
+    ids = SequentialIdGenerator()
+    redactor = DefaultSecretRedactor()
+    embedding = _SemanticEmbedding()
+
+    def factory() -> SqlAlchemyResearchUnitOfWork:
+        return SqlAlchemyResearchUnitOfWork(
+            engine,
+            clock,
+            ids,
+            redactor,
+            embedding_provider=embedding,
+            semantic_candidate_limit=100,
+        )
+
+    factory.clock = clock  # type: ignore[attr-defined]
+    factory.ids = ids  # type: ignore[attr-defined]
+
+    subject = _bootstrap_case(factory)
+    evidence = _make_evidence(
+        ids,
+        title="Semiconductor capacity expansion",
+        summary="Foundry capacity remains constrained",
+        content_text="Long-cycle semiconductor equipment demand",
+        instrument_ids=(US_INSTRUMENT,),
+        topic_tags=("semiconductor",),
+        observed_at=EARLIER,
+        published_at=EARLIER,
+    )
+    link = _make_link(
+        ids,
+        subject_id=subject.subject_id,
+        evidence_id=evidence.evidence_id,
+        linked_at=EARLIER,
+    )
+    with factory() as uow:
+        uow.evidence.add(evidence)
+        uow.subject_evidence_links.add(link)
+        uow.search_index.index(ResearchSearchEntityType.EVIDENCE, evidence.evidence_id)
+        uow.commit()
+
+    with factory() as uow:
+        lexical_only = SqlAlchemyResearchUnitOfWork(
+            engine,
+            clock,
+            ids,
+            redactor,
+        )
+        with lexical_only as lexical_uow:
+            lexical = lexical_uow.search_index.search(
+                ResearchSearchQuery(text="chip demand", subject_id=subject.subject_id)
+            )
+        hybrid = uow.search_index.search(
+            ResearchSearchQuery(text="chip demand", subject_id=subject.subject_id)
+        )
+    assert lexical.total == 0
+    assert hybrid.search_mode == "hybrid"
+    assert hybrid.semantic_model == embedding.model_id
+    assert any(item.entity_id == evidence.evidence_id for item in hybrid.items)

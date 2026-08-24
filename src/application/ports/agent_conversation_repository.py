@@ -99,6 +99,9 @@ class AgentConversationRepository(Protocol):
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: datetime | None = None,
         now: datetime | None = None,
     ) -> AgentTurn: ...
@@ -111,6 +114,9 @@ class AgentConversationRepository(Protocol):
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: datetime | None = None,
         now: datetime | None = None,
     ) -> AgentTurn: ...

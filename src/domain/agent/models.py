@@ -17,6 +17,11 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from domain.agent.attachments import (
+    AGENT_IMAGE_MAX_COUNT,
+    AGENT_IMAGE_MAX_TOTAL_BYTES,
+    AgentImageAttachment,
+)
 from domain.agent.enums import (
     AgentChannel,
     AgentConversationStatus,
@@ -188,6 +193,7 @@ class AgentMessage:
     model: str | None = None
     request_id: str | None = None
     model_receipt_json: str | None = None
+    attachments: tuple[AgentImageAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         _text(self.message_id, "message_id", 160)
@@ -207,6 +213,14 @@ class AgentMessage:
             _text(self.request_id, "request_id", 160)
         if self.model_receipt_json is not None:
             _text(self.model_receipt_json, "model_receipt_json", 16_384, allow_blank=True)
+        if len(self.attachments) > AGENT_IMAGE_MAX_COUNT:
+            raise DataContractError("Agent message has too many image attachments")
+        if not isinstance(self.attachments, tuple):
+            raise DataContractError("Agent message attachments must be a tuple")
+        if any(not isinstance(item, AgentImageAttachment) for item in self.attachments):
+            raise DataContractError("Agent message attachments are invalid")
+        if sum(item.byte_size for item in self.attachments) > AGENT_IMAGE_MAX_TOTAL_BYTES:
+            raise DataContractError("Agent message image attachments exceed the total bound")
         _time(self.created_at, "created_at")
 
 
@@ -231,9 +245,13 @@ class AgentTurn:
     updated_at: datetime
     assistant_message_id: str | None = None
     model_id: str | None = None
+    model: str | None = None
     reasoning_effort: str | None = None
     completed_at: datetime | None = None
     error_code: str | None = None
+    error_http_status: int | None = None
+    error_retryable: bool | None = None
+    error_attempts: int | None = None
     version: int = 1
 
     def __post_init__(self) -> None:
@@ -246,6 +264,8 @@ class AgentTurn:
         _enum(self.status, AgentTurnStatus, "status")
         if self.model_id is not None:
             _text(self.model_id, "model_id", 256)
+        if self.model is not None:
+            _text(self.model, "model", 256)
         if self.reasoning_effort is not None and self.reasoning_effort not in {
             "low",
             "medium",
@@ -258,6 +278,20 @@ class AgentTurn:
             or _SAFE_ERROR_CODE.fullmatch(self.error_code) is None
         ):
             raise DataContractError("error_code must be a safe bounded code")
+        if self.error_http_status is not None and (
+            isinstance(self.error_http_status, bool)
+            or not isinstance(self.error_http_status, int)
+            or not 100 <= self.error_http_status <= 599
+        ):
+            raise DataContractError("error_http_status must be an HTTP status or null")
+        if self.error_retryable is not None and type(self.error_retryable) is not bool:
+            raise DataContractError("error_retryable must be a boolean or null")
+        if self.error_attempts is not None and (
+            isinstance(self.error_attempts, bool)
+            or not isinstance(self.error_attempts, int)
+            or not 1 <= self.error_attempts <= 100
+        ):
+            raise DataContractError("error_attempts must be a bounded positive integer or null")
         _sequence(self.version, "version", minimum=1)
         _time(self.started_at, "started_at")
         _time(self.updated_at, "updated_at")

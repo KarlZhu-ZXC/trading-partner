@@ -72,7 +72,16 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("风险", ("portfolio_risk_get", "check", "policy")),
     ("研究标的", ("investment_case_read", "query", "context")),
     ("研究档案", ("investment_case_read", "query", "context")),
-    ("研究", ("investment_case_read", "research_memory_get", "search", "timeline")),
+    (
+        "研究",
+        ("investment_case_read", "research_memory_get", "search", "timeline", "attention"),
+    ),
+    ("待处理", ("investment_case_read", "attention")),
+    ("待办", ("investment_case_read", "attention")),
+    ("注意事项", ("investment_case_read", "attention")),
+    ("今天决策", ("investment_case_read", "attention")),
+    ("需要处理", ("investment_case_read", "attention")),
+    ("decision inbox", ("investment_case_read", "attention")),
     ("催化", ("research_memory_get", "agenda")),
     ("健康", ("system_health",)),
     ("数据质量", ("system_health",)),
@@ -86,10 +95,6 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "复核",
         ("decision_workbench_review_queue", "open_items", "summary", "subject"),
-    ),
-    (
-        "待处理",
-        ("decision_workbench_review_queue", "open_items", "summary"),
     ),
     (
         "工作台",

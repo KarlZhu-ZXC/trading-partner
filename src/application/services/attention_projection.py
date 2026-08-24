@@ -44,6 +44,8 @@ _REVIEW_ITEM_SOURCE: dict[str, AttentionSourceType] = {
     ReviewItemSourceType.SCORECARD_GAP.value: AttentionSourceType.SCORECARD_GAP,
     ReviewItemSourceType.AGENT_PENDING_ACTION.value: AttentionSourceType.AGENT_PENDING_ACTION,
     ReviewItemSourceType.BROKER_ORDER_INTENT.value: AttentionSourceType.BROKER_ORDER_INTENT,
+    ReviewItemSourceType.DECISION_REVIEW_DUE.value: AttentionSourceType.DECISION_REVIEW_DUE,
+    ReviewItemSourceType.UNLINKED_ACTIVITY.value: AttentionSourceType.UNLINKED_ACTIVITY,
 }
 
 _CLOSURE: dict[AttentionSourceType, tuple[AttentionClosureCode, str]] = {
@@ -78,6 +80,14 @@ _CLOSURE: dict[AttentionSourceType, tuple[AttentionClosureCode, str]] = {
     AttentionSourceType.DATA_QUALITY: (
         AttentionClosureCode.DATA_QUALITY_ISSUE_CLEARED,
         "A later durable fact or receipt clears the corresponding issue.",
+    ),
+    AttentionSourceType.DECISION_REVIEW_DUE: (
+        AttentionClosureCode.DECISION_REVIEW_SUPERSEDED,
+        "A later exact superseding Decision replaces the Decision under review.",
+    ),
+    AttentionSourceType.UNLINKED_ACTIVITY: (
+        AttentionClosureCode.UNLINKED_ACTIVITY_ANNOTATED,
+        "A durable link or classification is appended for the exact activity.",
     ),
 }
 
@@ -139,6 +149,20 @@ def next_read_for(
         )
     if source_type is AttentionSourceType.DATA_QUALITY:
         return AttentionNextReadDTO(tool="system_health", request={})
+    if source_type is AttentionSourceType.DECISION_REVIEW_DUE:
+        timeline_request: dict[str, object] = {
+            "operation": "timeline",
+            "entity_types": ["decision"],
+            "limit": 100,
+        }
+        if subject_id:
+            timeline_request["case_id"] = subject_id
+        return AttentionNextReadDTO(tool="research_memory_get", request=timeline_request)
+    if source_type is AttentionSourceType.UNLINKED_ACTIVITY:
+        return AttentionNextReadDTO(
+            tool="portfolio_analyze",
+            request={"operation": "trade_cycles"},
+        )
     return None
 
 
@@ -207,19 +231,37 @@ def _live_item(
     )
 
 
-def project_pending_candidate(item: CandidateRevisionDTO) -> AttentionItemDTO | None:
+def project_pending_candidate(
+    item: CandidateRevisionDTO,
+    *,
+    now: datetime | None = None,
+) -> AttentionItemDTO | None:
     status = item.status.value if hasattr(item.status, "value") else item.status
     if status != CandidateStatus.PROPOSED.value:
         return None
     kind = item.kind.value if hasattr(item.kind, "value") else str(item.kind)
+    expired = now is not None and item.expires_at <= now
     return _live_item(
         key=f"research-candidate-{item.candidate_id}",
         source_type=AttentionSourceType.RESEARCH_CANDIDATE,
         source_ref=item.candidate_id,
         subject_id=item.subject_id,
-        title=f"Pending candidate · {kind}",
-        detail=item.proposed_by_rationale,
-        recommended_action="CONFIRM_OR_REJECT_CANDIDATE",
+        title=(
+            f"Expired candidate awaiting reconciliation · {kind}"
+            if expired
+            else f"Pending candidate · {kind}"
+        ),
+        detail=(
+            f"{item.proposed_by_rationale} · The confirmation window has expired."
+            if expired
+            else item.proposed_by_rationale
+        ),
+        recommended_action=(
+            "RECONCILE_EXPIRED_CANDIDATE"
+            if expired
+            else "CONFIRM_OR_REJECT_CANDIDATE"
+        ),
+        severity=AttentionSeverity.ERROR if expired else AttentionSeverity.ATTENTION,
         first_seen_at=item.proposed_at,
         due_at=item.expires_at,
     )
@@ -509,10 +551,35 @@ def merge_attention_items(
     review_items: Sequence[AttentionItemDTO],
     live_items: Sequence[AttentionItemDTO],
 ) -> tuple[AttentionItemDTO, ...]:
-    review_keys = {item.key for item in review_items}
-    merged = list(review_items)
+    review_by_key = {item.key: item for item in review_items}
+    live_by_key = {item.key: item for item in live_items}
+    merged: list[AttentionItemDTO] = []
+    for review in review_items:
+        live = live_by_key.get(review.key)
+        if live is None:
+            merged.append(review)
+            continue
+        # Preserve durable lifecycle/occurrence identity while presenting the
+        # latest read-only projection facts. A stale acknowledged card must not
+        # hide a newly escalated severity, detail, due time, or next-read hint.
+        merged.append(
+            review.model_copy(
+                update={
+                    "source_type": live.source_type,
+                    "source_ref": live.source_ref,
+                    "subject_id": live.subject_id,
+                    "title": live.title,
+                    "detail": live.detail,
+                    "severity": live.severity,
+                    "recommended_action": live.recommended_action,
+                    "due_at": live.due_at,
+                    "closure_condition": live.closure_condition,
+                    "next_read": live.next_read,
+                }
+            )
+        )
     for item in live_items:
-        if item.key not in review_keys:
+        if item.key not in review_by_key:
             merged.append(item)
     return tuple(merged)
 
@@ -624,6 +691,10 @@ def assemble_attention_digest(
         subject_id=request.case_id,
         case_id=request.case_id,
         total_count=len(ordered),
+        total_count_is_lower_bound=any(
+            str(item.state) != AttentionCoverageState.COMPLETE.value
+            for item in coverage
+        ),
         returned_count=len(clipped),
         truncated=len(clipped) < len(ordered),
         highest_severity=highest_severity(ordered),

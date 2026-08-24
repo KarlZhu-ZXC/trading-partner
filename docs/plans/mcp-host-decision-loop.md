@@ -1,6 +1,8 @@
 # MCP Host Decision-Loop Plan
 
-状态：**已完成（PR1–PR6）。已连接的 Grok stdio 进程在烟测时仍是 PR3 之前的旧进程，需 `/mcps` 刷新后才能在该宿主上使用 `attention`。**
+状态：**已完成（PR1–PR6）。2026-08-20 已通过真实 FastMCP stdio 子进程完成
+`system_health → investment_case_read/attention → next_read` 只读闭环；2026-08-17
+记录中的既有 Grok 会话仍属于历史旧进程证据，不冒充已刷新。**
 开始日期：2026-08-17
 最近修订：2026-08-17
 范围：让外部 stdio MCP 宿主（Grok、Cursor、Claude Desktop、Codex）获得
@@ -141,6 +143,7 @@ AttentionDigest
   subject_id?
   case_id?                 # 与 subject_id 同值的兼容字段
   total_count              # 应用 limit 前
+  total_count_is_lower_bound # 任一来源 PARTIAL/UNAVAILABLE 时为 true
   returned_count
   truncated
   highest_severity?        # INFO | ATTENTION | ERROR

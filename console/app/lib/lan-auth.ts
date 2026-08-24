@@ -2,7 +2,7 @@ const LAN_ENABLED_VALUE = "1";
 
 export const LAN_SESSION_COOKIE = "tp_console_lan_session";
 export const LAN_SESSION_SECONDS = 12 * 60 * 60;
-export const LAN_PASSWORD_MIN_LENGTH = 16;
+export const LAN_PASSWORD_MIN_LENGTH = 1;
 
 const encoder = new TextEncoder();
 

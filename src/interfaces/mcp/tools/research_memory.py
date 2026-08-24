@@ -8,13 +8,20 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from application.dto.account_transactions import TradeCycleQueryInput
+from application.dto.activity_annotations import ActivityAnnotationAppendInput
+from application.dto.behavior_review import BehaviorReviewRunInput
 from application.dto.catalyst_agenda import AgendaMutationInput, AgendaQueryInput
 from application.dto.research_memory import ResearchSearchQuery
+from application.dto.tool_envelope import ToolEnvelope
+from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
 from bootstrap import ApplicationContainer
 from domain.common.actor import (
     CURRENT_CHAT_SUBMISSION_VALUES,
     ActorContext,
 )
+from domain.common.enums import DecisionScenario, Freshness
+from domain.common.ids import EntityIdPrefix
 from interfaces.mcp.schemas import (
     DecisionRecordAppendInput,
     JournalAppendInput,
@@ -236,6 +243,12 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         report_ids: list[str] | None = None,
         supersedes_decision_id: str | None = None,
         position_context_snapshot_id: str | None = None,
+        strategy_code: str | None = None,
+        strategy_version: str | None = None,
+        scenario: DecisionScenario | None = None,
+        trade_plan_id: str | None = None,
+        trade_plan_version: int | None = None,
+        review_due_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Append a research/position intent DecisionRecord (no order/fill writes)."""
         try:
@@ -255,6 +268,12 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                     "supersedes_decision_id": supersedes_decision_id,
                     "position_context_snapshot_id": position_context_snapshot_id,
                     "idempotency_key": idempotency_key,
+                    "strategy_code": strategy_code,
+                    "strategy_version": strategy_version,
+                    "scenario": scenario,
+                    "trade_plan_id": trade_plan_id,
+                    "trade_plan_version": trade_plan_version,
+                    "review_due_at": review_due_at,
                 }
             )
             envelope = container.services.decisions.append(
@@ -272,6 +291,12 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
                 supersedes_decision_id=inp.supersedes_decision_id,
                 position_context_snapshot_id=inp.position_context_snapshot_id,
                 idempotency_key=inp.idempotency_key,
+                strategy_code=inp.strategy_code,
+                strategy_version=inp.strategy_version,
+                scenario=inp.scenario,
+                trade_plan_id=inp.trade_plan_id,
+                trade_plan_version=inp.trade_plan_version,
+                review_due_at=inp.review_due_at,
             )
             return envelope.model_dump(mode="json")
         except ValidationError:
@@ -327,6 +352,157 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         except Exception as exc:  # noqa: BLE001
             return _unexpected_failure(container, exc)
 
+    def activity_annotation_append(
+        provider: str,
+        account_ref: str,
+        provider_transaction_id: str,
+        status: str,
+        confirmed_by: str,
+        authorization_note: str,
+        idempotency_key: str,
+        classification: str | None = None,
+        order_intent_id: str | None = None,
+        expected_version: int | None = None,
+        case_id: str | None = None,
+        decision_id: str | None = None,
+        trade_plan_id: str | None = None,
+        trade_plan_version: int | None = None,
+    ) -> dict[str, Any]:
+        """Append an exact Broker-activity link or truthful manual classification."""
+
+        try:
+            if confirmed_by not in {"user", "external_agent"}:
+                raise ValueError("confirmed_by must be user or external_agent")
+            request = ActivityAnnotationAppendInput.model_validate(
+                {
+                    "provider": provider,
+                    "account_ref": account_ref,
+                    "provider_transaction_id": provider_transaction_id,
+                    "status": status,
+                    "classification": classification,
+                    "order_intent_id": order_intent_id,
+                    "decision_id": decision_id,
+                    "trade_plan_id": trade_plan_id,
+                    "trade_plan_version": trade_plan_version,
+                    "subject_id": case_id,
+                    "actor": confirmed_by,
+                    "authorization_note": authorization_note,
+                    "idempotency_key": idempotency_key,
+                    "expected_version": expected_version,
+                }
+            )
+            value = container.services.activity_annotations.append_revision(request)
+            now = container.context.clock.now()
+            return ToolEnvelope.success(
+                request_id=container.context.id_generator.new(EntityIdPrefix.REQ),
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                freshness=Freshness.FRESH,
+                sources=(),
+                data=value,
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def trade_cycle_override_append(
+        root_cycle_id: str,
+        operation: str,
+        cycle_ids: tuple[str, ...],
+        confirmed_by: str,
+        authorization_note: str,
+        idempotency_key: str,
+        expected_version: int | None = None,
+        activity_ids: tuple[str, ...] = (),
+        split_groups: tuple[tuple[str, ...], ...] = (),
+        target_cycle_id: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a user-confirmed split/merge/relink Cycle projection revision."""
+
+        try:
+            if confirmed_by not in {"user", "external_agent"}:
+                raise ValueError("confirmed_by must be user or external_agent")
+            request = TradeCycleOverrideAppendInput.model_validate(
+                {
+                    "root_cycle_id": root_cycle_id,
+                    "operation": operation,
+                    "cycle_ids": cycle_ids,
+                    "activity_ids": activity_ids,
+                    "split_groups": split_groups,
+                    "target_cycle_id": target_cycle_id,
+                    "note": note,
+                    "actor": confirmed_by,
+                    "authorization_note": authorization_note,
+                    "idempotency_key": idempotency_key,
+                    "expected_version": expected_version,
+                }
+            )
+            projection = (
+                container.services.account_transactions.project_trade_cycles_for_override(
+                    TradeCycleQueryInput(limit=500)
+                )
+            )
+            value = container.services.trade_cycle_overrides.append_revision(
+                request, projection=projection
+            )
+            now = container.context.clock.now()
+            return ToolEnvelope.success(
+                request_id=container.context.id_generator.new(EntityIdPrefix.REQ),
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                freshness=Freshness.FRESH,
+                sources=(),
+                data=value,
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def behavior_review_run(
+        period_kind: str,
+        period_start: datetime,
+        period_end: datetime,
+        idempotency_key: str,
+        strategy_code: str | None = None,
+        strategy_version: str | None = None,
+        horizon: str | None = None,
+        instrument_ids: tuple[str, ...] = (),
+        currency: str | None = None,
+        cycle_ids: tuple[str, ...] = (),
+        decision_ids: tuple[str, ...] = (),
+        retro_run_ids: tuple[str, ...] = (),
+        retro_review_ids: tuple[str, ...] = (),
+        review_item_source_keys: tuple[str, ...] = (),
+        subject_ids: tuple[str, ...] = (),
+        action_items: tuple[dict[str, Any], ...] = (),
+        source_read_complete: bool = True,
+        source_error_code: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one deterministic period/cohort action recurrence review."""
+
+        try:
+            request = BehaviorReviewRunInput.model_validate(locals())
+            value = container.services.behavior_reviews.run(request)
+            now = container.context.clock.now()
+            return ToolEnvelope.success(
+                request_id=container.context.id_generator.new(EntityIdPrefix.REQ),
+                market=None,
+                as_of=now,
+                fetched_at=now,
+                freshness=Freshness.FRESH,
+                sources=(),
+                data=value,
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
     return SimpleNamespace(
         research_search=research_search,
         research_report_get=research_report_get,
@@ -335,4 +511,7 @@ def build_research_memory_adapters(container: ApplicationContainer) -> SimpleNam
         journal_append=journal_append,
         decision_record_append=decision_record_append,
         catalyst_agenda_manage=catalyst_agenda_manage,
+        activity_annotation_append=activity_annotation_append,
+        trade_cycle_override_append=trade_cycle_override_append,
+        behavior_review_run=behavior_review_run,
     )

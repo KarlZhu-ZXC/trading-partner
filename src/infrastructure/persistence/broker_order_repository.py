@@ -69,6 +69,10 @@ def _intent(row: BrokerOrderIntentRow) -> BrokerOrderIntent:
         quote_price=_decimal(row.quote_price),
         estimated_notional=_decimal(row.estimated_notional),
         status=BrokerOrderIntentStatus(row.status),
+        subject_id=row.subject_id,
+        decision_id=row.decision_id,
+        trade_plan_id=row.trade_plan_id,
+        trade_plan_version=row.trade_plan_version,
         submit_idempotency_key=row.submit_idempotency_key,
         confirmed_by=row.confirmed_by,
         submitted_via=row.submitted_via,
@@ -131,6 +135,10 @@ class SqlAlchemyBrokerOrderRepository:
                 str(value.estimated_notional) if value.estimated_notional is not None else None
             ),
             status=value.status.value,
+            subject_id=value.subject_id,
+            decision_id=value.decision_id,
+            trade_plan_id=value.trade_plan_id,
+            trade_plan_version=value.trade_plan_version,
             updated_at=(value.updated_at or value.created_at).isoformat(),
         )
         try:
@@ -341,6 +349,23 @@ class SqlAlchemyBrokerOrderRepository:
                         )
                     )
                 )
+                .order_by(
+                    BrokerOrderIntentRow.updated_at.desc(),
+                    BrokerOrderIntentRow.created_at.desc(),
+                    BrokerOrderIntentRow.order_intent_id.desc(),
+                )
+                .limit(limit)
+            ).all()
+            return tuple(_intent(row) for row in rows)
+
+    def list_recent(self, limit: int = 100) -> tuple[BrokerOrderIntent, ...]:
+        """Return the complete bounded durable intent history, newest first."""
+
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer in [1,500]")
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(BrokerOrderIntentRow)
                 .order_by(
                     BrokerOrderIntentRow.updated_at.desc(),
                     BrokerOrderIntentRow.created_at.desc(),

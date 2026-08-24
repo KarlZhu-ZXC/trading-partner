@@ -59,7 +59,53 @@ near-future fixed-window capacity and waits asynchronously up to
 states or reintroduce reject-only counters. Anonymous cancelled reservations expire
 with their short window; this is not a strict FIFO job queue.
 
+**Technical platform runtime**
+
+- Persistent trusted-LAN Console mode binds only the authenticated Next.js Web
+  process to `0.0.0.0`; the data API remains on `127.0.0.1:8765`. The LaunchAgent
+  stores only an owner-only password-file path, never the password, a URL secret,
+  or a `NEXT_PUBLIC_*` value. `trading-partner-agent console install --lan`
+  generates/reuses that file and subsequent ordinary Console restarts bring up API
+  plus LAN Web together. This remains trusted-LAN HTTP, not public hosting.
+- The loopback Console BFF reuses the exact public capability schema, confirmation
+  policy, and application handler but must retain complete local read results.
+  MCP's 15 KiB result compaction applies to MCP/Agent transport and the explicit
+  Capability Workbench only; it must never determine which local Subjects,
+  Candidates, Monitors, positions, Watchlist items, Agenda items, Retro runs,
+  Scorecards, or ReviewItems exist. Owned Console reads invoked after a user action
+  must explicitly request the same full-result mode. `_truncated` markers are
+  transport metadata, never domain rows or actionable identities.
+- SQLite production connections use WAL, `synchronous=NORMAL`, a 30-second busy
+  timeout, and bounded autocheckpointing. Maintenance status exposes only safe WAL
+  counters. Do not disable WAL to hide writer contention.
+- Launchd-triggered Monitor due, Post-market, and SGOV auto-run paths retain their
+  business idempotency and file locks and additionally use durable Operational Job
+  claim/lease/heartbeat/attempt/terminal receipts. Lease expiry becomes
+  `INTERRUPTED`; it never implies that an unknown order is safe to retry.
+- Optional OpenTelemetry is disabled by default and accepts only allowlisted `tp.*`
+  attributes. Prompts, payloads, URLs, credentials, headers, exception text, and stack
+  traces must never enter spans.
+- Optional semantic Research Search is local-only and disabled by default. FTS5 stays
+  canonical lexical recall; vector projection is rebuildable, never a business source
+  of truth, and any embedding failure falls back to lexical search without blocking a
+  research write.
+- Failed Agent model turns persist only closed diagnostics: machine error code,
+  Provider/model identity, safe HTTP status, retryability, and bounded attempt count.
+  Console renders these as a dedicated durable notification and restores it after
+  refresh/reconnect. The notification stays above the scrollable conversation and
+  may be dismissed as presentation-only local state; dismissal never deletes or
+  resolves the durable failed turn. Never persist or display an endpoint URL, response body,
+  exception message, header, request payload, or credential.
+
 **Research files, judgment, and memory**
+
+For every user discussion of a Thesis, Trade Plan, entry/exit, adding/reducing,
+holding, or trading strategy, apply the user's default
+`strategy_v1` discipline. The response must cover `UPSIDE`,
+`SIDEWAYS`, `PULLBACK`, and `INVALIDATION`, with an explicit action or `NO_ACTION`
+for each. If the user selects another primary Strategy, keep BossMo only as a
+risk/process check. This discipline is model interpretation, not a Provider fact,
+confirmation, position mutation, or order authorization.
 
 - `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)
@@ -68,6 +114,19 @@ with their short window; this is not a strict FIFO job queue.
 - `research_judgment_confirm`
 - `research_memory_get` (`search`, `report`, `timeline`)
 - `research_memory_append` (`journal`, `decision`)
+
+Phase 4A extends the existing Decision Record rather than creating another
+decision module. A Decision may carry optional `strategy_code`,
+`strategy_version`, one structured `scenario` (`UPSIDE`, `SIDEWAYS`, `PULLBACK`,
+or `INVALIDATION`), an exact `trade_plan_id` + `trade_plan_version` pair, and an
+aware `review_due_at`. The exact Trade Plan version must exist and belong to the
+same Research Subject. These fields remain intent/review metadata only and never
+authorize or create an order. Historical Decisions without them remain readable.
+An elapsed `review_due_at` is materialized through the existing ReviewItem and
+Attention path as `DECISION_REVIEW_DUE`. The source stays active until a later
+Decision explicitly names the exact prior Decision through
+`supersedes_decision_id`, or the user manually resolves the ReviewItem. Failed or
+bounded source reads must never auto-resolve it.
 
 The same grouped tools also expose Catalyst Agenda and Judgment Scorecard without
 increasing the public tool surface: `research_memory_get/agenda`,
@@ -262,7 +321,9 @@ credentials for it.
   warnings; it never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
-- `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `simulate_addition`,
+- `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `performance_series`,
+  `daily_equity`, `trade_cycles`, `trade_cycle_override_preview`, `journal_timeline`,
+  `behavior_summary`, `behavior_review_history`, `unlinked_activity`, `simulate_addition`,
   `retro_history`)
 - `research_judgment_get` (`challenge_review`) restores a Challenge Review
 - `research_judgment_propose` (`challenge_review`) starts one; explicit resolution
@@ -307,6 +368,33 @@ Finding keys. A disputed Finding requires a note. Stale writers remain
 `TRADE_RETRO_REVIEW_VERSION_CONFLICT`; there is no hidden merge. `export` includes
 the latest review and records that review version while retaining the original Run.
 
+Phase 4B `portfolio_analyze/trade_cycles` is a rebuildable, durable-only,
+long-only projection over normalized Account Transactions. It groups by exact
+account, Instrument, and native currency; zero-to-buy opens, later buys add,
+sells reduce, zero closes, and a later buy starts a new Cycle with a re-entry
+reference. It never contacts a broker, creates an order, infers short exposure,
+or treats transfers/corporate actions as trades. Missing prices/fees,
+sell-without-open, oversells, incomplete coverage, and bounded results remain
+explicit. Fill count is not a trade-win denominator; a complete CLOSED Cycle is
+the unit. SGOV Cycles are deterministically `CASH_MANAGEMENT`; other Cycles remain
+`UNCLASSIFIED` until a later explicit Strategy/Plan annotation exists.
+`portfolio_analyze/performance_series` derives native-currency TWR, actual-timestamp
+MWR/XIRR, and maximum drawdown only from durable Broker net-assets snapshots and
+external-flow activities. Missing valuation boundaries, mixed currencies, or a
+non-unique XIRR remain unavailable. `portfolio_analyze/behavior_summary` has no
+aggregate score and retains numerator, denominator, exclusions, and exact refs.
+`portfolio_analyze/unlinked_activity` lists unmatched Broker trades. An explicit
+`research_memory_append/activity_annotation` revision may link one exact activity
+to an existing same-Subject Decision/Plan or classify it truthfully; it never edits
+the Broker fact or authorizes an order.
+`research_memory_append/trade_cycle_override` appends a user-confirmed split/merge/
+relink revision only after `portfolio_analyze/trade_cycle_override_preview`; the
+algorithm projection remains retained and affected metrics fail closed until they
+can be recomputed. `research_memory_append/behavior_review` records one exact
+weekly/monthly/quarterly cohort and derives NEW/PERSISTENT/RESOLVED/RECURRED only
+from complete durable action-source reads. `portfolio_analyze/journal_timeline`
+merges durable Decisions, linked order intents/results, and Broker activities.
+
 The Console-only durable Review Queue materializes Catalyst overdue items, open Trade
 Retro reviews and action items, consecutive Judgment Scorecard gaps, and unresolved
 Agent/Broker states without adding a public MCP tool. Each ReviewItem retains a stable
@@ -328,7 +416,9 @@ ReviewItem through the same Console session/version/idempotency gate.
 
 - `uv run trading-partner-post-market-sync` checks the XNYS calendar and runs ten
   minutes after the real session close. It refreshes all configured account
-  providers before the exact active-source Watchlist sync, persists one terminal
+  providers, synchronizes normalized transactions, materializes Unlinked Activity
+  ReviewItems and source-referenced Daily Equity, and then performs the exact
+  active-source Watchlist sync. It persists one terminal
   receipt per market session, and never executes an order.
 - `uv run trading-partner-sgov-plan preview` explicitly refreshes Schwab and prints
   an immediate all-account Shadow plan. The dedicated launchd scheduler runs once
@@ -343,7 +433,8 @@ ReviewItem through the same Console session/version/idempotency gate.
   dedicated scheduler is the durable user authorization and uninstalling it revokes
   future automatic runs. It cannot sell, cancel, replace, use extended/overnight
   sessions, or submit another instrument. All other live actions retain the exact
-  current-chat confirmation gate. Each phase emits a SYSTEM Outbox notification and
+  current-chat confirmation gate. The automatic preparation phase writes only durable
+  state; the completion phase emits one concise SYSTEM Outbox result notification and
   never calls Codex or an LLM. Closed-day and non-due wakes make no Provider request.
   Retryable account-refresh and quote/sizing reads receive at most three bounded
   attempts; order submission is never retried after an unknown outcome. A blocked
@@ -623,15 +714,27 @@ position, Risk Policy, or order, and every run carries `execution_effect=false`.
 Optional composite judgment policies may add a bounded Playbook, 1–12 reference
 Instruments, relative-strength pairs, and user-confirmed execution state. The
 runtime computes 1h/4h/1d/3d returns, rule state, provenance, and session alignment
-before a server-side LLM call. Alibaba Cloud Model Studio `qwen3.8-max` is the
-default; the retained DeepSeek Provider can be selected through `LLM_PROVIDER`.
+before a server-side LLM call. The default Monitor route is Alibaba Cloud Model
+Studio `deepseek-v4-flash-0731` through Chat Completions with JSON Object output;
+`qwen3.8-max` is the Bailian Responses fallback. Agent model defaults remain separate.
+DeepSeek and OpenCode Go subscription endpoints can also be selected through
+`LLM_PROVIDER=deepseek|opencode_go`. OpenCode Go routes models through the documented
+Responses, Chat Completions, or Messages protocol and never reads OpenCode's local
+`auth.json`; its API key stays in the Trading Partner secret configuration.
 Only the Bailian adapter may use bounded web search for current macro-event context; search usage and
 up to ten source URLs are persisted, while prices, positions, levels, returns, and
 quantity facts remain deterministic-only. Explanations are validated as Chinese.
+OpenCode Go has no native Web Search capability in this integration and must not be
+described as having searched the web.
 The LLM has no mutation/order port;
 evidence IDs and quantity ranges are validated, session-misaligned divergence
 actions are downgraded to WAIT, unchanged qualitative signatures skip calls, and
-only material judgment changes create events/notifications. After primary failover,
+only material judgment changes create events/notifications. HOLD/WATCH/WAIT changes
+with the same phase, WATCH urgency, no divergence, and zero quantity are one neutral
+state and do not notify repeatedly. Consecutive model failures remain one interruption
+even when their typed error codes differ. Weekend-proxy judgments keep the requested
+XAUUSD Monitor identity but the title and market state must name PAXG/USDC or IG
+Weekend Gold explicitly and must not call the proxy a fresh OTC/LBMA quote. After primary failover,
 one malformed fallback payload may receive exactly one structure-only retry; a second
 invalid payload remains an explicit failed judgment. Never infer a fill or
 mutate confirmed state from an LLM result.
@@ -673,12 +776,18 @@ receipts, Pending Actions, cursors, and one-time channel handoffs through migrat
 disconnect recovery, migration `0050` adds explicit owner-scoped Agent presentation
 preferences, and migration `0051` discards legacy Moomoo `initial_margin` values that
 were persisted as financing usage before `debtCash` became the semantics. Terminal
-failures persist only bounded safe error codes. Console Chat
+failures persist only bounded safe error codes. The single Console Agent Rail
 and the strictly allowlisted Telegram poller are implemented;
 Agent broker orders remain unavailable and are not authorized by a research action.
 
-The model sees only private `tp_capability_search`, `tp_read`, and confirmation-preparing
-`tp_prepare_action`; these names are never registered as public MCP tools. Agent-A may
+The model sees only private `tp_capability_search`, `tp_read`, `tp_propose`,
+confirmation-preparing `tp_prepare_action`, and read-only `tp_web_search`; these names
+are never registered as public MCP tools. `tp_web_search` is available to every Agent
+model through the server-owned Tavily Search sidecar when configured. The sidecar uses
+bounded structured results directly, performs no additional Bailian model call, and
+never sends the Tavily key to an answer model. Queries persist only as hashes and
+durable receipts retain the actual `tavily` provenance. Search summaries and webpages
+are untrusted background and cannot override canonical Trading Partner facts. Agent-A may
 auto-run durable/provider reads, instrument discovery/cache, and explicitly non-executing
 technical artifacts. All other writes remain denied unless Agent-D's explicit operation
 allowlist creates a Pending Action that the same channel/principal confirms using the
@@ -706,7 +815,18 @@ server-owned credentials; the browser receives only bounded text-model IDs and c
 metadata, never an API key or full endpoint. Catalog failure falls back visibly to the configured
 default model. The runtime revalidates the selected Provider, catalog model, and reasoning effort
 before persisting the user message, so a modified browser request cannot inject an arbitrary
-model name.
+model name. An enabled `opencode_go` Agent Provider fetches the bounded Go `/models`
+directory and exposes safe model IDs from that directory. Known Responses and Messages
+models retain their explicit protocol routes; newly discovered models default to the
+OpenAI-compatible Chat Completions route because Go's directory currently publishes IDs
+without protocol metadata. A future non-Chat model still requires an explicit route hint.
+The Console Agent message path supports bounded private PNG/JPEG attachments; the
+Telegram path remains text-only. Image capability is separate from model discovery and
+does not authorize a model to access any file outside the exact attachment in the turn.
+OpenCode Zen `x-preview-f-free` is Ox Alpha Free. It is a reasoning model with
+selectable `low`, `high`, and `max` effort; omitting the field means Provider default,
+not disabled thinking. Do not group it with Zen free chat models that reject reasoning
+parameters.
 
 ## Console heading and control language
 

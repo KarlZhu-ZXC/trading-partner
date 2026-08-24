@@ -119,3 +119,31 @@ async def test_directory_failure_keeps_provider_error_type() -> None:
 
     assert error.value.code == "PROVIDER_UNAVAILABLE_ERROR"
     assert error.value.retryable is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_symbol", (".SPX", ".NDX", ".IXIC", "^NDX", "^IXIC"))
+async def test_legacy_us_index_identity_is_normalized_before_master_access(
+    legacy_symbol: str,
+) -> None:
+    canonical_symbol = {".SPX": "SPX", ".NDX": "NDX", ".IXIC": "IXIC"}.get(
+        legacy_symbol,
+        legacy_symbol.removeprefix("^")
+    )
+    canonical = _instrument(
+        f"index:US:{canonical_symbol}", AssetType.INDEX, Market.US
+    )
+    master = MagicMock()
+    master.get.side_effect = lambda instrument_id: (
+        canonical
+        if instrument_id == canonical.instrument_id
+        else (_ for _ in ()).throw(InvalidInstrument("instrument not found"))
+    )
+    resolver = MagicMock()
+    access = InstrumentAccessService(master, resolver)
+
+    result = await access.get(f"index:US:{legacy_symbol}", as_of=NOW)
+
+    assert result == canonical
+    resolver.resolve_dynamic.assert_not_called()
+    master.get.assert_called_once_with(canonical.instrument_id)

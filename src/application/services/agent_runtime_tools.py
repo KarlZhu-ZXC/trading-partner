@@ -21,6 +21,7 @@ from application.ports.agent_tool_gateway import (
     AgentToolGateway,
     AgentToolReceipt,
 )
+from application.ports.agent_web_search_provider import AgentWebSearchProvider
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.services.agent_pending_action_service import (
@@ -87,6 +88,7 @@ class AgentRuntimeToolHandler:
         id_generator: IdGenerator,
         search_capabilities: CapabilitySearcher,
         pending_action_gateway: AgentPendingActionGateway | None = None,
+        web_search_provider: AgentWebSearchProvider | None = None,
     ) -> None:
         self._gateway = gateway
         self._repository = repository
@@ -94,6 +96,7 @@ class AgentRuntimeToolHandler:
         self._id_generator = id_generator
         self._search_capabilities = search_capabilities
         self._pending_action_gateway = pending_action_gateway
+        self._web_search_provider = web_search_provider
 
     def validation_hint(
         self,
@@ -147,6 +150,20 @@ class AgentRuntimeToolHandler:
                 "prepare_action",
             }:
                 add_invalid(["mode"])
+        elif tool_name == "tp_web_search":
+            add_missing([key for key in ("query",) if key not in decoded])
+            add_invalid([key for key in decoded if key not in {"query", "max_results"}])
+            if "query" in decoded and (
+                not isinstance(decoded.get("query"), str)
+                or not str(decoded.get("query", "")).strip()
+                or len(str(decoded.get("query", ""))) > 500
+            ):
+                add_invalid(["query"])
+            if "max_results" in decoded and (
+                type(decoded.get("max_results")) is not int
+                or not 1 <= int(decoded.get("max_results", 0)) <= 10
+            ):
+                add_invalid(["max_results"])
         elif tool_name in {"tp_read", "tp_propose"}:
             add_missing([key for key in ("capability", "arguments") if key not in decoded])
             add_invalid(
@@ -254,6 +271,12 @@ class AgentRuntimeToolHandler:
                 channel=channel,
                 principal=principal,
             )
+        if call_name == "tp_web_search":
+            return await self._handle_web_search(
+                decoded,
+                conversation_id=conversation_id,
+                message_id=message_id,
+            )
         if call_name not in {"tp_read", "tp_propose"}:
             return tool_error("AGENT_TOOL_UNKNOWN"), None, None
         return await self._handle_read_or_propose(
@@ -262,6 +285,54 @@ class AgentRuntimeToolHandler:
             conversation_id=conversation_id,
             message_id=message_id,
         )
+
+    async def _handle_web_search(
+        self,
+        decoded: dict[str, Any],
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> ToolCallOutcome:
+        if self._web_search_provider is None:
+            return tool_error("AGENT_WEB_SEARCH_UNAVAILABLE"), None, None
+        query = decoded.get("query")
+        max_results = decoded.get("max_results", 5)
+        hints = self.validation_hint(tool_name="tp_web_search", decoded=decoded)
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or len(query) > 500
+            or type(max_results) is not int
+            or not 1 <= max_results <= 10
+        ):
+            return tool_error("AGENT_TOOL_SCHEMA_INVALID", **hints), None, None
+        try:
+            typed_result = await self._web_search_provider.search(
+                query,
+                max_results=max_results,
+            )
+        except TradingPartnerError as exc:
+            return tool_error(exc.code), None, None
+        except Exception:  # noqa: BLE001 - never expose provider exception text
+            return tool_error("AGENT_WEB_SEARCH_FAILED"), None, None
+        receipt = typed_result.receipt
+        durable = DurableToolReceipt(
+            receipt_id=self._id_generator.new(EntityIdPrefix.AGENT_TOOL_RECEIPT),
+            conversation_id=conversation_id,
+            message_id=message_id,
+            capability="agent_web_search",
+            operation="search",
+            arguments_sha256=arguments_digest(
+                {"query": query, "max_results": max_results}
+            ),
+            request_id=receipt.request_id or "unavailable",
+            source_codes=receipt.source_codes,
+            warning_codes=receipt.warning_codes,
+            error_codes=(receipt.error_code,) if receipt.error_code else (),
+            created_at=self._clock.now(),
+        )
+        self._repository.append_tool_receipt(durable)
+        return typed_result.as_dict(), receipt, None
 
     def _handle_capability_search(
         self,

@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 
 from application.dto.review_item import ReviewItemTransitionInput
 from application.services.review_item_service import ReviewItemService
@@ -74,6 +74,37 @@ def test_latest_observed_at_is_max_last_seen_including_resolved(
     later = subject.latest_observed_at()
     assert later == first
     assert subject.list_open() == ()
+
+
+def test_review_item_parent_is_flushed_before_fk_occurrence() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(connection: object, _record: object) -> None:
+        cursor = connection.cursor()  # type: ignore[attr-defined]
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    clock = _Clock(datetime(2026, 8, 21, 6, tzinfo=UTC))
+    subject = ReviewItemService(SqlAlchemyReviewItemRepository(engine), clock, _Ids())
+    projections = tuple(
+        replace(
+            _projection(),
+            source_key=f"agenda-overdue-agenda_{index}",
+            source_ref=f"agenda_{index}",
+        )
+        for index in range(5)
+    )
+
+    created = subject.reconcile(
+        projections,
+        observed_source_types=frozenset({ReviewItemSourceType.CATALYST_AGENDA}),
+    )
+
+    assert len(created) == 5
+    assert subject.metrics().total_items == 5
+    assert subject.metrics().open_count == 5
 
 
 def test_review_item_auto_resolves_only_after_successful_source_observation_and_reopens(

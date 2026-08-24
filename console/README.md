@@ -33,6 +33,11 @@ Agent/Broker 未决状态物化为内部持久事项。用户可以确认、设�
 数据源读取失败不会自动关闭事项，来源恢复后消失才自动关闭。Decision Workbench 使用同一
 闭环状态，但旧 Research、Monitor、Agenda、Retro、Scorecard 页面仍是完整操作入口。
 
+Console BFF 与 MCP 共用同一套 capability schema、确认策略和 application handler，但本地页面
+读取保留完整结果，不应用 MCP 的 15 KiB 传输压缩。只有 Capabilities 中的显式 MCP Workbench
+默认展示压缩后的传输结果；Portfolio 计算、Research timeline/workflow、Risk check 等页面内
+读取会明确请求完整本地结果。`_truncated` 不能作为本地对象、持仓、Candidate 或历史记录。
+
 ## 启动
 
 先在项目根目录启动 loopback API：
@@ -67,8 +72,19 @@ npm run dev:lan
 
 脚本仅开放密码保护的前端；后端仍只监听 `127.0.0.1:8765`。LAN 登录使用 12 小时
 HttpOnly、SameSite Cookie，连续失败会被限流。此模式只适用于可信局域网的普通 HTTP，
-不能用于公网、端口映射或访客网络。密码至少 16 个字符，且不要放入 URL、Git 或
+不能用于公网、端口映射或访客网络。密码不能为空，且不要放入 URL、Git 或
 `NEXT_PUBLIC_*` 环境变量。生产构建可使用 `npm run build && npm run start:lan`。
+
+若希望受保护的 LAN Web 与 Console supervisor 一同启动并在登录后自动恢复，安装持久模式：
+
+```bash
+uv run trading-partner-agent console install --lan
+```
+
+安装器生成或复用 `data/secrets/console-lan-password`（目录 `0700`、文件 `0600`），LaunchAgent
+只保存密码文件路径，不保存密码。本机可用 `cat data/secrets/console-lan-password` 查看登录密码。
+之后执行 `uv run trading-partner-agent console restart` 会同时重启 loopback API 和受认证的
+`0.0.0.0:3000` Web 前端。可用 `--lan-port 3001` 更换端口。
 
 ## 验证
 

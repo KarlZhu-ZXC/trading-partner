@@ -65,6 +65,18 @@ async def _proposal(
     }
 
 
+async def _attention(*, case_id: str | None = None, limit: int = 25) -> dict[str, Any]:
+    return {
+        "request_id": "req_attention",
+        "data": {
+            "scope": "subject" if case_id else "global",
+            "case_id": case_id,
+            "limit": limit,
+            "items": [],
+        },
+    }
+
+
 def _registry() -> CompactCapabilityRegistry:
     registry = CompactCapabilityRegistry()
     registry.add_capability(_health, name="system_health", policy=READ_DURABLE)
@@ -116,6 +128,20 @@ def _proposal_registry() -> CompactCapabilityRegistry:
             ),
         ),
         policy=APPEND,
+    )
+    return registry
+
+
+def _attention_registry() -> CompactCapabilityRegistry:
+    registry = _registry()
+    _register_dispatch_tool(
+        registry,
+        name="investment_case_read",
+        description="Read Research Subjects or the cross-domain decision inbox.",
+        variants=(
+            _spec("attention", _attention, ("case_id", "limit")),
+        ),
+        policy=READ_DURABLE,
     )
     return registry
 
@@ -208,6 +234,18 @@ def test_chinese_alias_routes_to_matching_capability() -> None:
     gateway = AgentCapabilityGateway(_registry())
     assert [item.capability for item in gateway.search("系统健康", limit=3)] == [
         "system_health"
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ("今天有什么待处理", "查看待办", "有哪些注意事项", "今天决策", "decision inbox"),
+)
+def test_attention_aliases_route_to_cross_domain_inbox(query: str) -> None:
+    gateway = AgentCapabilityGateway(_attention_registry())
+    descriptors = gateway.search(query, limit=8)
+    assert [(item.capability, item.operation) for item in descriptors] == [
+        ("investment_case_read", "attention")
     ]
 
 

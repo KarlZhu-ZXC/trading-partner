@@ -239,13 +239,10 @@ async def test_account_refresh_failure_reports_exact_blocked_stage_and_safe_diag
     assert result.provider_diagnostics[0].status_code == 503
     assert preview.calls == 0
     body = notifications.enqueued[0]["body"]
-    assert "阻断步骤：Schwab 账户刷新" in body
-    assert "操作：account_snapshot" in body
-    assert "类型：http_failure" in body
-    assert "HTTP：503" in body
-    assert "尝试：3 次" in body
-    assert "未读取可执行报价、未计算数量、未创建订单意图" in body
-    assert "自动买入：未提交任何订单" in body
+    assert "阶段：Schwab 账户刷新" in body
+    assert "诊断：PROVIDER_UNAVAILABLE_ERROR/schwab" in body
+    assert "操作：account_snapshot" not in body
+    assert "自动买入：未提交任何订单" not in body
 
 
 async def test_due_run_refreshes_only_schwab_and_enqueues_one_shadow_plan() -> None:
@@ -299,6 +296,49 @@ async def test_completion_phase_refreshes_again_and_uses_current_ask_guidance() 
     assert "不使用旧 bid+0.01" in body
 
 
+async def test_auto_passive_phase_persists_without_sending_a_telegram_message() -> None:
+    session = MarketSession(
+        session_date=date(2026, 8, 10),
+        close_at=datetime(2026, 8, 10, 20, 0, tzinfo=UTC),
+    )
+    service, _, _, notifications = _service(
+        now=datetime(2026, 8, 10, 19, 45, 2, tzinfo=UTC),
+        session=session,
+    )
+
+    result = await service.run_if_due(auto_execute=True)
+
+    assert result.phase is SgovShadowPlanPhase.PASSIVE_BID
+    assert result.automation_enabled is True
+    assert notifications.enqueued == []
+    assert notifications.flush_calls == 0
+
+
+async def test_auto_two_phase_run_emits_only_one_final_notification() -> None:
+    session = MarketSession(
+        session_date=date(2026, 8, 10),
+        close_at=datetime(2026, 8, 10, 20, 0, tzinfo=UTC),
+    )
+    broker_orders = _BrokerOrders()
+    service, _, _, notifications = _service(
+        now=datetime(2026, 8, 10, 19, 45, 2, tzinfo=UTC),
+        session=session,
+        broker_orders=broker_orders,
+    )
+
+    preparation = await service.run_if_due(auto_execute=True)
+    service._clock.value = datetime(2026, 8, 10, 19, 55, 2, tzinfo=UTC)  # type: ignore[attr-defined]
+    completion = await service.run_if_due(auto_execute=True)
+
+    assert preparation.notification_id is None
+    assert completion.notification_id is not None
+    assert len(notifications.enqueued) == 1
+    assert notifications.enqueued[0]["idempotency_key"] == (
+        "sgov-auto-plan:2026-08-10:completion"
+    )
+    assert "状态：SUBMITTED" in notifications.enqueued[0]["body"]
+
+
 async def test_auto_completion_submits_only_exact_sgov_limits_and_reports_results() -> None:
     session = MarketSession(
         session_date=date(2026, 8, 10),
@@ -331,8 +371,11 @@ async def test_auto_completion_submits_only_exact_sgov_limits_and_reports_result
     notification = notifications.enqueued[0]
     assert notification["idempotency_key"] == "sgov-auto-plan:2026-08-10:completion"
     assert notification["expires_at"] == session.close_at.replace(day=11)
-    assert "自动执行：已提交 2 笔；待核对 0 笔" in notification["body"]
-    assert "仅 SGOV BUY LIMIT · DAY · NORMAL" in notification["body"]
+    assert "SGOV · 自动买入结果 · 2026-08-10" in notification["body"]
+    assert "状态：SUBMITTED" in notification["body"]
+    assert "schwab-account-a：SUBMITTED · 46 股 @ $100.49" in notification["body"]
+    assert "SGOV bid / ask" not in notification["body"]
+    assert "仅 SGOV BUY LIMIT" not in notification["body"]
 
 
 async def test_auto_completion_fails_closed_on_stale_quote() -> None:

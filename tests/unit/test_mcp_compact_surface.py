@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -11,13 +12,20 @@ import pytest
 from jsonschema import Draft202012Validator
 from mcp.server.fastmcp.exceptions import ToolError
 
+from application.services.attention_projection import next_read_for
+from domain.attention.enums import AttentionSourceType
 from interfaces.mcp.server import (
     MCP_VNEXT_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
     create_capability_registry,
     create_mcp_server,
 )
-from interfaces.mcp.tools.compact import ConfirmationPolicy, _minimize_public_schema
+from interfaces.mcp.tools.compact import (
+    READ_DURABLE,
+    CompactCapabilityRegistry,
+    ConfirmationPolicy,
+    _minimize_public_schema,
+)
 
 
 class _Envelope:
@@ -58,6 +66,36 @@ def _container() -> MagicMock:
         "coverage_status": "UNKNOWN",
     }
     return container
+
+
+def test_attention_next_reads_match_the_current_exact_public_schemas() -> None:
+    registry = create_capability_registry(_container())
+    requests = tuple(
+        item
+        for source_type, source_ref, subject_id in (
+            (AttentionSourceType.RESEARCH_CANDIDATE, "candidate_1", "case_1"),
+            (AttentionSourceType.CATALYST_AGENDA, "agenda_1", "case_1"),
+            (AttentionSourceType.TRADE_RETRO, "retro_1", "case_1"),
+            (AttentionSourceType.SCORECARD_GAP, "thesis_1", "case_1"),
+            (AttentionSourceType.MONITOR_BLIND_SPOT, "monitor_1", None),
+            (AttentionSourceType.BROKER_ORDER_INTENT, "order_1", None),
+            (AttentionSourceType.DATA_QUALITY, "ACCOUNT_SNAPSHOT_DEGRADED", None),
+        )
+        if (item := next_read_for(
+            source_type,
+            source_ref=source_ref,
+            subject_id=subject_id,
+        )) is not None
+    )
+    assert len(requests) == 7
+    for item in requests:
+        operation = item.request.get("operation")
+        descriptor = registry.find_operation(
+            item.tool,
+            operation if isinstance(operation, str) else None,
+        )
+        errors = tuple(Draft202012Validator(descriptor.exact_schema).iter_errors(item.request))
+        assert errors == (), (item.tool, item.request, errors)
 
 
 def _wire_size(tools: list[Any]) -> int:
@@ -161,9 +199,9 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_manage",
         "monitor_evaluate",
     ]
-    # Exact inventory bytes were captured before the registration split.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 25_728
-    assert _wire_size(tools) == 35_951
+    # Exact inventory bytes freeze the current compact registration output.
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 27_631
+    assert _wire_size(tools) == 37_876
 
 
 @pytest.mark.asyncio
@@ -352,6 +390,38 @@ async def test_registry_and_mcp_transport_invoke_the_same_health_handler() -> No
     )
 
     assert registry_result == mcp_result
+
+
+@pytest.mark.asyncio
+async def test_local_uncompacted_invocation_keeps_validated_full_result() -> None:
+    async def large_read(request: dict[str, Any]) -> dict[str, Any]:
+        assert request == {"operation": "items"}
+        return {
+            "ok": True,
+            "data": {
+                "items": [
+                    {"item_id": f"item_{index}", "detail": "x" * 1000}
+                    for index in range(40)
+                ]
+            },
+        }
+
+    registry = CompactCapabilityRegistry()
+    registry.add_capability(
+        large_read,
+        name="large_read",
+        description="large durable read",
+        policy=READ_DURABLE,
+    )
+
+    compacted = await registry.invoke("large_read", {"request": {"operation": "items"}})
+    full = await registry.invoke_uncompacted(
+        "large_read", {"request": {"operation": "items"}}
+    )
+
+    assert compacted["_truncated"] is True
+    assert len(full["data"]["items"]) == 40
+    assert all("_truncated" not in item for item in full["data"]["items"])
 
 
 @pytest.mark.asyncio
@@ -695,6 +765,82 @@ async def test_performance_summary_routes_through_durable_attribution_service() 
 
     assert result["ok"] is True
     container.services.account_transactions.get_performance_attribution.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_trade_cycles_routes_through_durable_transaction_projection() -> None:
+    container = _container()
+    container.services.account_transactions.get_trade_cycles.return_value = _Envelope()
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "trade_cycles",
+                "account_refs": ["account_1"],
+                "instrument_ids": ["equity:US:NVDA"],
+                "start": "2026-01-01T00:00:00Z",
+                "end": "2026-08-01T00:00:00Z",
+                "limit": 25,
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    container.services.account_transactions.get_trade_cycles.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_performance_series_routes_through_durable_return_calculator() -> None:
+    container = _container()
+    container.services.account_transactions.get_performance_series.return_value = _Envelope()
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "performance_series",
+                "start": "2026-01-01T00:00:00Z",
+                "end": "2026-08-01T00:00:00Z",
+                "account_refs": ["account_1"],
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    container.services.account_transactions.get_performance_series.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_journal_timeline_routes_complete_durable_chain_without_provider_reads() -> None:
+    container = _container()
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    container.context.clock.now.return_value = now
+    container.context.id_generator.new.return_value = "req_journal_timeline"
+    container.services.research_timeline.get_timeline.return_value = SimpleNamespace(
+        ok=True, data=SimpleNamespace(items=())
+    )
+    container.services.account_transactions.list_durable_transactions.return_value = (
+        SimpleNamespace(ok=True, data=SimpleNamespace(transactions=()))
+    )
+    container.services.activity_annotations.list_annotations.return_value = ()
+    container.services.broker_orders.list_recent.return_value = ()
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "journal_timeline",
+                "case_id": "case_00000000-0000-7000-8000-000000000001",
+                "instrument_id": "equity:US:NVDA",
+                "limit": 50,
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["items"] == []
+    container.services.broker_orders.list_recent.assert_called_once_with(limit=50)
 
 
 @pytest.mark.asyncio

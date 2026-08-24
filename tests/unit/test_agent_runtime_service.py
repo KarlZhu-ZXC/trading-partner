@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -29,7 +30,11 @@ from application.services.agent_runtime_service import AgentRuntimeService
 from domain.agent.enums import AgentChannel, AgentMessageRole, AgentTurnStatus
 from domain.agent.models import AgentConversation, AgentMessage, AgentTurn
 from domain.agent.models import AgentToolReceipt as DurableReceipt
-from domain.common.errors import DataContractError, ProviderTimeoutError
+from domain.common.errors import (
+    DataContractError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from infrastructure.system.clock import SystemClock
 from infrastructure.system.id_generator import Uuid7IdGenerator
 from interfaces.agent.prompts import AGENT_SYSTEM_PROMPT
@@ -129,6 +134,9 @@ class MemoryConversationRepository:
         expected_version: int,
         assistant_message_id: str | None = None,
         error_code: str | None = None,
+        error_http_status: int | None = None,
+        error_retryable: bool | None = None,
+        error_attempts: int | None = None,
         completed_at: Any = None,
         now: Any = None,
     ) -> AgentTurn:
@@ -139,6 +147,9 @@ class MemoryConversationRepository:
             status=status,
             assistant_message_id=assistant_message_id,
             error_code=error_code,
+            error_http_status=error_http_status,
+            error_retryable=error_retryable,
+            error_attempts=error_attempts,
             completed_at=completed_at,
             updated_at=now or current.updated_at,
             version=current.version + 1,
@@ -197,6 +208,23 @@ class StreamingModelProvider(QueueModelProvider):
         self.requests.append(request)
         for chunk in self.chunks:
             yield chunk
+
+
+class RecordingTelemetry:
+    def __init__(self) -> None:
+        self.attributes: dict[str, object] = {}
+
+    @contextmanager
+    def start_span(self, name: str, attributes: Mapping[str, object] | None = None) -> Any:
+        assert name == "agent.turn"
+        self.attributes.update(attributes or {})
+        yield self
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+    def current_trace_id(self) -> str:
+        return "a" * 32
 
 
 class CatalogQueueModelProvider(QueueModelProvider):
@@ -396,6 +424,69 @@ async def test_agent_runtime_persists_plain_read_only_turn() -> None:
     assert result.turn_id == turn.turn_id
     assert turn.status is AgentTurnStatus.COMPLETED
     assert turn.assistant_message_id == result.assistant_message_id
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_persists_safe_trace_correlation() -> None:
+    repository = MemoryConversationRepository()
+    telemetry = RecordingTelemetry()
+    model = QueueModelProvider([ModelResponse(text="traceable answer")])
+    runtime, conversation = _runtime(repository, model, telemetry=telemetry)
+
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="trace this turn",
+        )
+    )
+
+    assistant = repository.messages[conversation.conversation_id][-1]
+    receipt = json.loads(assistant.model_receipt_json or "{}")
+    assert receipt["trace_id"] == "a" * 32
+    assert telemetry.attributes["tp.status"] == "completed"
+    assert telemetry.attributes["tp.tool_rounds"] == 0
+    assert "trace this turn" not in repr(telemetry.attributes)
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_persists_and_renders_typed_answer_blocks() -> None:
+    repository = MemoryConversationRepository()
+    structured = json.dumps(
+        {
+            "schema_version": 1,
+            "generated_by": "model",
+            "blocks": [
+                {
+                    "kind": "FACT",
+                    "text": "当前 durable snapshot 无持仓。",
+                    "evidence_refs": ["req_positions"],
+                },
+                {"kind": "NEXT_STEP", "text": "无需执行动作。"},
+            ],
+        }
+    )
+    runtime, conversation = _runtime(
+        repository,
+        QueueModelProvider([ModelResponse(text=structured)]),
+    )
+
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="typed answer",
+        )
+    )
+
+    assert "## 事实" in result.text
+    assert "## 下一步" in result.text
+    assistant = repository.messages[conversation.conversation_id][-1]
+    receipt = json.loads(assistant.model_receipt_json or "{}")
+    assert receipt["answer_envelope"]["schema_version"] == 1
+    assert receipt["answer_envelope"]["generated_by"] == "model"
 
 
 @pytest.mark.asyncio
@@ -715,6 +806,10 @@ async def test_agent_runtime_auto_fallback_is_single_and_read_only() -> None:
     assert result.fallback_code == "PROVIDER_TIMEOUT_ERROR"
     assert len(fast_model.requests) == 1
     assert len(default_model.requests) == 1
+    assert {tool.name for tool in default_model.requests[0].tools} == {
+        "tp_capability_search",
+        "tp_read",
+    }
 
     action_repository = MemoryConversationRepository()
     action_default = QueueModelProvider([ModelResponse(text="must-not-fallback")])
@@ -737,6 +832,99 @@ async def test_agent_runtime_auto_fallback_is_single_and_read_only() -> None:
         )
     assert len(action_fast.requests) == 1
     assert action_default.requests == []
+
+    proposal_repository = MemoryConversationRepository()
+    proposal_default = TimeoutModel([])
+    proposal_alternative = QueueModelProvider([ModelResponse(text="must-not-fallback")])
+    proposal_runtime, proposal_conversation = _runtime(
+        proposal_repository,
+        proposal_default,
+        model_providers={
+            "default": proposal_default,
+            "deepseek": proposal_alternative,
+        },
+        default_model_id="default",
+    )
+    with pytest.raises(ProviderTimeoutError):
+        await proposal_runtime.run_turn(
+            AgentTurnRequest(
+                conversation_id=proposal_conversation.conversation_id,
+                owner_principal="user:1",
+                channel=AgentChannel.CONSOLE,
+                content="搜索资料并提出 Thesis 修订候选",
+                model_id="auto",
+            )
+        )
+    assert len(proposal_default.requests) == 1
+    assert proposal_alternative.requests == []
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_rejects_hallucinated_write_tool_after_read_fallback() -> None:
+    class TimeoutModel(QueueModelProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            raise ProviderTimeoutError("bounded timeout")
+
+    repository = MemoryConversationRepository()
+    fallback_model = QueueModelProvider(
+        [
+            ModelResponse(
+                tool_calls=(
+                    ModelToolCall(
+                        id="hallucinated-proposal",
+                        name="tp_propose",
+                        arguments=json.dumps(
+                            {
+                                "capability": "research_judgment_propose",
+                                "operation": "thesis_revision",
+                                "arguments": {
+                                    "case_id": "case_test",
+                                    "payload": {"kind": "thesis_revision"},
+                                    "proposed_by": "user",
+                                    "idempotency_key": "must-not-run",
+                                },
+                            }
+                        ),
+                    ),
+                )
+            ),
+            ModelResponse(text="只读故障转移未执行 Proposal。"),
+        ]
+    )
+    primary = TimeoutModel([])
+    gateway = FakeGateway()
+    runtime, conversation = _runtime(
+        repository,
+        fallback_model,
+        tool_gateway=gateway,
+        model_providers={"default": fallback_model, "deepseek": primary},
+        default_model_id="default",
+    )
+
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="查询最新价格",
+            model_id="auto",
+        )
+    )
+
+    assert result.route_reason == "auto_fallback"
+    assert gateway.proposals == []
+    assert all(
+        {tool.name for tool in request.tools} == {"tp_capability_search", "tp_read"}
+        for request in fallback_model.requests
+    )
+    tool_messages = [
+        item
+        for item in fallback_model.requests[1].messages
+        if item.role == "tool" and item.tool_call_id == "hallucinated-proposal"
+    ]
+    assert len(tool_messages) == 1
+    assert "AGENT_AUTO_FALLBACK_READ_ONLY" in (tool_messages[0].content or "")
 
 
 def test_agent_runtime_recovers_stale_orphan_without_rerunning_provider() -> None:
@@ -814,6 +1002,78 @@ async def test_agent_runtime_enables_supported_native_web_search_by_default() ->
     assert result.text == "web-enabled"
     assert len(model.requests) == 1
     assert model.requests[0].native_web_search is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_exposes_sidecar_web_search_to_non_native_models() -> None:
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                tool_calls=(
+                    ModelToolCall(
+                        id="call_web",
+                        name="tp_web_search",
+                        arguments=json.dumps(
+                            {"query": "current gold news", "max_results": 3}
+                        ),
+                    ),
+                )
+            ),
+            ModelResponse(
+                text="网页背景已检索，来源：https://example.com/gold",
+                model="non-native-model",
+            ),
+        ]
+    )
+
+    class WebSearchProvider:
+        async def search(self, query: str, *, max_results: int = 5) -> AgentToolResult:
+            assert query == "current gold news"
+            assert max_results == 3
+            return AgentToolResult(
+                result={
+                    "ok": True,
+                    "summary": "current gold background",
+                    "source_urls": ["https://example.com/gold"],
+                    "web_search_used": True,
+                },
+                receipt=AgentToolReceipt(
+                    capability="agent_web_search",
+                    operation="search",
+                    request_id="req_web",
+                    effect="READ_PROVIDER",
+                    source_codes=("tavily",),
+                ),
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    runtime, conversation = _runtime(
+        repository,
+        model,
+        web_search_provider=WebSearchProvider(),
+    )
+
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="搜索今天黄金消息",
+        )
+    )
+
+    assert "tp_web_search" in {tool.name for tool in model.requests[0].tools}
+    assert result.web_search_used is True
+    assert result.web_source_urls == ("https://example.com/gold",)
+    durable = repository.receipts[-1]
+    assert durable.capability == "agent_web_search"
+    assistant = repository.messages[conversation.conversation_id][-1]
+    receipt = json.loads(assistant.model_receipt_json or "{}")
+    assert receipt["web_search_used"] is True
+    assert receipt["web_source_urls"] == ["https://example.com/gold"]
 
 
 @pytest.mark.asyncio
@@ -899,6 +1159,45 @@ async def test_agent_runtime_marks_turn_failed_with_safe_code_only() -> None:
     assert turn.status is AgentTurnStatus.FAILED
     assert turn.error_code == "AGENT_RUNTIME_FAILED"
     assert "secret" not in (turn.error_code or "")
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_persists_and_emits_safe_provider_failure_notice() -> None:
+    repository = MemoryConversationRepository()
+    model = CatalogQueueModelProvider([])
+
+    async def fail(_request: ModelRequest) -> ModelResponse:
+        raise ProviderRateLimitError(
+            "response body must-not-persist",
+            details={"status_code": 429, "attempts": 2},
+        )
+
+    model.complete = fail  # type: ignore[method-assign]
+    runtime, conversation = _runtime(repository, model)
+    events: list[Any] = []
+
+    with pytest.raises(ProviderRateLimitError):
+        await runtime.run_turn(
+            AgentTurnRequest(
+                conversation_id=conversation.conversation_id,
+                owner_principal="user:1",
+                channel=AgentChannel.CONSOLE,
+                content="触发限流",
+            ),
+            event_sink=events.append,
+        )
+
+    turn = next(iter(repository.turns.values()))
+    assert turn.error_code == "PROVIDER_RATE_LIMIT_ERROR"
+    assert turn.error_http_status == 429
+    assert turn.error_retryable is True
+    assert turn.error_attempts == 2
+    assert turn.model == "default-model"
+    failed = next(item for item in events if item.type == "failed")
+    assert failed.data["notification"]["http_status"] == 429
+    assert failed.data["notification"]["provider_id"] == "default"
+    assert "must-not-persist" not in repr(turn)
+    assert "must-not-persist" not in repr(failed)
 
 
 @pytest.mark.asyncio

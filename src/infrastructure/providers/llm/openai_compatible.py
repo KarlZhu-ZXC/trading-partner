@@ -26,6 +26,7 @@ from domain.common.errors import (
     DataContractError,
     ProviderAuthenticationError,
     ProviderRateLimitError,
+    ProviderRequestRejectedError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
@@ -212,6 +213,11 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
                     if status == 429:
                         raise ProviderRateLimitError(
                             "LLM endpoint was rate limited",
+                            details={"status_code": status},
+                        )
+                    if 400 <= status < 500:
+                        raise ProviderRequestRejectedError(
+                            "LLM endpoint rejected the request",
                             details={"status_code": status},
                         )
                     if status >= 400:
@@ -492,6 +498,11 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
                 raise ProviderRateLimitError(
                     "LLM endpoint was rate limited",
                     details={"status_code": status, "attempts": 2},
+                )
+            if 400 <= status < 500:
+                raise ProviderRequestRejectedError(
+                    "LLM endpoint rejected the request",
+                    details={"status_code": status},
                 )
             if status >= 400:
                 raise ProviderUnavailableError(

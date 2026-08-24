@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
+from application.ports.local_embedding_provider import LocalEmbeddingProvider
 from application.ports.secret_redactor import SecretRedactor
 from domain.common.errors import PersistenceError
 from infrastructure.persistence.audit_log_writer import SqlAlchemySessionAuditLogWriter
@@ -44,11 +45,15 @@ class SqlAlchemyResearchUnitOfWork:
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
+        embedding_provider: LocalEmbeddingProvider | None = None,
+        semantic_candidate_limit: int = 500,
     ) -> None:
         self._engine = engine
         self._clock = clock
         self._id_generator = id_generator
         self._secret_redactor = secret_redactor
+        self._embedding_provider = embedding_provider
+        self._semantic_candidate_limit = semantic_candidate_limit
         self._session: Session | None = None
         self._subjects: SqlAlchemyResearchSubjectRepository | None = None
         self._theses: SqlAlchemyThesisRepository | None = None
@@ -96,7 +101,11 @@ class SqlAlchemyResearchUnitOfWork:
         self._events = SqlAlchemyResearchEventRepository(session)
         self._decisions = SqlAlchemyDecisionRecordRepository(session)
         self._journal = SqlAlchemyJournalRepository(session)
-        self._search_index = SqlAlchemyResearchSearchIndex(session)
+        self._search_index = SqlAlchemyResearchSearchIndex(
+            session,
+            embedding_provider=self._embedding_provider,
+            semantic_candidate_limit=self._semantic_candidate_limit,
+        )
         self._audit = SqlAlchemySessionAuditLogWriter(
             session,
             self._clock,

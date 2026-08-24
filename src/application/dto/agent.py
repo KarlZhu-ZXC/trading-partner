@@ -9,6 +9,12 @@ from typing import Literal
 
 from application.ports.agent_model_provider import ModelUsage
 from application.ports.agent_tool_gateway import AgentToolReceipt
+from domain.agent.attachments import (
+    AGENT_IMAGE_MAX_BYTES,
+    AGENT_IMAGE_MAX_COUNT,
+    AGENT_IMAGE_MAX_TOTAL_BYTES,
+    AGENT_IMAGE_MEDIA_TYPES,
+)
 from domain.agent.enums import AgentChannel
 
 # Ephemeral host context is intentionally kept small.  These limits belong to
@@ -155,6 +161,27 @@ class AgentTurnEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentImageInput:
+    """Validated in-memory image input before private storage."""
+
+    content: bytes
+    media_type: str
+    original_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.content, bytes) or not 1 <= len(self.content) <= (
+            AGENT_IMAGE_MAX_BYTES
+        ):
+            raise ValueError("image content is out of bounds")
+        if self.media_type not in AGENT_IMAGE_MEDIA_TYPES:
+            raise ValueError("image media type is unsupported")
+        if self.original_name is not None and (
+            not self.original_name.strip() or len(self.original_name) > 255
+        ):
+            raise ValueError("image original name is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class AgentTurnRequest:
     conversation_id: str
     owner_principal: str
@@ -165,6 +192,17 @@ class AgentTurnRequest:
     reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
     external_message_ref: str | None = None
     ephemeral_context: EphemeralContext | None = None
+    attachments: tuple[AgentImageInput, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.attachments, tuple):
+            raise ValueError("Agent attachments must be a tuple")
+        if len(self.attachments) > AGENT_IMAGE_MAX_COUNT:
+            raise ValueError("Too many Agent image attachments")
+        if any(not isinstance(item, AgentImageInput) for item in self.attachments):
+            raise ValueError("Agent image attachments are invalid")
+        if sum(len(item.content) for item in self.attachments) > AGENT_IMAGE_MAX_TOTAL_BYTES:
+            raise ValueError("Agent image attachments exceed the total size bound")
 
 
 @dataclass(frozen=True, slots=True)

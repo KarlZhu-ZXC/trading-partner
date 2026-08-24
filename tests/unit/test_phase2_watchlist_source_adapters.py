@@ -154,6 +154,7 @@ async def test_moomoo_adapter_parses_unicode_and_unsupported_codes() -> None:
 async def test_moomoo_adapter_maps_provider_idx_to_domain_index() -> None:
     context = _FakeMoomooContext()
     context.memberships["My List"] = [
+        {"code": "US..IXIC", "name": "Nasdaq Composite", "stock_type": "IDX"},
         {"code": "US..NDX", "name": "Nasdaq 100", "stock_type": "IDX"},
         {"code": "US..SPX", "name": "S&P 500", "stock_type": "IDX"},
     ]
@@ -169,8 +170,9 @@ async def test_moomoo_adapter_maps_provider_idx_to_domain_index() -> None:
     memberships = await adapter.list_memberships("My List")
 
     assert [item.instrument_id for item in memberships] == [
-        "index:US:.NDX",
-        "index:US:.SPX",
+        "index:US:IXIC",
+        "index:US:NDX",
+        "index:US:SPX",
     ]
     assert all(item.provider_asset_type == "IDX" for item in memberships)
     assert all(item.research_supported for item in memberships)

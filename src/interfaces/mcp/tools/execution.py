@@ -74,6 +74,10 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
         limit_offset: Decimal | None = None,
         idempotency_key: str = "",
         preview_ttl_seconds: int = 120,
+        case_id: str | None = None,
+        decision_id: str | None = None,
+        trade_plan_id: str | None = None,
+        trade_plan_version: int | None = None,
     ) -> dict[str, Any]:
         """Create a short-lived, single-use exact Schwab order preview."""
         try:
@@ -93,6 +97,10 @@ def build_execution_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "limit_offset": limit_offset,
                     "idempotency_key": idempotency_key,
                     "preview_ttl_seconds": preview_ttl_seconds,
+                    "case_id": case_id,
+                    "decision_id": decision_id,
+                    "trade_plan_id": trade_plan_id,
+                    "trade_plan_version": trade_plan_version,
                 }
             )
             return (await container.services.broker_orders.preview(request)).model_dump(mode="json")

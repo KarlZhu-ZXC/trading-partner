@@ -57,6 +57,21 @@ _YAHOO_CONTINUOUS_FUTURE_RE = re.compile(r"^[A-Z0-9]{1,8}=F$")
 _KR_SECURITY_RE = re.compile(r"^(\d{6})(?:\.(KS|KQ))?$")
 _KR_INDEXES = frozenset({"KS11", "KQ11", "KS200"})
 
+# Public US index identities stay provider-neutral. Yahoo chart uses caret
+# symbols, and its S&P 500 symbol is ^GSPC rather than ^SPX. Moomoo index
+# codes arrive in the form US..<symbol>.
+_US_INDEX_YAHOO_SYMBOLS: dict[str, str] = {
+    "SPX": "^GSPC",
+    "NDX": "^NDX",
+    "IXIC": "^IXIC",
+}
+_US_INDEX_PROVIDER_SYMBOLS: dict[str, str] = {
+    "GSPC": "SPX",
+    "SPX": "SPX",
+    "NDX": "NDX",
+    "IXIC": "IXIC",
+}
+
 # A-share option-style contract codes (exchange native), e.g. 10007601.SH
 _A_SHARE_OPTION_CODE_RE = re.compile(r"^(\d{6,10})(\.(?:SH|SZ|BJ))?$", re.IGNORECASE)
 
@@ -70,6 +85,20 @@ class NormalizedSymbol:
     exchange_hint: str | None
     display_symbol: str
     warnings: tuple[str, ...]
+
+
+def canonical_us_index_symbol(raw: str) -> str:
+    """Normalize Yahoo/Moomoo US index symbols to public bare symbols."""
+    candidate = raw.strip().upper()
+    while candidate.startswith(("^", ".")):
+        candidate = candidate[1:]
+    return _US_INDEX_PROVIDER_SYMBOLS.get(candidate, candidate)
+
+
+def yahoo_symbol_for_us_index(raw: str) -> str:
+    """Map a canonical/public US index symbol to Yahoo's chart symbol."""
+    canonical = canonical_us_index_symbol(raw)
+    return _US_INDEX_YAHOO_SYMBOLS.get(canonical, f"^{canonical}")
 
 
 def normalize_symbol_input(

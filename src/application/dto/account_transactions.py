@@ -8,12 +8,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from application.dto.market import DecimalWire
 from domain.common.enums import VendorId
+from domain.common.values import parse_instrument_id
 from domain.portfolio.enums import (
     AccountActivityCoverageStatus,
     AccountTransactionKind,
     AccountTransactionSide,
+    TradeCycleClassification,
+    TradeCycleQuality,
+    TradeCycleStatus,
 )
-from domain.portfolio.models import AccountActivityCoverageReceipt, AccountTransaction
+from domain.portfolio.models import (
+    AccountActivityCoverageReceipt,
+    AccountTransaction,
+    TradeCycle,
+    TradeCycleProjection,
+)
 
 
 class _DTO(BaseModel):
@@ -120,3 +129,96 @@ class AccountTransactionsDTO(_DTO):
 class AccountActivityCoverageDTO(_DTO):
     receipts: tuple[AccountActivityCoverageReceiptDTO, ...]
     overall_status: AccountActivityCoverageStatus
+
+
+class TradeCycleQueryInput(_DTO):
+    providers: tuple[VendorId, ...] = ()
+    account_refs: tuple[str, ...] = ()
+    instrument_ids: tuple[str, ...] = ()
+    start: datetime | None = None
+    end: datetime | None = None
+    limit: int = Field(default=200, ge=1, le=500)
+
+    @field_validator("providers", "account_refs", "instrument_ids")
+    @classmethod
+    def unique_filters(cls, value: tuple[object, ...]) -> tuple[object, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("trade cycle filters must be unique")
+        return value
+
+    @field_validator("account_refs")
+    @classmethod
+    def valid_accounts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item.strip() for item in value):
+            raise ValueError("account_refs entries must be non-blank")
+        return value
+
+    @field_validator("instrument_ids")
+    @classmethod
+    def valid_instruments(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            parse_instrument_id(item)
+        return value
+
+    @field_validator("start", "end")
+    @classmethod
+    def aware_times(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("trade cycle datetime must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> TradeCycleQueryInput:
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("start must be <= end")
+        return self
+
+
+class TradeCycleDTO(_DTO):
+    cycle_id: str
+    account_ref: str
+    provider: VendorId
+    instrument_id: str | None
+    currency: str | None
+    activity_ids: tuple[str, ...]
+    opened_at: datetime | None
+    closed_at: datetime | None
+    status: TradeCycleStatus
+    classification: TradeCycleClassification
+    opening_count: int
+    add_count: int
+    reduce_count: int
+    ending_quantity: DecimalWire | None
+    gross_realized_pnl: DecimalWire | None
+    net_realized_pnl: DecimalWire | None
+    maximum_deployed_capital: DecimalWire | None
+    holding_duration_seconds: int | None
+    reentry_of_cycle_id: str | None
+    quality: TradeCycleQuality
+    warning_codes: tuple[str, ...]
+    algorithm_version: str
+
+    @classmethod
+    def from_domain(cls, value: TradeCycle) -> TradeCycleDTO:
+        return cls.model_validate(value)
+
+
+class TradeCycleProjectionDTO(_DTO):
+    cycles: tuple[TradeCycleDTO, ...]
+    algorithm_cycles: tuple[TradeCycleDTO, ...] = ()
+    override_revisions: tuple[dict[str, object], ...] = ()
+    override_impacts: tuple[dict[str, object], ...] = ()
+    status: TradeCycleQuality
+    coverage_status: AccountActivityCoverageStatus
+    warning_codes: tuple[str, ...]
+    algorithm_version: str
+
+    @classmethod
+    def from_domain(cls, value: TradeCycleProjection) -> TradeCycleProjectionDTO:
+        return cls(
+            cycles=tuple(TradeCycleDTO.from_domain(item) for item in value.cycles),
+            status=value.status,
+            coverage_status=value.coverage_status,
+            warning_codes=value.warning_codes,
+            algorithm_version=value.algorithm_version,
+        )

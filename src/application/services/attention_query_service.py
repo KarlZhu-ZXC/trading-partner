@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from application.dto.attention import (
     AttentionCoverageDTO,
@@ -44,9 +45,20 @@ from domain.attention.enums import (
     AttentionSeverity,
 )
 from domain.common.enums import CandidateStatus
-from domain.review_item.enums import ReviewItemStatus
 
 ResearchUowFactory = Callable[[], ResearchUnitOfWork]
+_LOGGER = logging.getLogger(__name__)
+_MATERIALIZATION_STALE_AFTER = timedelta(hours=24)
+
+
+def _log_source_failure(source: AttentionCoverageSource, error: BaseException) -> None:
+    """Emit only bounded source/type metadata; never exception text or payloads."""
+
+    _LOGGER.warning(
+        "Attention durable source unavailable: source=%s error_type=%s",
+        source.value,
+        type(error).__name__,
+    )
 
 
 class AttentionQueryService:
@@ -99,18 +111,24 @@ class AttentionQueryService:
     def health_summary(self) -> AttentionHealthSummaryDTO:
         now = self._clock.now()
         materialized_at = self._review_items.latest_observed_at()
+        metrics = self._review_items.metrics()
         open_items = self._review_items.list_open(limit=500)
-        open_count = sum(1 for item in open_items if item.status == ReviewItemStatus.OPEN.value)
-        acknowledged_count = sum(
-            1 for item in open_items if item.status == ReviewItemStatus.ACKNOWLEDGED.value
-        )
+        open_count = metrics.open_count
+        acknowledged_count = metrics.acknowledged_count
+        limitation_codes: list[str] = []
+        if open_count + acknowledged_count > len(open_items):
+            limitation_codes.append("ATTENTION_REVIEW_ITEMS_TRUNCATED")
+        quality_available = False
         try:
             quality = self._data_quality.check()
-            limitations = (
-                quality.data.limitations if quality.ok and quality.data is not None else ()
-            )
-        except Exception:  # noqa: BLE001 — health summary must not fail the process
+            quality_data = quality.data if quality.ok else None
+            quality_available = quality_data is not None
+            limitations = quality_data.limitations if quality_data is not None else ()
+        except Exception as error:  # noqa: BLE001 — health summary must not fail the process
+            _log_source_failure(AttentionCoverageSource.DATA_QUALITY, error)
             limitations = ()
+        if not quality_available:
+            limitation_codes.append("ATTENTION_DATA_QUALITY_UNAVAILABLE")
         highest = None
         for item in open_items:
             try:
@@ -125,8 +143,16 @@ class AttentionQueryService:
                 )
             ):
                 highest = severity
+        materialization_stale = (
+            materialized_at is not None
+            and now - materialized_at > _MATERIALIZATION_STALE_AFTER
+        )
+        if materialization_stale:
+            limitation_codes.append("ATTENTION_REVIEW_ITEMS_STALE")
         if materialized_at is None:
             coverage_status = AttentionCoverageState.UNKNOWN
+        elif not quality_available or limitation_codes:
+            coverage_status = AttentionCoverageState.PARTIAL
         else:
             coverage_status = AttentionCoverageState.COMPLETE
         return AttentionHealthSummaryDTO(
@@ -135,8 +161,13 @@ class AttentionQueryService:
             open_review_item_count=open_count,
             acknowledged_review_item_count=acknowledged_count,
             highest_severity=highest,
-            catalyst_sync_receipt_missing="CATALYST_AGENDA_SYNC_RECEIPT_MISSING" in limitations,
+            catalyst_sync_receipt_missing=(
+                "CATALYST_AGENDA_SYNC_RECEIPT_MISSING" in limitations
+                if quality_available
+                else None
+            ),
             coverage_status=coverage_status,
+            limitation_codes=tuple(limitation_codes),
         )
 
     def _collect_review_items(
@@ -147,14 +178,24 @@ class AttentionQueryService:
     ) -> tuple[AttentionItemDTO, ...]:
         try:
             values = self._review_items.list_open(subject_id=subject_id, limit=500)
+            metrics = self._review_items.metrics(subject_id=subject_id)
             items = tuple(
                 item for value in values if (item := project_review_item(value)) is not None
             )
+            truncated = metrics.open_count + metrics.acknowledged_count > len(values)
             coverages.append(
-                coverage(AttentionCoverageSource.REVIEW_ITEMS, "COMPLETE", observed_at=now)
+                coverage(
+                    AttentionCoverageSource.REVIEW_ITEMS,
+                    "PARTIAL" if truncated else "COMPLETE",
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_REVIEW_ITEMS_TRUNCATED",) if truncated else ()
+                    ),
+                )
             )
             return items
-        except Exception:  # noqa: BLE001 — source failure stays local
+        except Exception as error:  # noqa: BLE001 — source failure stays local
+            _log_source_failure(AttentionCoverageSource.REVIEW_ITEMS, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.REVIEW_ITEMS,
@@ -176,19 +217,28 @@ class AttentionQueryService:
                 pending = uow.candidates.list(
                     subject_id=subject_id,
                     status=CandidateStatus.PROPOSED,
-                    limit=200,
+                    limit=201,
                     offset=0,
                 )
             items = tuple(
                 item
-                for value in CandidateRevisionDTO.from_domain_list(pending)
-                if (item := project_pending_candidate(value)) is not None
+                for value in CandidateRevisionDTO.from_domain_list(pending[:200])
+                if (item := project_pending_candidate(value, now=now)) is not None
             )
+            truncated = len(pending) > 200
             coverages.append(
-                coverage(AttentionCoverageSource.RESEARCH_CANDIDATES, "COMPLETE", observed_at=now)
+                coverage(
+                    AttentionCoverageSource.RESEARCH_CANDIDATES,
+                    "PARTIAL" if truncated else "COMPLETE",
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_CANDIDATES_TRUNCATED",) if truncated else ()
+                    ),
+                )
             )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.RESEARCH_CANDIDATES, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.RESEARCH_CANDIDATES,
@@ -239,11 +289,23 @@ class AttentionQueryService:
                     AttentionCoverageSource.CATALYST_AGENDA,
                     state,
                     observed_at=now,
-                    limitation_codes=envelope.data.limitation_codes,
+                    limitation_codes=tuple(
+                        dict.fromkeys(
+                            (
+                                *envelope.data.limitation_codes,
+                                *(
+                                    ("ATTENTION_AGENDA_TRUNCATED",)
+                                    if envelope.data.has_more
+                                    else ()
+                                ),
+                            )
+                        )
+                    ),
                 )
             )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.CATALYST_AGENDA, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.CATALYST_AGENDA,
@@ -278,11 +340,20 @@ class AttentionQueryService:
                     run for run in runs if subject_id in run.subject_ids or not run.subject_ids
                 )
             items = tuple(item for run in runs for item in project_trade_retro(run))
+            truncated = len(envelope.data.runs) >= 100
             coverages.append(
-                coverage(AttentionCoverageSource.TRADE_RETRO, "COMPLETE", observed_at=now)
+                coverage(
+                    AttentionCoverageSource.TRADE_RETRO,
+                    "PARTIAL" if truncated else "COMPLETE",
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_RETRO_LIMIT_REACHED",) if truncated else ()
+                    ),
+                )
             )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.TRADE_RETRO, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.TRADE_RETRO,
@@ -315,9 +386,21 @@ class AttentionQueryService:
                 return ()
             items = project_scorecard_gaps(envelope.data.runs)
             state = "PARTIAL" if envelope.data.has_more else "COMPLETE"
-            coverages.append(coverage(AttentionCoverageSource.SCORECARD, state, observed_at=now))
+            coverages.append(
+                coverage(
+                    AttentionCoverageSource.SCORECARD,
+                    state,
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_SCORECARD_TRUNCATED",)
+                        if envelope.data.has_more
+                        else ()
+                    ),
+                )
+            )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.SCORECARD, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.SCORECARD,
@@ -373,7 +456,9 @@ class AttentionQueryService:
                 coverage(AttentionCoverageSource.MONITORS, "COMPLETE", observed_at=now)
             )
             return tuple(items)
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.DATA_QUALITY, error)
+            _log_source_failure(AttentionCoverageSource.MONITORS, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.DATA_QUALITY,
@@ -398,7 +483,7 @@ class AttentionQueryService:
         now: datetime,
     ) -> tuple[AttentionItemDTO, ...]:
         try:
-            intents = self._broker_orders.list_unresolved(limit=100)
+            intents = self._broker_orders.list_unresolved(limit=101)
             items = tuple(
                 project_unresolved_broker(
                     order_intent_id=intent.order_intent_id,
@@ -406,13 +491,22 @@ class AttentionQueryService:
                     symbol=intent.symbol,
                     provider_status=intent.provider_status,
                 )
-                for intent in intents
+                for intent in intents[:100]
             )
+            truncated = len(intents) > 100
             coverages.append(
-                coverage(AttentionCoverageSource.BROKER_ORDERS, "COMPLETE", observed_at=now)
+                coverage(
+                    AttentionCoverageSource.BROKER_ORDERS,
+                    "PARTIAL" if truncated else "COMPLETE",
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_BROKER_TRUNCATED",) if truncated else ()
+                    ),
+                )
             )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.BROKER_ORDERS, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.BROKER_ORDERS,
@@ -429,15 +523,22 @@ class AttentionQueryService:
         now: datetime,
     ) -> tuple[AttentionItemDTO, ...]:
         try:
-            actions = self._agent_pending_actions.list_unresolved(now=now, limit=100)
-            items = tuple(project_unresolved_agent(action) for action in actions)
+            actions = self._agent_pending_actions.list_unresolved(now=now, limit=101)
+            items = tuple(project_unresolved_agent(action) for action in actions[:100])
+            truncated = len(actions) > 100
             coverages.append(
                 coverage(
-                    AttentionCoverageSource.AGENT_PENDING_ACTIONS, "COMPLETE", observed_at=now
+                    AttentionCoverageSource.AGENT_PENDING_ACTIONS,
+                    "PARTIAL" if truncated else "COMPLETE",
+                    observed_at=now,
+                    limitation_codes=(
+                        ("ATTENTION_AGENT_ACTIONS_TRUNCATED",) if truncated else ()
+                    ),
                 )
             )
             return items
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            _log_source_failure(AttentionCoverageSource.AGENT_PENDING_ACTIONS, error)
             coverages.append(
                 coverage(
                     AttentionCoverageSource.AGENT_PENDING_ACTIONS,

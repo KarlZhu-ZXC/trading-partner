@@ -137,6 +137,12 @@ def resolve_llm_endpoint_config(
     deepseek_api_key: str | None,
     deepseek_base_url: str,
     deepseek_model: str,
+    opencode_zen_api_key: str | None,
+    opencode_zen_base_url: str,
+    opencode_zen_model: str,
+    opencode_go_api_key: str | None,
+    opencode_go_base_url: str,
+    opencode_go_model: str,
 ) -> LLMEndpointConfig:
     """Resolve generic settings, or exactly one legacy endpoint.
 
@@ -210,7 +216,43 @@ def resolve_llm_endpoint_config(
             timeout_seconds=timeout_seconds,
             max_output_tokens=max_output_tokens,
         )
-    raise ConfigurationError("LLM_PROVIDER must be bailian or deepseek")
+    if provider == "opencode_go":
+        if _clean(opencode_go_api_key) is None:
+            raise ConfigurationError(
+                "OPENCODE_GO_API_KEY is required for the OpenCode Go endpoint"
+            )
+        return LLMEndpointConfig(
+            api_style="chat_completions",
+            base_url=opencode_go_base_url,
+            api_key=opencode_go_api_key or "",
+            model=opencode_go_model,
+            reasoning_mode="thinking",
+            reasoning_effort=reasoning_effort,
+            native_web_search="disabled",
+            native_web_extractor="disabled",
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+        )
+    if provider == "opencode_zen":
+        if _clean(opencode_zen_api_key) is None:
+            raise ConfigurationError(
+                "OPENCODE_ZEN_API_KEY is required for the OpenCode Zen endpoint"
+            )
+        return LLMEndpointConfig(
+            api_style="responses",
+            base_url=opencode_zen_base_url,
+            api_key=opencode_zen_api_key or "",
+            model=opencode_zen_model,
+            reasoning_mode="effort",
+            reasoning_effort=reasoning_effort,
+            native_web_search="disabled",
+            native_web_extractor="disabled",
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+        )
+    raise ConfigurationError(
+        "LLM_PROVIDER must be bailian, deepseek, opencode_zen, or opencode_go"
+    )
 
 
 __all__ = [
