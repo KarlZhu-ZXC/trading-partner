@@ -2,7 +2,7 @@
 
 状态：**Phase 4A–4D v1 已实现并通过全量、Console、migration 与隔离 wheel 验收**
 
-设计日期：2026-08-21
+当前 migration head：`0070_retire_unlinked_review_items`
 
 产品入口：Console `Journal`
 
@@ -38,7 +38,7 @@ Scorecard 和 Review Queue 组织成一条稳定主线。
 
 Phase 4 不为流程中的每个名词创建新模块。实现优先级固定为：
 
-1. 改造现有 Decision Workbench 为 Console `Journal` 流程壳；
+1. 复用 `/decision-workbench` 兼容路由承载 Console `Journal` 流程壳；
 2. 复用现有 Decision Record 保存 Decision/NO_ACTION；
 3. 复用 Monitor + Catalyst 作为 `Observe` 组件，不创建第二套 Evidence Hub；
 4. 复用 Portfolio Positions/Transactions/Performance 作为 `Execute` 和绩效组件；
@@ -48,38 +48,16 @@ Phase 4 不为流程中的每个名词创建新模块。实现优先级固定为
 独立 Agenda、Scorecard 和 Retro 路由在兼容期保留专业下钻能力，但不继续占用一级导航，也不要求
 用户按模块逐页完成同一条流程。
 
-### 1.2 Phase 4A 第一切片（2026-08-21）
+### 1.2 当前实现
 
-已实现：
-
-- 复用 `/decision-workbench` 路由并将 Console 名称改为 `Journal`；
-- 一级导航由 10 项收敛为 7 项；Agenda、Scorecards、Retro 路由仍可从流程组件下钻；
-- 原 6 张模块卡合并为 `Decide → Observe → Execute → Review` 四个组件；
-- Workbench durable aggregate 复用 Account Positions/Transactions，页面仍不访问 Broker；
-- `Record Decision` 复用 `research_memory_append/decision`，Action/Scenario/Reason 三项即可保存；
-- Research Subject 的 `Record Decision` 一次跳转会保留 exact Subject 并直接打开同一 Quick Capture；
-- `WATCH`、`NO_ACTION`、`RESEARCH_MORE` 使用现有 NORMAL contract，其余交易意图使用
-  STRICT_REVIEW；写入继续经过 `research_memory_append` capability confirmation；
-- strategy_v1 其余三种情景明确保持 REVIEW，不因当前记录自动授权动作。
-- Decision Record 已正式增加 nullable Strategy、Scenario、exact Plan version 和 aware Review Due
-  字段；Plan 不存在或跨 Research Subject 时 fail closed；历史 Decision 保持兼容；
-- Journal Decide 组件复用现有 Research Timeline 显示最近 Decision/NO_ACTION，不建立新 Timeline
-  数据库。
-- elapsed Review Due 复用现有 ReviewItem/Attention，deep-link 回 exact Subject 的 Quick Capture；
-  新 Decision 只有显式 supersede exact prior Decision 才自动关闭事项，失败/limit 命中不关闭；
-- Quick Capture 从 due link 进入时保留 `supersedes_decision_id`；普通 Record Decision 不会误用
-  该关联。
-
-后续切片已补入跨域 Decision/交易 Timeline、Unlinked Activity、Trade Cycle、TWR/MWR/XIRR、
-drawdown 和行为 cohort。完整链只在 exact durable link 存在时成立；历史 Broker Fill 不会仅凭
-Instrument 和时间被冒充为已关联事前 Decision。
-
-第一切片验收数据：合并后的 Decision/MCP/Attention/ReviewItem/Console/migration 聚焦切片
-`162 passed`，pytest `17.85s`；其中较窄的 Decision/Retro/ReviewItem/Console 行为切片
-`61 passed`，pytest `3.30s`。Console unit/rendered `41 passed`，测试体约 `0.64s`；Console
-typecheck、ESLint 和 production build 通过。全仓 Ruff 与 `mypy src`（688 个源文件）通过。新增
-聚合仍是 durable-only，没有增加 Provider 调用或公开 MCP 工具，compact schema 继续满足
-29.5 KiB 预算；数据库 head 后续已推进至 `0070_retire_unlinked_review_items`。
+- `/decision-workbench` 是兼容路由，用户界面名称统一为 `Journal`；主流程是
+  `Decide → Observe → Execute → Review`。
+- Decision/NO_ACTION、exact Plan version、review due、Timeline、Trade Cycle、Daily Equity、
+  TWR/MWR/XIRR/drawdown、behavior cohort、immutable review 和 external Observation 均已实现。
+- 页面读取 durable state，不因打开页面隐式刷新 Broker；Notes 正文仅在 Notes 页签按需读取。
+- exact durable link 缺失时保持未关联/不可用；Instrument 和时间接近不能证明事前 Decision。
+- 公共 MCP 仍为 27 个工具，当前 migration head 为
+  `0070_retire_unlinked_review_items`。
 
 ## 2. 用户要能直接回答的问题
 
@@ -113,7 +91,7 @@ typecheck、ESLint 和 production build 通过。全仓 Ruff 与 `mypy src`（68
 - 不计算跨币种总收益，直到 timestamped FX 覆盖和换算政策正式定义；
 - 不从持仓变化反推出一定发生买卖；转仓和公司行动保持独立类别；
 - 不开放自动确认、自动下单、订单替换、卖空、期权或其他无人值守交易；
-- 不删除现有 Portfolio、Trade Retro、Research 或 Decision Workbench 页面。
+- 不删除现有 Portfolio、Trade Retro 或 Research 专业页面；Journal 保留兼容路由。
 
 ## 4. 事实边界：不建立第二套交易事实
 
@@ -402,7 +380,7 @@ closed-cycle 胜率分母。
 - Portfolio：账户快照、持仓、Activity 和原生绩效下钻；
 - Trade Retro：immutable 周度 Run 与人工 Review；
 - Research：Thesis、Trade Plan 和证据；
-- Decision Workbench：跨模块待处理事项；
+- Journal Reviews：跨模块待处理事项；
 - Journal：贯穿模块的操作与学习主线，并 deep-link 回专业页面。
 
 Journal 不复制第二套 Portfolio 编辑器或 Retro 写入口。
@@ -567,7 +545,7 @@ Broker 交易事实不因是否关联而改变。
 | Journal | 汇总主线、统计和关联；不复制专业写操作 |
 | Trade Retro | Finding 引用 exact Cycle；行动项回 Journal/Workbench |
 | Scorecards | 使用行为事实作为纪律证据；盈利不替代判断质量 |
-| Decision Workbench | 聚合未关联 Fill、低覆盖绩效、逾期 Review、复发行为 |
+| Journal Reviews | 聚合未关联 Fill、低覆盖绩效、逾期 Review、复发行为 |
 | Agent Rail | 读取 Timeline/Cycle/Behavior；写入经过 exact append/confirm contract |
 
 ## 10. 系统架构
@@ -575,7 +553,7 @@ Broker 交易事实不因是否关联而改变。
 优先复用的现有模块：
 
 ```text
-Decision Workbench aggregate / ReviewItem
+Journal aggregate / ReviewItem
 Decision Record / Research Journal
 AccountTransaction / AccountSnapshot
 Portfolio Performance Attribution
@@ -675,7 +653,7 @@ Fee、Corporate action、Decision-before-fill、Plan-link、Cycle grouping cover
 状态固定 `COMPLETE`、`PARTIAL`、`INCOMPLETE`、`UNAVAILABLE`。COMPLETE 只在所选指标要求的全部
 输入可证明时使用；不能把局部完整简化成一个模糊绿色灯。
 
-## 15. 实施轨道
+## 15. 已实现组件与不变量
 
 | Track | 范围 | 状态 |
 |---|---|---|
@@ -684,97 +662,74 @@ Fee、Corporate action、Decision-before-fill、Plan-link、Cycle grouping cover
 | Phase 4C | Durable equity projection、TWR、MWR/XIRR、drawdown、coverage | Implemented; unsupported Cycle R-multiple remains unavailable |
 | Phase 4D | Behavior analytics、strategy_v1 cohorts、period Reviews、action recurrence、Console consolidation | Implemented |
 
-### 上线顺序与回滚
-
-每个 Track 使用以下顺序，不能直接从 migration 跳到默认启用：
-
-1. migration + repository contract；
-2. historical dry-run / shadow projection；
-3. 与现有 Transactions、Positions、Performance 的差异报告；
-4. read-only Console preview；
-5. 开放该 Track 的用户写入；
-6. 接入 Review Queue 和 scheduled materialization；
-7. 生产样本达到验收门后才设为默认入口。
+### Projection 与回补安全
 
 rebuildable projection 保留前一 active version，切换失败时回到旧 projection；原始 Transaction、
 Decision、Order Receipt、Snapshot 和 Review 从不回滚或删除。任何 backfill 都先输出数量、覆盖、
 冲突和 wall-clock，再请求用户确认持久化范围。
 
-### 4A — Capture first
+### 4A — Capture
 
-交付：现有 Workbench → Journal 流程改造、Decision Record Quick Capture、Positions/Transactions
-聚合、source projection、Activation 和 coverage report。第一切片不新建 Journal ORM。
+当前合同：Journal、Decision Record Quick Capture、Positions/Transactions 聚合、source
+projection、Activation 和 coverage report。Journal 不建立第二套交易事实。
 
 验收：六张模块卡收敛为 Decide/Observe/Execute/Review 四个流程组件；source 重放不重复；
 NO_ACTION 不创建订单；自动/人工记录可区分；页面不访问 Provider；无需复制 ID；一次明确保存
 没有重复确认。
 
-### 4B — Build the trade unit
+### 4B — Trade unit
 
-状态：**Trade Cycle、append-only activity revision、Unlinked Inbox 与 split/merge/relink override 已实现**。
-
-交付：Cycle grouping v1、scale-in/out/close/re-entry、manual split/merge/link revision、Unlinked
+当前合同：Cycle grouping v1、scale-in/out/close/re-entry、manual split/merge/link revision、Unlinked
 ReviewItem、Research/Portfolio/Retro deep links。
 
-第一切片复用 AccountTransaction 与现有 FIFO 口径，新增无持久化、可重建的
+实现复用 AccountTransaction 与现有 FIFO 口径，提供无持久化、可重建的
 `portfolio_analyze/trade_cycles`：按 account + Instrument + native currency 归组；0→BUY 开启、BUY
 加仓、partial SELL 减仓、归零关闭、后续 BUY 新建 re-entry Cycle。SELL-without-open、oversell、
 缺 price/fee 和覆盖不足 fail closed/降级；Transfer、Corporate Action 和其他非 TRADE 不制造 Cycle。
-Journal Execute 组件直接显示 latest Cycle 和 Cycle count，不创建第二套交易页面。
+Journal Execute 组件显示 latest Cycle 和 Cycle count，不创建第二套交易页面。
 SGOV Cycle 确定性标为 `CASH_MANAGEMENT`，其他 Cycle 暂为 `UNCLASSIFIED`，避免在 Behavior
 阶段把现金管理污染成主动交易，也不提前猜测用户意图。Portfolio Activity 复用共享 Paginator，
 每页只显示 6 个 Cycle；真实账户当前可重建 72 个 Cycle，不一次性拉成长页面。
 
-Phase 4A/4B 合并聚焦切片 `172 passed`，pytest `13.77s`。Trade Cycle calculator、durable
-coordinator 和 compact MCP 子集 `41 passed`，pytest `7.75s`。
-Console `41 passed`，测试体约
-`0.42s`，production build 通过。全仓 Ruff 与 `mypy src`（689 个源文件）通过。公共工具仍为
-27；compact input schema 从 26,135 bytes 降至 26,116 bytes，wire inventory 为 36,377 bytes。
-
 验收：Fill 不作为胜率分母；Activity 不进入两个 active Cycle；归零后新建 Cycle；Transfer 和
 Corporate Action 不制造交易；revision 不删除算法结果；读取失败不关闭 ReviewItem。
 
-### 4C — Make returns trustworthy
+### 4C — Trustworthy returns
 
-交付：Daily Equity、native-currency TWR/MWR/XIRR/drawdown、Cycle P/L/return/R-Multiple、coverage
+当前合同：Daily Equity、native-currency TWR/MWR/XIRR/drawdown、Cycle P/L/return/R-Multiple、coverage
 drill-down、Portfolio 与 Journal 联动。
 
 验收：external flow 不计入收益；缺估值边界时 TWR unavailable/partial；无唯一 XIRR 不返回数字；
 无 planned risk 不返回 R-Multiple；多币种不隐式相加；每项列出 input IDs 和算法版本。
 
-### 4D — Turn history into behavior change
+### 4D — Behavior change
 
-交付：Behavior rules、strategy_v1 cohorts、Behavior/Reviews tabs、weekly/monthly/quarterly Review、
+当前合同：Behavior rules、strategy_v1 cohorts、Behavior/Reviews tabs、weekly/monthly/quarterly Review、
 persistent/recurring action、Agent read/exact append。
 
 验收：无综合纪律分；每个比例有分子/分母/排除项；盈利不覆盖纪律缺口；亏损不自动判违规；
 新/持续/解决/复发可区分；行动项可追踪到后续 cohort。
 
-### 4E — Capture living observations without re-entry
+### 4E — External Observations
 
-首个切片复用 Journal，通过 provider-neutral Observation Source adapter 读取 Moomoo 本机
+Journal 通过 provider-neutral Observation Source adapter 读取 Moomoo 本机
 私有 living note，并允许未来 TradingView 或本机 Capture Bridge 输出同一 canonical full-text
 snapshot。所有来源保存不可变 revision；无署名内容确定性归属本人，明确署名内容保持外部观点；OpenCode Go
 `qwen3.8-flash`（`max`）只生成四情景与版本变化草稿。`Review as Decision`
 预填现有 Decision 对话框，仍需用户编辑并显式保存，不自动创建 Thesis、Plan、Monitor 或订单。
-完整边界见 [External Observation Sources Workflow](../plans/moomoo-living-notes-workflow.md)。
+完整外部输入合同见
+[`observation-source-v1.schema.json`](../contracts/observation-source-v1.schema.json)；运行与隐私
+边界见 [本地操作控制台与数据维护](../operations/local-console-and-maintenance.md)。
 
-### 集成验收（2026-08-21）
+### 当前质量合同
 
-- 后端全量：`2522 passed`，pytest `70.08s`；Ruff 全仓通过；`mypy src` 通过
-  `755` 个源文件；架构边界 `34 passed`。
-- Console：`41 passed`，测试体约 `0.47s`；TypeScript、ESLint、production build 通过。
-- focused 计算切片保持短小：Phase 4C returns `16 passed`，测试体约 `0.15s`；
-  Phase 4D behavior + annotation `14 passed`，wall `0.84s`；盘后闭环 `17 passed`，`1.15s`。
-- 公共 MCP 仍为 `27` 个工具；compact input schema `27,631 bytes`，wire inventory
-  `37,876 bytes`，低于既定预算。
-- 数据库 head 后续为 `0070_retire_unlinked_review_items`；空库 forward upgrade、幂等重放和 round-trip
-  已通过。盘后 job 现在按账户快照 → Transactions → Unlinked ReviewItem → Daily Equity →
-  Watchlist 顺序执行。
-- sdist、wheel 构建及隔离安装/初始化/migration smoke 通过，输出
-  `ISOLATED_WHEEL_SMOKE_OK`。
-- 新增无实盘副作用的 Decision → Order → Fill → Cycle → Daily Equity/Returns →
-  Behavior Review 集成验收，以及 Journal 浏览器操作验收；Playwright `6 passed`。
+- CI 必须通过 Ruff、strict Mypy、覆盖率门槛、Console build/unit/E2E、依赖审计、SBOM、
+  forward-only migration 幂等与隔离 Wheel smoke。
+- 公共 MCP inventory 固定为 27，compact schema 保持在仓库测试预算内。
+- 盘后 job 的各步骤保留 durable receipt、幂等键和失败隔离；已完成步骤不会因后续
+  Observation/Watchlist 失败回滚。
+- Decision → Order → Fill → Cycle → Daily Equity/Returns → Behavior Review 的验收不得产生
+  实盘副作用。
 
 仍然不伪装为可计算的事实：账户级跨币种收益、没有 planned risk 时的 R-Multiple、OPEN Cycle
 unrealized，以及没有完整 bars 时的 MAE/MFE。它们保持 `UNAVAILABLE` 或 `NOT_SUPPORTED`，
@@ -791,16 +746,16 @@ unrealized，以及没有完整 bars 时的 MAE/MFE。它们保持 `UNAVAILABLE`
 - 长 Timeline 虚拟化或分页；
 - 窄屏优先时间、动作、标的、状态、金额，来源/质量进入详情。
 
-## 17. 测试与性能预算
+## 17. 测试与性能边界
 
 聚焦 source idempotency、Cycle zero-crossing/scale/transfer/corporate action、TWR cash-flow boundary、
 XIRR 无解、FX 缺失、annotation revision/stale writer、授权门、ReviewItem 分页/失败、Console
 durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 
-- 每个 Track 新增后端 focused slice 尽量 ≤ 5 秒；
-- Console Journal focused unit/rendered tests 尽量 ≤ 2 秒；
-- 只有 job、migration、数据库并发和真实路由保留 integration test；
-- 每个 Track 记录测试净增减、focused wall clock、全量 wall clock 变化。
+- 单元测试保持确定性，不访问真实 Provider 或私人运行数据；
+- job、migration、数据库并发和真实路由使用 integration test；
+- Console 变更同时覆盖 TypeScript、ESLint、production build 和关键 Playwright 流程；
+- 性能回归使用同一命令、数据量和环境比较，不把旧测试计数或一次 wall clock 固化为规格。
 
 ## 18. 端到端验收场景
 
@@ -824,7 +779,7 @@ durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 - Trade Cycle 成为统一交易统计分母；
 - 收益率具备现金流、估值、币种和覆盖口径；
 - strategy_v1 四情景与实际动作可比较；
-- Journal、Portfolio、Research、Retro、Workbench 不存在冲突写入口；
+- Journal、Portfolio、Research、Retro 不存在冲突写入口；
 - Console 主要流程无需复制 ID 或翻找多个页面；
 - Agent 与 Console 使用同一 application contract；
 - 公共 MCP 仍为 27 个工具；

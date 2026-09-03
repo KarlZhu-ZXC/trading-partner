@@ -1,7 +1,7 @@
 # Console Layout Standard
 
 The Research workspace is the reference layout for specialist Console pages. This
-standard applies to Research, Portfolio, Workbench, Monitors, Catalyst Agenda,
+standard applies to Research, Portfolio, Journal, Monitors, Catalyst Agenda,
 Trade Retro, Scorecards, the Phase 4 Journal workflow, Operations, and Capabilities.
 The Overview home page remains
 intentionally excluded and retains its dashboard composition. Agent conversations live

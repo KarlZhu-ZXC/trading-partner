@@ -18,7 +18,7 @@ Provider 调用失败时，Run 详情会展示结构化诊断，包括 Provider�
 界面默认使用浅色主题，左下角可切换浅色/深色；选择只保存在本机浏览器。Agent 首次发送会
 自动创建 durable conversation；当前路由和用户明确选中的文本只作为本轮临时上下文，不进入长期
 记忆。页面上的持仓、账户与研究数据不会被自动抓取发送，当前事实仍通过受控工具读取。
-Research、Monitor、Portfolio 与 Decision Workbench 会额外注册 navigation-only 页面上下文，
+Research、Monitor、Portfolio 与 Journal 会额外注册 navigation-only 页面上下文，
 用于让右侧栏理解当前所选对象；回复以安全的标题、列表、代码、表格和实体链接排版。浏览器刷新后，
 右侧栏会恢复 durable Agent Turn 状态并轮询仍在运行的回合；已展示但丢失一次性 token 的 Pending
 Action 必须由用户点击 `Resume confirmation` 重新换发，系统不会自动确认。Telegram handoff 与
@@ -26,12 +26,12 @@ Action 必须由用户点击 `Resume confirmation` 重新换发，系统不会�
 输入栏可依次选择 Provider、该 Provider 实时目录中的文本模型及对应思考强度；目录由后端
 凭据代拉并缓存，浏览器不会收到 API key 或完整 endpoint，拉取失败时回退配置默认模型。
 每次使用都会保留搜索回执和来源 URL；网页背景不能覆盖 Trading Partner 返回的价格、持仓、
-点位、收益或数量事实。不支持原生搜索的端点仍显示为 disabled。真实订单仍未开放。
+点位、收益或数量事实。不支持原生搜索的端点仍显示为 disabled。Console Agent 订单仍未开放。
 
 总览的 Review Queue 把 Catalyst 逾期、Trade Retro 复核/行动项、Scorecard 持续缺口以及
 Agent/Broker 未决状态物化为内部持久事项。用户可以确认、设置期限或填写闭环依据后关闭；
-数据源读取失败不会自动关闭事项，来源恢复后消失才自动关闭。Decision Workbench 使用同一
-闭环状态，但旧 Research、Monitor、Agenda、Retro、Scorecard 页面仍是完整操作入口。
+数据源读取失败不会自动关闭事项，来源恢复后消失才自动关闭。Journal Reviews 使用同一
+闭环状态；Research、Monitor、Agenda、Retro、Scorecard 页面保留专业下钻能力。
 
 Console BFF 与 MCP 共用同一套 capability schema、确认策略和 application handler，但本地页面
 读取保留完整结果，不应用 MCP 的 15 KiB 传输压缩。只有 Capabilities 中的显式 MCP Workbench

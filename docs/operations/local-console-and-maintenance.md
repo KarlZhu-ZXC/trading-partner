@@ -2,8 +2,9 @@
 
 ## 控制台
 
-控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。它不调用 Codex/LLM，
-但不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
+控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。普通页面读取不调用
+Provider 或 LLM；只有用户显式运行 Agent、启用复合判断的 Monitor、Observation 分析等入口
+才调用配置好的服务端模型。它不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
 备份和缓存清理，也可以从 MCP 工作台调用全部 27 个公开工具。它不会在页面加载时隐式
 访问 Provider，也不提供订单能力。
 
@@ -68,7 +69,7 @@ GET  /api/agent/conversations/{conversation_id}/metrics
 记忆、授权或交易意图。Metrics 只从 durable `model_receipt_json` 与 turns 汇总，最多采样
 500 条；超限时返回 `truncated=true`，畸形 receipt 被忽略并计入 warning。
 
-行为门禁使用真实 Agent runtime 的确定性 fake fixtures，覆盖 15 个 catalog case：
+行为门禁使用真实 Agent runtime 的确定性 fake fixtures，覆盖版本化 catalog cases：
 
 ```bash
 uv run trading-partner-agent eval
@@ -243,7 +244,7 @@ uv run trading-partner-agent console install --lan
 绑定 LAN 地址。可用 `--lan-port 3001` 选择其他端口。
 
 页面包括：总览、全部
-研究档案/Thesis、Decision Workbench、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、27 个 MCP 能力、持久化账户、
+研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、27 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
 
 总览 Review Queue 是内部持久化决策闭环，不增加公开 MCP 工具。Acknowledge 可选填期限；

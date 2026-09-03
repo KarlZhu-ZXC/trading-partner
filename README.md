@@ -238,14 +238,16 @@ them are documented in [AGENTS.md](AGENTS.md).
 
 ## <img src="docs/assets/readme/sections/data.svg" alt="" width="24" /> Data and secrets
 
-- Static secrets live in the project-root `.env`, which is gitignored.
-- Rotating provider OAuth tokens live under `data/secrets/`, which is also gitignored.
+- Source checkouts use the gitignored project-root `.env`; installed hosts use the
+  owner-only `runtime.env` created by `trading-partner-init`.
+- Rotating Provider OAuth tokens live under the active
+  `RUNTIME_ROOT/data/secrets/`, which is gitignored and owner-only.
 - Installed tools derive every mutable token, lock, attachment, backup, and
   Observation path from the owner-only runtime directory created by
   `trading-partner-init`; package installation directories contain code and static
   defaults only.
-- Owner-specific account-basis checkpoints belong in the runtime
-  `data/secrets/account_basis_checkpoints.yaml`; the repository ships only an empty
+- Owner-specific account-basis checkpoints belong in
+  `RUNTIME_ROOT/data/secrets/account_basis_checkpoints.yaml`; the repository ships only an empty
   example and never packages account references, quantities, costs, or document hashes.
 - Durable research and account state stays in your configured local database.
 - Credentials are redacted from logs, MCP envelopes, exceptions, and audit payloads.
@@ -263,6 +265,10 @@ them are documented in [AGENTS.md](AGENTS.md).
 - [Product roadmap](docs/roadmap/global-roadmap-cn-us.md)
 - [Contributing guide](.github/CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+
+Completed plans, dated smoke receipts, and superseded UI audits are removed after
+their lasting rules move into `AGENTS.md`, a Phase specification, or an operator
+guide. Git history and versioned release notes retain historical evidence.
 
 ## <img src="docs/assets/readme/sections/development.svg" alt="" width="24" /> Development
 

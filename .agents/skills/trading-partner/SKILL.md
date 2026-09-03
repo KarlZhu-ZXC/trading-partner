@@ -7,6 +7,8 @@ description: "Use Trading Partner MCP for verified investment facts, research, p
 
 Use the live MCP schema and repository `AGENTS.md` as the detailed source of truth.
 Keep calls and explanations bounded; never copy the product specification into chat.
+The current repository boundary is implemented Phase 1–4D, 27 public tools, and
+migration head `0070_retire_unlinked_review_items`.
 
 ## Call contract
 
@@ -92,7 +94,7 @@ must retain their token/perpetual/CFD identity and basis warnings.
   clarification.
 - Journal, decision, watchlist, policy, Monitor, review, and agenda writes retain
   their idempotency/version/actor gates.
-- Structured Phase 4A Decisions may bind `strategy_code`, one of `UPSIDE` /
+- Structured Phase 4 Decisions may bind `strategy_code`, one of `UPSIDE` /
   `SIDEWAYS` / `PULLBACK` / `INVALIDATION`, an exact same-Subject Trade Plan
   version, and an aware review due time. These fields are intent metadata, not an
   order authorization. An elapsed due time uses the existing durable ReviewItem
@@ -192,3 +194,8 @@ args = ["run", "trading-partner-mcp"]
 
 Other unattended trading, options/complex orders, short selling, order replacement,
 and autonomous confirmation remain out of scope.
+
+Installed hosts must use the explicit `runtime.env` produced by
+`trading-partner-init`. Mutable files belong below its `RUNTIME_ROOT`; private
+Observation bodies and real account-basis checkpoints must never enter Git, package
+data, examples, tests, documentation, or tool output.

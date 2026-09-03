@@ -73,8 +73,9 @@ FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成�
 验证的 schema 标题/默认值和冗余 discriminator mapping、共享重复属性定义，并保证 closed
 union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
 
-Shared Agent Runtime 的 `tp_capability_search`、`tp_read` 和 `tp_prepare_action` 是模型请求内的
-私有函数，不注册为 MCP 工具，公开数量仍严格为 27。Agent-A 只允许 durable/provider reads、
+Shared Agent Runtime 的 `tp_capability_search`、`tp_read`、`tp_propose`、`tp_prepare_action` 和
+`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具，公开数量仍严格为 27。
+Agent-A 只允许 durable/provider reads、
 instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
 schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
 Agent-D 仅对单独维护的 research-write operation allowlist 创建 Pending Action；用户在原
@@ -543,7 +544,7 @@ FX 等暂不支持研究的 Moomoo 成员仍会显示，但 `instrument_id=null`
 Moomoo durable items 读取省略 `group_name` 时优先选择系统 `All`，不会静默退回
 `Favorites`；响应同时返回 `group_was_defaulted`、`total_count` 和 `has_more`。
 
-### 3.13 Portfolio Risk Engine v1
+### 3.13 Portfolio Risk Engine v2
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -645,7 +646,7 @@ Provider 尝试链会以脱敏结构写入 immutable Monitor observation。Conso
 但永不保存或显示 URL、代理地址、请求/响应正文、header 或底层异常文本。旧 Run 没有该
 sidecar 时继续按空诊断读取，不伪造历史细节。
 
-### 3.15 Technical Engine v2（1 个新增工具，1 个升级工具）
+### 3.15 Technical Engine v2
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -800,12 +801,13 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   消费的旧预留项；不得用它们配置 Moomoo 或 Schwab。新的券商接入必须使用 provider-scoped
   配置名。
 
-静态密钥只放项目根目录 `.env`。Provider 管理的轮换 OAuth token 只允许放在 gitignored
-`data/secrets/`，且只能由 Provider SDK 更新。`.env.example` 只记录键名与安全默认值；不得
-把 `.env` 或 token 内容复制到对话、日志、测试或提交中。
+源码工作区使用项目根目录 `.env`；安装版使用 `trading-partner-init` 生成的 owner-only
+`runtime.env`。Provider 管理的轮换 OAuth token 只允许放在 active
+`RUNTIME_ROOT/data/secrets/`，且只能由 Provider SDK 更新。`.env.example` 只记录键名与安全
+默认值；不得把真实配置或 token 内容复制到对话、日志、测试或提交中。
 
 配置维护约定：新增 `AppSettings` 环境变量时，必须同步更新 `.env.example`；在本地开发
-工作区中还要向既有 `.env` 补入安全默认值。不得覆盖已有值，Secret 只能补空键并由用户填写。
+工作区中还要向 active local config 补入安全默认值。不得覆盖已有值，Secret 只能补空键并由用户填写。
 项目配置不再使用冗长的全局 `TRADING_PARTNER_` 前缀；环境变量按 provider 或 feature
 命名。新增键仍应使用足够明确的 scoped 名称，避免与 Codex 启动的其他 MCP 子进程发生
 通用环境变量名冲突。
@@ -858,10 +860,11 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0030_generic_notification_outbox`；它包含 append-only Trade Plan
-identity/version/conditions、Risk v2 policy 字段、Monitor 的精确计划版本关联，以及与
-Monitor 状态转移事件或盘后 run 同事务写入的通知 Outbox，并追加 bounded、secret-safe
-Provider 路由回执。
+`0070_retire_unlinked_review_items`。当前链覆盖 append-only Trade Plan、Risk v2、Monitoring、
+通知 Outbox、Provider 路由回执、Shared Agent Runtime、ReviewItem、Trade Retro、Catalyst
+Agenda、Judgment Scorecard、Journal/Decision、Trade Cycle override、Daily Equity、外部
+Observation revision 与账户 Instrument identity 修复。`0069`/`0070` 属于显式不可逆的数据
+修复；CI 验证 forward upgrade 幂等、数据不变量和隔离 Wheel，不把空 downgrade 冒充回滚能力。
 
 ### Telegram 通知 Outbox（可选）
 
