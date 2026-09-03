@@ -1081,7 +1081,7 @@ wheels = [
 
 [[package]]
 name = "moomoo-api"
-version = "10.9.6908"
+version = "10.10.7008"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pandas" },
@@ -1089,7 +1089,7 @@ dependencies = [
     { name = "pycryptodome" },
     { name = "simplejson" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/49/3c/0789f8aa79a926719bd298bbf9cf192fa9bf73fbfe827480b648eb6004da/moomoo_api-10.9.6908.tar.gz", hash = "sha256:6df0370ed120ec6e9f0bf65576a07838a7d105bb91e3ebb929f496a096700304", size = 6429606, upload-time = "2026-07-15T07:59:40.292Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/90/41bac41995adf406840c44873589e0eb8bc715c86f096ba4efe7bd1f3f97/moomoo_api-10.10.7008.tar.gz", hash = "sha256:2c721a9b8daeb141f77408300056a7b398ff252ac06d35bad6dd3b21489185c7", size = 6435262, upload-time = "2026-08-13T09:16:19.633Z" }
 
 [[package]]
 name = "msgpack"
