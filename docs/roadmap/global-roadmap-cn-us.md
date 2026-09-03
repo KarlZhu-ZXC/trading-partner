@@ -96,8 +96,9 @@ The authoritative detail is the
 
 Unrelated capability breadth is frozen while the implemented Phase 1–4D product is
 re-centered on the Moomoo-first judgment intake and review loop, stability, usability,
-data quality, and cross-feature closure. The active sequence and live progress are in
-[Moomoo-first judgment intake transformation](judgment-intake-transformation.md).
+data quality, and cross-feature closure. The implemented judgment-intake contract is
+owned by [Phase 4](../phases/phase4.md); completed implementation ledgers remain only
+in Git history rather than as a parallel specification.
 Completed implementation plans are not retained as parallel specifications.
 
 Continuous requirements remain:

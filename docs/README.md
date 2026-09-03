@@ -17,7 +17,6 @@ are folded into `AGENTS.md`, a Phase specification, or an operator guide.
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |
 | [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Current direction and genuinely deferred integrations |
-| [roadmap/judgment-intake-transformation.md](roadmap/judgment-intake-transformation.md) | Active Moomoo-first judgment-loop implementation plan and progress ledger |
 
 ## Implemented specifications
 
@@ -56,8 +55,7 @@ when those releases shipped. They are not current usage instructions.
 - `AGENTS.md` owns agent-facing invariants, safety gates, architecture, and verification.
 - `phases/` owns implemented contracts; it does not act as a progress diary.
 - `guide/` and `operations/` own current user/operator instructions only.
-- `roadmap/` owns genuinely deferred directions and the single explicitly marked
-  active transformation ledger while a cross-phase migration is underway.
+- `roadmap/` owns genuinely deferred directions.
 - `releases/` preserves version-specific historical truth.
 - Completed plans, dated local paths, screenshots, test counts, and smoke receipts are
   removed instead of becoming a second current specification.
