@@ -2502,6 +2502,11 @@ async def operations(request: Request) -> dict[str, Any]:
         "maintenance": services.maintenance.status().model_dump(mode="json"),
         "health": health,
         "monitor_dashboard": _canonical_subject_transport(monitor_dashboard),
+        "observation_review_metrics": (
+            _container(request).services.external_note_reviews.metrics().model_dump(
+                mode="json"
+            )
+        ),
         "sync_receipts": [
             {
                 "run_id": item.run_id,

@@ -66,3 +66,15 @@ class ExternalNoteReviewDTO(_DTO):
             idempotency_key=value.idempotency_key,
             created_at=value.created_at,
         )
+
+
+class ExternalNoteReviewMetricsDTO(_DTO):
+    measured_at: datetime
+    total: int
+    pending: int
+    deferred: int
+    adopted: int
+    no_action: int
+    oldest_unresolved_age_seconds: int | None
+    terminal_with_exact_decision: int
+    truncated: bool

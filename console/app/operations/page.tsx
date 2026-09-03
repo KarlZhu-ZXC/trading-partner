@@ -9,6 +9,14 @@ import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 type Dict = Record<string, unknown>;
 type ConfirmationState = { title: string; description: string; confirmLabel?: string; tone?: "default" | "warning"; onConfirm: () => void };
 
+function durationLabel(value: unknown): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 3_600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86_400) return `${(seconds / 3_600).toFixed(1)}h`;
+  return `${(seconds / 86_400).toFixed(1)}d`;
+}
+
 export default function OperationsPage() {
   const result = useApi<Dict>("/api/operations");
   const oauthResult = useApi<Dict>("/api/schwab/oauth");
@@ -25,6 +33,7 @@ export default function OperationsPage() {
   const oauthRetryRequiresConfirmation = oauthFlow?.retry_requires_confirmation === true;
   const notification = result.data?.notifications as Dict | undefined;
   const maintenance = result.data?.maintenance as Dict | undefined;
+  const observationReviews = result.data?.observation_review_metrics as Dict | undefined;
   const tableCounts = listOf<Dict>(maintenance, "table_counts");
   const retention = listOf<Dict>(maintenance, "retention_rules");
   const health = envelopeData<Dict>(result.data?.health);
@@ -167,6 +176,9 @@ export default function OperationsPage() {
           </Card>
           <Card className="span-3" kicker="OUTBOX" title="Telegram Notifications">
             <div className="operation-hero compact"><Badge value={notification?.configured ? "HEALTHY" : "NOT CONFIGURED"} /><strong>{String(notification?.pending ?? 0)} pending</strong><span>{String(notification?.delivered ?? 0)} delivered · {String(notification?.dead_letter ?? 0)} dead</span></div>
+          </Card>
+          <Card className="span-12" kicker="JUDGMENT INTAKE" title="Observation Review Health">
+            <div className="metric-pairs"><MetricTile label="Pending" value={String(observationReviews?.pending ?? 0)} detail={<>Oldest {durationLabel(observationReviews?.oldest_unresolved_age_seconds)}</>} /><MetricTile label="Deferred" value={String(observationReviews?.deferred ?? 0)} detail="Explicitly postponed" /><MetricTile label="Adopted" value={String(observationReviews?.adopted ?? 0)} detail="Confirmed Decisions" /><MetricTile label="No Action" value={String(observationReviews?.no_action ?? 0)} detail="Confirmed Decisions" /><MetricTile label="Exact Provenance" value={`${String(observationReviews?.terminal_with_exact_decision ?? 0)} / ${String(Number(observationReviews?.adopted ?? 0) + Number(observationReviews?.no_action ?? 0))}`} detail={observationReviews?.truncated ? "Bounded read" : "Complete local read"} /></div>
           </Card>
           <Card className="span-4" kicker="DATABASE" title="Local Data">
             <div className="big-number">{formatBytes(maintenance?.database_bytes)}</div><p className="mono muted">{String(maintenance?.database_filename ?? "—")}</p>

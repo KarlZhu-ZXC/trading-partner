@@ -61,7 +61,7 @@ Legend: `[ ]` not started, `[~]` in progress, `[x]` completed, `[!]` blocked.
   gates, and rollback strategy in this document.
 - [x] Remove the fixed 27-tool count from future-facing product invariants while
   retaining the current runtime count as an implemented snapshot.
-- [~] Track the parallel model-evaluation task. Its result may change provider/model,
+- [x] Track the parallel model-evaluation task. Its result may change provider/model,
   prompt protocol, reasoning effort, timeout, fallback, and evaluation fixtures; it
   must not change the confirmation boundary or make model output authoritative.
 - [x] Capture the pre-change focused test/build baseline: 96 focused Python tests,
@@ -178,7 +178,7 @@ services. Future counts remain unfrozen.
 
 ### T6 — Model decision integration and evaluation
 
-- [ ] Import the parallel model-evaluation result and record the selected primary,
+- [x] Import the parallel model-evaluation result and record the selected primary,
   fallback, prompt/schema version, reasoning effort, timeout, cost/privacy rationale,
   and rejected alternatives in the current Phase contract.
 - [x] Keep the provider behind `AgentModelProvider`; no domain or Console code may
@@ -188,9 +188,28 @@ services. Future counts remain unfrozen.
 - [x] Require deterministic schema validation and retain the prior successful
   interpretation when a new attempt fails.
 - [x] Add observable, secret-safe failure categories and manual retry/reanalysis.
+- [ ] Add `EXTERNAL_NOTE_REVIEW_MODEL=qwen3.8-max` as an optional second provider
+  configuration without changing the daily Flash configuration.
+- [ ] Add deterministic escalation for `SUPERSEDES`/`INVALIDATES`, `ADD`/`REDUCE`/
+  `EXIT`, a Thesis conflict flag, a requested Thesis/Plan proposal, or an explicit
+  user review. Model text must never decide its own escalation authority.
+- [ ] Persist the Max review draft separately from the immutable source Observation,
+  first-pass Flash interpretation, Observation Review outcome, and formal Decision.
+- [ ] Add the exact Flash-versus-Max benchmark cases to sanitized regression fixtures;
+  treat invented timing, confirmation conditions, and action propagation as failures.
 
 Gate: the selected and fallback models pass the same closed fixture suite, and model
 failure leaves the review usable with explicit degradation.
+
+Model decision (parallel evaluation completed 2026-09-03): use `qwen3.8-flash` for
+continuous first-pass structure and `qwen3.8-max` for escalated View Review. If only
+one model can be configured, prefer Max for semantic fidelity. Do not use LongCat 2.0
+for formal review because it incorrectly propagated a withdrawn add plan into HOLD/
+EXIT actions. Do not use DeepSeek as the private-note fallback because the test added
+unstated timing/confirmation conditions and the reviewed privacy basis was not current.
+GLM, Kimi, MiniMax, MiMo, and Hy directory visibility did not establish reliable
+completion of this strict contract. The second layer remains a draft producer and has
+no confirmation, research-write, Monitor, portfolio, or order authority.
 
 ### T7 — Automation, quality, documentation, and release
 
@@ -198,7 +217,7 @@ failure leaves the review usable with explicit degradation.
   and enqueue only normalized USER-text changes; suppress duplicate, summary-only,
   external-only, and whitespace-only noise. A model-labelled `NO_MATERIAL_CHANGE`
   cannot suppress a real USER text change because the model is non-authoritative.
-- [~] Add review freshness, pending age, sync/analysis coverage, duplicate prevention,
+- [x] Add review freshness, pending age, sync/analysis coverage, duplicate prevention,
   and adoption provenance to Data Quality/Operations.
 - [~] Run focused tests, full Python quality, Console tests/lint/typecheck/build,
   packaging, migrations, secret scan, and a real local smoke with private output kept
@@ -243,3 +262,4 @@ both Console and Codex without weakening confirmation or privacy.
 | 2026-09-03 | MCP tool count is flexible. | Discoverability and coherent intent routing are more important than preserving an arbitrary count. |
 | 2026-09-03 | Model choice is a replaceable implementation decision pending a parallel evaluation. | Product authority and deterministic gates must not depend on one model vendor. |
 | 2026-09-03 | Do not switch the formal interpretation model from partial benchmark evidence. | LongCat 2.0 completed quickly but mis-propagated an explicit withdrawal; other directory-visible candidates have not yet completed the strict contract reliably. |
+| 2026-09-03 | Use Qwen 3.8 Flash for continuous structure and Qwen 3.8 Max for deterministically escalated review. | The completed benchmark found Max most faithful on withdrawal/invalidation semantics while Flash remained suitable for high-volume first-pass extraction. |

@@ -168,6 +168,10 @@ def test_pending_review_is_idempotent_and_requires_full_successful_interpretatio
     assert projection.source_type.value == "OBSERVATION_REVIEW_DUE"
     assert projection.source_ref == REVISION_ID
     assert projection.subject_id == SUBJECT_ID
+    metrics = service.metrics()
+    assert metrics.pending == 1
+    assert metrics.deferred == 0
+    assert metrics.oldest_unresolved_age_seconds == 0
 
     summary_service, _ = _service(
         fixed_clock,
@@ -251,6 +255,10 @@ def test_review_defers_then_adopts_exact_decision(fixed_clock, id_generator) -> 
     assert adopted.status == "ADOPTED"
     assert adopted.decision_id == DECISION_ID
     assert [item.version for item in reviews.values] == [1, 2, 3]
+    metrics = service.metrics()
+    assert metrics.adopted == 1
+    assert metrics.pending == 0
+    assert metrics.terminal_with_exact_decision == 1
     with pytest.raises(InvalidExternalNoteReviewTransition):
         service.transition(
             ExternalNoteReviewTransitionInput(

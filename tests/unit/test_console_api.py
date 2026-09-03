@@ -584,6 +584,20 @@ class _ExternalNoteReviewsService:
             }
         )
 
+    def metrics(self) -> Any:
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "total": 1,
+                "pending": 1,
+                "deferred": 0,
+                "adopted": 0,
+                "no_action": 0,
+                "oldest_unresolved_age_seconds": 60,
+                "terminal_with_exact_decision": 0,
+                "truncated": False,
+            }
+        )
+
 
 class _ViewReviewsService:
     def __init__(self) -> None:
