@@ -35,6 +35,7 @@ from interfaces.mcp.tools.risk import build_risk_adapters
 from interfaces.mcp.tools.system import build_system_adapters
 from interfaces.mcp.tools.us_context import build_us_context_adapters
 from interfaces.mcp.tools.us_research import build_us_research_adapters
+from interfaces.mcp.tools.view_review import build_view_review_adapters
 from interfaces.mcp.tools.watchlist import build_watchlist_adapters
 from interfaces.mcp.tools.workflows import build_workflow_adapters
 from interfaces.mcp.validation import tool_input_invalid_envelope
@@ -406,7 +407,7 @@ class CompactCapabilityRegistry:
 
         This method is intentionally separate from :meth:`list_tools`; these
         descriptors never become MCP tools and therefore cannot change the
-        public 27-tool inventory.
+        public MCP inventory.
         """
 
         self._register_operation(descriptor, invoke, validate)
@@ -1372,8 +1373,8 @@ def create_compact_capability_registry(
         system=build_system_adapters(
             container,
             surface_profile="mcp_vnext_shadow",
-            public_tool_count=27,
-            surface_schema_version="mcp-vnext-shadow-v2",
+            public_tool_count=len(MCP_VNEXT_TOOL_NAMES),
+            surface_schema_version="mcp-vnext-shadow-v3",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -1389,6 +1390,7 @@ def create_compact_capability_registry(
         watchlist=build_watchlist_adapters(container),
         risk=build_risk_adapters(container),
         monitoring=build_monitoring_adapters(container),
+        view_review=build_view_review_adapters(container),
     )
     registry = CompactCapabilityRegistry()
 
@@ -1401,6 +1403,17 @@ def create_compact_capability_registry(
         registry,
         adapter=adapters.instrument.instrument_resolve,
         policy=CACHE_DISCOVERY,
+    )
+    _copy_handler(registry, adapter=adapters.view_review.view_inbox, policy=READ_DURABLE)
+    _copy_handler(
+        registry,
+        adapter=adapters.view_review.view_review_get,
+        policy=READ_DURABLE,
+    )
+    _copy_handler(
+        registry,
+        adapter=adapters.view_review.current_view_get,
+        policy=READ_DURABLE,
     )
 
     _register_dispatch_tool(

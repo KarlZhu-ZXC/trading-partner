@@ -25,6 +25,7 @@ from application.ports.daily_equity_repository import (
     JournalActivationRepository,
 )
 from application.ports.external_note_repository import ExternalNoteRepository
+from application.ports.external_note_review_repository import ExternalNoteReviewRepository
 from application.ports.historical_validation_artifact_repository import (
     HistoricalValidationArtifactRepository,
 )
@@ -81,6 +82,9 @@ from infrastructure.persistence.database import (
 )
 from infrastructure.persistence.external_note_repository import (
     SqlAlchemyExternalNoteRepository,
+)
+from infrastructure.persistence.external_note_review_repository import (
+    SqlAlchemyExternalNoteReviewRepository,
 )
 from infrastructure.persistence.industry_metric_repository import (
     SqlAlchemyIndustryMetricRepository,
@@ -145,6 +149,7 @@ class PersistenceInfrastructure:
     catalyst_agenda_sync: CatalystAgendaSyncRepository
     review_items: ReviewItemRepository
     external_notes: ExternalNoteRepository
+    external_note_reviews: ExternalNoteReviewRepository
     research_uow_factory: ResearchUowFactory
     watchlist_uow_factory: WatchlistUowFactory
 
@@ -215,6 +220,7 @@ def build_persistence_infrastructure(
         catalyst_agenda_sync=SqlAlchemyCatalystAgendaSyncRepository(engine),
         review_items=SqlAlchemyReviewItemRepository(engine),
         external_notes=SqlAlchemyExternalNoteRepository(engine),
+        external_note_reviews=SqlAlchemyExternalNoteReviewRepository(engine),
         research_uow_factory=research_uow_factory,
         watchlist_uow_factory=watchlist_uow_factory,
     )

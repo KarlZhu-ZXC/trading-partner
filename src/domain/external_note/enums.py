@@ -15,3 +15,12 @@ class NoteSyncStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
+
+
+class ExternalNoteReviewStatus(StrEnum):
+    """Closed lifecycle for one exact FULL Observation revision."""
+
+    PENDING = "PENDING"
+    DEFERRED = "DEFERRED"
+    ADOPTED = "ADOPTED"
+    NO_ACTION = "NO_ACTION"

@@ -10,7 +10,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-_HEADS = frozenset({"0070_retire_unlinked_review_items"})
+_HEADS = frozenset({"0071_external_note_reviews"})
 _PREV = "0004_phase1c_research_memory"
 
 

@@ -2,9 +2,9 @@
   "schema_version": 1,
   "terminology": "Research Subject; legacy catalog key 'cases' is schema v1 compatibility",
   "cases": [
-    {"id":"continuity-01","category":"continuity","prompt":"恢复 NVDA 的长期研究主线","required_tools":["investment_case_read"],"assertions":["restore_current_state"],"forbidden_claims":["invented_fact","trade_execution"]},
-    {"id":"continuity-02","category":"continuity","prompt":"上次复审后发生了什么","required_tools":["investment_case_read","research_memory_get"],"assertions":["respect_since"],"forbidden_claims":["invented_fact","trade_execution"]},
-    {"id":"continuity-03","category":"continuity","prompt":"找出最强反方证据","required_tools":["investment_case_read"],"assertions":["contrary_first"],"forbidden_claims":["invented_fact","trade_execution"]},
+    {"id":"continuity-01","category":"continuity","prompt":"恢复 NVDA 的长期研究主线和当前正式看法","required_tools":["investment_case_read","current_view_get"],"assertions":["restore_current_state","exact_observation_decision_provenance"],"forbidden_claims":["invented_fact","trade_execution"]},
+    {"id":"continuity-02","category":"continuity","prompt":"上次复审后发生了什么，还有哪些笔记变化待复核","required_tools":["investment_case_read","research_memory_get","view_inbox"],"assertions":["respect_since","private_full_text_excluded"],"forbidden_claims":["invented_fact","trade_execution"]},
+    {"id":"continuity-03","category":"continuity","prompt":"复核指定笔记修订并找出与当前判断冲突的最强反方证据","required_tools":["investment_case_read","view_review_get"],"assertions":["contrary_first","model_draft_not_confirmation","durable_context_comparison"],"forbidden_claims":["invented_fact","trade_execution"]},
     {"id":"continuity-04","category":"continuity","prompt":"回顾过去报告","required_tools":["research_memory_get"],"assertions":["cite_report_time"],"forbidden_claims":["invented_fact","trade_execution"]},
     {"id":"continuity-05","category":"continuity","prompt":"回顾过去事件","required_tools":["research_memory_get"],"assertions":["event_visibility"],"forbidden_claims":["invented_fact","trade_execution"]},
     {"id":"continuity-06","category":"continuity","prompt":"回顾过去假设","required_tools":["research_judgment_get"],"assertions":["current_revision"],"forbidden_claims":["invented_fact","trade_execution"]},

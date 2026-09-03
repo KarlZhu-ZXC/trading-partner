@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { ClipboardPenLine, RefreshCw } from "lucide-react";
 import { ErrorNote, ActionButton, Badge, Card, ConfirmationDialog, DataBoundary, Disclosure, Empty, FormField, HorizontalTabs, PageActionMenu, Paginator, QuickLink, SortableTableHeader, TextInputDialog, formatDate, formatDecimal, shortId } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
@@ -72,7 +73,7 @@ const JOURNAL_TABS: Array<{ id: JournalTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "cycles", label: "Trade Cycles" },
   { id: "behavior", label: "Behavior" },
-  { id: "notes", label: "Notes" },
+  { id: "notes", label: "View Inbox" },
   { id: "reviews", label: "Reviews" },
   { id: "timeline", label: "Timeline" },
 ];
@@ -129,6 +130,54 @@ function periodStart(filter: PeriodFilter): number | null {
   now.setHours(0, 0, 0, 0);
   now.setDate(now.getDate() - days);
   return now.getTime();
+}
+
+function selectedPeriodWindow(
+  filter: PeriodFilter,
+  customStart: string,
+  customEnd: string,
+): { start: string | null; end: string | null; valid: boolean } {
+  const presetStart = periodStart(filter);
+  const start = filter === "CUSTOM"
+    ? startOfDayIsoOrNull(customStart)
+    : presetStart === null
+      ? null
+      : new Date(presetStart).toISOString();
+  const end = filter === "CUSTOM" ? endOfDayIsoOrNull(customEnd) : null;
+  return {
+    start,
+    end,
+    valid: !start || !end || Date.parse(start) <= Date.parse(end),
+  };
+}
+
+function openReviewCountFor(
+  subjectFilters: string[],
+  reviewItems: Dict[],
+  metrics: Dict,
+): number {
+  return subjectFilters.length > 1
+    ? reviewItems.length
+    : number(metrics.open_count) || reviewItems.length;
+}
+
+function currentTradePlan(state: Dict): Dict | null {
+  return state.current_trade_plan && typeof state.current_trade_plan === "object"
+    ? state.current_trade_plan as Dict
+    : null;
+}
+
+function selectedInstrumentScope(
+  explicit: string[],
+  subjectInstruments: string[],
+): string[] {
+  if (explicit.length > 0) return explicit;
+  return subjectInstruments.length > 0 ? Array.from(new Set(subjectInstruments)) : [];
+}
+
+function contextInstrumentScope(active: string[], fallback: string): string[] {
+  if (active.length > 0) return active;
+  return fallback ? [fallback] : [];
 }
 
 function dateInputValue(value = new Date()): string {
@@ -457,6 +506,37 @@ function BehaviorPanel({ value }: { value: Dict }) {
   </>;
 }
 
+function CurrentViewCard({
+  subjectId,
+  currentView,
+  subject,
+  loading,
+  error,
+}: {
+  subjectId: string;
+  currentView: Dict;
+  subject: Dict;
+  loading: boolean;
+  error: string | null;
+}) {
+  let content: ReactNode;
+  if (!subjectId) {
+    content = <Empty>Select one Research Subject to inspect its confirmed view.</Empty>;
+  } else if (loading) {
+    content = <Empty>Loading the confirmed view…</Empty>;
+  } else if (error) {
+    content = <div className="inline-error">Current View read failed: {error}</div>;
+  } else if (!currentView.review) {
+    content = <Empty>No Moomoo-derived view has been reviewed and confirmed for this Research Subject yet. Open View Inbox to review the latest eligible change.</Empty>;
+  } else {
+    const decision = asDict(currentView.decision);
+    const thesis = asDict(currentView.thesis);
+    const plan = asDict(currentView.trade_plan);
+    content = <div className="journal-current-view"><div><span>Decision</span><strong>{text(decision.title, "Confirmed Decision")}</strong><p>{text(decision.rationale, "No rationale recorded.")}</p></div><div><span>Thesis</span><strong>{text(thesis.title, "No live Thesis")}</strong><p>{text(thesis.statement, "The confirmed Decision remains available without a live Thesis.")}</p></div><div><span>Trade Plan</span><strong>{currentView.trade_plan ? `${shortId(plan.plan_id)} · v${number(plan.version)}` : "No active Plan"}</strong><p>{currentView.trade_plan ? `${upper(plan.status)} · ${shortId(plan.instrument_id)}` : "No execution plan is implied by this view."}</p></div><div><span>Source</span><strong>{shortId(currentView.source_note_revision_id)}</strong><p>Exact immutable Observation revision</p></div></div>;
+  }
+  return <Card kicker="JUDGMENT SYSTEM OF RECORD" title="Current Confirmed View" description={text(currentView.subject_title, text(subject.title, "Select a Research Subject"))} action={currentView.review ? <Badge value={upper(asDict(currentView.review).status, "CONFIRMED")} tone="good" /> : undefined}>{content}</Card>;
+}
+
 export default function DecisionWorkbenchPage() {
   const [requestedSubjectId, setRequestedSubjectId] = useState("");
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
@@ -471,12 +551,17 @@ export default function DecisionWorkbenchPage() {
   const [decisionReason, setDecisionReason] = useState("");
   const [decisionSourceNote, setDecisionSourceNote] = useState<string | null>(null);
   const [decisionSourceRevisionId, setDecisionSourceRevisionId] = useState<string | null>(null);
+  const [decisionSourceReview, setDecisionSourceReview] = useState<{ reviewId: string; version: number } | null>(null);
+  const [decisionReviewPackage, setDecisionReviewPackage] = useState<Dict | null>(null);
+  const [observationDefer, setObservationDefer] = useState<{ reviewId: string; version: number; title: string; dueDate: string } | null>(null);
+  const [observationDeferBusy, setObservationDeferBusy] = useState(false);
   const [decisionDraftScenarios, setDecisionDraftScenarios] = useState<Dict[]>([]);
   const [decisionReviewDate, setDecisionReviewDate] = useState(() => futureDateInput(7));
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [decisionMessage, setDecisionMessage] = useState<string | null>(null);
   const [captureRequested, setCaptureRequested] = useState(false);
+  const [captureContextError, setCaptureContextError] = useState<string | null>(null);
   const [supersedesDecisionId, setSupersedesDecisionId] = useState<string | null>(null);
   const [journalTab, setJournalTab] = useState<JournalTab>("overview");
   const [cycleOffset, setCycleOffset] = useState(0);
@@ -505,17 +590,14 @@ export default function DecisionWorkbenchPage() {
   const [instrumentTableFilters, setInstrumentTableFilters] = useState<string[]>([]);
   const [instrumentTableSort, setInstrumentTableSort] = useState<InstrumentTableSort>({ key: "lastTradeAt", direction: "desc" });
   const [instrumentTableOffset, setInstrumentTableOffset] = useState(0);
-  const presetPeriodStart = periodStart(periodFilter);
-  const selectedPeriodStart = periodFilter === "CUSTOM"
-    ? startOfDayIsoOrNull(customPeriodStart)
-    : presetPeriodStart === null
-      ? null
-      : new Date(presetPeriodStart).toISOString();
-  const selectedPeriodEnd = periodFilter === "CUSTOM"
-    ? endOfDayIsoOrNull(customPeriodEnd)
-    : null;
-  const periodWindowValid = !selectedPeriodStart || !selectedPeriodEnd
-    || Date.parse(selectedPeriodStart) <= Date.parse(selectedPeriodEnd);
+  const selectedPeriod = selectedPeriodWindow(
+    periodFilter,
+    customPeriodStart,
+    customPeriodEnd,
+  );
+  const selectedPeriodStart = selectedPeriod.start;
+  const selectedPeriodEnd = selectedPeriod.end;
+  const periodWindowValid = selectedPeriod.valid;
   const workbenchQuery = [
     requestedSubjectId ? `subject_id=${encodeURIComponent(requestedSubjectId)}` : "",
     ...classificationFilters.map((value) => `classifications=${encodeURIComponent(value)}`),
@@ -535,6 +617,10 @@ export default function DecisionWorkbenchPage() {
   );
   const defaultSubjectId = text(workbenchApi.data?.selected_subject_id, "");
   const subjectId = requestedSubjectId || defaultSubjectId;
+  const currentViewApi = useApi<Dict>(
+    `/api/current-view?subject_id=${encodeURIComponent(subjectId)}`,
+    { enabled: Boolean(subjectId) },
+  );
   useAgentPageContext({
     surface: "decision-workbench",
     selected_subject_id: subjectId || null,
@@ -556,13 +642,16 @@ export default function DecisionWorkbenchPage() {
     subjectFilters.length === 0 || subjectFilters.includes(text(item.subject_id, ""))
   );
   const reviewItemMetrics = asDict(workbenchApi.data?.review_item_metrics);
-  const openReviewCount = subjectFilters.length > 1
-    ? reviewItems.length
-    : number(reviewItemMetrics.open_count) || reviewItems.length;
+  const openReviewCount = openReviewCountFor(
+    subjectFilters,
+    reviewItems,
+    reviewItemMetrics,
+  );
   const behaviorReviewRuns = listOf<Dict>(workbenchApi.data, "behavior_review_runs");
   const observationData = observationApi.data?.data;
   const externalNotes = listOf<Dict>(observationData, "external_notes");
   const observationSources = listOf<Dict>(observationData, "observation_sources");
+  const currentView = asDict(currentViewApi.data?.data);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -664,9 +753,7 @@ export default function DecisionWorkbenchPage() {
   ) ?? null;
   const pendingCandidates = listOf<Dict>(state, "pending_candidates");
   const openQuestions = listOf<Dict>(state, "open_questions");
-  const plan = state.current_trade_plan && typeof state.current_trade_plan === "object"
-    ? state.current_trade_plan as Dict
-    : null;
+  const plan = currentTradePlan(state);
   const planId = text(plan?.plan_id, "");
   const planVersion = number(plan?.version);
   const planLinkReady = Boolean(planId && planVersion >= 1);
@@ -684,16 +771,14 @@ export default function DecisionWorkbenchPage() {
     .filter((item) => subjectFilters.includes(text(item.subject?.subject_id, "")))
     .map((item) => text(item.subject?.primary_instrument_id, ""))
     .filter(Boolean);
-  const activeInstrumentFilters = instrumentFilters.length > 0
-    ? instrumentFilters
-    : subjectInstrumentFilters.length > 0
-      ? Array.from(new Set(subjectInstrumentFilters))
-      : [];
-  const contextInstrumentFilters = activeInstrumentFilters.length > 0
-    ? activeInstrumentFilters
-    : instrumentId
-      ? [instrumentId]
-      : [];
+  const activeInstrumentFilters = selectedInstrumentScope(
+    instrumentFilters,
+    subjectInstrumentFilters,
+  );
+  const contextInstrumentFilters = contextInstrumentScope(
+    activeInstrumentFilters,
+    instrumentId,
+  );
   const filteredExternalNotes = externalNotes.filter((item) =>
     activeInstrumentFilters.length === 0
       || activeInstrumentFilters.includes(text(asDict(item.identity).primary_instrument_id, ""))
@@ -1031,9 +1116,12 @@ export default function DecisionWorkbenchPage() {
 
   useEffect(() => {
     if (!captureRequested || !selected) return;
+    setCaptureContextError(null);
     setDecisionError(null);
     setDecisionSourceNote(null);
     setDecisionSourceRevisionId(null);
+    setDecisionSourceReview(null);
+    setDecisionReviewPackage(null);
     setDecisionDraftScenarios([]);
     setDecisionOpen(true);
     setCaptureRequested(false);
@@ -1042,6 +1130,16 @@ export default function DecisionWorkbenchPage() {
     url.searchParams.delete("supersedes_decision_id");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [captureRequested, selected]);
+
+  useEffect(() => {
+    if (!captureRequested || workbenchApi.loading || selected) return;
+    setCaptureRequested(false);
+    setCaptureContextError(
+      requestedSubjectId
+        ? "The requested Research Subject is unavailable or archived. Open Research and choose an available Subject before recording a Decision."
+        : "Choose a Research Subject before recording a Decision.",
+    );
+  }, [captureRequested, requestedSubjectId, selected, workbenchApi.loading]);
 
   async function prepareWeeklyReview() {
     setBehaviorReviewBusy(true); setBehaviorReviewError(null);
@@ -1398,14 +1496,41 @@ export default function DecisionWorkbenchPage() {
         const firstError = listOf<Dict>(result, "errors")[0];
         throw new Error(text(firstError?.message, "Decision Record was rejected."));
       }
+      const decision = asDict(result.data);
+      const decisionId = text(decision.decision_id, "");
+      let reviewClosureWarning: string | null = null;
+      if (decisionSourceReview && decisionSourceRevisionId) {
+        if (!decisionId) {
+          reviewClosureWarning = "Decision recorded, but its Observation review could not be linked because the write response omitted the Decision identity.";
+        } else {
+          try {
+            await postApi<Dict>(
+              `/api/observation-reviews/${encodeURIComponent(decisionSourceReview.reviewId)}`,
+              {
+                status: decisionAction === "no_action" ? "NO_ACTION" : "ADOPTED",
+                expected_version: decisionSourceReview.version,
+                subject_id: subjectId,
+                decision_id: decisionId,
+                authorization_note: `User confirmed this exact Observation revision as Decision ${decisionId}.`,
+                idempotency_key: `console-observation-review-${decisionSourceReview.reviewId}-${decisionSourceReview.version}-${decisionId}`,
+                confirmation: "observation_review_update",
+              },
+            );
+          } catch {
+            reviewClosureWarning = "Decision recorded, but closing the Observation review failed. Refresh and repair the review link; do not duplicate the Decision.";
+          }
+        }
+      }
       setDecisionOpen(false);
       setDecisionReason("");
       setDecisionSourceNote(null);
       setDecisionSourceRevisionId(null);
+      setDecisionSourceReview(null);
+      setDecisionReviewPackage(null);
       setDecisionDraftScenarios([]);
       setDecisionReviewDate(futureDateInput(7));
       setSupersedesDecisionId(null);
-      setDecisionMessage(`${decisionScenario} · ${selectedAction.replaceAll("_", " ")} recorded.`);
+      setDecisionMessage(reviewClosureWarning ?? `${decisionScenario} · ${selectedAction.replaceAll("_", " ")} recorded.`);
       workbenchApi.refresh();
     } catch (cause) {
       setDecisionError(cause instanceof Error ? cause.message : "Decision Record failed.");
@@ -1428,8 +1553,16 @@ export default function DecisionWorkbenchPage() {
     setDecisionScenario("SIDEWAYS");
     setDecisionAction("no_action");
     setDecisionReason(reason);
-    setDecisionSourceNote(`${text(identity.note_id)}@v${number(revision.version) || 1}`);
+    setDecisionSourceNote(
+      `${text(identity.title, text(revision.title, "Source Note"))} · v${number(revision.version) || 1}`,
+    );
     setDecisionSourceRevisionId(text(revision.note_revision_id, "") || null);
+    const review = asDict(item.review);
+    const reviewId = text(review.review_id, "");
+    const reviewVersion = number(review.version);
+    setDecisionSourceReview(
+      reviewId && reviewVersion >= 1 ? { reviewId, version: reviewVersion } : null,
+    );
     setDecisionDraftScenarios(scenarios);
     setDecisionError(null);
     setSupersedesDecisionId(null);
@@ -1439,17 +1572,102 @@ export default function DecisionWorkbenchPage() {
     }
   }
 
-  function reviewNoteAsDecision(item: Dict, matchingSubjectId: string | null) {
+  async function reviewNoteAsDecision(item: Dict, matchingSubjectId: string | null) {
     if (!matchingSubjectId) {
       setDecisionError("Create or select a matching Research Subject before reviewing this Note as a Decision.");
       return;
     }
+    const revision = asDict(item.revision);
+    const revisionId = text(revision.note_revision_id, "");
+    let reviewItem = item;
+    let reviewPackage: Dict | null = null;
+    if (revisionId) {
+      try {
+        const response = await postApi<Dict>(
+          `/api/observations/${encodeURIComponent(revisionId)}/review/ensure`,
+          { subject_id: matchingSubjectId },
+        );
+        reviewItem = { ...item, review: asDict(response.data) };
+        const packageResponse = asDict(
+          await getJson(
+            `/api/observations/${encodeURIComponent(revisionId)}/review`,
+          ),
+        );
+        reviewPackage = asDict(packageResponse.data);
+      } catch (cause) {
+        setNoteSyncError(
+          cause instanceof Error
+            ? cause.message
+            : "Observation review could not be prepared.",
+        );
+        return;
+      }
+    }
+    setDecisionReviewPackage(reviewPackage);
     if (matchingSubjectId !== subjectId || !selected) {
-      setPendingNoteDecision(item);
+      setPendingNoteDecision(reviewItem);
       selectSubjectContext(matchingSubjectId);
       return;
     }
-    primeNoteDecision(item);
+    primeNoteDecision(reviewItem);
+  }
+
+  async function deferNoteReview(item: Dict, matchingSubjectId: string | null) {
+    const revision = asDict(item.revision);
+    const revisionId = text(revision.note_revision_id, "");
+    if (!revisionId) {
+      setNoteSyncError("The exact Observation revision is unavailable.");
+      return;
+    }
+    try {
+      const response = await postApi<Dict>(
+        `/api/observations/${encodeURIComponent(revisionId)}/review/ensure`,
+        { subject_id: matchingSubjectId },
+      );
+      const review = asDict(response.data);
+      const reviewId = text(review.review_id, "");
+      const version = number(review.version);
+      if (!reviewId || version < 1) throw new Error("Observation review identity is unavailable.");
+      setObservationDefer({
+        reviewId,
+        version,
+        title: text(asDict(item.identity).title, "View change"),
+        dueDate: futureDateInput(7),
+      });
+    } catch (cause) {
+      setNoteSyncError(cause instanceof Error ? cause.message : "Observation review could not be prepared.");
+    }
+  }
+
+  async function confirmObservationDefer() {
+    if (!observationDefer) return;
+    const dueAt = endOfDayIsoOrNull(observationDefer.dueDate);
+    if (!dueAt) {
+      setNoteSyncError("Review Date must be a valid date.");
+      return;
+    }
+    setObservationDeferBusy(true);
+    try {
+      await postApi<Dict>(
+        `/api/observation-reviews/${encodeURIComponent(observationDefer.reviewId)}`,
+        {
+          status: "DEFERRED",
+          expected_version: observationDefer.version,
+          due_at: dueAt,
+          authorization_note: `User deferred review until ${observationDefer.dueDate}.`,
+          idempotency_key: `console-observation-defer-${observationDefer.reviewId}-${observationDefer.version}-${observationDefer.dueDate}`,
+          confirmation: "observation_review_update",
+        },
+      );
+      setObservationDefer(null);
+      setNoteSyncMessage("View review deferred with a durable due date.");
+      observationApi.refresh();
+      workbenchApi.refresh();
+    } catch (cause) {
+      setNoteSyncError(cause instanceof Error ? cause.message : "Observation review could not be deferred.");
+    } finally {
+      setObservationDeferBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -1530,7 +1748,7 @@ export default function DecisionWorkbenchPage() {
   }));
 
   return <ConsoleShell active="decision-workbench" pageActions={<PageActionMenu ariaLabel="Journal Page Actions" items={[
-    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
+    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
     { id: "refresh", label: loading ? "Refreshing…" : "Refresh", description: "Reload durable workflow context", icon: <RefreshCw aria-hidden="true" className={loading ? "spin" : undefined} />, disabled: loading, onSelect: workbenchApi.refresh },
   ]} />}>
     <DataBoundary loading={loading} error={error}>
@@ -1546,6 +1764,8 @@ export default function DecisionWorkbenchPage() {
           <p className="journal-filter-scope">Period, Account, Instrument, and Classification are applied to the durable Behavior cohort. Quality applies to the Cycle browser; Subject selects research context and Review scope.{!periodWindowValid ? " The custom date range is invalid: Start Date must not be after End Date." : ""}</p>
         </section>
 
+        {captureContextError ? <div className="inline-error" role="alert">{captureContextError}</div> : null}
+
         {selected ? <section className="decision-subject-hero journal-subject-context">
             <div><span>{upper(subject.subject_type, "RESEARCH SUBJECT")}</span><h2>{text(subject.title, "Unnamed Research Subject")}</h2><p>{text(subject.summary, "No stable research scope recorded.")}</p></div>
             <div className="decision-subject-meta"><Badge value={upper(subject.status)} /><strong>{shortId(subject.primary_instrument_id)}</strong><small className="mono">{subjectId}</small></div>
@@ -1554,6 +1774,7 @@ export default function DecisionWorkbenchPage() {
           <HorizontalTabs items={journalTabs} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
 
           <section id="journal-panel-overview" role="tabpanel" aria-labelledby="journal-tab-overview" hidden={journalTab !== "overview"} className="journal-panel-stack">
+          <CurrentViewCard subjectId={subjectId} currentView={currentView} subject={subject} loading={currentViewApi.loading} error={currentViewApi.error} />
           <Card title="Data Confidence" action={<Badge value={partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : "AVAILABLE"} />}>
             <div className="journal-confidence-strip">
               <span>Transactions<strong>{transactionsUnavailable ? "—" : allTransactions.length}</strong><small>{transactionWindowLimited ? "Bounded read" : "Durable facts"}</small></span>
@@ -1616,7 +1837,7 @@ export default function DecisionWorkbenchPage() {
           <Card className="decision-next-card" title="Needs Review" action={<Badge value={partialFailures.length ? "INCOMPLETE" : compactNextSteps.length ? `${compactNextSteps.length} GROUPS` : "READY"} />}><StepList items={compactNextSteps.slice(0, 4)} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} /><ErrorNote>{reviewError}</ErrorNote>{decisionMessage ? <div className="inline-success">{decisionMessage}</div> : null}</Card>
 
           {selected ? <div className="decision-stage-grid journal-research-context">
-            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><QuickLink href={`/research#subject-${subjectId}`}>Open Research</QuickLink></div>}>
+            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><QuickLink href={`/research#subject-${subjectId}`}>Open Research</QuickLink></div>}>
               <div className="decision-stage-lead"><Badge value={researchUnavailable || timelineUnavailable ? "INCOMPLETE" : latestDecision ? "DECISION" : primaryThesis ? upper(primaryThesis.status) : "MISSING"} /><strong>{researchUnavailable ? "Research state read unavailable" : timelineUnavailable ? "Decision Timeline unavailable" : text(latestDecision?.title, text(primaryThesis?.title, "No live Thesis"))}</strong><ScenarioDigest value={researchUnavailable || timelineUnavailable ? "Retry the missing durable read before interpreting the decision chain." : text(latestDecision?.summary, text(primaryRevision?.statement, "Create a falsifiable judgment before defining execution intent."))} /></div>
               <div className="workflow-support-line"><span>Trade Plan</span><Badge value={researchUnavailable ? "UNAVAILABLE" : plan ? upper(plan.status) : "MISSING"} /><strong>{plan ? `${shortId(plan.instrument_id)} · v${number(plan.version) || "—"}` : "No Current Plan"}</strong></div>
               <div className="decision-metrics"><span>Recent Decisions<strong>{decisionItems.length}</strong></span><span>Plan Conditions<strong>{listOf<Dict>(plan, "conditions").length}</strong></span><span>Pending Reviews<strong>{pendingCandidates.length + openQuestions.length}</strong></span></div>
@@ -1697,6 +1918,7 @@ export default function DecisionWorkbenchPage() {
               onRefresh={() => { void refreshObservationSources(); }}
               onSelectSubject={selectSubjectContext}
               onReviewDecision={reviewNoteAsDecision}
+              onDeferReview={deferNoteReview}
               analysisBusyId={noteAnalysisBusyId}
               onAnalyzeRevision={(revisionId) => { void analyzeObservation(revisionId); }}
               positionContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allPositions.filter((position) => text(position.instrument_id, "") === noteInstrumentId); const quantity = matches.reduce((total, position) => total + number(position.quantity), 0); return <div><strong>{matches.length ? quantity : "No Position"}</strong><small>{matches.length ? `${matches.length} account position${matches.length === 1 ? "" : "s"}` : "No durable holding in the current snapshot"}</small></div>; }}
@@ -1758,16 +1980,32 @@ export default function DecisionWorkbenchPage() {
           <ErrorNote>{behaviorReviewError}</ErrorNote>
         </ConfirmationDialog>
         <ConfirmationDialog
-          open={decisionOpen}
-          title="Record Decision"
-          description={supersedesDecisionId ? `Review and supersede ${shortId(supersedesDecisionId)} with a new durable Decision. This does not submit or authorize an order.` : "Save the current strategy decision in the existing durable Decision Record. This does not submit or authorize an order."}
-          confirmLabel="Save Decision"
-          busy={decisionBusy}
-          onConfirm={() => { void saveDecision(); }}
-          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); } }}
+          open={observationDefer !== null}
+          title="Defer View Review"
+          description="Keep this exact Observation revision pending and set when it should return to attention. This records no investment Decision."
+          confirmLabel="Defer Review"
+          busy={observationDeferBusy}
+          onConfirm={() => { void confirmObservationDefer(); }}
+          onCancel={() => { if (!observationDeferBusy) setObservationDefer(null); }}
         >
           <div className="journal-capture-form">
-            <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small className="mono">{subjectId || "—"}</small></span><span>Trade Plan<strong>{planLinkReady ? `${planId} · version ${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceRevisionId || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
+            <div className="confirmation-facts journal-capture-wide"><span>View Change<strong>{observationDefer?.title ?? "—"}</strong></span></div>
+            <FormField label="Review Date" required className="journal-capture-wide"><input type="date" required value={observationDefer?.dueDate ?? ""} onChange={(event) => setObservationDefer((current) => current ? { ...current, dueDate: event.target.value } : current)} /></FormField>
+          </div>
+        </ConfirmationDialog>
+        <ConfirmationDialog
+          open={decisionOpen}
+          title={decisionSourceRevisionId ? "Review View Change" : "Record Decision"}
+          description={supersedesDecisionId ? `Review and supersede ${shortId(supersedesDecisionId)} with a new durable Decision. This does not submit or authorize an order.` : decisionSourceRevisionId ? "Compare the imported view with the current confirmed baseline, edit the conclusion, then record one durable Decision. No position, Monitor, or order changes automatically." : "Save the current strategy decision in the existing durable Decision Record. This does not submit or authorize an order."}
+          confirmLabel={decisionSourceRevisionId ? "Confirm & Record Decision" : "Save Decision"}
+          busy={decisionBusy}
+          onConfirm={() => { void saveDecision(); }}
+          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); } }}
+        >
+          <div className="journal-capture-form">
+            <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small>{upper(subject.status, "UNKNOWN")}</small></span><span>Trade Plan<strong>{planLinkReady ? `${shortId(plan?.instrument_id)} · v${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceNote || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
+            {decisionSourceRevisionId ? <Disclosure className="journal-capture-wide" variant="code" title="Exact Durable Provenance"><pre>{JSON.stringify({ subject_id: subjectId, trade_plan_id: planLinkReady ? planId : null, trade_plan_version: planLinkReady ? planVersion : null, note_revision_id: decisionSourceRevisionId }, null, 2)}</pre></Disclosure> : null}
+            {decisionReviewPackage ? <div className="journal-capture-wide notes-review-baseline"><span className="card-kicker">CONFIRMED BASELINE COMPARISON</span><div className="confirmation-facts"><span>What Changed<strong>{text(decisionReviewPackage.material_change_summary, "No change summary available")}</strong></span><span>Current Thesis<strong>{text(asDict(decisionReviewPackage.thesis).statement, "No live Thesis")}</strong></span><span>Prior Decision<strong>{text(asDict(decisionReviewPackage.latest_decision).title, "No prior Decision")}</strong></span><span>Deterministic Checks<strong>{listOf<string>(decisionReviewPackage, "deterministic_flags").map((item) => item.replaceAll("_", " ")).join(" · ") || "No structural conflict detected"}</strong></span></div><small>Model text is a draft. Thesis, Plan, Position, Monitor, and coverage checks above come from durable local records.</small></div> : null}
             <FormField label="Action" required><select required value={decisionAction} onChange={(event) => setDecisionAction(event.target.value as DecisionAction)}>{DECISION_ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></FormField>
             <FormField label="Current Scenario" required><select required value={decisionScenario} onChange={(event) => setDecisionScenario(event.target.value as DecisionScenario)}>{DECISION_SCENARIOS.map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></FormField>
             <FormField label="Reason" required className="journal-capture-wide"><textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>

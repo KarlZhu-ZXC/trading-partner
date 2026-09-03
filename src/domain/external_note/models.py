@@ -7,7 +7,12 @@ from datetime import datetime
 
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
-from domain.external_note.enums import NoteCoverage, NoteSpeakerKind, NoteSyncStatus
+from domain.external_note.enums import (
+    ExternalNoteReviewStatus,
+    NoteCoverage,
+    NoteSpeakerKind,
+    NoteSyncStatus,
+)
 
 
 def _text(value: object, field: str, maximum: int) -> str:
@@ -179,6 +184,79 @@ class ExternalNoteInterpretation:
     payload_json: str
     error_code: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalNoteReview:
+    """One append-only review-state revision for an exact Observation revision."""
+
+    review_id: str
+    note_revision_id: str
+    note_id: str
+    version: int
+    status: ExternalNoteReviewStatus
+    subject_id: str | None
+    decision_id: str | None
+    due_at: datetime | None
+    actor: str
+    authorization_note: str
+    idempotency_key: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.review_id.startswith("external_note_review_"):
+            raise DataContractError("review_id must use external_note_review_ prefix")
+        object.__setattr__(
+            self,
+            "note_revision_id",
+            _text(self.note_revision_id, "note revision id", 128),
+        )
+        object.__setattr__(self, "note_id", _text(self.note_id, "note id", 128))
+        if self.version < 1:
+            raise DataContractError("external note review version must be positive")
+        if not isinstance(self.status, ExternalNoteReviewStatus):
+            raise DataContractError("external note review status is invalid")
+        object.__setattr__(
+            self,
+            "subject_id",
+            _optional_text(self.subject_id, "review subject id", 128),
+        )
+        object.__setattr__(
+            self,
+            "decision_id",
+            _optional_text(self.decision_id, "review decision id", 128),
+        )
+        if self.due_at is not None:
+            require_aware_datetime(self.due_at, field_name="due_at")
+        object.__setattr__(self, "actor", _text(self.actor, "review actor", 100))
+        object.__setattr__(
+            self,
+            "authorization_note",
+            _text(self.authorization_note, "review authorization note", 4_000),
+        )
+        object.__setattr__(
+            self,
+            "idempotency_key",
+            _text(self.idempotency_key, "review idempotency key", 200),
+        )
+        require_aware_datetime(self.created_at, field_name="created_at")
+        terminal = self.status in {
+            ExternalNoteReviewStatus.ADOPTED,
+            ExternalNoteReviewStatus.NO_ACTION,
+        }
+        if terminal and (self.subject_id is None or self.decision_id is None):
+            raise DataContractError(
+                "adopted and no-action reviews require subject_id and decision_id"
+            )
+        if not terminal and self.decision_id is not None:
+            raise DataContractError("pending or deferred review cannot link a decision")
+        if self.status is ExternalNoteReviewStatus.PENDING and self.actor != "system":
+            raise DataContractError("pending review must be materialized by system")
+        if self.status is not ExternalNoteReviewStatus.PENDING and self.actor not in {
+            "user",
+            "external_agent",
+        }:
+            raise DataContractError("review outcome actor must be user or external_agent")
 
 
 @dataclass(frozen=True, slots=True)

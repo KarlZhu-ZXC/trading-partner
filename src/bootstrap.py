@@ -559,6 +559,10 @@ def build_application(
     external_notes = build_external_note_services(
         settings=settings,
         repository=persistence.external_notes,
+        review_repository=persistence.external_note_reviews,
+        research_uow_factory=research_unit_of_work_factory,
+        account_snapshots=account_snapshot_repository,
+        monitors=monitor_repository,
         clock=clock,
         id_generator=id_generator,
         resilience=provider_infrastructure.llm_resilience,
@@ -831,6 +835,8 @@ def build_application(
             review_items=review_item_service,
             attention=attention_query_service,
             external_notes=external_notes.service,
+            external_note_reviews=external_notes.reviews,
+            view_reviews=external_notes.view_reviews,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,

@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.agent_model_provider import AgentModelProvider
 from application.ports.clock import Clock
 from application.ports.external_note_repository import ExternalNoteRepository
+from application.ports.external_note_review_repository import ExternalNoteReviewRepository
 from application.ports.id_generator import IdGenerator
+from application.ports.monitor_repository import MonitorRepository
+from application.services._research_support import UowFactory
 from application.services.external_note_interpretation_service import (
     ExternalNoteInterpretationService,
 )
+from application.services.external_note_review_service import ExternalNoteReviewService
 from application.services.external_note_sync_service import ExternalNoteSyncService
+from application.services.view_review_service import ViewReviewService
 from domain.common.enums import VendorId
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.observation_capture_store import (
@@ -34,6 +40,8 @@ from infrastructure.system.process_file_lock import ProcessFileLock
 @dataclass(frozen=True, slots=True)
 class ExternalNotesBundle:
     service: ExternalNoteSyncService
+    reviews: ExternalNoteReviewService
+    view_reviews: ViewReviewService
     analysis_provider: AgentModelProvider | None
 
 
@@ -41,6 +49,10 @@ def build_external_note_services(
     *,
     settings: AppSettings,
     repository: ExternalNoteRepository,
+    review_repository: ExternalNoteReviewRepository,
+    research_uow_factory: UowFactory,
+    account_snapshots: AccountSnapshotRepository,
+    monitors: MonitorRepository,
     clock: Clock,
     id_generator: IdGenerator,
     resilience: LLMResilienceController,
@@ -81,6 +93,13 @@ def build_external_note_services(
         if settings.moomoo_notes_remote_enabled
         else None
     )
+    review_service = ExternalNoteReviewService(
+        review_repository,
+        repository,
+        research_uow_factory,
+        clock,
+        id_generator,
+    )
     return ExternalNotesBundle(
         service=ExternalNoteSyncService(
             (
@@ -96,6 +115,15 @@ def build_external_note_services(
                 settings.post_market_sync_lock_path.parent / "observations.lock"
             ),
             credential_stores=(credential_store,) if credential_store is not None else (),
+            review_materializer=review_service,
+        ),
+        reviews=review_service,
+        view_reviews=ViewReviewService(
+            repository,
+            review_repository,
+            research_uow_factory,
+            account_snapshots,
+            monitors,
         ),
         analysis_provider=provider,
     )

@@ -7,12 +7,13 @@ description: "Use Trading Partner MCP for verified investment facts, research, p
 
 Use the live MCP schema and repository `AGENTS.md` as the detailed source of truth.
 Keep calls and explanations bounded; never copy the product specification into chat.
-The current repository boundary is implemented Phase 1–4D, 27 public tools, and
-migration head `0070_retire_unlinked_review_items`.
+The current repository boundary is implemented Phase 1–4D, 30 public tools, and
+migration head `0071_external_note_reviews`.
 
 ## Call contract
 
-- Use only the 27 `mcp_vnext_shadow` tools.
+- Use only the currently published `mcp_vnext_shadow` tools; do not assume a frozen
+  tool count. Prefer the intent-first View tools for note-to-judgment review.
 - Grouped tools take one required `request` object. Put `operation` and all variant
   fields inside `request`; never mix fields from another operation.
 - Trust `data` only when `ok=true`. Preserve `as_of`, `fetched_at`, `freshness`,
@@ -28,6 +29,9 @@ migration head `0070_retire_unlinked_review_items`.
   always follows `system_health` with `investment_case_read/attention`; the
   health `attention_summary` is materialized ReviewItems only and cannot skip
   the inbox.
+- View intake: `view_inbox` lists structured pending note changes without private full
+  bodies; `view_review_get` compares one exact revision with durable judgment and
+  portfolio context; `current_view_get` restores the latest exact confirmed view.
 - Research: `investment_case_read`, `investment_case_manage`,
   `research_judgment_get`, `research_judgment_propose`,
   `research_judgment_confirm`, `research_memory_get`, `research_memory_append`.

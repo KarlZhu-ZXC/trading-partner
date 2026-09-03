@@ -2,9 +2,15 @@
 
 ## Product intent
 
-Trading Partner is a long-horizon investment judgment companion. Codex (or another
-agent host) talks to the user; Trading Partner MCP supplies facts, research state,
-and structured tools. The implemented Phase 1–4D boundary covers A-share/US research,
+Trading Partner is a long-horizon investment judgment companion and the durable
+system of record for the owner's reviewed investment views. Moomoo is the owner's
+primary analysis and note-authoring surface; Trading Partner ingests immutable
+Observation revisions, drafts a non-authoritative interpretation, compares it with
+confirmed judgment and portfolio context, and records a Decision or `NO_ACTION` only
+after explicit user review. Codex, Console, or another agent host may conduct that
+review; market data and the remaining structured capabilities support the judgment
+loop rather than define its starting point. The implemented Phase 1–4D boundary
+covers A-share/US research,
 Korea Exchange quote/technical monitoring,
 accounts, Research Subjects, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
@@ -21,9 +27,12 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Current source of truth
 
-- Implemented scope is Phase 1–4D on the single 27-tool `mcp_vnext_shadow` surface.
+- Implemented scope is Phase 1–4D. The current runtime snapshot exposes the single
+  30-tool `mcp_vnext_shadow` surface, but the count is not a future product invariant:
+  tools may be split, grouped, added, deprecated, or removed through an explicit
+  compatibility migration when that improves intent discovery and workflow cohesion.
 - Application version is read from `src/application/__init__.py`; the current database
-  migration head is `0070_retire_unlinked_review_items`.
+  migration head is `0071_external_note_reviews`.
 - This file owns agent-facing invariants. `docs/phases/` owns implemented product
   contracts, `docs/guide/` and `docs/operations/` own current instructions,
   `docs/roadmap/` owns genuinely deferred work, and `docs/releases/` owns historical
@@ -36,8 +45,9 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Implemented boundary
 
-The sole public MCP vNext Shadow surface is exactly **27** tools
-(`mcp_vnext_shadow`). Grouped tools accept one required `request` object. Large
+The current public MCP vNext Shadow surface contains **30** tools
+(`mcp_vnext_shadow`). This is an implemented snapshot, not a target count. Grouped
+tools accept one required `request` object. Large
 groups publish a flattened operation schema to reduce host context, then revalidate
 the exact closed operation variant before dispatch, so fields from another operation
 still fail without invoking a service. Application services remain separate; compact
@@ -129,6 +139,13 @@ non-equity assets. When activated, cover `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and
 another primary Strategy, keep BossMo only as a risk/process check. This discipline
 is model interpretation, not a Provider fact, confirmation, position mutation, or
 order authorization.
+
+- `view_inbox` — bounded durable list of pending/deferred Observation reviews; never
+  returns private full note bodies.
+- `view_review_get` — one exact structured draft plus deterministic comparison with
+  confirmed Thesis/Plan/Decision, durable Position, Monitor, and coverage context.
+- `current_view_get` — the latest formal view derived from an exact adopted
+  Observation review and Decision; it is not another mutable truth store.
 
 - `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)
@@ -525,7 +542,11 @@ ReviewItem through the same Console session/version/idempotency gate.
   providers, synchronizes normalized transactions and source-referenced Daily Equity,
   and then performs the exact
   active-source Watchlist sync followed by one `MOOMOO_NOTE` Observation sync with
-  `analyze=false`. Observation counts/status share the same durable receipt; Cookie,
+  `analyze=true` for newly eligible FULL revisions. Deterministic USER-block comparison
+  materializes review only when normalized USER text changed; duplicate, summary-only,
+  external-speaker-only, and whitespace-only changes do not enqueue work. A model
+  `NO_MATERIAL_CHANGE` label cannot suppress a real USER text change. Observation
+  counts/status share the same durable receipt; Cookie,
   Provider, or note failures remain visible without blocking completed account,
   transaction, Watchlist, or notification work. It persists one terminal
   receipt per market session, and never executes an order.
@@ -911,7 +932,7 @@ technical artifacts. All other writes remain denied unless Agent-D's explicit op
 allowlist creates a Pending Action that the same channel/principal confirms using the
 exact hash, version, expiry, and single-use opaque token. Sync/evaluate, accounts, risk
 policy, and every broker write remain denied. Exact grouped-operation DTO validation and
-the 27-tool MCP inventory remain unchanged. Conversation memory is continuity context,
+the public MCP inventory remain unchanged. Conversation memory is continuity context,
 never a source of current prices, positions, fills, or research state.
 
 Capability discovery distinguishes automatic `read` from `prepare_action`; discovering a

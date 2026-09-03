@@ -57,7 +57,7 @@ RUNTIME_SEED_ALIAS_COUNT = 8
 PHASE1D_MINIMUM_SEED_INSTRUMENT_COUNT = 8
 PHASE1D_MINIMUM_SEED_ALIAS_COUNT = 6
 PHASE1F_SEED_TS = "2026-07-18T00:00:00+00:00"
-_HEADS = frozenset({"0070_retire_unlinked_review_items"})
+_HEADS = frozenset({"0071_external_note_reviews"})
 
 
 def _enable_fk(engine: Engine) -> None:

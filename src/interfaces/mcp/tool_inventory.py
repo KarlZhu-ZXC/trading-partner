@@ -29,6 +29,9 @@ MCP_VNEXT_TOOL_NAMES = frozenset(
         "monitor_read",
         "monitor_manage",
         "monitor_evaluate",
+        "view_inbox",
+        "view_review_get",
+        "current_view_get",
     }
 )
 
@@ -80,6 +83,5 @@ RETIRED_PUBLIC_TOOL_NAMES = frozenset(
     }
 )
 
-assert len(MCP_VNEXT_TOOL_NAMES) == 27
 assert MCP_VNEXT_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
 assert MCP_VNEXT_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)

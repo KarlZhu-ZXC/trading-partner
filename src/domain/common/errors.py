@@ -255,6 +255,21 @@ class ReviewItemVersionConflict(TradingPartnerError):
     default_retryable = False
 
 
+class ExternalNoteReviewNotFound(TradingPartnerError):
+    default_code = "EXTERNAL_NOTE_REVIEW_NOT_FOUND"
+    default_retryable = False
+
+
+class ExternalNoteReviewVersionConflict(TradingPartnerError):
+    default_code = "EXTERNAL_NOTE_REVIEW_VERSION_CONFLICT"
+    default_retryable = False
+
+
+class InvalidExternalNoteReviewTransition(TradingPartnerError):
+    default_code = "INVALID_EXTERNAL_NOTE_REVIEW_TRANSITION"
+    default_retryable = False
+
+
 class ActivityAnnotationNotFound(TradingPartnerError):
     default_code = "ACTIVITY_ANNOTATION_NOT_FOUND"
     default_retryable = False

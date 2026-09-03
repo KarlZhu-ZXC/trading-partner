@@ -28,6 +28,11 @@ class SqlAlchemyExternalNoteRepository:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    def get(self, note_id: str) -> ExternalNoteIdentity | None:
+        with Session(self._engine) as session:
+            row = session.get(ExternalNoteIdentityRow, note_id)
+            return _identity(row) if row is not None else None
+
     def get_by_source_id(self, source: str, external_id: str) -> ExternalNoteIdentity | None:
         with Session(self._engine) as session:
             row = session.scalar(

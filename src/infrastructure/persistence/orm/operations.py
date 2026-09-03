@@ -129,6 +129,70 @@ class ExternalNoteSyncReceiptRow(Base):
     completed_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class ExternalNoteReviewRevisionRow(Base):
+    __tablename__ = "external_note_review_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "note_revision_id",
+            "version",
+            name="uq_external_note_review_revision_version",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_external_note_review_idempotency",
+        ),
+        CheckConstraint("version >= 1", name="ck_external_note_review_version"),
+        CheckConstraint(
+            "status IN ('PENDING','DEFERRED','ADOPTED','NO_ACTION')",
+            name="ck_external_note_review_status",
+        ),
+        CheckConstraint(
+            "((status IN ('ADOPTED','NO_ACTION')) AND subject_id IS NOT NULL "
+            "AND decision_id IS NOT NULL) OR "
+            "((status IN ('PENDING','DEFERRED')) AND decision_id IS NULL)",
+            name="ck_external_note_review_terminal_links",
+        ),
+        Index(
+            "ix_external_note_review_latest",
+            "note_revision_id",
+            "version",
+        ),
+        Index(
+            "ix_external_note_review_subject_status",
+            "subject_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    review_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    note_revision_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("external_note_revisions.note_revision_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    note_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("external_note_identities.note_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("investment_cases.case_id", ondelete="RESTRICT"),
+    )
+    decision_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("decision_records.decision_id", ondelete="RESTRICT"),
+    )
+    due_at: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    authorization_note: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class IndustryMetricObservationRow(Base):
     __tablename__ = "industry_metric_observations"
     __table_args__ = (

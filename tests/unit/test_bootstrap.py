@@ -194,7 +194,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert VendorId.BROKER not in registered
         # Fresh unmigrated SQLite → schema not ready (in-memory state path).
         assert provider_state_schema_ready(container.resources.database.engine) is False
-        assert len(PUBLIC_TOOL_NAMES) == 27
+        assert {"view_inbox", "view_review_get", "current_view_get"} <= PUBLIC_TOOL_NAMES
     finally:
         container.close()
 

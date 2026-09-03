@@ -503,6 +503,9 @@ function ResearchSubjectDetail({
   ));
   const liveTheses = theses.filter((thesis) => ["active", "strengthened", "weakened"].includes(text(thesis.status, "").toLowerCase()));
   const continuitySignals = [
+    ...(String(researchSubject.status).toLowerCase() === "draft"
+      ? [{ key: "draft-lifecycle", severity: "ACTION", title: "Research is not tracking yet", detail: "Start Tracking before making a Thesis or Trade Plan live. Draft research and Decisions remain available." }]
+      : []),
     ...(String(researchSubject.status).toLowerCase() === "active" && liveTheses.length === 0
       ? [{ key: "live-thesis", severity: "ACTION", title: "No live Thesis", detail: "Tracking is active, but no current falsifiable judgment is live." }]
       : []),
@@ -985,7 +988,11 @@ export default function ResearchPage() {
       const response = await write("investment_case_manage", { operation: "create", case_type: subjectDraft.subjectType, title, summary, primary_instrument_id: subjectDraft.instrument.trim() || null, topic_tags: splitList(subjectDraft.tags), linked_case_ids: splitList(subjectDraft.linkedSubjectIds), confirmed_by: "user", idempotency_key: idempotencyKey("subject-create") }, "investment_case_manage");
       const created = envelopeData<Dict>(response);
       const createdId = created?.case_id;
-      if (typeof createdId === "string") setSelectedSubjectId(createdId);
+      if (typeof createdId === "string") {
+        setQuery("");
+        setStatus("DRAFT");
+        setSelectedSubjectId(createdId);
+      }
       setSubjectEditor(false);
       setSubjectEditorError(null);
       setSubjectDraft(EMPTY_SUBJECT_DRAFT);

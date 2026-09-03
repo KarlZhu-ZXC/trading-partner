@@ -160,7 +160,6 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert names == EXPECTED_TOOLS
-        assert len(names) == 27
         # No old aliases or internal Evidence writes.
         assert "open_question_create" not in names
         assert "thesis_revision_reject" not in names

@@ -90,12 +90,32 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("新闻", ("us_company_get", "live_news")),
     (
         "审阅",
-        ("decision_workbench_review_queue", "open_items", "summary", "subject"),
+        (
+            "view_inbox",
+            "view_review_get",
+            "current_view_get",
+            "decision_workbench_review_queue",
+            "open_items",
+            "summary",
+            "subject",
+        ),
     ),
     (
         "复核",
-        ("decision_workbench_review_queue", "open_items", "summary", "subject"),
+        (
+            "view_inbox",
+            "view_review_get",
+            "current_view_get",
+            "decision_workbench_review_queue",
+            "open_items",
+            "summary",
+            "subject",
+        ),
     ),
+    ("笔记", ("view_inbox", "view_review_get", "current_view_get")),
+    ("观点", ("view_inbox", "view_review_get", "current_view_get")),
+    ("当前看法", ("current_view_get",)),
+    ("当前观点", ("current_view_get",)),
     (
         "工作台",
         ("decision_workbench_review_queue", "open_items", "summary", "subject"),
@@ -484,7 +504,7 @@ class AgentCapabilityGateway(AgentToolGateway):
             ]
             if self._review_item_service is not None:
                 # The Review Queue is a Console-only durable capability.  It
-                # intentionally never enters the public 27-tool registry.
+                # intentionally never enters the public MCP registry.
                 review_candidates = [
                     self._review_descriptor(operation, mode="read")
                     for operation in _REVIEW_QUEUE_OPERATIONS

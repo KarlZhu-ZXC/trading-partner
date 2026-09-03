@@ -12,6 +12,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from mcp.server.fastmcp.exceptions import ToolError
 
+from application.dto.view_review import ViewInboxDTO
 from application.services.attention_projection import next_read_for
 from domain.attention.enums import AttentionSourceType
 from interfaces.mcp.server import (
@@ -163,7 +164,6 @@ async def test_compact_is_the_only_public_surface() -> None:
 
     assert PUBLIC_TOOL_NAMES == MCP_VNEXT_TOOL_NAMES
     assert compact_names == MCP_VNEXT_TOOL_NAMES
-    assert len(compact_names) == 27
 
 
 @pytest.mark.asyncio
@@ -173,6 +173,9 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
     assert [tool.name for tool in tools] == [
         "system_health",
         "instrument_resolve",
+        "view_inbox",
+        "view_review_get",
+        "current_view_get",
         "investment_case_read",
         "investment_case_manage",
         "research_judgment_get",
@@ -200,8 +203,30 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_evaluate",
     ]
     # Exact inventory bytes freeze the current compact registration output.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 27_680
-    assert _wire_size(tools) == 37_925
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_015
+    assert _wire_size(tools) == 39_183
+
+
+@pytest.mark.asyncio
+async def test_intent_first_view_tools_are_bounded_durable_reads() -> None:
+    container = _container()
+    container.context.id_generator.new.return_value = "req_view_inbox"
+    container.context.clock.now.return_value = datetime(2026, 9, 3, 12, tzinfo=UTC)
+    container.context.secret_redactor.redact_text.side_effect = lambda value: value
+    container.services.view_reviews.inbox.return_value = ViewInboxDTO(
+        items=(),
+        returned_count=0,
+        has_more=False,
+    )
+    registry = create_capability_registry(container)
+
+    result = await registry.invoke("view_inbox", {"limit": 10})
+
+    assert result["ok"] is True
+    assert result["data"] == {"items": [], "returned_count": 0, "has_more": False}
+    descriptor = registry.find_operation("view_inbox", None)
+    assert descriptor.policy is READ_DURABLE
+    assert descriptor.arguments_schema["properties"]["limit"]["maximum"] == 100
 
 
 @pytest.mark.asyncio
@@ -685,8 +710,8 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
             ],
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
-        "public_tool_count": 27,
-        "surface_schema_version": "mcp-vnext-shadow-v2",
+        "public_tool_count": len(MCP_VNEXT_TOOL_NAMES),
+        "surface_schema_version": "mcp-vnext-shadow-v3",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",
@@ -902,7 +927,7 @@ async def test_trade_retro_review_routes_through_existing_grouped_tool() -> None
     assert review_input.run_id == request["run_id"]
     assert review_input.expected_version == 0
     assert review_input.finding_reviews[0].finding_key == f"finding_{'a' * 64}"
-    assert len(MCP_VNEXT_TOOL_NAMES) == 27
+    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -950,7 +975,7 @@ async def test_judgment_scorecard_run_and_history_route_without_new_public_tools
     assert history_input.thesis_id is None
     assert history_input.limit == 12
     assert history_input.offset == 2
-    assert len(MCP_VNEXT_TOOL_NAMES) == 27
+    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -1031,7 +1056,7 @@ async def test_catalyst_agenda_read_and_confirmed_append_reuse_memory_tools() ->
     assert manage_input.payload.evidence_id == "evidence_1"
     actor_context = container.services.catalyst_agenda.manage.call_args.kwargs["actor_context"]
     assert actor_context is not None
-    assert len(MCP_VNEXT_TOOL_NAMES) == 27
+    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio

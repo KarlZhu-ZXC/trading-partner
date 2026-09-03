@@ -131,6 +131,7 @@ _PHASE4_TABLES = {
     "external_note_revisions",
     "external_note_interpretations",
     "external_note_sync_receipts",
+    "external_note_review_revisions",
 }
 
 _PHASE3_TABLES = {
@@ -150,7 +151,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0070_retire_unlinked_review_items"})
+_HEAD_REVISIONS = frozenset({"0071_external_note_reviews"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -338,6 +339,83 @@ def test_post_market_observation_migration_preserves_historical_receipts(
                 text("SELECT status FROM post_market_sync_runs WHERE run_id='run_legacy'")
             ).scalar_one()
             == "SUCCEEDED"
+        )
+    engine.dispose()
+
+
+def test_external_note_review_migration_backfills_confirmed_decision(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'external-note-reviews.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0070_retire_unlinked_review_items")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO investment_cases("
+                "case_id,case_type,title,summary,status,topic_tags_json,created_at,"
+                "updated_at,created_by,linked_case_ids_json,evidence_ids_json,"
+                "report_ids_json,event_ids_json,decision_ids_json,schema_version) VALUES("
+                "'case_review_migration','company','NVDA','NVDA research','active','[]',"
+                "'2026-09-01T00:00:00+00:00','2026-09-01T00:00:00+00:00','user',"
+                "'[]','[]','[]','[]','[]',1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO external_note_identities("
+                "note_id,source,external_id,title,created_at,last_seen_at) VALUES("
+                "'external_note_migration','MOOMOO_NOTE','nvda-migration','NVDA',"
+                "'2026-09-01T00:00:00+00:00','2026-09-01T00:00:00+00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO external_note_revisions("
+                "note_revision_id,note_id,version,content_sha256,source_revision_key,"
+                "title,summary,full_body,coverage,source_timestamp,observed_at,visibility,"
+                "related_stock_ids_json,related_codes_json,blocks_json) VALUES("
+                "'external_note_revision_migration','external_note_migration',1,:hash,"
+                "'source:migration','NVDA','Updated view','Updated view','FULL',"
+                "'2026-09-01T00:00:00+00:00','2026-09-01T00:00:00+00:00','SELF',"
+                "'[]','[]','[]')"
+            ),
+            {"hash": "a" * 64},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO decision_records("
+                "decision_id,case_id,decision_type,title,rationale,decided_at,recorded_at,"
+                "decided_by,confirmation_mode,thesis_revision_ids_json,evidence_ids_json,"
+                "report_ids_json,external_note_revision_id,idempotency_key,"
+                "idempotency_payload_sha256,schema_version) VALUES("
+                "'decision_review_migration','case_review_migration','no_action',"
+                "'Hold for evidence','No action until confirmation',"
+                "'2026-09-01T00:00:00+00:00','2026-09-01T00:00:00+00:00','user',"
+                "'normal','[]','[]','[]','external_note_revision_migration',"
+                "'decision-review-migration',:hash,1)"
+            ),
+            {"hash": "b" * 64},
+        )
+
+    command.upgrade(cfg, "0071_external_note_reviews")
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status,subject_id,decision_id,note_revision_id,version "
+                "FROM external_note_review_revisions"
+            )
+        ).one()
+        assert tuple(row) == (
+            "NO_ACTION",
+            "case_review_migration",
+            "decision_review_migration",
+            "external_note_revision_migration",
+            1,
         )
     engine.dispose()
 
