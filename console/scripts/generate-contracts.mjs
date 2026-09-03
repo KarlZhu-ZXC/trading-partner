@@ -18,7 +18,11 @@ const exported = spawnSync(
   { cwd: projectRoot, encoding: "utf8" },
 );
 if (exported.status !== 0) {
-  process.stderr.write(exported.stderr || "Contract schema export failed.\n");
+  process.stderr.write(
+    exported.stderr
+      || exported.error?.message
+      || "Contract schema export failed.\n",
+  );
   process.exit(exported.status || 1);
 }
 const schemas = JSON.parse(exported.stdout);
