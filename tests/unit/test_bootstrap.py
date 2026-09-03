@@ -97,9 +97,7 @@ def test_enabled_account_provider_order_filters_optional_unselected_sources() ->
         VendorId.SCHWAB,
         VendorId.MOOMOO,
     )
-    assert enabled_account_provider_order(candidates, ("MANUAL_CSV",)) == (
-        VendorId.MANUAL_CSV,
-    )
+    assert enabled_account_provider_order(candidates, ("MANUAL_CSV",)) == (VendorId.MANUAL_CSV,)
 
 
 class _FakeTransport:
@@ -194,7 +192,7 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert VendorId.BROKER not in registered
         # Fresh unmigrated SQLite → schema not ready (in-memory state path).
         assert provider_state_schema_ready(container.resources.database.engine) is False
-        assert {"view_inbox", "view_review_get", "current_view_get"} <= PUBLIC_TOOL_NAMES
+        assert "view_get" in PUBLIC_TOOL_NAMES
     finally:
         container.close()
 
@@ -409,9 +407,7 @@ def test_e5b_owned_transport_is_httpx_and_construction_is_offline(
 def test_general_proxy_is_shared_by_cross_asset_providers(
     test_settings: AppSettings,
 ) -> None:
-    settings = test_settings.model_copy(
-        update={"provider_proxy_url": "http://127.0.0.1:7891"}
-    )
+    settings = test_settings.model_copy(update={"provider_proxy_url": "http://127.0.0.1:7891"})
     container = build_application(settings)
     try:
         cross_asset = container.resources.cross_asset_transport

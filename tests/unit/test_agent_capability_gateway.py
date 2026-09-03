@@ -26,9 +26,7 @@ from interfaces.mcp.tools.compact import (
 async def _health(*, value: int = 1) -> dict[str, Any]:
     return {
         "request_id": "req_agent",
-        "sources": [
-            {"name": "durable_store", "role": "PRIMARY", "url": "https://secret.example"}
-        ],
+        "sources": [{"name": "durable_store", "role": "PRIMARY", "url": "https://secret.example"}],
         "data": {"value": value},
     }
 
@@ -115,8 +113,7 @@ def _registry() -> CompactCapabilityRegistry:
 
 def _view_registry() -> CompactCapabilityRegistry:
     registry = CompactCapabilityRegistry()
-    for name in ("view_inbox", "view_review_get", "current_view_get"):
-        registry.add_capability(_health, name=name, policy=READ_DURABLE)
+    registry.add_capability(_health, name="view_get", policy=READ_DURABLE)
     return registry
 
 
@@ -145,9 +142,7 @@ def _attention_registry() -> CompactCapabilityRegistry:
         registry,
         name="investment_case_read",
         description="Read Research Subjects or the cross-domain decision inbox.",
-        variants=(
-            _spec("attention", _attention, ("case_id", "limit")),
-        ),
+        variants=(_spec("attention", _attention, ("case_id", "limit")),),
         policy=READ_DURABLE,
     )
     return registry
@@ -167,8 +162,7 @@ def test_private_agent_capabilities_are_registry_metadata_only() -> None:
     grouped = [item for item in descriptors if item.capability == "grouped_read"]
     assert {item.operation for item in grouped} == {"alpha", "beta"}
     assert all(
-        item.schema["properties"]["operation"]["const"] in {"alpha", "beta"}
-        for item in grouped
+        item.schema["properties"]["operation"]["const"] in {"alpha", "beta"} for item in grouped
     )
 
 
@@ -195,9 +189,7 @@ def test_prepare_action_search_returns_only_injected_allowlist_schema() -> None:
         action_allowlist=(("action_manage", "add"),),
     )
     descriptors = gateway.search("add", mode="prepare_action", limit=8)
-    assert [(item.capability, item.operation) for item in descriptors] == [
-        ("action_manage", "add")
-    ]
+    assert [(item.capability, item.operation) for item in descriptors] == [("action_manage", "add")]
     assert descriptors[0].auto_allowed is False
     assert gateway.search("add", mode="read", limit=8) == ()
 
@@ -239,9 +231,7 @@ async def test_proposal_search_and_invoke_skip_only_the_redundant_outer_gate() -
 
 def test_chinese_alias_routes_to_matching_capability() -> None:
     gateway = AgentCapabilityGateway(_registry())
-    assert [item.capability for item in gateway.search("系统健康", limit=3)] == [
-        "system_health"
-    ]
+    assert [item.capability for item in gateway.search("系统健康", limit=3)] == ["system_health"]
 
 
 @pytest.mark.parametrize(
@@ -260,7 +250,7 @@ def test_attention_aliases_route_to_cross_domain_inbox(query: str) -> None:
 def test_view_aliases_prioritize_the_judgment_intake_reads(query: str) -> None:
     gateway = AgentCapabilityGateway(_view_registry())
     capabilities = {item.capability for item in gateway.search(query, limit=8)}
-    assert capabilities == {"view_inbox", "view_review_get", "current_view_get"}
+    assert capabilities == {"view_get"}
 
 
 @pytest.mark.asyncio
@@ -321,9 +311,7 @@ def test_result_compaction_preserves_typed_errors_without_exception_text() -> No
             "error_codes": ["PROVIDER_TIMEOUT_ERROR"],
         }
     )
-    assert compacted["errors"] == [
-        {"code": "PROVIDER_TIMEOUT_ERROR", "retryable": True}
-    ]
+    assert compacted["errors"] == [{"code": "PROVIDER_TIMEOUT_ERROR", "retryable": True}]
     assert compacted["error_codes"] == ["PROVIDER_TIMEOUT_ERROR"]
     assert "secret provider exception" not in str(compacted)
 
@@ -371,9 +359,14 @@ def test_large_quote_batch_compaction_preserves_latest_price_and_baseline() -> N
 
     assert compacted["_truncated"] is True
     assert compacted["compaction"] == "quote_batch_v1"
-    assert len(
-        json.dumps(compacted, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ) <= 16 * 1024
+    assert (
+        len(
+            json.dumps(
+                compacted, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+        )
+        <= 16 * 1024
+    )
     assert len(compacted["data"]["items"]) == 50
     assert compacted["data"]["previous_close_basis_by_asset"] == {
         "equity_etf_index": "previous_completed_regular_session_close",
@@ -460,5 +453,5 @@ def test_agent_prompt_binds_previous_close_semantics() -> None:
     assert "previous_completed_daily_bar_close" in AGENT_SYSTEM_PROMPT
     assert "前一完整日线收盘" in AGENT_SYSTEM_PROMPT
     assert "不得称常规盘前收或“结算价”" in AGENT_SYSTEM_PROMPT
-    assert "view_inbox" in AGENT_SYSTEM_PROMPT
+    assert "view_get/inbox" in AGENT_SYSTEM_PROMPT
     assert "不要把行情查询作为观点复核的默认起点" in AGENT_SYSTEM_PROMPT

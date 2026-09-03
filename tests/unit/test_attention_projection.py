@@ -99,8 +99,8 @@ def test_next_read_rejects_write_operations() -> None:
         source_ref="external_note_revision_1",
         subject_id="case_1",
     ) == AttentionNextReadDTO(
-        tool="view_review_get",
-        request={"note_revision_id": "external_note_revision_1"},
+        tool="view_get",
+        request={"operation": "review", "note_revision_id": "external_note_revision_1"},
     )
 
 

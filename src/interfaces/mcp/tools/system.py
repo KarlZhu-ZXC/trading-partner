@@ -14,7 +14,7 @@ def build_system_adapters(
     *,
     surface_profile: str,
     public_tool_count: int,
-    surface_schema_version: str = "mcp-vnext-shadow-v4",
+    surface_schema_version: str = "mcp-vnext-shadow-v5",
 ) -> SimpleNamespace:
     """Build the compact system adapter."""
 
@@ -76,9 +76,7 @@ def build_system_adapters(
                 )
                 try:
                     data["attention_summary"] = (
-                        container.services.attention.health_summary().model_dump(
-                            mode="json"
-                        )
+                        container.services.attention.health_summary().model_dump(mode="json")
                     )
                 except Exception:  # noqa: BLE001 — health remains available
                     limitations = []

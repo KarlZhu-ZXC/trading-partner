@@ -766,9 +766,7 @@ def _register_dispatch_tool(
             _spec: VariantSpec = spec,
             _model: type[BaseModel] = model,
         ) -> Any:
-            return await _invoke_variant(
-                _spec, _model, arguments, capability=name
-            )
+            return await _invoke_variant(_spec, _model, arguments, capability=name)
 
         def validate_variant(
             arguments: dict[str, Any],
@@ -888,9 +886,7 @@ def _register_flat_dispatch_tool(
             _spec: VariantSpec = spec,
             _model: type[BaseModel] = model,
         ) -> Any:
-            return await _invoke_variant(
-                _spec, _model, arguments, capability=name
-            )
+            return await _invoke_variant(_spec, _model, arguments, capability=name)
 
         def validate_variant(
             arguments: dict[str, Any],
@@ -1132,10 +1128,7 @@ def _replace_exact_refs(value: Any, reference: str, replacement: dict[str, Any])
         return value
     if value == {"$ref": reference}:
         return deepcopy(replacement)
-    return {
-        key: _replace_exact_refs(item, reference, replacement)
-        for key, item in value.items()
-    }
+    return {key: _replace_exact_refs(item, reference, replacement) for key, item in value.items()}
 
 
 def _inline_profitable_definitions(schema: dict[str, Any]) -> dict[str, Any]:
@@ -1374,7 +1367,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="mcp_vnext_shadow",
             public_tool_count=len(MCP_VNEXT_TOOL_NAMES),
-            surface_schema_version="mcp-vnext-shadow-v4",
+            surface_schema_version="mcp-vnext-shadow-v5",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -1404,20 +1397,31 @@ def create_compact_capability_registry(
         adapter=adapters.instrument.instrument_resolve,
         policy=CACHE_DISCOVERY,
     )
-    _copy_handler(registry, adapter=adapters.view_review.view_inbox, policy=READ_DURABLE)
-    _copy_handler(
+    _register_dispatch_tool(
         registry,
-        adapter=adapters.view_review.view_review_get,
-        policy=READ_DURABLE,
-    )
-    _copy_handler(
-        registry,
-        adapter=adapters.view_review.view_review_run,
-        policy=EVALUATE,
-    )
-    _copy_handler(
-        registry,
-        adapter=adapters.view_review.current_view_get,
+        name="view_get",
+        description=(
+            "Read the Moomoo-first judgment intake: list pending note changes, compare "
+            "one exact revision with durable context, or restore a Subject's latest "
+            "confirmed view. Never returns private full note bodies or calls a Provider."
+        ),
+        variants=(
+            _spec(
+                "inbox",
+                adapters.view_review.view_inbox,
+                _all_fields(adapters.view_review.view_inbox),
+            ),
+            _spec(
+                "review",
+                adapters.view_review.view_review_get,
+                _all_fields(adapters.view_review.view_review_get),
+            ),
+            _spec(
+                "current",
+                adapters.view_review.current_view_get,
+                _all_fields(adapters.view_review.current_view_get),
+            ),
+        ),
         policy=READ_DURABLE,
     )
 
@@ -1699,6 +1703,7 @@ def create_compact_capability_registry(
         registry,
         adapters.portfolio,
         adapters.workflows,
+        adapters.view_review,
     )
     _register_watchlist_risk_monitoring(
         registry,

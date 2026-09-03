@@ -1,7 +1,7 @@
 # Trading Partner Local Console
 
 本地操作型前端，展示并操作 Trading Partner 的持久化事实、Monitor、账户、自选、
-31 个 MCP vNext 能力和确定性运维服务。可选 Shared Agent 以可折叠右侧栏常驻在各工作台旁；
+28 个 MCP vNext 能力和确定性运维服务。可选 Shared Agent 以可折叠右侧栏常驻在各工作台旁；
 它默认关闭且不执行订单。只有用户点击同步或
 运行按钮时才访问外部 Provider。若某个 Monitor 已显式启用复合判断策略，运行该 Monitor
 可以调用配置好的服务端 LLM；模型没有状态写入或订单端口。其他写入仍受原 MCP 确认、actor

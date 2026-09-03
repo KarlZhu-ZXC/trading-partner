@@ -403,7 +403,7 @@ the user explicitly requests a real add/remove.
 Phase 2 remains accepted only while all of the following are proven:
 
 - Watchlist, Risk, Monitoring, and Technical operations remain inside the current
-  31-tool public surface;
+  28-tool public surface;
 - Moomoo and Manual CSV satisfy the same source contract;
 - database survives restart and preserves inactive membership history;
 - refresh is atomic and stale fallback is explicit;
@@ -725,7 +725,7 @@ signals, strategy scoring, parameter optimization, backtests, and orders remain
 outside Phase 2D.
 
 Current acceptance covers standard indicators, disclosed structure output, PNG
-rendering, MCP registration, bootstrap wiring, and the current 31-tool inventory.
+rendering, MCP registration, bootstrap wiring, and the current 28-tool inventory.
 
 ## 16. Outside the Phase 2 boundary
 
