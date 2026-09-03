@@ -63,6 +63,9 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
   not contact brokers.
 - Native-currency activity coverage, FIFO/broker-basis performance summaries,
   exposure analysis, hypothetical additions, and deterministic Risk Engine checks.
+- Journal decision records, deterministic Trade Cycles, Daily Equity, native-currency
+  TWR/MWR/drawdown, behavior cohorts, immutable reviews, and provider-neutral external
+  Observation revisions with explicit Decision adoption.
 - Immutable Trade Retro: capture a pre-period Trade Plan/Decision snapshot, compare
   it with durable broker transactions, persist deterministic discipline findings,
   optionally add a bounded Chinese narrative, append version-checked human review
@@ -75,7 +78,7 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 - One hourly local scheduler for due interval and A-share/US/KR post-market groups.
 - Loopback-only Console for Research, Portfolio, Monitoring, Operations, Data
   Quality, and the compact capability workbench. Its disabled-by-default shared
-  Agent Runtime uses three private capability tools and does not change the public
+  Agent Runtime uses five private capability tools and does not change the public
   MCP count; an explicit Monitor run may separately call the configured server-side
   model only for an enabled composite judgment policy.
 - Manual QuantConnect Free bridge: prepare hashed LEAN code, user runs it on the
@@ -84,15 +87,13 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 The authoritative detail is the
 [MCP capability boundary](../guide/mcp-capability-boundary.md), not this summary.
 
-## Active roadmap
+## Current maintenance roadmap
 
 ### R1 — Reliability and evidence quality
 
-This is now the active product phase. New capability breadth is frozen while the
-existing product is consolidated around stability, usability, and cross-feature
-decision-loop closure. The implementation sequence and measurable acceptance
-criteria live in the
-[Reliability, Usability, and Decision-Loop plan](../plans/reliability-usability-and-closure-plan.md).
+New capability breadth is frozen while the implemented Phase 1–4D product is
+consolidated around stability, usability, data quality, and cross-feature closure.
+Completed implementation plans are not retained as parallel specifications.
 
 Continuous requirements remain:
 
@@ -102,7 +103,7 @@ Continuous requirements remain:
 - reduce schema and test duplication when coverage is already represented elsewhere;
 - keep public documentation synchronized with the 27-tool runtime contract.
 
-### R2 — Catalyst Agenda and judgment calibration（已完成）
+### R2 — Preserve Catalyst and judgment calibration
 
 The implemented durable future-event agenda separates scheduled/expected events from
 already observed Research Events. It provides coverage and date certainty,
@@ -111,8 +112,9 @@ retains revisions when dates move, and never infers that “no returned event”
 Judgment Scorecard S1 calibrates one exact Thesis revision against those facts without
 creating an opaque aggregate score.
 
-See the
-[Catalyst Agenda plan](../plans/catalyst-agenda-and-scorecard-plan.md).
+The authoritative contracts now live in
+[Phase 4](../phases/phase4.md) and the
+[MCP capability boundary](../guide/mcp-capability-boundary.md).
 
 ### R3 — Historical validation only when value is proven
 
@@ -121,7 +123,7 @@ historical databases, experiment orchestration, walk-forward testing, and bias
 analysis are optional future investments—not assumed next steps. They should be
 added only after repeated manual validations demonstrate real product value.
 
-### R4 — Phase 4 Trading Journal and behavior loop（4A reuse-first 已启动）
+### R4 — Operate the completed Phase 4 Journal loop
 
 Phase 4 不扩展市场广度，而是把现有 Research、Trade Plan、Broker activity、Portfolio
 Performance、Trade Retro 和 Review Queue 组织成一条可追溯的个人操作与学习主线：
@@ -135,15 +137,15 @@ Decision / NO_ACTION
   -> Next Decision Discipline
 ```
 
-产品把现有 Decision Workbench 原地改造为顶层 Console `Journal`，迁移期保留 Portfolio、
-Trade Retro 和 Research 专业路由。Journal 不建立第二套交易事实；它引用 durable source，新增 append-only
+产品已把 `/decision-workbench` 兼容路由原地改造为顶层 Console `Journal`，并保留 Portfolio、
+Trade Retro 和 Research 专业路由。Journal 不建立第二套交易事实；它引用 durable source、append-only
 annotation、确定性 Trade Cycle、日频账户估值、可信收益率和行为 cohort。`strategy_v1` 的
 `UPSIDE`、`SIDEWAYS`、`PULLBACK`、`INVALIDATION` 与实际动作进入同一决策快照，
 `NO_ACTION` 也是正式记录。
 
-实施顺序固定为 4A Capture、4B Trade Cycle、4C Performance、4D Behavior Review。公共 MCP
-保持 27 个 grouped tools，订单确认和 SGOV 唯一 unattended exception 不变。完整系统、Console、
-迁移和验收合同见 [Phase 4 specification](../phases/phase4.md)。
+4A Capture、4B Trade Cycle、4C Performance、4D Behavior Review 均已实现。后续工作只改善
+覆盖、性能、可观测性和使用闭环；公共 MCP 保持 27 个 grouped tools，订单确认和 SGOV
+唯一 unattended exception 不变。完整合同见 [Phase 4 specification](../phases/phase4.md)。
 
 ## Deferred integrations
 
@@ -182,5 +184,5 @@ New roadmap work should start only when all relevant gates hold:
 - the capability fits an existing grouped tool or justifies changing the compact
   public surface;
 - focused tests cover the new invariant without recreating broad provider matrices;
-- README, capability guide, phase spec, active plan, release note, and Skill are
-  updated in the same change.
+- README, `AGENTS.md`, capability guide, relevant Phase spec, release note, roadmap,
+  and Skill are updated in the same change.

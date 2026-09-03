@@ -400,9 +400,10 @@ the user explicitly requests a real add/remove.
 
 ## 12. Acceptance
 
-Phase 2 is complete only when all of the following are proven:
+Phase 2 remains accepted only while all of the following are proven:
 
-- exact Watchlist Hub delivery surface was 58 tools before Phase 2B;
+- Watchlist, Risk, Monitoring, and Technical operations remain inside the current
+  27 grouped-tool public surface;
 - Moomoo and Manual CSV satisfy the same source contract;
 - database survives restart and preserves inactive membership history;
 - refresh is atomic and stale fallback is explicit;
@@ -414,35 +415,9 @@ Phase 2 is complete only when all of the following are proven:
   guide, roadmap, and docs index agree;
 - Ruff, mypy, focused tests, full pytest, Alembic heads, package build, and a fresh
   installed-wheel smoke pass;
-- real OpenD group/member read succeeds without raw SDK logs or secret output.
+- real OpenD group/member reads succeed without raw SDK logs or secret output.
 
-Historical Watchlist Hub closeout evidence (before the three Phase 2B tools):
-
-- exact runtime registration: 58 tools, including all four `watchlist_*` tools;
-- Ruff passed across the repository; mypy passed across 320 source files;
-- full test suite: 1,750 tests passed in 29.44 seconds after the 2026-07-19
-  test-asset slimming passes;
-  duplicate DTO/settings matrices, Provider Router and Vendor Chain cases,
-  provider-cache/cache-codec validation matrices, Research Memory model/repository
-  matrices, historical frozen-path assertions, and repeated MCP tool-list checks
-  were consolidated without removing representative stdio, migration, FTS,
-  append-only, routing, or secret-redaction behavior; the Moomoo mutation unit
-  test keeps its post-write verification while using a test-only rate-limit window;
-- Phase 2A Watchlist closeout used `0010_post_market_sync_runs`, after
-  `0011_reddit_rss_resilience` and `0009_phase2_watchlist_hub`; clean-database
-  migration and migration round-trip tests passed;
-- sdist and wheel built successfully; a fresh Python 3.13 environment installed
-  the wheel and registered all 58 tools (`wheel_smoke_ok:58`);
-- real OpenD read returned 24 groups, found `Favorites`, and persisted its member
-  without executing a mutation; the unsupported member remained visible with no
-  fabricated Instrument;
-- injected persistence failure after a successful upstream write produced a
-  durable `PARTIAL` mutation with `PERSISTENCE_ERROR`;
-- integration tests proved restart recovery, stable membership IDs, inactive
-  history, research metadata linkage, and no deletion of the separate Research
-  WatchlistItem/Research Subject rows.
-
-## 13. Phase 2B — Portfolio Risk Engine v1
+## 13. Phase 2B — Portfolio Risk Engine v2
 
 Phase 2B pulls the deterministic account/portfolio risk gate forward so Codex can
 challenge a proposed addition before the later strategy, backtest, or monitoring
@@ -490,18 +465,9 @@ idempotency, representative pass/breach/incomplete evaluation, MCP inventory and
 schemas, clean migration, Ruff, and mypy. It does not recreate the old exhaustive
 provider/routing matrix.
 
-Completion evidence on 2026-07-20:
-
-- runtime inventory contains exactly 61 tools, including all three `risk_*` tools;
-- clean SQLite migration and upgrade/downgrade/upgrade coverage reaches
-  `0012_phase2b_risk_engine` and seeds the disclosed default policy;
-- repository-wide Ruff and mypy passed across 333 source files;
-- 54 focused MCP, bootstrap, migration, delivery-audit, and risk tests passed in
-  3.89 seconds; the four new risk tests cover policy version/idempotency,
-  breach, incomplete missing-price-time behavior, and MCP delegation;
-- the project database was migrated without rebuilding account or Watchlist data;
-  a live durable-snapshot smoke returned a typed `BREACH`, 38 rule results,
-  `execution_effect=false`, source/data-quality warnings, and no tool error.
+Risk acceptance covers policy version/idempotency, representative pass/breach/
+incomplete evaluation, pending-order exposure, source/data-quality warnings, and
+`execution_effect=false` without rebuilding account or Watchlist data.
 
 ## 14. Phase 2C — Monitoring Hub
 
@@ -710,19 +676,10 @@ as a secret-safe structured diagnostic containing only Provider, stage, typed er
 HTTP status, attempt, and retryability. The Console renders that chain directly;
 URLs, proxy values, headers, bodies, and exception text are never persisted.
 
-Current acceptance evidence (2026-07-29):
-
-- the current public surface is 27 tools; `monitor_read` has four closed
-  operations and the current surface schema is `compact-v19`;
-- migrations `0023_monitoring_hub_v3`, `0024_monitor_notification_outbox`,
-  `0028_provider_route_history`, `0030_generic_notification_outbox`, and
-  `0036_monitor_provider_diagnostics` pass
-  clean upgrade/downgrade/upgrade checks;
-- focused tests cover transition deduplication, immutable observations, whole-hour
-  schedule validation, due/skip behavior, compact schema, and launchd arguments;
-- a live GC=F 4-hour interval smoke persisted five observations, and an immediate
-  second dispatcher call returned `NO_DUE_MONITORS` without another quote request;
-- repository-wide Ruff and mypy pass.
+Current acceptance covers transition deduplication, immutable observations,
+whole-hour scheduling, due/skip behavior, compact schema, launchd arguments, and
+secret-safe Provider diagnostics. Forward migrations and isolated Wheel startup
+remain part of CI.
 
 ## 15. Phase 2D — Technical Engine v2
 
@@ -767,14 +724,8 @@ and Tool Envelope policies. Minute bars, benchmark-relative strength, automated
 signals, strategy scoring, parameter optimization, backtests, and orders remain
 outside Phase 2D.
 
-Completion evidence on 2026-07-20:
-
-- default runtime inventory exposes exactly 27 tools;
-- Ruff and mypy pass across the repository source tree;
-- compact acceptance covers standard indicators, disclosed structure output,
-  PNG rendering, MCP registration, bootstrap wiring, and public inventory;
-- no setting, secret, migration, database table, scheduler, or order surface was
-  added.
+Current acceptance covers standard indicators, disclosed structure output, PNG
+rendering, MCP registration, bootstrap wiring, and the exact 27-tool inventory.
 
 ## 16. Outside the Phase 2 boundary
 

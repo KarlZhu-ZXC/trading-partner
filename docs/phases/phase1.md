@@ -299,20 +299,22 @@ SQLite migrations persist research state, search indexes, accounts, portfolio
 snapshots, challenge reviews, workflow receipts, and transactions. Backup/restore
 uses SQLite online backup plus integrity and schema checks.
 
-Static secrets live only in the gitignored root `.env`. Rotating OAuth tokens may
-live only under gitignored `data/secrets/`. Dependency loggers that can render
+Source checkouts use the gitignored root `.env`; installed hosts use owner-only
+`runtime.env`. Rotating OAuth tokens may live only under the active gitignored
+`RUNTIME_ROOT/data/secrets/`. Dependency loggers that can render
 query credentials, OAuth token paths, or raw SDK connection identifiers are
 suppressed at provider/transport boundaries. Secrets must never appear in MCP
 envelopes, logs, tests, documentation, or commits.
 
 ## 10. Acceptance
 
-Phase 1 closeout passed:
+Phase 1 remains accepted through the current repository gates:
 
 - Ruff;
-- mypy across 280 source files at closeout;
-- 2,044 tests;
-- Alembic upgrade to `0008_phase1l_workflows`;
+- strict Mypy and the repository coverage floor;
+- focused, integration, migration, and public-surface tests;
+- the historical Phase 1 closeout revision `0008_phase1l_workflows` remains in the
+  forward migration chain to current head `0070_retire_unlinked_review_items`;
 - sdist/wheel build and fresh Python 3.13 isolated-wheel smoke;
 - 80 declarative dialogue scenarios;
 - three longitudinal Research Subject fixtures;

@@ -1,5 +1,13 @@
 # Unreleased
 
+- Consolidated project documentation around one current source-of-truth hierarchy.
+  `AGENTS.md`, the Trading Partner Skill, roadmap, capability guide, Phase 4 spec,
+  operations guide, known issues, and documentation index now describe the implemented
+  Phase 1–4D / 27-tool / migration-0070 boundary consistently. Removed completed plans,
+  dated MCP smoke receipts, superseded Console design audits, and their screenshots;
+  Git history and release notes retain historical evidence without leaving parallel
+  current specifications or broken links.
+
 - Hardened the repository and installed-runtime boundary without expanding product
   scope. Private Observation inbox files and real account-basis checkpoints are now
   Git-ignored; Wheels ship only an empty checkpoint example. Installed runtimes pin a

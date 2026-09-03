@@ -19,6 +19,21 @@ durable file. `InvestmentCase`, `investment_case_*`, `case_id`, `case_type`,
 `linked_case_ids`, and the opaque `case_` ID prefix are compatibility-boundary names,
 not user-facing terminology. Equity means an actual stock Instrument only.
 
+## Current source of truth
+
+- Implemented scope is Phase 1–4D on the single 27-tool `mcp_vnext_shadow` surface.
+- Application version is read from `src/application/__init__.py`; the current database
+  migration head is `0070_retire_unlinked_review_items`.
+- This file owns agent-facing invariants. `docs/phases/` owns implemented product
+  contracts, `docs/guide/` and `docs/operations/` own current instructions,
+  `docs/roadmap/` owns genuinely deferred work, and `docs/releases/` owns historical
+  version truth.
+- Do not retain completed plans, dated smoke receipts, local-path screenshots, or
+  superseded design audits as parallel specifications. Fold lasting rules into the
+  appropriate current document, update `docs/README.md`, then delete the obsolete file.
+- Historical release notes are intentionally immutable except for secret/privacy
+  redaction or broken-link repair; do not rewrite old terminology as current behavior.
+
 ## Implemented boundary
 
 The sole public MCP vNext Shadow surface is exactly **27** tools
@@ -61,6 +76,11 @@ with their short window; this is not a strict FIFO job queue.
 
 **Technical platform runtime**
 
+- Installed runtimes pin one owner-controlled `RUNTIME_ROOT`; every mutable token,
+  lock, attachment, backup, Observation inbox, reconciliation artifact, and optional
+  account-basis checkpoint derives from it. Wheel/site-packages directories contain
+  code and static defaults only. Real Observation bodies and account-basis values are
+  Git-ignored and must never be packaged, committed, or copied into tests/docs.
 - Persistent trusted-LAN Console mode binds only the authenticated Next.js Web
   process to `0.0.0.0`; the data API remains on `127.0.0.1:8765`. The LaunchAgent
   stores only an owner-only password-file path, never the password, a URL secret,
@@ -490,12 +510,12 @@ Console session, expected version, idempotency key, actor, and authorization not
 resolution requires a bounded note. A successfully observed source disappearance may
 auto-resolve an item. A failed or unavailable source read must never auto-resolve one.
 If a closed source condition disappears and later recurs, the same item reopens with a
-higher occurrence count. The Decision Workbench consumes this queue while the existing
+higher occurrence count. The Journal Reviews workflow consumes this queue while the existing
 Research, Monitor, Agenda, Retro, and Scorecard pages remain intact.
 Each occurrence also retains its own opened/last-seen, first-acknowledged, and closure
 timestamps plus MANUAL/AUTO resolution mode. Queue metrics must use occurrence history,
 not lifetime first_seen timestamps or a paginated item list; zero-sample medians/rates
-remain null. Decision Workbench may acknowledge, adjust a due time, or resolve an exact
+remain null. Journal may acknowledge, adjust a due time, or resolve an exact
 ReviewItem through the same Console session/version/idempotency gate.
 
 **Scheduled operational CLI (not a public MCP tool)**
@@ -975,7 +995,8 @@ Console UI-convention regression test so this contract cannot silently regress.
 
 1. Domain never imports MCP, SQLAlchemy, Alembic, Pydantic Settings, or providers.
 2. Application never imports infrastructure or interfaces.
-3. Interfaces only adapt protocols / validate inputs / convert to DTOs.
+3. Infrastructure never imports interfaces. Interfaces only adapt protocols, validate
+   inputs, and convert to DTOs.
 4. Only `src/bootstrap.py` and the sanctioned `src/composition_root/` package
    connect application services to infrastructure. `bootstrap.py` stays the
    public façade (`ApplicationContainer`, `build_application`); bounded graph
@@ -1008,8 +1029,8 @@ src/
 Imports are top-level (`application.*`, `domain.*`, `infrastructure.*`,
 `interfaces.*`, `bootstrap`). There is no `trading_partner` package layer.
 
-Docs: `docs/README.md` indexes the roadmap, consolidated phase specifications,
-user guides, and historical archives.
+Docs: `docs/README.md` indexes the roadmap, consolidated Phase specifications,
+current guides/runbooks, contracts, and release history.
 
 ## Documentation placement
 
@@ -1026,18 +1047,24 @@ under `docs/` (typically `docs/operations/` or `docs/guide/`) for
 operator/user-facing detail. When the detail already exists here or under
 `docs/`, link to it from the README instead of restating it. Every new `docs/`
 page must be added to the `docs/README.md` index.
+Completed implementation plans and dated audit/smoke artifacts are deleted after their
+durable rules and evidence summary have moved to a Phase spec, guide, release note, or
+this file. Do not create a new `docs/plans/` or `docs/audits/` archive merely to preserve
+superseded prose; Git history already owns that record.
 
 ## Secrets and configuration
 
-- Static secrets live only in project-root `.env` (gitignored).
-- Provider-managed rotating OAuth tokens may live only under project-root
-  `data/secrets/` (gitignored, owner-only). Only the provider SDK may create or
-  update them; never copy tokens between applications.
-- Never read, print, or paste real `.env` contents into chat, logs, tests, or commits.
+- Source checkouts may use project-root `.env`; installed hosts use the explicit
+  owner-only `runtime.env` produced by `trading-partner-init`. Both are gitignored.
+- Provider-managed rotating OAuth tokens may live only under the active
+  `RUNTIME_ROOT/data/secrets/` (gitignored, owner-only). Only the provider SDK may
+  create or update them; never copy tokens between applications.
+- Never read, print, or paste real `.env`/`runtime.env` contents into chat, logs,
+  tests, or commits.
 - Use `.env.example` for key names and safe defaults.
-- When adding an `AppSettings` environment key, update `.env.example` and also
-  add its safe default to the existing local `.env` without overwriting values;
-  Secret keys must be added empty for the user to fill.
+- When adding an `AppSettings` environment key, update `.env.example` and add its
+  safe default to the active local config without overwriting values. Secret keys
+  must remain empty for the owner to fill.
 - Redact API keys, tokens, and credentials in every output path.
 
 ## Coding conventions
