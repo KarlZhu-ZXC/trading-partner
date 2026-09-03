@@ -7,7 +7,10 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from application.dto.external_note_review import ExternalNoteReviewDTO
+from application.dto.external_note_review import (
+    ExternalNoteReviewDraftDTO,
+    ExternalNoteReviewDTO,
+)
 
 
 class _DTO(BaseModel):
@@ -72,6 +75,7 @@ class ViewPositionContextDTO(_DTO):
 
 class ViewReviewPackageDTO(_DTO):
     review: ExternalNoteReviewDTO
+    deep_review: ExternalNoteReviewDraftDTO | None
     note_id: str
     note_revision_id: str
     note_version: int
@@ -95,6 +99,8 @@ class ViewReviewPackageDTO(_DTO):
     monitors: tuple[ViewMonitorBaselineDTO, ...]
     positions: tuple[ViewPositionContextDTO, ...]
     deterministic_flags: tuple[str, ...]
+    escalation_reasons: tuple[str, ...]
+    requires_deep_review: bool
     coverage: dict[str, str]
     allowed_actions: tuple[str, ...]
 
@@ -107,6 +113,8 @@ class CurrentViewDTO(_DTO):
     subject_status: str
     instrument_id: str | None
     source_note_revision_id: str
+    source_title: str
+    source_note_version: int
     review: ExternalNoteReviewDTO
     decision: ViewDecisionBaselineDTO
     thesis: ViewThesisBaselineDTO | None

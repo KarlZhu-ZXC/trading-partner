@@ -6,7 +6,7 @@
   idempotency, and same-Subject/revision validation. Eligible successful FULL
   interpretations now materialize durable `OBSERVATION_REVIEW_DUE` items; Console
   exposes review state and closes the review only after the exact Decision succeeds.
-  Migration head is now `0071_external_note_reviews`.
+  Migration head is now `0072_external_note_review_drafts`.
   A shared deterministic `ViewReviewService` compares the draft with the latest
   confirmed Thesis, Trade Plan, Decision, durable Positions, and linked Monitors,
   publishes explicit coverage and allowed actions, and derives Current View from the
@@ -14,10 +14,17 @@
   now starts with View Inbox; Journal exposes Current Confirmed View, renames Notes
   to View Inbox, supports durable deferral, and shows the baseline comparison before
   confirmation. The explicit read-only `view_inbox`, `view_review_get`, and
-  `current_view_get` tools move the public snapshot from 27 to 30 capabilities under
-  `mcp-vnext-shadow-v3`; no prior capability was removed or renamed, and tool count is
+  `current_view_get` tools plus confirmation-gated `view_review_run` move the public
+  snapshot from 27 to 31 capabilities under
+  `mcp-vnext-shadow-v4`; no prior capability was removed or renamed, and tool count is
   no longer a product invariant. Private full note bodies remain Console-only and
-  model output cannot confirm a review outcome.
+  model output cannot confirm a review outcome. Continuous first-pass structure keeps
+  OpenCode Go `qwen3.8-flash` at `max`; deterministic escalation stores a separate
+  append-only draft. The owner runtime explicitly authorizes
+  `muse-spark-1.3-contributor` at `high`; generic installs fail closed unless the
+  separate Contributor-training opt-in is present, and Qwen 3.8 Max remains the
+  zero-training fallback. Known withdrawn-action and invented-condition failures are
+  frozen as sanitized regression benchmarks.
 
 - Consolidated project documentation around one current source-of-truth hierarchy.
   `AGENTS.md`, the Trading Partner Skill, roadmap, capability guide, Phase 4 spec,
@@ -310,7 +317,9 @@
 - Added separate first-class OpenCode Zen and OpenCode Go support for the shared Agent and
   composite Monitor judgment runtime. They share one account credential by default while
   retaining separate Base URLs, model directories, optional key overrides, and route receipts.
-  Go now includes `muse-spark-1.2-contributor`; models route
+  Go now includes Responses routing for Grok 4.5/4.6 and Muse Spark 1.2/1.3
+  Contributor. Private Observation review may select Muse Spark 1.3 only behind an
+  explicit Contributor-training opt-in. Models route
   through Responses, Chat Completions, or Messages according to a closed protocol map.
   Neither Provider advertises native Web Search, and unknown future model IDs
   remain hidden, and subscription/entitlement failures stay typed and secret-safe.

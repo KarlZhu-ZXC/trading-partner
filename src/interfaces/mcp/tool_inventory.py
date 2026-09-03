@@ -31,6 +31,7 @@ MCP_VNEXT_TOOL_NAMES = frozenset(
         "monitor_evaluate",
         "view_inbox",
         "view_review_get",
+        "view_review_run",
         "current_view_get",
     }
 )

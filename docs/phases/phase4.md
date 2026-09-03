@@ -2,11 +2,11 @@
 
 状态：**Phase 4A–4D v1 已实现并通过全量、Console、migration 与隔离 wheel 验收**
 
-当前 migration head：`0071_external_note_reviews`
+当前 migration head：`0072_external_note_review_drafts`
 
 产品入口：Console `Journal`
 
-公共 MCP 表面：`mcp_vnext_shadow` **30 个工具**
+公共 MCP 表面：`mcp_vnext_shadow` **31 个工具**
 
 ## 1. 产品决定
 
@@ -56,8 +56,8 @@ Phase 4 不为流程中的每个名词创建新模块。实现优先级固定为
   TWR/MWR/XIRR/drawdown、behavior cohort、immutable review 和 external Observation 均已实现。
 - 页面读取 durable state，不因打开页面隐式刷新 Broker；Notes 正文仅在 Notes 页签按需读取。
 - exact durable link 缺失时保持未关联/不可用；Instrument 和时间接近不能证明事前 Decision。
-- 公共 MCP 当前为 30 个工具，当前 migration head 为
-  `0071_external_note_reviews`。
+- 公共 MCP 当前为 31 个工具，当前 migration head 为
+  `0072_external_note_review_drafts`。
 
 ## 2. 用户要能直接回答的问题
 
@@ -716,8 +716,19 @@ persistent/recurring action、Agent read/exact append。
 Journal 通过 provider-neutral Observation Source adapter 读取 Moomoo 本机
 私有 living note，并允许未来 TradingView 或本机 Capture Bridge 输出同一 canonical full-text
 snapshot。所有来源保存不可变 revision；无署名内容确定性归属本人，明确署名内容保持外部观点；OpenCode Go
-`qwen3.8-flash`（`max`）只生成四情景与版本变化草稿。`Review as Decision`
+`qwen3.8-flash`（`max`）只生成四情景与版本变化草稿。需要升级复核时，可在所有者通过
+`EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true` 明确接受训练条款后使用
+`muse-spark-1.3-contributor`（`high`）；该草稿与第一层解释分开持久化，仍无任何确认或写入
+权限。Muse Spark 1.3 与 Grok 4.6 必须按 OpenCode Go 目录走 Responses API。
+`Review View Change`
 预填现有 Decision 对话框，仍需用户编辑并显式保存，不自动创建 Thesis、Plan、Monitor 或订单。
+每个 eligible FULL revision 通过 append-only Observation Review 进入
+`PENDING`/`DEFERRED`，只有精确绑定同一 Research Subject 和 Note Revision 的已确认
+Decision 才能形成 `ADOPTED` 或 `NO_ACTION`。`view_inbox`、`view_review_get` 和
+`current_view_get` 是 bounded durable reads；`view_review_run` 是单独确认的 Provider
+evaluation，只追加独立 review draft。Current View 从 exact Review + Decision 派生，
+没有第二套可变观点表。重复、SUMMARY_ONLY、乱序、external-speaker-only 和仅空白变化
+不产生新的复核任务。
 完整外部输入合同见
 [`observation-source-v1.schema.json`](../contracts/observation-source-v1.schema.json)；运行与隐私
 边界见 [本地操作控制台与数据维护](../operations/local-console-and-maintenance.md)。
@@ -726,7 +737,8 @@ snapshot。所有来源保存不可变 revision；无署名内容确定性归属
 
 - CI 必须通过 Ruff、strict Mypy、覆盖率门槛、Console build/unit/E2E、依赖审计、SBOM、
   forward-only migration 幂等与隔离 Wheel smoke。
-- 公共 MCP inventory 固定为 27，compact schema 保持在仓库测试预算内。
+- 公共 MCP 当前为 31 个工具；数量只通过显式兼容迁移调整，closed schema、确认策略和
+  compact transport 预算继续由仓库测试锁定。
 - 盘后 job 的各步骤保留 durable receipt、幂等键和失败隔离；已完成步骤不会因后续
   Observation/Watchlist 失败回滚。
 - Decision → Order → Fill → Cycle → Daily Equity/Returns → Behavior Review 的验收不得产生
@@ -772,6 +784,8 @@ durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 10. 缺期初估值时收益率 INCOMPLETE；
 11. 历史 Fill 补录 Decision 标记 RETROSPECTIVE；
 12. 周度 Review 发现第三次重复尝试，行动项可在后续 cohort 验证是否复发。
+13. Moomoo USER 观点变化进入 View Inbox，经 Flash/可选升级草稿复核后确认 exact
+    Decision/NO_ACTION，并能从 Current View 回溯到原 Note Revision。
 
 ## 19. Definition of Done
 
@@ -783,7 +797,7 @@ durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 - Journal、Portfolio、Research、Retro 不存在冲突写入口；
 - Console 主要流程无需复制 ID 或翻找多个页面；
 - Agent 与 Console 使用同一 application contract；
-- 公共 MCP 当前为 30 个工具；
+- 公共 MCP 当前为 31 个工具；
 - 订单权限、确认门和 SGOV 唯一 unattended exception 不变；
 - README、capability guide、Console layout、roadmap、release note 和 Skill 同步更新。
 

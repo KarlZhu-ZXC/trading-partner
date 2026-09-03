@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from domain.external_note.enums import ExternalNoteReviewStatus
-from domain.external_note.models import ExternalNoteReview
+from domain.external_note.models import ExternalNoteReview, ExternalNoteReviewDraft
 
 
 class ExternalNoteReviewRepository(Protocol):
@@ -29,3 +29,11 @@ class ExternalNoteReviewRepository(Protocol):
         subject_id: str | None = None,
         limit: int = 100,
     ) -> tuple[ExternalNoteReview, ...]: ...
+
+    def append_draft(self, value: ExternalNoteReviewDraft) -> ExternalNoteReviewDraft: ...
+
+    def latest_draft(self, note_revision_id: str) -> ExternalNoteReviewDraft | None: ...
+
+    def latest_successful_draft(
+        self, note_revision_id: str
+    ) -> ExternalNoteReviewDraft | None: ...

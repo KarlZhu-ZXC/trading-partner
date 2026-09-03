@@ -347,4 +347,15 @@ def _validation_hint(error: Exception) -> list[dict[str, object]]:
     return [{"location": [], "type": type(error).__name__}]
 
 
-__all__ = ["ExternalNoteInterpretationService"]
+NoteInterpretationDraft = _Interpretation
+NOTE_INTERPRETATION_TOOL_NAME = _TOOL_NAME
+parse_note_interpretation_response = _parse
+validate_note_interpretation_attribution = _validate_attribution
+
+__all__ = [
+    "ExternalNoteInterpretationService",
+    "NOTE_INTERPRETATION_TOOL_NAME",
+    "NoteInterpretationDraft",
+    "parse_note_interpretation_response",
+    "validate_note_interpretation_attribution",
+]

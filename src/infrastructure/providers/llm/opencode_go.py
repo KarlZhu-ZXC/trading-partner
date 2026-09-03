@@ -51,7 +51,16 @@ from infrastructure.providers.llm.deepseek_monitor_judgment import (
 )
 from infrastructure.providers.llm.openai_compatible import OpenAICompatibleModelProvider
 
-_GO_RESPONSES_MODELS = frozenset({"grok-4.5", "gpt-5.6-luna", "muse-spark-1.2-contributor"})
+_GO_RESPONSES_MODELS = frozenset(
+    {
+        "grok-4.5",
+        "grok-4.6",
+        "gpt-5.6-luna",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3-contributor",
+    }
+)
+_GO_XHIGH_REASONING_MODELS = frozenset({"muse-spark-1.3-contributor"})
 _ZEN_RESPONSES_MODELS = frozenset(
     {
         "gpt-5.6-sol",
@@ -245,6 +254,8 @@ class OpenCodeGoModelProvider(AgentModelProvider):
                     if item.id in _ZEN_PLAIN_FREE_CHAT_MODELS
                     else ("low", "high", "max")
                     if item.id in _ZEN_REASONING_FREE_CHAT_MODELS
+                    else ("low", "medium", "high", "xhigh")
+                    if item.id in _GO_XHIGH_REASONING_MODELS
                     else ("low", "medium", "high", "max")
                     if item.id in self.responses_models
                     else ("high", "max")

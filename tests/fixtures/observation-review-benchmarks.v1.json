@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "withdrawn-add-must-not-propagate",
+      "previous_user_view": "回调后考虑加仓。",
+      "current_user_blocks": [
+        {"ordinal": 0, "body": "撤回此前加仓计划，等待新的明确证据。"}
+      ],
+      "expected_change_relations": ["SUPERSEDES", "INVALIDATES"],
+      "required_current_actions": ["NO_ACTION", "REVIEW"],
+      "forbidden_propagated_actions": ["ADD", "HOLD", "EXIT"],
+      "forbid_invented_timing": true,
+      "forbid_invented_confirmation": true
+    },
+    {
+      "id": "explicit-invalidation-stays-scenario-scoped",
+      "previous_user_view": "趋势保持时继续持有。",
+      "current_user_blocks": [
+        {"ordinal": 0, "body": "若明确跌破失效位，INVALIDATION 场景退出；其余场景等待。"}
+      ],
+      "expected_change_relations": ["REVISION", "INVALIDATES"],
+      "required_current_actions": ["REVIEW", "EXIT"],
+      "forbidden_propagated_actions": ["ADD"],
+      "forbid_invented_timing": true,
+      "forbid_invented_confirmation": true
+    }
+  ]
+}

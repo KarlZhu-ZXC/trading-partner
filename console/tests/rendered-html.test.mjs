@@ -257,6 +257,8 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(observationSource, /All Notes/);
   assert.match(observationSource, /Open Research/);
   assert.match(observationSource, /create: "observation"/);
+  assert.match(observationSource, /Choose the exact Research Subject/);
+  assert.match(observationSource, /the system will not guess/);
   assert.match(source, /compactNextSteps/);
   assert.match(source, /\/api\/observations\/sync/);
   assert.match(observationSource, /Review View Change/);

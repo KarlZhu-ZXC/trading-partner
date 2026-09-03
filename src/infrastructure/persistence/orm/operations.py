@@ -193,6 +193,50 @@ class ExternalNoteReviewRevisionRow(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class ExternalNoteReviewDraftRow(Base):
+    __tablename__ = "external_note_review_drafts"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_external_note_review_draft_idempotency",
+        ),
+        CheckConstraint(
+            "status IN ('SUCCEEDED','FAILED')",
+            name="ck_external_note_review_draft_status",
+        ),
+        CheckConstraint(
+            "(status='SUCCEEDED' AND error_code IS NULL) OR "
+            "(status='FAILED' AND error_code IS NOT NULL)",
+            name="ck_external_note_review_draft_failure",
+        ),
+        Index(
+            "ix_external_note_review_draft_latest",
+            "note_revision_id",
+            "created_at",
+        ),
+    )
+
+    draft_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    review_id: Mapped[str] = mapped_column(Text, nullable=False)
+    note_revision_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("external_note_revisions.note_revision_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_codes: Mapped[tuple[str, ...]] = mapped_column(
+        "trigger_codes_json", JsonStringTuple(), nullable=False
+    )
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class IndustryMetricObservationRow(Base):
     __tablename__ = "industry_metric_observations"
     __table_args__ = (

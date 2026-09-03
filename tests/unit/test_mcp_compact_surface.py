@@ -23,6 +23,7 @@ from interfaces.mcp.server import (
 )
 from interfaces.mcp.tools.compact import (
     READ_DURABLE,
+    CapabilityConfirmationRequiredError,
     CompactCapabilityRegistry,
     ConfirmationPolicy,
     _minimize_public_schema,
@@ -175,6 +176,7 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "instrument_resolve",
         "view_inbox",
         "view_review_get",
+        "view_review_run",
         "current_view_get",
         "investment_case_read",
         "investment_case_manage",
@@ -203,8 +205,8 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_evaluate",
     ]
     # Exact inventory bytes freeze the current compact registration output.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_015
-    assert _wire_size(tools) == 39_183
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_173
+    assert _wire_size(tools) == 39_646
 
 
 @pytest.mark.asyncio
@@ -227,6 +229,38 @@ async def test_intent_first_view_tools_are_bounded_durable_reads() -> None:
     descriptor = registry.find_operation("view_inbox", None)
     assert descriptor.policy is READ_DURABLE
     assert descriptor.arguments_schema["properties"]["limit"]["maximum"] == 100
+
+
+@pytest.mark.asyncio
+async def test_escalated_view_review_is_explicit_and_never_a_read_side_effect() -> None:
+    container = _container()
+    container.context.id_generator.new.return_value = "req_deep_review"
+    container.context.clock.now.return_value = datetime(2026, 9, 3, 12, tzinfo=UTC)
+    container.context.secret_redactor.redact_text.side_effect = lambda value: value
+    container.services.external_note_review_drafts.review = AsyncMock(return_value=None)
+    registry = create_capability_registry(container)
+
+    with pytest.raises(CapabilityConfirmationRequiredError):
+        await registry.invoke(
+            "view_review_run",
+            {"note_revision_id": "external_note_revision_test"},
+        )
+    result = await registry.invoke(
+        "view_review_run",
+        {"note_revision_id": "external_note_revision_test"},
+        confirmation="view_review_run",
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {
+        "note_revision_id": "external_note_revision_test",
+        "status": "NOT_REQUIRED_OR_NOT_CONFIGURED",
+    }
+    container.services.external_note_review_drafts.review.assert_awaited_once_with(
+        "external_note_revision_test",
+        explicit_review=True,
+        force=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -711,7 +745,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
         "public_tool_count": len(MCP_VNEXT_TOOL_NAMES),
-        "surface_schema_version": "mcp-vnext-shadow-v3",
+        "surface_schema_version": "mcp-vnext-shadow-v4",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",

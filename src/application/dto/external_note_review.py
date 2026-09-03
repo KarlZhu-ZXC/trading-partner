@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from domain.external_note.models import ExternalNoteReview
+from domain.external_note.models import ExternalNoteReview, ExternalNoteReviewDraft
 
 
 class _DTO(BaseModel):
@@ -78,3 +78,41 @@ class ExternalNoteReviewMetricsDTO(_DTO):
     oldest_unresolved_age_seconds: int | None
     terminal_with_exact_decision: int
     truncated: bool
+
+
+class ExternalNoteReviewDraftDTO(_DTO):
+    draft_id: str
+    review_id: str
+    note_revision_id: str
+    status: str
+    provider: str
+    model: str
+    reasoning_effort: str
+    schema_version: str
+    trigger_codes: tuple[str, ...]
+    payload: dict[str, object]
+    error_code: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, value: ExternalNoteReviewDraft) -> ExternalNoteReviewDraftDTO:
+        import json
+
+        try:
+            payload = json.loads(value.payload_json)
+        except (TypeError, ValueError):
+            payload = {}
+        return cls(
+            draft_id=value.draft_id,
+            review_id=value.review_id,
+            note_revision_id=value.note_revision_id,
+            status=value.status,
+            provider=value.provider,
+            model=value.model,
+            reasoning_effort=value.reasoning_effort,
+            schema_version=value.schema_version,
+            trigger_codes=value.trigger_codes,
+            payload=payload if isinstance(payload, dict) else {},
+            error_code=value.error_code,
+            created_at=value.created_at,
+        )

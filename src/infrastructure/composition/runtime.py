@@ -355,6 +355,7 @@ class RuntimeResources:
     monitor_judgment_fallback_provider: object | None = None
     monitor_event_analysis_provider: AgentModelProvider | None = None
     external_note_analysis_provider: AgentModelProvider | None = None
+    external_note_review_provider: AgentModelProvider | None = None
     trade_retro_narrative_provider: object | None = None
     agent_model_provider: AgentModelProvider | None = None
     agent_model_providers: dict[str, AgentModelProvider] = field(default_factory=dict)
@@ -382,6 +383,7 @@ class RuntimeResources:
                 self.monitor_judgment_fallback_provider,
                 self.monitor_event_analysis_provider,
                 self.external_note_analysis_provider,
+                self.external_note_review_provider,
                 self.trade_retro_narrative_provider,
                 self.agent_model_provider,
                 self.agent_web_search_provider,

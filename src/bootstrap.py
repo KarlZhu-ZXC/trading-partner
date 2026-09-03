@@ -786,6 +786,7 @@ def build_application(
             monitor_judgment_fallback_provider=monitor_judgment_fallback_provider,
             monitor_event_analysis_provider=monitor_event_analysis_provider,
             external_note_analysis_provider=external_notes.analysis_provider,
+            external_note_review_provider=external_notes.review_provider,
             trade_retro_narrative_provider=trade_retro_narrative_provider,
             agent_model_provider=agent_model_provider,
             agent_model_providers=agent_model_providers,
@@ -836,6 +837,7 @@ def build_application(
             attention=attention_query_service,
             external_notes=external_notes.service,
             external_note_reviews=external_notes.reviews,
+            external_note_review_drafts=external_notes.review_drafts,
             view_reviews=external_notes.view_reviews,
         ),
         operations=OperationalServices(

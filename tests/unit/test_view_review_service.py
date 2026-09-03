@@ -131,6 +131,12 @@ class _Reviews:
     def latest_for_revision(self, revision_id: str):
         return self.value if revision_id == REVISION_ID else None
 
+    def latest_draft(self, _revision_id: str):
+        return None
+
+    def latest_successful_draft(self, _revision_id: str):
+        return None
+
     def list_latest(self, **_kwargs: object):
         return (self.value,)
 
@@ -246,6 +252,9 @@ def test_mapped_review_composes_confirmed_baseline_and_durable_context(
     assert result.positions[0].quantity == Decimal("10")
     assert result.monitors[0].monitor_id == "monitor_amd"
     assert "REVIEW_THESIS_IMPACT" in result.deterministic_flags
+    assert result.requires_deep_review is True
+    assert "ACTION_EXIT" in result.escalation_reasons
+    assert "THESIS_IMPACT" in result.escalation_reasons
     assert result.allowed_actions == (
         "DEFER",
         "RECORD_DECISION",
@@ -338,5 +347,7 @@ def test_current_view_is_derived_from_exact_confirmed_review_and_decision(
 
     assert result is not None
     assert result.source_note_revision_id == REVISION_ID
+    assert result.source_title == "AMD"
+    assert result.source_note_version == 2
     assert result.decision.decision_id == "decision_current"
     assert result.review.status == "NO_ACTION"

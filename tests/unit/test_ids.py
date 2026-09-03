@@ -63,6 +63,7 @@ def test_entity_id_prefix_frozen_values() -> None:
         "external_note_interpretation",
         "external_note_sync",
         "external_note_review",
+        "external_note_review_draft",
         "review_item",
         "operational_job_run",
         "snapshot",

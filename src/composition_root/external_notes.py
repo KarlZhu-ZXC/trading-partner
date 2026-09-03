@@ -15,6 +15,9 @@ from application.services._research_support import UowFactory
 from application.services.external_note_interpretation_service import (
     ExternalNoteInterpretationService,
 )
+from application.services.external_note_review_draft_service import (
+    ExternalNoteReviewDraftService,
+)
 from application.services.external_note_review_service import ExternalNoteReviewService
 from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.view_review_service import ViewReviewService
@@ -41,8 +44,10 @@ from infrastructure.system.process_file_lock import ProcessFileLock
 class ExternalNotesBundle:
     service: ExternalNoteSyncService
     reviews: ExternalNoteReviewService
+    review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
     analysis_provider: AgentModelProvider | None
+    review_provider: AgentModelProvider | None
 
 
 def build_external_note_services(
@@ -58,7 +63,9 @@ def build_external_note_services(
     resilience: LLMResilienceController,
 ) -> ExternalNotesBundle:
     config = settings.resolved_external_note_analysis_config
+    review_config = settings.resolved_external_note_review_config
     provider: AgentModelProvider | None = None
+    review_provider: AgentModelProvider | None = None
     interpretation: ExternalNoteInterpretationService | None = None
     if config is not None:
         provider = RoutedAgentModelProvider(
@@ -73,6 +80,15 @@ def build_external_note_services(
             clock=clock,
             id_generator=id_generator,
             timeout_seconds=config.timeout_seconds,
+        )
+    if review_config is not None:
+        review_provider = RoutedAgentModelProvider(
+            OpenCodeGoModelProvider(
+                review_config,
+                proxy_url=settings.provider_proxy_url,
+            ),
+            vendor=VendorId.OPENCODE_GO,
+            resilience=resilience,
         )
     inbox_dir = settings.observation_inbox_dir
     remote_client = (
@@ -100,6 +116,30 @@ def build_external_note_services(
         clock,
         id_generator,
     )
+    view_review_service = ViewReviewService(
+        repository,
+        review_repository,
+        research_uow_factory,
+        account_snapshots,
+        monitors,
+    )
+    review_draft_service = ExternalNoteReviewDraftService(
+        review_provider,
+        provider_name="opencode_go",
+        model=(review_config.model if review_config is not None else "qwen3.8-max"),
+        reviews=review_repository,
+        notes=repository,
+        view_reviews=view_review_service,
+        clock=clock,
+        id_generator=id_generator,
+        timeout_seconds=(review_config.timeout_seconds if review_config is not None else 120),
+        max_output_tokens=(review_config.max_output_tokens if review_config is not None else 5000),
+        reasoning_effort=(
+            review_config.reasoning_effort
+            if review_config is not None and review_config.reasoning_effort is not None
+            else "max"
+        ),
+    )
     return ExternalNotesBundle(
         service=ExternalNoteSyncService(
             (
@@ -115,17 +155,20 @@ def build_external_note_services(
                 settings.post_market_sync_lock_path.parent / "observations.lock"
             ),
             credential_stores=(credential_store,) if credential_store is not None else (),
-            review_materializer=review_service,
+            review_materializer=(
+                review_service if settings.observation_review_workflow_enabled else None
+            ),
+            deep_reviewer=(
+                review_draft_service
+                if settings.observation_review_workflow_enabled
+                else None
+            ),
         ),
         reviews=review_service,
-        view_reviews=ViewReviewService(
-            repository,
-            review_repository,
-            research_uow_factory,
-            account_snapshots,
-            monitors,
-        ),
+        review_drafts=review_draft_service,
+        view_reviews=view_review_service,
         analysis_provider=provider,
+        review_provider=review_provider,
     )
 
 

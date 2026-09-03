@@ -5,7 +5,7 @@
 控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。普通页面读取不调用
 Provider 或 LLM；只有用户显式运行 Agent、启用复合判断的 Monitor、Observation 分析等入口
 才调用配置好的服务端模型。它不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
-备份和缓存清理，也可以从 MCP 工作台调用全部 30 个公开工具。它不会在页面加载时隐式
+备份和缓存清理，也可以从 MCP 工作台调用全部 31 个公开工具。它不会在页面加载时隐式
 访问 Provider，也不提供订单能力。
 
 终端一：
@@ -108,8 +108,11 @@ LLM_PROVIDER=opencode_go
 MONITOR_JUDGMENT_ENABLED=true
 ```
 
-Go 的 `muse-spark-1.2-contributor` 使用 Responses API；该 Contributor 模型允许使用提示词
-和补全训练未来模型，并受 Meta 地域政策限制，不应用于私密研究内容。订阅限额、模型
+Go 的 `muse-spark-1.2-contributor`、`muse-spark-1.3-contributor` 以及 Grok 4.5/4.6
+使用 Responses API。Contributor 模型允许使用提示词和补全训练未来模型，并受 Meta 地域
+政策限制；只有所有者明确接受该条款并配置
+`EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true` 后，才允许任一 Contributor 模型接收
+私密研究内容。订阅限额、模型
 entitlement、地域限制与上游故障会保留为 typed Provider error，
 不会静默切换成行情事实或安静规则。该适配不会读取 `~/.local/share/opencode/auth.json`，
 不会把任一 API key 发给浏览器，也不发布原生 Web Search。
@@ -118,6 +121,17 @@ Journal 的 `Refresh Sources` 只读扫描本机 Moomoo 缓存并快速返回；
 后台发送给单独配置的 OpenCode Go `qwen3.8-flash`，使用 `max` 推理强度与
 120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
 创建 Monitor 或授权订单。未署名段落确定性视为本人观点，明确姓名前缀保留为外部观点。
+
+升级复核模型独立配置。当前所有者已接受 Contributor 训练条款时，可使用：
+
+```dotenv
+EXTERNAL_NOTE_REVIEW_MODEL=muse-spark-1.3-contributor
+EXTERNAL_NOTE_REVIEW_REASONING_EFFORT=high
+EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true
+```
+
+`high` 是当前生产档位；脱敏比较中 `xhigh` 更慢且把一般 PULLBACK 过度传播为 EXIT。
+关闭 opt-in 或将其遗漏会在配置阶段 fail closed，不会静默把私人正文发送给 Contributor。
 
 该入口现已扩展为 provider-neutral `Refresh Sources`。可用
 `uv run trading-partner-observation-sync` 同步全部配置来源，或通过 `--source MOOMOO_NOTE`
@@ -244,7 +258,7 @@ uv run trading-partner-agent console install --lan
 绑定 LAN 地址。可用 `--lan-port 3001` 选择其他端口。
 
 页面包括：总览、全部
-研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、30 个 MCP 能力、持久化账户、
+研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、31 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
 
 总览 Review Queue 是内部持久化决策闭环，不增加公开 MCP 工具。Acknowledge 可选填期限；
@@ -353,7 +367,7 @@ Trade Plan 或研究记录的确认。缓存删除另有二次确认；Console �
 确认门禁的 Schwab 下单只存在于 `broker_order_manage` MCP。
 
 Console 的 MCP 工作台与 Codex MCP 不是两套业务实现：两种 transport 都由同一份
-30-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
+31-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
 自选、Research 及 Monitor 等一一对应的前端查询也通过 Registry 调用；`overview`、
 `research`、`monitors` 等路由
 只负责把多项读取合并成适合页面的 BFF 响应。收盘任务、通知、备份和缓存维护仍是

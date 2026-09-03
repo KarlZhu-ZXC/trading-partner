@@ -218,6 +218,10 @@ class ObservationReviewTransitionRequest(_RequestModel):
     confirmation: Literal["observation_review_update"]
 
 
+class ObservationDeepReviewRequest(_RequestModel):
+    force: bool = False
+
+
 class ActivityAnnotationRequest(_RequestModel):
     provider: str = Field(min_length=1, max_length=64)
     account_ref: str = Field(min_length=1, max_length=128)
@@ -1926,6 +1930,9 @@ def _observation_inbox_payload(request: Request, *, limit: int) -> dict[str, Any
     return {
         "external_notes": jsonable_encoder(notes),
         "observation_sources": jsonable_encoder(sources),
+        "review_workflow_enabled": _container(
+            request
+        ).settings.observation_review_workflow_enabled,
     }
 
 
@@ -2099,7 +2106,10 @@ async def observation_view_review(
     note_revision_id: str,
 ) -> dict[str, Any]:
     try:
-        value = _container(request).services.view_reviews.get(note_revision_id)
+        value = _container(request).services.view_reviews.get(
+            note_revision_id,
+            explicit_review=True,
+        )
     except TradingPartnerError as error:
         raise HTTPException(
             status_code=409,
@@ -2120,6 +2130,37 @@ async def current_view(
             status_code=409,
             detail={"code": error.code, "message": _sanitized_error(request, error)},
         ) from None
+    return {"data": value.model_dump(mode="json") if value is not None else None}
+
+
+@app.post("/api/observations/{note_revision_id}/deep-review")
+async def observation_deep_review(
+    request: Request,
+    note_revision_id: str,
+    payload: ObservationDeepReviewRequest,
+) -> dict[str, Any]:
+    try:
+        value = await _container(request).services.external_note_review_drafts.review(
+            note_revision_id,
+            explicit_review=True,
+            force=payload.force,
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return {"data": value.model_dump(mode="json") if value is not None else None}
+
+
+@app.get("/api/observations/{note_revision_id}/deep-review")
+async def observation_deep_review_status(
+    request: Request,
+    note_revision_id: str,
+) -> dict[str, Any]:
+    value = _container(request).services.external_note_review_drafts.latest(
+        note_revision_id
+    )
     return {"data": value.model_dump(mode="json") if value is not None else None}
 
 

@@ -81,10 +81,16 @@ async def test_opencode_go_routes_models_to_each_documented_protocol() -> None:
         await provider.complete(ModelRequest(messages=base, model="muse-spark-1.2-contributor"))
     ).text == "luna"
     assert (
+        await provider.complete(ModelRequest(messages=base, model="muse-spark-1.3-contributor"))
+    ).text == "luna"
+    assert (await provider.complete(ModelRequest(messages=base, model="grok-4.6"))).text == "luna"
+    assert (
         await provider.complete(ModelRequest(messages=base, model="qwen3.8-max"))
     ).text == "qwen"
     assert paths == [
         "/zen/go/v1/chat/completions",
+        "/zen/go/v1/responses",
+        "/zen/go/v1/responses",
         "/zen/go/v1/responses",
         "/zen/go/v1/responses",
         "/zen/go/v1/messages",
@@ -101,6 +107,8 @@ async def test_opencode_go_catalog_exposes_directory_models_and_assigns_efforts(
             json={
                 "data": [
                     {"id": "gpt-5.6-luna"},
+                    {"id": "grok-4.6"},
+                    {"id": "muse-spark-1.3-contributor"},
                     {"id": "muse-spark-1.2-contributor"},
                     {"id": "qwen3.8-max"},
                     {"id": "deepseek-v4-flash-vision-exp"},
@@ -116,6 +124,8 @@ async def test_opencode_go_catalog_exposes_directory_models_and_assigns_efforts(
 
     assert tuple(item.id for item in catalog.models) == (
         "gpt-5.6-luna",
+        "grok-4.6",
+        "muse-spark-1.3-contributor",
         "muse-spark-1.2-contributor",
         "qwen3.8-max",
         "deepseek-v4-flash-vision-exp",
@@ -123,9 +133,11 @@ async def test_opencode_go_catalog_exposes_directory_models_and_assigns_efforts(
     )
     assert catalog.models[0].reasoning_efforts == ("low", "medium", "high", "max")
     assert catalog.models[1].reasoning_efforts == ("low", "medium", "high", "max")
-    assert catalog.models[2].reasoning_efforts == ("high", "max")
-    assert catalog.models[3].reasoning_efforts == ("high", "max")
+    assert catalog.models[2].reasoning_efforts == ("low", "medium", "high", "xhigh")
+    assert catalog.models[3].reasoning_efforts == ("low", "medium", "high", "max")
     assert catalog.models[4].reasoning_efforts == ("high", "max")
+    assert catalog.models[5].reasoning_efforts == ("high", "max")
+    assert catalog.models[6].reasoning_efforts == ("high", "max")
     await client.aclose()
 
 
