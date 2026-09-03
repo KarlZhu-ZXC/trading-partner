@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -14,7 +14,6 @@ from application.services.activity_annotation_service import (
     ActivityAnnotationService,
     unlinked_activity_source_key,
 )
-from application.services.review_item_service import ReviewItemService
 from domain.common.enums import AssetType, Market, VendorId
 from domain.common.errors import (
     ActivityAnnotationVersionConflict,
@@ -37,7 +36,6 @@ from infrastructure.persistence.activity_annotation_repository import (
     SqlAlchemyActivityAnnotationRepository,
 )
 from infrastructure.persistence.metadata import Base
-from infrastructure.persistence.review_item_repository import SqlAlchemyReviewItemRepository
 
 
 class _Clock:
@@ -85,14 +83,13 @@ def _service(
     transaction_repository.append_many(transactions)
     clock = _Clock()
     ids = _Ids()
-    review_items = ReviewItemService(SqlAlchemyReviewItemRepository(engine), clock, ids)
     service = ActivityAnnotationService(
         transaction_repository,
         SqlAlchemyActivityAnnotationRepository(engine),
         research_uow_factory,  # type: ignore[arg-type]
         clock,
         ids,
-        review_items,
+        None,
         broker_orders,  # type: ignore[arg-type]
     )
     return service, clock, transaction_repository
@@ -113,7 +110,7 @@ def _input(**updates: object) -> ActivityAnnotationAppendInput:
     return ActivityAnnotationAppendInput(**values)
 
 
-def test_unlinked_projection_is_stable_and_replayed_without_duplicate_items() -> None:
+def test_unlinked_projection_is_stable_and_never_materializes_review_items() -> None:
     service, _clock, _transactions = _service()
 
     first = service.list_unlinked()
@@ -122,12 +119,8 @@ def test_unlinked_projection_is_stable_and_replayed_without_duplicate_items() ->
     assert first.activities[0].source_key == unlinked_activity_source_key(
         VendorId.BROKER, "acct-1", "tx-1"
     )
-    assert second.activities[0].review_item is not None
-    assert first.activities[0].review_item is not None
-    assert (
-        second.activities[0].review_item.review_item_id
-        == first.activities[0].review_item.review_item_id
-    )
+    assert first.activities[0].review_item is None
+    assert second.activities[0].review_item is None
 
 
 def test_unplanned_and_cash_management_are_append_only_revisions() -> None:
@@ -216,12 +209,11 @@ def test_linked_decision_and_plan_must_share_subject() -> None:
         )
 
 
-def test_limit_or_failed_read_does_not_auto_close_but_annotation_does() -> None:
+def test_limit_or_failed_read_does_not_queue_and_annotation_removes_projection() -> None:
     transactions = (_transaction("tx-1"), _transaction("tx-2"))
-    service, clock, transaction_repository = _service(transactions=transactions)
+    service, _clock, transaction_repository = _service(transactions=transactions)
     page = service.list_unlinked(limit=1)
     assert page.has_more is True
-    clock.value += timedelta(hours=1)
     original_list = transaction_repository.list
     transaction_repository.list = lambda **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
         RuntimeError("provider read failed")
@@ -229,7 +221,7 @@ def test_limit_or_failed_read_does_not_auto_close_but_annotation_does() -> None:
     with pytest.raises(RuntimeError):
         service.list_unlinked(limit=1)
     transaction_repository.list = original_list  # type: ignore[method-assign]
-    assert page.activities[0].review_item is not None
+    assert page.activities[0].review_item is None
 
     first_id = page.activities[0].provider_transaction_id
     service.append_revision(_input(provider_transaction_id=first_id))

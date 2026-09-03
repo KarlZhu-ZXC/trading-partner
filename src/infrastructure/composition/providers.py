@@ -476,6 +476,7 @@ def build_provider_infrastructure(
             ),
         ),
     )
+    moomoo_security_corrections = MoomooSecurityCorrections.load_default()
     moomoo_account = MoomooAccountAdapter(
         id_generator,
         enabled="MOOMOO" in settings.holdings_sources,
@@ -487,6 +488,7 @@ def build_provider_infrastructure(
         base_currency=settings.moomoo_account_base_currency,
         clock=clock,
         opend_rate_limiter=moomoo_limiter,
+        security_corrections=moomoo_security_corrections,
     )
     manual_account = ManualCsvAccountAdapter(
         settings.manual_holdings_csv_path if "MANUAL_CSV" in settings.holdings_sources else None,
@@ -536,7 +538,7 @@ def build_provider_infrastructure(
                 port=settings.moomoo_port,
                 clock=clock,
                 opend_rate_limiter=moomoo_limiter,
-                security_corrections=MoomooSecurityCorrections.load_default(),
+                security_corrections=moomoo_security_corrections,
             )
         else:
             watchlist_source = ManualCsvWatchlistAdapter(

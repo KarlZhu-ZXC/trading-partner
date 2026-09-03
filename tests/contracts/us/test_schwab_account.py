@@ -13,7 +13,11 @@ from application.dto.portfolio import AccountGetSnapshotInput
 from bootstrap import build_application
 from domain.common.enums import AppEnvironment, LogLevel, VendorId
 from domain.common.errors import ProviderAuthenticationError, ProviderUnavailableError
-from domain.portfolio.enums import AccountPositionSide, AccountTransactionSide
+from domain.portfolio.enums import (
+    AccountPositionSide,
+    AccountTransactionKind,
+    AccountTransactionSide,
+)
 from infrastructure.config.settings import AppSettings
 from infrastructure.providers.account.schwab import (
     SchwabAccountAdapter,
@@ -192,6 +196,7 @@ async def test_schwab_snapshot_normalizes_selected_account_without_plain_identit
     assert snapshot.margin_used == Decimal("400")
     assert snapshot.positions[0].instrument_id == "equity:US:NVDA"
     assert snapshot.positions[1].side is AccountPositionSide.SHORT
+    assert snapshot.positions[1].instrument_id == "option:US:NVDA260619C00200000"
     assert snapshot.positions[1].market_value == Decimal("-425")
     assert snapshot.positions[0].market_price is None
     assert "BROKER_VALUATION_PRICE_DERIVED" in snapshot.warning_codes
@@ -383,6 +388,63 @@ async def test_schwab_cash_journal_items_are_preserved_as_instrumentless_activit
     assert activity.cash_amount == Decimal("1770")
     assert activity.currency == "USD"
     assert "SCHWAB_TRANSACTION_ITEM_OMITTED" not in result.meta.warnings
+
+
+@pytest.mark.asyncio
+async def test_schwab_dividend_description_uses_unique_exact_instrument_candidate(
+    id_generator: object, fixed_clock: object
+) -> None:
+    client = _Client()
+    client.transactions = lambda *_args: [  # type: ignore[method-assign]
+        {
+            "activityId": 200,
+            "time": "2026-07-01T15:00:00Z",
+            "type": "TRADE",
+            "transferItems": [{
+                "amount": "10",
+                "price": "160",
+                "instruction": "BUY",
+                "instrument": {"assetType": "EQUITY", "symbol": "SPG"},
+            }],
+        },
+        {
+            "activityId": 201,
+            "time": "2026-07-10T15:00:00Z",
+            "type": "DIVIDEND_OR_INTEREST",
+            "description": "QUALIFIED DIVIDEND SPG",
+            "netAmount": "12.50",
+            "transferItems": [{
+                "amount": "12.50",
+                "instrument": {"assetType": "CURRENCY", "symbol": "CURRENCY_USD"},
+            }],
+        },
+        {
+            "activityId": 202,
+            "time": "2026-07-11T15:00:00Z",
+            "type": "DIVIDEND_OR_INTEREST",
+            "description": "QUALIFIED DIVIDEND UNKNOWN",
+            "netAmount": "1.00",
+            "transferItems": [{
+                "amount": "1.00",
+                "instrument": {"assetType": "CURRENCY", "symbol": "CURRENCY_USD"},
+            }],
+        },
+    ]
+
+    result = await _adapter(id_generator, fixed_clock, client).get_account_transactions(
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 7, 12, tzinfo=UTC),
+        limit=10,
+    )
+
+    dividends = [
+        item
+        for item in result.value.transactions
+        if item.kind is AccountTransactionKind.DIVIDEND
+    ]
+    assert [item.instrument_id for item in dividends] == [None, "equity:US:SPG"]
+    assert dividends[1].mapping_version == "schwab_activity_v2"
+    assert "SCHWAB_DIVIDEND_INSTRUMENT_UNAVAILABLE" in result.meta.warnings
 
 
 @pytest.mark.asyncio

@@ -294,7 +294,7 @@ src/infrastructure/providers/llm/
   chat_completions_codec.py
   responses_codec.py
 src/infrastructure/providers/telegram/
-  agent_long_poller.py
+  agent_client.py
 src/infrastructure/persistence/
   agent_conversation_repository.py
   agent_pending_action_repository.py

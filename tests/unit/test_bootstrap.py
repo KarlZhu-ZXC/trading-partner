@@ -179,6 +179,9 @@ def test_build_application_returns_container(test_settings: AppSettings) -> None
         assert container.operations.post_market_sync._watchlist is (  # type: ignore[attr-defined]
             container.services.watchlist
         )
+        assert container.operations.post_market_sync._external_notes is (  # type: ignore[attr-defined]
+            container.services.external_notes
+        )
         assert container.operations.post_market_sync._delay.total_seconds() == (  # type: ignore[attr-defined]
             test_settings.post_market_sync_delay_minutes * 60
         )

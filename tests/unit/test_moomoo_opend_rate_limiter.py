@@ -69,6 +69,14 @@ def test_watchlist_member_policy_includes_opend_arrival_margin() -> None:
     assert policy.window_seconds == 31.0
 
 
+def test_order_fee_policy_is_scoped_to_ten_requests_per_thirty_seconds() -> None:
+    policy = DEFAULT_MOOMOO_POLICIES[MoomooOpenDOperation.ACCOUNT_ORDER_FEES]
+
+    assert policy.limit_count == 10
+    assert policy.window_seconds == 30.0
+    assert policy.scoped is True
+
+
 def test_account_scopes_are_independent_and_required(tmp_path: Path) -> None:
     path = tmp_path / "moomoo.log"
     now = [100.0]

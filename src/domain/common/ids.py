@@ -59,6 +59,10 @@ class EntityIdPrefix(StrEnum):
     REVIEW_ITEM = "review_item"
     ACTIVITY_ANNOTATION = "activity_annotation"
     TRADE_CYCLE_OVERRIDE = "trade_cycle_override"
+    EXTERNAL_NOTE = "external_note"
+    EXTERNAL_NOTE_REVISION = "external_note_revision"
+    EXTERNAL_NOTE_INTERPRETATION = "external_note_interpretation"
+    EXTERNAL_NOTE_SYNC = "external_note_sync"
     OPERATIONAL_JOB_RUN = "operational_job_run"
     # Phase 3A append-only futures definition identity prefixes.
     FUTURES_PRODUCT = "futures_product"

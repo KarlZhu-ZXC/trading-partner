@@ -200,8 +200,8 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_evaluate",
     ]
     # Exact inventory bytes freeze the current compact registration output.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 27_631
-    assert _wire_size(tools) == 37_876
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 27_680
+    assert _wire_size(tools) == 37_925
 
 
 @pytest.mark.asyncio
@@ -788,6 +788,29 @@ async def test_trade_cycles_routes_through_durable_transaction_projection() -> N
 
     assert result["ok"] is True
     container.services.account_transactions.get_trade_cycles.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_behavior_summary_routes_aware_date_window_to_durable_calculator() -> None:
+    container = _container()
+    container.services.account_transactions.get_behavior_summary.return_value = _Envelope()
+
+    result = await create_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_analyze",
+        {
+            "request": {
+                "operation": "behavior_summary",
+                "start": "2026-07-01T00:00:00Z",
+                "end": "2026-07-31T23:59:59Z",
+                "minimum_sample_size": 3,
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    request = container.services.account_transactions.get_behavior_summary.call_args.args[0]
+    assert request.start == datetime(2026, 7, 1, tzinfo=UTC)
+    assert request.end == datetime(2026, 7, 31, 23, 59, 59, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

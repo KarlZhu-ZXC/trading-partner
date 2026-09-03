@@ -6,6 +6,7 @@ import {
   Badge,
   Card,
   DataBoundary,
+  QuickLink,
   Empty,
   MetricTile,
   RefreshButton,
@@ -22,6 +23,7 @@ import { monitorRunPresentation } from "./lib/monitor-runs";
 type Dict = Record<string, unknown>;
 
 function durationLabel(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
   const seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -80,12 +82,13 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
+  const groupedInboxCount = notices.actionItems.length + (unresolvedReviewCount > 0 ? 1 : 0);
   const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   return (
     <ConsoleShell active="overview">
       <DataBoundary loading={result.loading} error={result.error}>
-        <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<Link href="/agenda">Open /agenda</Link>}>
+        <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
           <div className="agenda-summary-grid">
             <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
             <MetricTile label="Upcoming" value={String(agendaCounts.upcoming)} />
@@ -115,16 +118,14 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card className="span-12" kicker="DECISION WORKFLOW" title="Today’s Inbox" subtitle="Manual actions that need a deliberate response" action={<Badge value={`${notices.actionItems.length} ACTIONS`} />}>
-            {notices.actionItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Manual Action Required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{notices.actionItems.slice(0, 16).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          <Card id="review-queue" className="span-12" kicker="DECISION WORKFLOW" title="Action & Review Inbox" subtitle="Grouped manual actions and durable closure metrics" action={<div className="page-actions"><Badge value={`${groupedInboxCount} GROUPS`} /><QuickLink href="/decision-workbench#reviews">Open Reviews</QuickLink></div>}>
+            {groupedInboxCount === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Manual Action Required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{unresolvedReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Review Queue</strong><span>{unresolvedReviewCount} open or acknowledged items · grouped here to avoid flooding the Home page.</span></div><span aria-hidden="true">→</span></Link> : null}{notices.actionItems.slice(0, 15).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">
                 <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the Current Source Status</small></div>
                 <div className="attention-queue">{notices.automaticItems.slice(0, 6).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>
               </div>
             ) : null}
-          </Card>
-          <Card id="review-queue" className="span-12" kicker="DURABLE CLOSURE" title="Review Queue Summary" subtitle="Lifecycle metrics from the Journal workflow" action={<Link className="text-link" href="/decision-workbench">Open Journal →</Link>}>
             <div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
               <span>Open<strong>{String(Number(reviewMetrics.open_count ?? 0) + Number(reviewMetrics.acknowledged_count ?? 0))}</strong></span>
               <span>Overdue<strong>{String(reviewMetrics.overdue_count ?? 0)}</strong></span>
@@ -133,7 +134,6 @@ export default function OverviewPage() {
               <span>Median Close<strong>{durationLabel(reviewMetrics.median_open_to_close_seconds)}</strong><small>n={String(reviewMetrics.closure_sample_size ?? 0)}</small></span>
               <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
             </div>
-            <div className="attention-clear"><span aria-hidden="true">{unresolvedReviewCount === 0 ? "✓" : "→"}</span><div><strong>{unresolvedReviewCount === 0 ? "No Unresolved Review Items" : `${unresolvedReviewCount} Items Need Review`}</strong><small>Acknowledge, schedule, and resolve items in Journal so the Home page stays a concise overview.</small></div></div>
           </Card>
           <Card
             className="span-12"
@@ -182,8 +182,8 @@ export default function OverviewPage() {
             className="span-8"
             kicker="MONITOR PULSE"
             title="Current Monitor Posture"
-            subtitle="Latest rule state from each active definition"
-            action={<Link className="text-link" href="/monitors">View All →</Link>}
+            subtitle="Triggered and unavailable rules first; quiet rules are summarized"
+            action={<QuickLink href="/monitors">View All</QuickLink>}
           >
             {activeMonitorItems.length === 0 ? (
               <Empty>No Monitor definitions yet.</Empty>
@@ -192,6 +192,9 @@ export default function OverviewPage() {
                 {activeMonitorItems.slice(0, 4).map((item) => {
                   const monitor = (item.monitor ?? {}) as Dict;
                   const states = listOf<Dict>(item, "rule_states");
+                  const attentionStates = states.filter((state) => String(state.state ?? "").toUpperCase() !== "QUIET");
+                  const triggeredStates = attentionStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED");
+                  const unavailableStates = attentionStates.length - triggeredStates.length;
                   const run = (item.latest_run ?? {}) as Dict;
                   return (
                     <article className="monitor-row" key={String(monitor.monitor_id)}>
@@ -205,14 +208,9 @@ export default function OverviewPage() {
                         </Link>
                         <span>Created {formatDate(item.monitor_created_at ?? monitor.created_at)} · {String(monitor.cadence ?? "—")} · v{String(monitor.version ?? "—")}</span>
                       </div>
-                      <div className="state-dots" aria-label="Rule States">
-                        {states.slice(0, 10).map((state) => (
-                          <i
-                            className={`state-dot ${String(state.state ?? "").toLowerCase()}`}
-                            key={String(state.rule_code)}
-                            title={`${String(state.rule_code)}: ${String(state.state)}`}
-                          />
-                        ))}
+                      <div className="monitor-state-summary" aria-label="Rule State Summary">
+                        <strong>{triggeredStates.length} Triggered</strong>
+                        <span>{unavailableStates ? `${unavailableStates} Unavailable · ` : ""}{states.length - attentionStates.length} Quiet</span>
                       </div>
                       <div className="run-meta">
                         <Badge value={String(run.status ?? monitor.status ?? "—")} />

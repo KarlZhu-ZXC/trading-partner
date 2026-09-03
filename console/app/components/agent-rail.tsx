@@ -74,7 +74,7 @@ import {
   AgentMessageCard,
   AgentReceiptCard,
 } from "./agent-message-card";
-import { ConfirmationDialog } from "./ui";
+import { ConfirmationDialog, Disclosure } from "./ui";
 import {
   AGENT_RAIL_DEFAULT_WIDTH,
   AGENT_RAIL_MAX_VIEWPORT_RATIO,
@@ -1364,21 +1364,22 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
 
             <div className="agent-rail-scroll" aria-live="polite">
               {!!runtimeComponents.length && !historyOpen && !preferencesOpen && (
-                <details className="agent-component-status">
-                  <summary>Runtime Components · {runtimeComponents.filter(([, value]) => value.running).length}/{runtimeComponents.length} supervised</summary>
-                  <div>
-                    {runtimeComponents.map(([key, value]) => (
-                      <span className={value.running ? "running" : "stopped"} key={key}>
-                        <strong>{key.replaceAll("_", " ")}</strong>
-                        <small>{value.running
-                          ? `RUNNING · PID ${value.pid ?? "—"}${value.start_time ? ` · ${displayDate(value.start_time)}` : ""}`
-                          : value.installed
-                            ? `STOPPED · ${value.last_error ?? `EXIT ${value.last_exit ?? "—"}`}`
-                            : "NOT INSTALLED"}</small>
-                      </span>
-                    ))}
-                  </div>
-                </details>
+                <Disclosure
+                  className="agent-component-status"
+                  title={`Runtime Components · ${runtimeComponents.filter(([, value]) => value.running).length}/${runtimeComponents.length} supervised`}
+                  variant="compact"
+                >
+                  {runtimeComponents.map(([key, value]) => (
+                    <span className={value.running ? "running" : "stopped"} key={key}>
+                      <strong>{key.replaceAll("_", " ")}</strong>
+                      <small>{value.running
+                        ? `RUNNING · PID ${value.pid ?? "—"}${value.start_time ? ` · ${displayDate(value.start_time)}` : ""}`
+                        : value.installed
+                          ? `STOPPED · ${value.last_error ?? `EXIT ${value.last_exit ?? "—"}`}`
+                          : "NOT INSTALLED"}</small>
+                    </span>
+                  ))}
+                </Disclosure>
               )}
               {handoff && !historyOpen && (
                 <div className="agent-rail-handoff">

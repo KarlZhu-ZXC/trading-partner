@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { authenticatedFetch } from "../lib/api";
 import type { AgentImageAttachment, AgentMessage, AgentReceipt } from "../lib/agent-api";
 import { AgentMessageContent } from "./agent-message-content";
+import { Disclosure } from "./ui";
 
 type Dict = Record<string, unknown>;
 
@@ -273,10 +274,13 @@ export function AgentMessageCard({
         </div>
       )}
       {!!receipts.length && (
-        <details className="agent-message-evidence">
-          <summary>Evidence &amp; Tools · {receipts.length}</summary>
-          <div>{receipts.map((receipt) => <AgentReceiptCard key={receipt.receipt_id} receipt={receipt} />)}</div>
-        </details>
+        <Disclosure
+          className="agent-message-evidence"
+          title={`Evidence & Tools · ${receipts.length}`}
+          variant="compact"
+        >
+          {receipts.map((receipt) => <AgentReceiptCard key={receipt.receipt_id} receipt={receipt} />)}
+        </Disclosure>
       )}
     </article>
   );

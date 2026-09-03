@@ -8,6 +8,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Trading Partner · Local Hub",
   description: "Trading Partner local operations, investment research, and shared Agent console.",
+  icons: {
+    icon: [{ url: "/assets/trading-partner-brand/logo.png", type: "image/png" }],
+    apple: [{ url: "/assets/trading-partner-brand/logo.png", type: "image/png" }],
+  },
 };
 
 const appearanceInitScript = `

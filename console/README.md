@@ -72,7 +72,7 @@ npm run dev:lan
 
 脚本仅开放密码保护的前端；后端仍只监听 `127.0.0.1:8765`。LAN 登录使用 12 小时
 HttpOnly、SameSite Cookie，连续失败会被限流。此模式只适用于可信局域网的普通 HTTP，
-不能用于公网、端口映射或访客网络。密码不能为空，且不要放入 URL、Git 或
+不能用于公网、端口映射或访客网络。密码至少 16 个字符，且不要放入 URL、Git 或
 `NEXT_PUBLIC_*` 环境变量。生产构建可使用 `npm run build && npm run start:lan`。
 
 若希望受保护的 LAN Web 与 Console supervisor 一同启动并在登录后自动恢复，安装持久模式：

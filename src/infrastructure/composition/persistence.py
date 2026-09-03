@@ -24,6 +24,7 @@ from application.ports.daily_equity_repository import (
     DailyEquityRepository,
     JournalActivationRepository,
 )
+from application.ports.external_note_repository import ExternalNoteRepository
 from application.ports.historical_validation_artifact_repository import (
     HistoricalValidationArtifactRepository,
 )
@@ -41,7 +42,7 @@ from application.ports.workflow_run_repository import WorkflowRunRepository
 from infrastructure.artifacts.historical_validation import (
     FileHistoricalValidationArtifactRepository,
 )
-from infrastructure.config.settings import PROJECT_ROOT, AppSettings
+from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.account_snapshot_repository import (
     SqlAlchemyAccountSnapshotRepository,
 )
@@ -77,6 +78,9 @@ from infrastructure.persistence.daily_equity_repository import SqlAlchemyDailyEq
 from infrastructure.persistence.database import (
     SqlAlchemyDatabase,
     create_engine_from_url,
+)
+from infrastructure.persistence.external_note_repository import (
+    SqlAlchemyExternalNoteRepository,
 )
 from infrastructure.persistence.industry_metric_repository import (
     SqlAlchemyIndustryMetricRepository,
@@ -140,6 +144,7 @@ class PersistenceInfrastructure:
     catalyst_agenda_scope: CatalystAgendaScopeReader
     catalyst_agenda_sync: CatalystAgendaSyncRepository
     review_items: ReviewItemRepository
+    external_notes: ExternalNoteRepository
     research_uow_factory: ResearchUowFactory
     watchlist_uow_factory: WatchlistUowFactory
 
@@ -199,7 +204,7 @@ def build_persistence_infrastructure(
         broker_orders=SqlAlchemyBrokerOrderRepository(engine),
         workflow_runs=SqlAlchemyWorkflowRunRepository(engine),
         historical_validation_artifacts=FileHistoricalValidationArtifactRepository(
-            PROJECT_ROOT / "data" / "artifacts" / "historical_validation"
+            settings.paths.historical_validation
         ),
         industry_metrics=SqlAlchemyIndustryMetricRepository(engine),
         post_market_sync_runs=SqlAlchemyPostMarketSyncRunRepository(engine),
@@ -209,6 +214,7 @@ def build_persistence_infrastructure(
         catalyst_agenda_scope=SqlAlchemyCatalystAgendaScopeReader(engine),
         catalyst_agenda_sync=SqlAlchemyCatalystAgendaSyncRepository(engine),
         review_items=SqlAlchemyReviewItemRepository(engine),
+        external_notes=SqlAlchemyExternalNoteRepository(engine),
         research_uow_factory=research_uow_factory,
         watchlist_uow_factory=watchlist_uow_factory,
     )

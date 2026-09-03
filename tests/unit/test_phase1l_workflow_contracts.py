@@ -162,6 +162,42 @@ def test_account_transaction_repository_is_idempotent_and_filtered() -> None:
     engine.dispose()
 
 
+def test_account_transaction_repository_enriches_exact_missing_instrument_identity() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAccountTransactionRepository(engine)
+    dividend = AccountTransaction(
+        provider_transaction_id="dividend-1",
+        account_ref="account_hash_1",
+        provider=VendorId.SCHWAB,
+        instrument_id=None,
+        kind=AccountTransactionKind.DIVIDEND,
+        side=None,
+        quantity=None,
+        price=None,
+        fees=Decimal(0),
+        currency="USD",
+        occurred_at=NOW,
+        cash_amount=Decimal("12.50"),
+        source_type="DIVIDEND_OR_INTEREST",
+        mapping_version="schwab_activity_v1",
+    )
+    enriched = replace(
+        dividend,
+        instrument_id="equity:US:SPG",
+        mapping_version="schwab_activity_v2",
+    )
+
+    assert repository.append_many((dividend,)) == (dividend,)
+    assert repository.append_many((enriched,)) == ()
+    restored = repository.list(
+        providers=(VendorId.SCHWAB,), start=NOW, end=NOW, limit=10
+    )[0]
+    assert restored.instrument_id == "equity:US:SPG"
+    assert restored.mapping_version == "schwab_activity_v2"
+    engine.dispose()
+
+
 def test_account_transaction_repository_filters_by_instant_across_utc_offsets() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trading-partner.local/contracts/observation-source-v1.schema.json",
+  "title": "Trading Partner Full-Text Observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_code", "external_id", "title", "full_body", "observed_at"],
+  "properties": {
+    "source_code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+    },
+    "external_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50000
+    },
+    "full_body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_timestamp": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "primary_instrument_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "related_provider_stock_ids": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "related_provider_codes": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "visibility": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    }
+  }
+}

@@ -23,19 +23,19 @@ from domain.agent.models import (
     arguments_digest,
 )
 from domain.common.ids import EntityIdPrefix
-from infrastructure.providers.telegram.agent_long_poller import (
+from infrastructure.system.clock import SystemClock
+from infrastructure.system.id_generator import Uuid7IdGenerator
+from interfaces.telegram.agent_client import TelegramBotAgentClient
+from interfaces.telegram.agent_poller import (
     TELEGRAM_AGENT_CHANNEL,
     TELEGRAM_AGENT_CURSOR_KEY,
     TelegramAgentPoller,
-    TelegramBotAgentClient,
     TelegramPollReceipt,
     TelegramUpdate,
     split_telegram_text,
     validate_agent_chat_id,
     validate_agent_user_id,
 )
-from infrastructure.system.clock import SystemClock
-from infrastructure.system.id_generator import Uuid7IdGenerator
 
 
 class MemoryAgentRepository:

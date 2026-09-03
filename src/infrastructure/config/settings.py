@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, DotEnvSettingsSource, NoDecode, Sett
 from domain.common.enums import AppEnvironment, DataCategory, LogLevel
 from domain.common.errors import ConfigurationError
 from infrastructure.config.llm import LLMEndpointConfig, resolve_llm_endpoint_config
+from infrastructure.config.runtime_paths import RuntimePaths
 
 # settings.py → config → infrastructure → src → PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -39,6 +40,7 @@ _SECRET_FIELD_NAMES = frozenset(
         "schwab_client_secret",
         "schwab_account_hashes",
         "schwab_token_path",
+        "account_basis_checkpoints_path",
         "provider_proxy_url",
         "apify_api_token",
         "dukascopy_api_key",
@@ -113,6 +115,10 @@ class AppSettings(BaseSettings):
     mcp_server_name: str = Field(min_length=1)
     default_timezone: str = Field(min_length=1)
     provider_timeout_seconds: float = Field(gt=0)
+    # All mutable local state derives from one stable runtime root. Source
+    # checkouts default to the repository; installed runtimes set this to the
+    # directory containing their explicit runtime.env.
+    runtime_root: Path = PROJECT_ROOT
 
     # Optional secret-safe OpenTelemetry. Disabled by default; spans never
     # record request payloads, prompts, URLs, credentials, or exception text.
@@ -434,6 +440,25 @@ class AppSettings(BaseSettings):
             "OPENCODE_GO_MODEL",
         ),
     )
+    external_note_analysis_enabled: bool = True
+    external_note_analysis_model: str = Field(
+        default="qwen3.8-flash",
+        validation_alias=AliasChoices(
+            "external_note_analysis_model",
+            "EXTERNAL_NOTE_ANALYSIS_MODEL",
+        ),
+    )
+    external_note_analysis_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
+    external_note_analysis_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
+    observation_inbox_dir: Path = Path("data/observations/inbox")
+    moomoo_notes_remote_enabled: bool = True
+    moomoo_notes_cookie_path: Path = Path("data/secrets/moomoo_notes_cookie.txt")
+    account_basis_checkpoints_path: Path | None = None
+    moomoo_notes_request_delay_min_seconds: float = Field(default=0.6, ge=0, le=30)
+    moomoo_notes_request_delay_max_seconds: float = Field(default=1.8, ge=0, le=60)
+    moomoo_notes_request_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    moomoo_notes_remote_max_stock_ids: int = Field(default=50, ge=1, le=100)
+    moomoo_notes_remote_max_notes: int = Field(default=30, ge=1, le=100)
     # ``max`` preserves the legacy Monitor default.  An explicitly blank
     # generic value normalizes to ``None`` so ``LLM_REASONING_MODE=none`` can
     # remain a complete provider-neutral configuration.
@@ -992,6 +1017,26 @@ class AppSettings(BaseSettings):
         return configs
 
     @property
+    def resolved_external_note_analysis_config(self) -> LLMEndpointConfig | None:
+        """Resolve the private-note draft extractor independently from Monitor/Agent."""
+
+        api_key = self.opencode_go_api_key or self.opencode_api_key
+        if not self.external_note_analysis_enabled or api_key is None:
+            return None
+        return LLMEndpointConfig(
+            api_style="chat_completions",
+            base_url=self.opencode_go_base_url,
+            api_key=api_key,
+            model=self.external_note_analysis_model,
+            reasoning_mode="thinking",
+            reasoning_effort="max",
+            native_web_search="disabled",
+            native_web_extractor="disabled",
+            timeout_seconds=self.external_note_analysis_timeout_seconds,
+            max_output_tokens=self.external_note_analysis_max_output_tokens,
+        )
+
+    @property
     def default_agent_llm_id(self) -> str | None:
         configs = self.resolved_agent_llm_configs
         if not configs:
@@ -1210,12 +1255,21 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _normalize_sqlite_url_and_paths(self) -> Self:
+        runtime_root = self.runtime_root.expanduser()
+        if not runtime_root.is_absolute():
+            runtime_root = (PROJECT_ROOT / runtime_root).resolve()
+        else:
+            runtime_root = runtime_root.resolve()
+        object.__setattr__(self, "runtime_root", runtime_root)
+        data_root = (runtime_root / "data").resolve()
+        secret_root = (data_root / "secrets").resolve()
+
         url = self.database_url
         if url.startswith("sqlite:///"):
             path_part = url.removeprefix("sqlite:///")
             # Absolute path: sqlite:////abs/path → path_part starts with /
             if not path_part.startswith("/"):
-                absolute = (PROJECT_ROOT / path_part).resolve()
+                absolute = (runtime_root / path_part).resolve()
                 object.__setattr__(self, "database_url", f"sqlite:///{absolute}")
 
         chain_path = self.vendor_chain_path
@@ -1237,33 +1291,55 @@ class AppSettings(BaseSettings):
 
         token_path = self.schwab_token_path
         if not token_path.is_absolute():
-            token_path = (PROJECT_ROOT / token_path).resolve()
-        secret_root = (PROJECT_ROOT / "data" / "secrets").resolve()
+            token_path = (runtime_root / token_path).resolve()
         if not token_path.is_relative_to(secret_root):
             raise ValueError("schwab_token_path must be under project data/secrets")
         object.__setattr__(self, "schwab_token_path", token_path)
 
+        moomoo_cookie_path = self.moomoo_notes_cookie_path
+        if not moomoo_cookie_path.is_absolute():
+            moomoo_cookie_path = (runtime_root / moomoo_cookie_path).resolve()
+        if not moomoo_cookie_path.is_relative_to(secret_root):
+            raise ValueError("moomoo_notes_cookie_path must be under project data/secrets")
+        object.__setattr__(self, "moomoo_notes_cookie_path", moomoo_cookie_path)
+
+        checkpoint_path = self.account_basis_checkpoints_path
+        if checkpoint_path is not None:
+            if not checkpoint_path.is_absolute():
+                checkpoint_path = (runtime_root / checkpoint_path).resolve()
+            if not checkpoint_path.is_relative_to(secret_root):
+                raise ValueError(
+                    "account_basis_checkpoints_path must be under runtime data/secrets"
+                )
+            object.__setattr__(self, "account_basis_checkpoints_path", checkpoint_path)
+
+        observation_inbox = self.observation_inbox_dir
+        if not observation_inbox.is_absolute():
+            observation_inbox = (runtime_root / observation_inbox).resolve()
+        if not observation_inbox.is_relative_to(data_root):
+            raise ValueError("observation_inbox_dir must be under runtime data")
+        object.__setattr__(self, "observation_inbox_dir", observation_inbox)
+
         manual_watchlist_path = self.manual_watchlist_csv_path
         if manual_watchlist_path is not None and not manual_watchlist_path.is_absolute():
-            manual_watchlist_path = (PROJECT_ROOT / manual_watchlist_path).resolve()
+            manual_watchlist_path = (runtime_root / manual_watchlist_path).resolve()
         object.__setattr__(self, "manual_watchlist_csv_path", manual_watchlist_path)
 
         retro_root = self.retro_obsidian_journal_dir
         if retro_root is not None and not retro_root.is_absolute():
-            retro_root = (PROJECT_ROOT / retro_root).resolve()
+            retro_root = (runtime_root / retro_root).resolve()
         object.__setattr__(self, "retro_obsidian_journal_dir", retro_root)
 
         lock_path = self.post_market_sync_lock_path
         if not lock_path.is_absolute():
-            lock_path = (PROJECT_ROOT / lock_path).resolve()
-        data_root = (PROJECT_ROOT / "data").resolve()
+            lock_path = (runtime_root / lock_path).resolve()
         if not lock_path.is_relative_to(data_root):
             raise ValueError("post_market_sync_lock_path must be under project data")
         object.__setattr__(self, "post_market_sync_lock_path", lock_path)
 
         telegram_agent_lock_path = self.telegram_agent_lock_path
         if not telegram_agent_lock_path.is_absolute():
-            telegram_agent_lock_path = (PROJECT_ROOT / telegram_agent_lock_path).resolve()
+            telegram_agent_lock_path = (runtime_root / telegram_agent_lock_path).resolve()
         if not telegram_agent_lock_path.is_relative_to(data_root):
             raise ValueError("telegram_agent_lock_path must be under project data")
         object.__setattr__(self, "telegram_agent_lock_path", telegram_agent_lock_path)
@@ -1274,6 +1350,14 @@ class AppSettings(BaseSettings):
         if self.provider_retry_max_delay_seconds < self.provider_retry_base_delay_seconds:
             raise ValueError(
                 "provider_retry_max_delay_seconds must be >= provider_retry_base_delay_seconds"
+            )
+        if (
+            self.moomoo_notes_request_delay_max_seconds
+            < self.moomoo_notes_request_delay_min_seconds
+        ):
+            raise ValueError(
+                "moomoo_notes_request_delay_max_seconds must be >= "
+                "moomoo_notes_request_delay_min_seconds"
             )
         return self
 
@@ -1360,6 +1444,7 @@ class AppSettings(BaseSettings):
                     env_file=path,
                     env_file_encoding="utf-8",
                 )()
+                values.setdefault("runtime_root", path.parent.resolve())
                 return cls(_env_file=None, **values)  # type: ignore[call-arg]
             if source_layout:
                 default_env = PROJECT_ROOT / ".env"
@@ -1383,6 +1468,18 @@ class AppSettings(BaseSettings):
         if attr is not None:
             return int(getattr(self, attr))
         return self.cache_ttl_default_seconds
+
+    @property
+    def runtime_data_root(self) -> Path:
+        """Stable owner-controlled root for mutable local data."""
+
+        return self.paths.data
+
+    @property
+    def paths(self) -> RuntimePaths:
+        """Return the typed mutable-data layout for this runtime."""
+
+        return RuntimePaths.from_root(self.runtime_root)
 
     def timeout_for(self, category: DataCategory) -> float:
         """Return provider timeout seconds for ``category`` (design §12.1 / 1E).

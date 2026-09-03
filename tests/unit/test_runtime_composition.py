@@ -6,6 +6,7 @@ from domain.common.enums import AppEnvironment, LogLevel, VendorId
 from infrastructure.composition.runtime import (
     build_agent_model_providers,
     build_agent_web_search_provider,
+    build_monitor_event_analysis_provider,
     build_monitor_judgment_provider,
     build_trade_retro_narrative_provider,
 )
@@ -74,9 +75,11 @@ def test_opencode_go_composition_supports_agent_and_monitor() -> None:
 
     agent_provider = build_agent_model_providers(settings)["opencode_go"]
     monitor_provider = build_monitor_judgment_provider(settings)
+    event_analysis_provider = build_monitor_event_analysis_provider(settings)
 
     assert isinstance(agent_provider, OpenCodeGoModelProvider)
     assert isinstance(monitor_provider, OpenCodeGoMonitorJudgmentProvider)
+    assert isinstance(event_analysis_provider, OpenCodeGoModelProvider)
 
 
 def test_opencode_go_composition_supports_trade_retro_narrative() -> None:

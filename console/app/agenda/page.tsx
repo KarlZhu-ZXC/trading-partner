@@ -10,6 +10,7 @@ import {
   Badge,
   Card,
   DataBoundary,
+  Disclosure,
   Empty,
   FieldLabel,
   PageActionMenu,
@@ -151,6 +152,10 @@ function asInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.trunc(parsed);
+}
+
+function optionLabel(value: string): string {
+  return value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()).join(" ");
 }
 
 function toNumber(value: unknown): number {
@@ -833,6 +838,7 @@ export default function CatalystAgendaPage() {
         )}
 
         <Card className="span-12" kicker="PROVIDER REFRESH" title="Calendar Sync" subtitle="Manually refresh external catalyst dates">
+          <Disclosure className="agenda-sync-disclosure" title="Configure Provider Calendar Sync" variant="panel">
           <p className="agenda-note">
             Explicitly sync provider calendars (manual only). This does not refresh accounts or watchlists.
           </p>
@@ -877,6 +883,7 @@ export default function CatalystAgendaPage() {
             </ActionButton>
           </div>
           <ErrorNote>{syncError}</ErrorNote>
+          </Disclosure>
           {lastSync ? (
             <div className="agenda-sync-receipt">
               <h3>Last Sync Receipt</h3>
@@ -931,25 +938,25 @@ export default function CatalystAgendaPage() {
             <label>
               <span>Time Bucket</span>
               <select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value as (typeof TIME_FILTERS)[number])}>
-                {TIME_FILTERS.map((item) => <option key={item}>{item}</option>)}
+                {TIME_FILTERS.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
               </select>
             </label>
             <label>
               <span>Kind</span>
               <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
-                {kindOptions.map((item) => <option key={item}>{item}</option>)}
+                {kindOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
               </select>
             </label>
             <label>
               <span>Scope</span>
               <select value={scopeFilter} onChange={(event) => setScopeFilter(event.target.value as (typeof SCOPE_OPTIONS)[number])}>
-                {scopeOptions.map((item) => <option key={item}>{item}</option>)}
+                {scopeOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
               </select>
             </label>
             <label>
               <span>Status</span>
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-                {statusOptions.map((item) => <option key={item}>{item}</option>)}
+                {statusOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
               </select>
             </label>
           </div>
@@ -1264,8 +1271,7 @@ export default function CatalystAgendaPage() {
                       </ActionButton>
                     </div>
 
-                    <details className="agenda-versions">
-                      <summary>Version History ({Math.max(versions.length - 1, 0)})</summary>
+                    <Disclosure className="agenda-versions" title={`Version History (${Math.max(versions.length - 1, 0)})`} variant="compact">
                       {versions.length <= 1 ? (
                         <p className="agenda-empty">No additional history versions returned.</p>
                       ) : (
@@ -1277,7 +1283,7 @@ export default function CatalystAgendaPage() {
                           ))}
                         </ul>
                       )}
-                    </details>
+                    </Disclosure>
                   </article>
                 );
               })}

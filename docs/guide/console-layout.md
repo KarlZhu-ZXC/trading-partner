@@ -44,6 +44,25 @@ action button.
 - Long lists collapse, paginate, or use tabs rather than forcing unrelated page
   regions to grow with them.
 
+## Disclosure and navigation primitives
+
+- Content accordions use the shared `Disclosure` component. Use `panel` for a
+  complete editor or workflow, `compact` for supporting detail, and `code` for
+  receipts, schemas, or raw durable state. Do not add page-local `<details>` /
+  `<summary>` styling, custom plus/minus glyphs, or a second chevron.
+- A disclosure summary contains one action-oriented title, at most one short
+  explanatory line, optional passive metadata, and the shared chevron. Form fields,
+  policy paragraphs, and action buttons belong in the expanded body.
+- Cross-page shortcuts use the shared `QuickLink` component. Do not ship naked
+  route labels, improvised arrow characters, or card-specific “Open /path” buttons.
+  Rich entity cards and links with custom navigation behavior may remain specialized.
+- Compact menus and filter popovers are not content accordions. They may use native
+  disclosure semantics only when their menu behavior and keyboard interaction are
+  separately styled and tested.
+- Multi-step corrections such as Cycle Split, Merge, or Relink must expose readable
+  object choices and a guided preview flow. Never make users copy opaque IDs or use
+  an unbounded native multi-select as the primary interaction.
+
 ## Interaction boundaries
 
 - A page load remains durable-only unless the product contract explicitly says

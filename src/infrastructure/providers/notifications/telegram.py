@@ -198,9 +198,17 @@ def _format_notification_html(title: str, body: str) -> str:
     changes_start = lines.index("CHANGES") + 1 if "CHANGES" in lines else rules_index
     changes = lines[changes_start:rules_index]
     judgment_index = lines.index("JUDGMENT") if "JUDGMENT" in lines else None
-    rule_end = judgment_index if judgment_index is not None else len(lines)
+    analysis_index = lines.index("MODEL_ANALYSIS") if "MODEL_ANALYSIS" in lines else None
+    rule_end = min(
+        index for index in (judgment_index, analysis_index, len(lines)) if index is not None
+    )
     rows, notes = _parse_rule_rows(lines[rules_index + 1 : rule_end])
-    judgment_lines = lines[judgment_index + 1 :] if judgment_index is not None else []
+    judgment_lines = (
+        lines[judgment_index + 1 : analysis_index or len(lines)]
+        if judgment_index is not None
+        else []
+    )
+    analysis_lines = lines[analysis_index + 1 :] if analysis_index is not None else []
     if not rows:
         return render_plain_text_html(title, body)
 
@@ -246,6 +254,8 @@ def _format_notification_html(title: str, body: str) -> str:
         sections.append(rule_cards)
     if notes:
         sections.append("\n".join(_format_notification_note(note) for note in notes))
+    if analysis_lines:
+        sections.append(_format_model_analysis(analysis_lines))
     return "\n\n".join(sections)
 
 
@@ -260,7 +270,11 @@ def _format_standalone_judgment_html(title: str, lines: list[str]) -> str:
     monitor_name = _prefixed_value(lines, "监控：")
     if monitor_name is not None and len(monitor_name) <= 80:
         sections.append(f"<i>{html.escape(monitor_name)}</i>")
-    sections.append(_format_judgment_section(lines))
+    analysis_index = lines.index("MODEL_ANALYSIS") if "MODEL_ANALYSIS" in lines else None
+    judgment_lines = lines[:analysis_index] if analysis_index is not None else lines
+    sections.append(_format_judgment_section(judgment_lines))
+    if analysis_index is not None:
+        sections.append(_format_model_analysis(lines[analysis_index + 1 :]))
     return "\n\n".join(sections)
 
 
@@ -305,6 +319,9 @@ def _format_post_market_summary_html(title: str, lines: list[str]) -> str:
         index = end_index + 1
     if notes:
         sections.append("\n".join(_format_notification_note(note) for note in notes))
+    if "MODEL_ANALYSIS" in lines:
+        analysis_index = lines.index("MODEL_ANALYSIS")
+        sections.append(_format_model_analysis(lines[analysis_index + 1 :]))
     return "\n\n".join(sections)
 
 
@@ -331,9 +348,17 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         else []
     )
     judgment_index = lines.index("JUDGMENT") if "JUDGMENT" in lines else None
-    rule_end = judgment_index if judgment_index is not None else len(lines)
+    analysis_index = lines.index("MODEL_ANALYSIS") if "MODEL_ANALYSIS" in lines else None
+    rule_end = min(
+        index for index in (judgment_index, analysis_index, len(lines)) if index is not None
+    )
     rows, notes = _parse_rule_rows(lines[rules_index + 1 : rule_end])
-    judgment_lines = lines[judgment_index + 1 :] if judgment_index is not None else []
+    judgment_lines = (
+        lines[judgment_index + 1 : analysis_index or len(lines)]
+        if judgment_index is not None
+        else []
+    )
+    analysis_lines = lines[analysis_index + 1 :] if analysis_index is not None else []
     if not rows:
         return None
     heading = symbol or name
@@ -379,7 +404,15 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
     )
     if rule_cards:
         parts.append(rule_cards)
+    if analysis_lines:
+        parts.append(_format_model_analysis(analysis_lines))
     return "\n".join(parts)
+
+
+def _format_model_analysis(lines: list[str]) -> str:
+    values = tuple(item.strip() for item in lines if item.strip())
+    body = "\n".join(f"• {html.escape(item)}" for item in values)
+    return f"🤖 <b>模型分析</b>\n{body}"
 
 
 def _format_price_context(
@@ -426,10 +459,7 @@ def _format_notification_note(note: str) -> str:
     )
     for prefix, icon, label in labels:
         if note.startswith(prefix):
-            return (
-                f"{icon} <b>{label}</b>："
-                f"{html.escape(note.removeprefix(prefix).strip())}"
-            )
+            return f"{icon} <b>{label}</b>：{html.escape(note.removeprefix(prefix).strip())}"
     return f"<i>{html.escape(note)}</i>"
 
 
@@ -469,9 +499,7 @@ def _format_judgment_section(lines: list[str]) -> str:
         ]
         if diagnostics:
             visible.append(
-                "<details><summary>模型诊断</summary>"
-                + "\n".join(diagnostics)
-                + "</details>"
+                "<details><summary>模型诊断</summary>" + "\n".join(diagnostics) + "</details>"
             )
         return "\n".join(visible)
 
@@ -511,9 +539,7 @@ def _format_judgment_section(lines: list[str]) -> str:
         details.append(_format_point_block("失效条件", invalidation_points))
     if details:
         visible.append(
-            "<details><summary>更多判断与失效条件</summary>"
-            + "\n".join(details)
-            + "</details>"
+            "<details><summary>更多判断与失效条件</summary>" + "\n".join(details) + "</details>"
         )
     visible.append("<i>只记录判断；未修改持仓、阶段或订单。</i>")
     return "\n".join(visible)
@@ -653,10 +679,7 @@ def _change_banner(changes: list[str]) -> str:
     if event_types == {"TRIGGERED"}:
         return "🟥 <b>新告警</b>"
     if event_types == {"RECOVERED"}:
-        return (
-            "🟩 <b>告警解除</b>\n"
-            "原触发条件当前已不成立；不代表价格上涨或行情转好。"
-        )
+        return "🟩 <b>告警解除</b>\n原触发条件当前已不成立；不代表价格上涨或行情转好。"
     return f"🟨 <b>监控状态变化 · {len(changes)} 项</b>"
 
 
@@ -717,12 +740,7 @@ def _format_rule_table(
             symbol=symbol,
         )
         rule_cell = f"<b>{html.escape(condition)}</b> · {html.escape(display_meaning)}"
-        table_rows.append(
-            "<tr>"
-            f"<td>{state_cell}</td>"
-            f"<td>{rule_cell}</td>"
-            "</tr>"
-        )
+        table_rows.append(f"<tr><td>{state_cell}</td><td>{rule_cell}</td></tr>")
     table_rows.append("</table>")
     return "".join(table_rows)
 

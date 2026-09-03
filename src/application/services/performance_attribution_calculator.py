@@ -8,7 +8,11 @@ from datetime import datetime
 from decimal import Decimal
 
 from domain.attribution.enums import AttributionStatus, CostBasisMethod, LotDirection
-from domain.attribution.models import AccountPerformance, InstrumentPerformance
+from domain.attribution.models import (
+    AccountPerformance,
+    InstrumentPerformance,
+    PositionBasisCheckpoint,
+)
 from domain.common.enums import VendorId
 from domain.portfolio.enums import (
     AccountPositionSide,
@@ -34,12 +38,20 @@ class _InstrumentAccumulator:
     matched_quantity: Decimal = Decimal(0)
     known_fees: Decimal = Decimal(0)
     fees_complete: bool = True
+    dividend_income: Decimal = Decimal(0)
+    dividend_income_complete: bool = True
     activity_ids: list[str] = field(default_factory=list)
+    basis_checkpoint_ids: list[str] = field(default_factory=list)
     warning_codes: set[str] = field(default_factory=set)
 
 
 class PerformanceAttributionCalculator:
     """Calculate facts only; no Provider calls, persistence, or judgment scoring."""
+
+    def __init__(
+        self, checkpoints: tuple[PositionBasisCheckpoint, ...] = ()
+    ) -> None:
+        self._checkpoints = checkpoints
 
     def calculate_account(
         self,
@@ -62,6 +74,14 @@ class PerformanceAttributionCalculator:
             and item.currency == currency
             and item.occurred_at <= end
         )
+        checkpoints = tuple(
+            item
+            for item in self._checkpoints
+            if item.account_ref == account_ref
+            and item.provider is provider
+            and item.currency == currency
+            and item.effective_at <= end
+        )
         if method is CostBasisMethod.BROKER_REPORTED:
             return self._broker_reported(
                 account_ref=account_ref,
@@ -83,6 +103,7 @@ class PerformanceAttributionCalculator:
             end=end,
             opening_history_verified=opening_history_verified,
             coverage_warning_codes=coverage_warning_codes,
+            checkpoints=checkpoints,
         )
 
     def _fifo(
@@ -97,6 +118,7 @@ class PerformanceAttributionCalculator:
         end: datetime,
         opening_history_verified: bool,
         coverage_warning_codes: tuple[str, ...],
+        checkpoints: tuple[PositionBasisCheckpoint, ...],
     ) -> AccountPerformance:
         lots: dict[str, deque[_Lot]] = defaultdict(deque)
         accumulators: dict[str, _InstrumentAccumulator] = defaultdict(
@@ -105,23 +127,70 @@ class PerformanceAttributionCalculator:
         account_warnings = set(coverage_warning_codes)
         if not opening_history_verified:
             account_warnings.add("FIFO_OPENING_HISTORY_UNVERIFIED")
+        latest_checkpoints: dict[str, PositionBasisCheckpoint] = {}
+        for checkpoint in checkpoints:
+            current = latest_checkpoints.get(checkpoint.instrument_id)
+            if current is None or checkpoint.effective_at > current.effective_at:
+                latest_checkpoints[checkpoint.instrument_id] = checkpoint
         if any(
             item.kind is AccountTransactionKind.CORPORATE_ACTION
+            and (
+                item.instrument_id is None
+                or item.instrument_id not in latest_checkpoints
+                or item.occurred_at > latest_checkpoints[item.instrument_id].effective_at
+            )
             for item in transactions
         ):
             account_warnings.add("CORPORATE_ACTION_LOT_EFFECT_UNSUPPORTED")
-        ordered = sorted(
-            transactions,
-            key=lambda item: (item.occurred_at, item.provider_transaction_id),
+        replaced_activity_ids = {
+            item.replaces_activity_id
+            for item in checkpoints
+            if item.replaces_activity_id is not None
+        }
+        events: list[
+            tuple[datetime, int, str, AccountTransaction | PositionBasisCheckpoint]
+        ] = [
+            (item.occurred_at, 0, item.provider_transaction_id, item)
+            for item in transactions
+            if item.provider_transaction_id not in replaced_activity_ids
+        ]
+        events.extend(
+            (item.effective_at, 1, item.checkpoint_id, item) for item in checkpoints
         )
-        for activity in ordered:
+        events.sort(key=lambda item: (item[0], item[1], item[2]))
+        for _, _, _, event in events:
+            if isinstance(event, PositionBasisCheckpoint):
+                queue = lots[event.instrument_id]
+                queue.clear()
+                queue.append(
+                    _Lot(
+                        direction=LotDirection.LONG,
+                        quantity=event.quantity,
+                        price=event.total_cost_basis / event.quantity,
+                        fee_per_unit=Decimal(0),
+                    )
+                )
+                accumulators[event.instrument_id].basis_checkpoint_ids.append(
+                    event.checkpoint_id
+                )
+                continue
+            activity = event
+            in_window = start <= activity.occurred_at <= end
+            if activity.kind is AccountTransactionKind.DIVIDEND:
+                if activity.instrument_id is not None and in_window:
+                    accumulator = accumulators[activity.instrument_id]
+                    accumulator.activity_ids.append(activity.provider_transaction_id)
+                    if activity.cash_amount is None:
+                        accumulator.dividend_income_complete = False
+                    else:
+                        accumulator.dividend_income += activity.cash_amount
+                continue
             if activity.kind is not AccountTransactionKind.TRADE:
                 continue
             if activity.instrument_id is None or activity.quantity is None:
                 account_warnings.add("TRADE_IDENTITY_INCOMPLETE")
                 continue
             accumulator = accumulators[activity.instrument_id]
-            in_window = start <= activity.occurred_at <= end
             if in_window:
                 accumulator.activity_ids.append(activity.provider_transaction_id)
                 if activity.fees is None:
@@ -202,23 +271,19 @@ class PerformanceAttributionCalculator:
                 warnings.add("ENDING_POSITION_MISMATCH")
             elif position is None and ending_quantity != 0:
                 warnings.add("VALUATION_SNAPSHOT_POSITION_UNAVAILABLE")
+            valuation_price = self._valuation_price(position, snapshot, end)
             unrealized: Decimal | None
             if ending_quantity == 0:
                 unrealized = Decimal(0)
-            elif (
-                position is None
-                or position.market_price is None
-                or position.market_price_at is None
-                or position.market_price_at > end
-            ):
+            elif valuation_price is None:
                 unrealized = None
                 warnings.add("TIMESTAMPED_VALUATION_UNAVAILABLE")
             else:
                 unrealized = sum(
                     (
-                        (position.market_price - lot.price) * lot.quantity
+                        (valuation_price - lot.price) * lot.quantity
                         if lot.direction is LotDirection.LONG
-                        else (lot.price - position.market_price) * lot.quantity
+                        else (lot.price - valuation_price) * lot.quantity
                         for lot in queue
                     ),
                     Decimal(0),
@@ -230,6 +295,23 @@ class PerformanceAttributionCalculator:
             )
             if realized_net is None:
                 warnings.add("TRANSACTION_FEES_UNAVAILABLE")
+            dividend_income = (
+                accumulator.dividend_income
+                if accumulator.dividend_income_complete
+                else None
+            )
+            if dividend_income is None:
+                warnings.add("DIVIDEND_ACTIVITY_AMOUNT_UNAVAILABLE")
+            net_trading_pnl = (
+                realized_net + unrealized
+                if realized_net is not None and unrealized is not None
+                else None
+            )
+            total_pnl = (
+                net_trading_pnl + dividend_income
+                if net_trading_pnl is not None and dividend_income is not None
+                else None
+            )
             instruments.append(
                 InstrumentPerformance(
                     instrument_id=instrument_id,
@@ -245,10 +327,16 @@ class PerformanceAttributionCalculator:
                     broker_reported_realized_pnl=(
                         position.realized_pnl if position is not None else None
                     ),
+                    dividend_income=dividend_income,
+                    net_trading_pnl=net_trading_pnl,
+                    total_pnl=total_pnl,
                     known_fees=accumulator.known_fees,
                     fees_complete=accumulator.fees_complete,
                     matched_quantity=accumulator.matched_quantity,
                     activity_ids=tuple(dict.fromkeys(accumulator.activity_ids)),
+                    basis_checkpoint_ids=tuple(
+                        dict.fromkeys(accumulator.basis_checkpoint_ids)
+                    ),
                     snapshot_id=snapshot.snapshot_id if snapshot is not None else None,
                     warning_codes=tuple(sorted(warnings)),
                 )
@@ -305,6 +393,22 @@ class PerformanceAttributionCalculator:
             if not fees_complete:
                 instrument_warnings.add("TRANSACTION_FEES_UNAVAILABLE")
             ending_quantity = self._signed_snapshot_quantity(position)
+            dividend_income = sum(
+                (
+                    item.cash_amount or Decimal(0)
+                    for item in activities
+                    if item.kind is AccountTransactionKind.DIVIDEND
+                ),
+                Decimal(0),
+            )
+            broker_trading_pnl = (
+                (position.realized_pnl or Decimal(0))
+                + (position.unrealized_pnl or Decimal(0))
+                if position is not None
+                and position.realized_pnl is not None
+                and position.unrealized_pnl is not None
+                else None
+            )
             instruments.append(
                 InstrumentPerformance(
                     instrument_id=instrument_id,
@@ -324,10 +428,18 @@ class PerformanceAttributionCalculator:
                     broker_reported_realized_pnl=(
                         position.realized_pnl if position is not None else None
                     ),
+                    dividend_income=dividend_income,
+                    net_trading_pnl=broker_trading_pnl,
+                    total_pnl=(
+                        broker_trading_pnl + dividend_income
+                        if broker_trading_pnl is not None
+                        else None
+                    ),
                     known_fees=known_fees,
                     fees_complete=fees_complete,
                     matched_quantity=Decimal(0),
                     activity_ids=tuple(item.provider_transaction_id for item in activities),
+                    basis_checkpoint_ids=(),
                     snapshot_id=snapshot.snapshot_id if snapshot is not None else None,
                     warning_codes=tuple(sorted(instrument_warnings)),
                 )
@@ -366,6 +478,29 @@ class PerformanceAttributionCalculator:
         return -quantity if position.side is AccountPositionSide.SHORT else quantity
 
     @staticmethod
+    def _valuation_price(
+        position: AccountPosition | None,
+        snapshot: AccountSnapshot | None,
+        end: datetime,
+    ) -> Decimal | None:
+        if position is None:
+            return None
+        if (
+            position.market_price is not None
+            and position.market_price_at is not None
+            and position.market_price_at <= end
+        ):
+            return position.market_price
+        if (
+            snapshot is not None
+            and snapshot.account_as_of <= end
+            and position.market_value is not None
+            and position.quantity > 0
+        ):
+            return abs(position.market_value) / position.quantity
+        return None
+
+    @staticmethod
     def _account_result(
         *,
         account_ref: str,
@@ -380,6 +515,11 @@ class PerformanceAttributionCalculator:
         warning_codes: set[str],
     ) -> AccountPerformance:
         window = tuple(item for item in transactions if start <= item.occurred_at <= end)
+        if any(
+            item.kind is AccountTransactionKind.DIVIDEND and item.instrument_id is None
+            for item in window
+        ):
+            warning_codes.add("DIVIDEND_INSTRUMENT_UNAVAILABLE")
         dividends = sum(
             (
                 item.cash_amount or Decimal(0)

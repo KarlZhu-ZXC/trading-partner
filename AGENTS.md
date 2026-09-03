@@ -4,7 +4,7 @@
 
 Trading Partner is a long-horizon investment judgment companion. Codex (or another
 agent host) talks to the user; Trading Partner MCP supplies facts, research state,
-and structured tools. The implemented Phase 1–3D boundary covers A-share/US research,
+and structured tools. The implemented Phase 1–4D boundary covers A-share/US research,
 Korea Exchange quote/technical monitoring,
 accounts, Research Subjects, Watchlist Hub, Risk v2, Monitoring v2, versioned Trade
 Plans, deterministic Position Sizing, and professional daily/weekly technical
@@ -99,13 +99,16 @@ with their short window; this is not a strict FIFO job queue.
 
 **Research files, judgment, and memory**
 
-For every user discussion of a Thesis, Trade Plan, entry/exit, adding/reducing,
-holding, or trading strategy, apply the user's default
-`strategy_v1` discipline. The response must cover `UPSIDE`,
-`SIDEWAYS`, `PULLBACK`, and `INVALIDATION`, with an explicit action or `NO_ACTION`
-for each. If the user selects another primary Strategy, keep BossMo only as a
-risk/process check. This discipline is model interpretation, not a Provider fact,
-confirmation, position mutation, or order authorization.
+Apply the user's default `strategy_v1` discipline only when the user is making or
+reviewing an actionable investment judgment for a specific stock or ETF: equity
+Thesis conviction, entry, add, hold, reduce, exit, or a concrete trade setup. It
+must not activate from software development, UI/schema/test/docs work, generic
+financial facts, domain identifiers such as Thesis/Trade Plan/position/strategy, or
+non-equity assets. When activated, cover `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and
+`INVALIDATION`, with an explicit action or `NO_ACTION` for each. If the user selects
+another primary Strategy, keep BossMo only as a risk/process check. This discipline
+is model interpretation, not a Provider fact, confirmation, position mutation, or
+order authorization.
 
 - `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)
@@ -127,6 +130,71 @@ Attention path as `DECISION_REVIEW_DUE`. The source stays active until a later
 Decision explicitly names the exact prior Decision through
 `supersedes_decision_id`, or the user manually resolves the ReviewItem. Failed or
 bounded source reads must never auto-resolve it.
+
+The Console-only Moomoo living-note intake is an observation source, not another
+Research or decision module. It reads the local private-note cache without writing
+to Moomoo and stores content changes as immutable external-note revisions. Attribution
+uses a deterministic explicit-speaker section state: each dated section starts as
+`USER`. A line-leading `@speaker` marker (with optional colon/body) is canonical and
+may introduce any bounded new speaker. For legacy text without `@`, only `boss墨`,
+`宝总`, and `姜汁汽水` are recognized as named speakers. Following unlabeled paragraphs
+inherit that speaker until the next date, explicit line-leading marker, or explicit
+USER label. Every other bare `heading:` prefix—including 财报看法、整体观点、风险、结论—
+inherits the current speaker and must never create a person. Mid-sentence `@` mentions
+do not change attribution.
+With the user's explicit private-content authorization, new
+revisions may be interpreted in the background by OpenCode Go
+`qwen3.8-flash` at `max` effort under a strict schema and 120-second
+timeout. The model draft compares the prior successful revision and covers USER
+`UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION`. It cannot confirm a Thesis,
+Decision, Plan, Monitor, position, or order. Console `Review as Decision` only
+prefills the existing Decision confirmation dialog with the exact note revision.
+The confirmed Decision stores that exact revision through optional
+`external_note_revision_id`; the revision must exist, belong to a Note whose primary
+Instrument matches the Research Subject, and have been observed no later than the
+Decision time. Historical Decisions without the field remain readable.
+`SUMMARY_ONLY` list text is change-detection evidence only: it must not be sent to
+the model or adopted, and eviction of a prior FULL editor cache must not create a
+false downgrade revision when the visible summary is unchanged.
+External observations use one provider-neutral adapter contract. Source capabilities
+declare full-text, incremental-sync, interactive-session, and content-mode support;
+the same sync may aggregate several sources while identity remains `(source,
+external_id)`. The owner-controlled Local Observation Bridge accepts only the closed
+`observation-source-v1` full-text JSON contract. Moomoo, future TradingView capture,
+and other adapters must converge there or emit the same canonical snapshot; they must
+not create source-specific Journal, interpretation, or Decision modules.
+Observation idempotency is keyed by a stable source revision key, not content hash.
+Replaying the same source revision creates no row; a newly observed reversion to old
+content remains a new revision; an unseen observation older than the latest source
+time is ignored with an explicit out-of-order warning. A Moomoo list text may be
+promoted from `SUMMARY_ONLY` only when a prior editor body proves line-by-line that
+the list text is its strict ordered superset. Promotion preserves prior paragraph
+boundaries and may add only a proven prefix and/or suffix; middle insertion or rewrite
+fails closed. Date section order is detected independently for every revision as
+`NEWEST_TO_OLDEST`, `OLDEST_TO_NEWEST`, `MIXED`, or `UNKNOWN`; the model receives that
+closed result and must not infer chronology from position for mixed/unknown notes.
+The same speaker inheritance rules apply so a named viewpoint neither stops after one
+line nor leaks across the next date.
+Console, CLI, and future adapter captures share a bounded cross-process observation
+sync lock. In-process concurrent captures serialize; cross-process contention waits
+briefly and then returns retryable `OBSERVATION_SYNC_BUSY` rather than racing identity
+or revision writes.
+Moomoo note ingestion must never control or automate the desktop UI. An optional
+read-only HTTP enrichment layer may use an explicitly configured owner-only Cookie
+file to refresh the internal note-list response and editor HTML. The Moomoo desktop
+CEF Cookie database contains only presentation state such as locale; authentication
+is injected by its native bridge and must not be misrepresented as a reusable Cookie.
+The user prohibits Computer Use or UI automation against Moomoo, not read-only
+process/network diagnostics. With explicit user authorization, secret-safe analysis
+may inspect process metadata, local IPC, or network protocol shape, but must not alter
+the app, system proxy/certificate state, account state, or trading state, and must
+never display or persist recovered credentials. A remote Cookie may alternatively
+come from an explicitly authenticated Web session and be provided over stdin. Requests are serial,
+bounded, and sleep for a newly sampled delay inside the configured min/max window.
+The Cookie, query identity, response body, and endpoint details never enter logs,
+receipts, database rows, or Console errors. Missing/expired authentication, throttling,
+or internal-page drift falls back to the local cache; list summaries remain
+`SUMMARY_ONLY` and never reach the model or Decision adoption.
 
 The same grouped tools also expose Catalyst Agenda and Judgment Scorecard without
 increasing the public tool surface: `research_memory_get/agenda`,
@@ -321,6 +389,24 @@ credentials for it.
   warnings; it never contacts brokers
 - `external_state_sync` (`accounts`, `transactions`, `watchlist`) — the only public
   upstream refresh entry
+- Moomoo historical-deal synchronization enriches exact order fees through bounded
+  `order_fee_query` batches (maximum 20 orders, 10 requests per 30 seconds per
+  account). One order fee is allocated exactly once across its partial fills. A
+  failed, partial, or invalid fee read never drops the trades: Net P/L remains
+  unavailable and Console may show explicitly labelled Gross P/L instead.
+- Instrument performance separates `net_trading_pnl`, exact `dividend_income`, and
+  `total_pnl`. Schwab dividend identity uses an explicit security Instrument first;
+  cash-only rows may use a full-symbol token from the bounded description only when it
+  uniquely matches a same-account equity/ETF candidate from durable activity or the
+  current snapshot. Ambiguous/unmatched cash stays unattributed. An existing NULL
+  transaction identity may be enriched only when every other normalized fact is equal.
+  Corporate-action lot effects and missing transferred cost basis remain fail-closed
+  unless a strict owner-verified Broker Statement/position-import basis checkpoint
+  replaces the open lots at an exact timestamp. A checkpoint carries quantity, total
+  native-currency cost, source reference, and optional document hash; it creates no
+  trade or cash flow. A replaced zero-cash position-import activity is excluded from
+  Trade Cycle counts. Later trades, DRIPs, dividends, and corporate actions continue
+  normally, and any new mismatch fails closed again.
 - `portfolio_analyze` (`exposure`, `coverage`, `performance_summary`, `performance_series`,
   `daily_equity`, `trade_cycles`, `trade_cycle_override_preview`, `journal_timeline`,
   `behavior_summary`, `behavior_review_history`, `unlinked_activity`, `simulate_addition`,
@@ -416,9 +502,12 @@ ReviewItem through the same Console session/version/idempotency gate.
 
 - `uv run trading-partner-post-market-sync` checks the XNYS calendar and runs ten
   minutes after the real session close. It refreshes all configured account
-  providers, synchronizes normalized transactions, materializes Unlinked Activity
-  ReviewItems and source-referenced Daily Equity, and then performs the exact
-  active-source Watchlist sync. It persists one terminal
+  providers, synchronizes normalized transactions and source-referenced Daily Equity,
+  and then performs the exact
+  active-source Watchlist sync followed by one `MOOMOO_NOTE` Observation sync with
+  `analyze=false`. Observation counts/status share the same durable receipt; Cookie,
+  Provider, or note failures remain visible without blocking completed account,
+  transaction, Watchlist, or notification work. It persists one terminal
   receipt per market session, and never executes an order.
 - `uv run trading-partner-sgov-plan preview` explicitly refreshes Schwab and prints
   an immediate all-account Shadow plan. The dedicated launchd scheduler runs once
@@ -530,6 +619,14 @@ summary and compact rule table. Transition alerts and changed
 post-market blocks include the prior observed price, price change, and the exact
 Provider source from the run receipt. Price-change percentages are rounded half-up
 and rendered with exactly two decimal places.
+Every emitted Monitor transition notification also ends with a read-only model
+analysis. Multiple transitions for one Monitor in one run share one analysis; an
+existing successful composite judgment is reused instead of making a second call.
+Otherwise the configured Monitor model receives only bounded event/rule facts,
+uses `max` effort, and returns at most 160 Chinese characters. The call is capped
+at 80 seconds. Failure appends an explicit unavailable sentence and never blocks,
+changes, or suppresses the deterministic event. Post-market digests collect the
+bounded analyses in one final section and make no model call when nothing changed.
 The prominent transition section must identify every changed rule by its exact
 condition/threshold, bounded human meaning, severity, and event state; never reduce
 the change to a bare `TRIGGERED`/`RECOVERED` label. Historical Outbox formats remain
@@ -726,7 +823,8 @@ up to ten source URLs are persisted, while prices, positions, levels, returns, a
 quantity facts remain deterministic-only. Explanations are validated as Chinese.
 OpenCode Go has no native Web Search capability in this integration and must not be
 described as having searched the web.
-The LLM has no mutation/order port;
+The LLM has no mutation/order port. Event analysis is notification-only and is not
+a judgment, durable rule fact, confirmation, or execution authorization;
 evidence IDs and quantity ranges are validated, session-misaligned divergence
 actions are downgraded to WAIT, unchanged qualitative signatures skip calls, and
 only material judgment changes create events/notifications. HOLD/WATCH/WAIT changes

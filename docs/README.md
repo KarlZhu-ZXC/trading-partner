@@ -20,6 +20,7 @@ truth.
 | [plans/reliability-usability-and-closure-plan.md](plans/reliability-usability-and-closure-plan.md) | Active reliability, usability, and decision-loop implementation plan |
 | [plans/mcp-host-decision-loop.md](plans/mcp-host-decision-loop.md) | External MCP host attention read, result compaction, and schema-repair plan |
 | [plans/refactor-slimming-backlog.md](plans/refactor-slimming-backlog.md) | Deferred defect follow-ups plus the backend/frontend slimming and consolidation backlog |
+| [plans/moomoo-living-notes-workflow.md](plans/moomoo-living-notes-workflow.md) | Implemented provider-neutral external Observation intake and Decision-review boundary |
 
 ## Current specifications
 
@@ -28,7 +29,7 @@ truth.
 | [phases/phase1.md](phases/phase1.md) | Research memory, market/company facts, accounts, workflows, and the compact MCP foundation |
 | [phases/phase2.md](phases/phase2.md) | Watchlist Hub, Risk Engine, Monitoring Hub, notifications, and Technical Engine |
 | [phases/phase3.md](phases/phase3.md) | Cross-asset facts, company operating data, QuantConnect bridge, and judgment-to-plan controls |
-| [phases/phase4.md](phases/phase4.md) | Planned Trading Journal, Trade Cycle, performance, and behavior-review product loop |
+| [phases/phase4.md](phases/phase4.md) | Implemented Trading Journal, Trade Cycle, performance, and behavior-review product loop |
 
 ## User and operator guides
 
@@ -54,6 +55,7 @@ authority for current operation.
 | [plans/shared-agent-runtime.md](plans/shared-agent-runtime.md) | Implemented Shared Agent Runtime contract and maturity backlog record |
 | [plans/mcp-host-decision-loop.md](plans/mcp-host-decision-loop.md) | Planned: give external MCP hosts the Console/Agent decision loop without a 28th tool |
 | [plans/agent-17-improvements.md](plans/agent-17-improvements.md) | Implemented Agent Rail reliability and usability improvement list |
+| [plans/moomoo-living-notes-workflow.md](plans/moomoo-living-notes-workflow.md) | Implemented external Observation source contract, immutable revisions, and private-note review flow |
 
 ## Design audits
 
@@ -88,6 +90,8 @@ instructions.
 - `examples/manual-holdings.v1.csv` and `examples/manual-watchlist.v1.csv` are
   strict manual-source templates.
 - `examples/quantconnect-free-hourly-template.py` is the starter LEAN strategy.
+- [contracts/observation-source-v1.schema.json](contracts/observation-source-v1.schema.json)
+  is the closed full-text Local Observation Bridge contract.
 - [references/tradingview-internal-api-reference.md](references/tradingview-internal-api-reference.md)
   records the reviewed unofficial TradingView account-session endpoints, their
   security boundary, and a staged read-only integration direction.

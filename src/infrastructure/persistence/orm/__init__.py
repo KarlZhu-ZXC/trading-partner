@@ -60,6 +60,10 @@ from infrastructure.persistence.orm.operations import (
     BehaviorReviewRunRow,
     BrokerOrderIntentRow,
     DailyEquitySnapshotRow,
+    ExternalNoteIdentityRow,
+    ExternalNoteInterpretationRow,
+    ExternalNoteRevisionRow,
+    ExternalNoteSyncReceiptRow,
     IndustryMetricObservationRow,
     JournalActivationRow,
     OperationalJobRunRow,
@@ -130,6 +134,10 @@ from infrastructure.persistence.orm.transactions import (
 
 __all__ = [
     "Base",
+    "ExternalNoteIdentityRow",
+    "ExternalNoteInterpretationRow",
+    "ExternalNoteRevisionRow",
+    "ExternalNoteSyncReceiptRow",
     "BehaviorActionObservationRow",
     "BehaviorReviewRunRow",
     "AgentConversationRow",

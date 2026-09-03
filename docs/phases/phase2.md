@@ -50,10 +50,13 @@ uv run trading-partner-post-market-sync
 ```
 
 It refreshes every configured account provider first, then performs the same exact
-Watchlist full sync. XNYS session rules determine whether the job is due ten minutes
+Watchlist full sync and one read-only Moomoo Observation sync without model analysis.
+The durable receipt includes Observation status, notes seen, revisions created, and
+FULL/summary counts. An Observation failure degrades the run without rolling back
+completed account or Watchlist facts. XNYS session rules determine whether the job is due ten minutes
 after the real close, including holidays and early-close sessions. One terminal
 receipt is stored per market session; successful sessions are skipped idempotently,
-while partial or failed sessions remain retryable. Portfolio and Watchlist persist
+while partial or failed sessions remain retryable. Portfolio, Watchlist, and Notes persist
 independently, and neither command can place, modify, or cancel an order.
 
 Scheduling remains an external-host responsibility; neither CLI turns the MCP

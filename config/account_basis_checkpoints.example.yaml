@@ -1,0 +1,5 @@
+# Copy this file to the owner-only runtime path configured by
+# ACCOUNT_BASIS_CHECKPOINTS_PATH. Never commit real account references, quantities,
+# costs, statement references, activity IDs, or document hashes.
+version: 1
+checkpoints: []

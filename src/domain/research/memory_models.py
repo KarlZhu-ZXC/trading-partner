@@ -399,6 +399,10 @@ class DecisionRecord:
     trade_plan_id: str | None = None
     trade_plan_version: int | None = None
     review_due_at: datetime | None = None
+    # A Decision may point at one immutable external observation revision.
+    # The reference is intentionally optional so all pre-observation Decisions
+    # remain valid and readable.
+    external_note_revision_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_entity_id(self.decision_id, field="decision_id", prefix=EntityIdPrefix.DECISION)
@@ -490,6 +494,11 @@ class DecisionRecord:
             )
         if self.review_due_at is not None:
             require_aware_datetime(self.review_due_at, field_name="review_due_at")
+        _require_optional_entity_id(
+            self.external_note_revision_id,
+            field="external_note_revision_id",
+            prefix=EntityIdPrefix.EXTERNAL_NOTE_REVISION,
+        )
         _require_id_tuple(
             self.thesis_revision_ids,
             field="thesis_revision_ids",

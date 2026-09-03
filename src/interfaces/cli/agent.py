@@ -45,6 +45,7 @@ CONSOLE_WEB_LABEL = "com.trading-partner.console-web"
 CONSOLE_API_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{CONSOLE_API_LABEL}.plist"
 CONSOLE_WEB_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{CONSOLE_WEB_LABEL}.plist"
 CONSOLE_LAN_PASSWORD_RELATIVE_PATH = Path("data") / "secrets" / "console-lan-password"
+CONSOLE_LAN_PASSWORD_MIN_LENGTH = 16
 
 
 def _project_root() -> Path:
@@ -157,18 +158,22 @@ def _ensure_console_lan_password(project_root: Path) -> Path:
         if not path.is_file() or path.is_symlink():
             raise SystemExit("Console LAN password path must be a regular file")
         password = path.read_text(encoding="utf-8").strip()
-        if len(password) < 1:
+        if len(password) < CONSOLE_LAN_PASSWORD_MIN_LENGTH:
             password = os.environ.get(
                 "TRADING_PARTNER_CONSOLE_LAN_PASSWORD"
             ) or secrets.token_urlsafe(24)
-            if len(password) < 1:
-                raise SystemExit("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must not be empty")
+            if len(password) < CONSOLE_LAN_PASSWORD_MIN_LENGTH:
+                raise SystemExit(
+                    "TRADING_PARTNER_CONSOLE_LAN_PASSWORD must contain at least 16 characters"
+                )
             path.write_text(f"{password}\n", encoding="utf-8")
         path.chmod(0o600)
         return path
     password = os.environ.get("TRADING_PARTNER_CONSOLE_LAN_PASSWORD") or secrets.token_urlsafe(24)
-    if len(password) < 1:
-        raise SystemExit("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must not be empty")
+    if len(password) < CONSOLE_LAN_PASSWORD_MIN_LENGTH:
+        raise SystemExit(
+            "TRADING_PARTNER_CONSOLE_LAN_PASSWORD must contain at least 16 characters"
+        )
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         stream.write(f"{password}\n")

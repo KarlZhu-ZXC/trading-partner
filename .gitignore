@@ -35,12 +35,17 @@ data/secrets/
 data/locks/
 data/artifacts/
 data/automation/
+data/audits/
 data/agent/
 data/backups/
+data/observations/
 data/research/hog_cycle/
 data/research/lidaxiao_bilibili/
 data/research/bossmo_bilibili/
 !data/.gitkeep
+
+# Owner-specific portfolio reconciliation inputs. Keep only the example in Git.
+config/account_basis_checkpoints.yaml
 
 # IDE / OS
 .idea/

@@ -29,14 +29,16 @@ def test_initialize_creates_owner_only_config_and_upgrades_idempotently(
     assert database.is_file()
     assert not ambient_database.exists()
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
-    assert "API_KEY" not in env_file.read_text(encoding="utf-8")
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "API_KEY" not in env_text
+    assert f"RUNTIME_ROOT={runtime_home.resolve()}" in env_text
     engine = create_engine(f"sqlite:///{database}")
     try:
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
     finally:
         engine.dispose()
-    assert revision == "0063_agent_image_attachments"
+    assert revision == "0070_retire_unlinked_review_items"
     assert first["mcp_args"] == ["--env-file", str(env_file)]
 
 

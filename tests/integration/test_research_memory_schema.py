@@ -55,6 +55,7 @@ _REQUIRED_INDEXES = {
     "ix_events_case_occurred_at",
     "ix_events_case_recorded_at",
     "ix_decisions_case_recorded_at",
+    "ix_decisions_external_note_revision",
     "ix_journal_case_created_at",
     "ix_search_documents_visible_at",
     "ix_search_document_cases_case",
@@ -292,6 +293,7 @@ def test_business_tables_columns_pk_nullability_via_pragma(
             "trade_plan_id": 0,
             "trade_plan_version": 0,
             "review_due_at": 0,
+            "external_note_revision_id": 0,
             "idempotency_key": 1,
             "idempotency_payload_sha256": 1,
             "schema_version": 1,
@@ -424,6 +426,11 @@ def test_foreign_keys_unique_checks_indexes_via_pragma_and_master(
         "decision_records": {
             ("case_id", "investment_cases", "case_id"),
             ("supersedes_decision_id", "decision_records", "decision_id"),
+            (
+                "external_note_revision_id",
+                "external_note_revisions",
+                "note_revision_id",
+            ),
         },
         "journal_entries": {
             ("case_id", "investment_cases", "case_id"),

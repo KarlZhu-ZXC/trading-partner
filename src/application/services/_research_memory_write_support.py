@@ -425,6 +425,7 @@ def compute_decision_idempotency_payload_sha256(
     trade_plan_id: str | None = None,
     trade_plan_version: int | None = None,
     review_due_at: datetime | None = None,
+    external_note_revision_id: str | None = None,
 ) -> str:
     """Canonical SHA-256 of redacted/normalized Decision caller payload (§8.6)."""
     if not isinstance(decision_type, DecisionType):
@@ -466,6 +467,7 @@ def compute_decision_idempotency_payload_sha256(
             trade_plan_id,
             trade_plan_version,
             review_due_at,
+            external_note_revision_id,
         )
     ):
         payload.update(
@@ -482,6 +484,11 @@ def compute_decision_idempotency_payload_sha256(
                 "trade_plan_version": trade_plan_version,
             }
         )
+        # Keep the Phase 4A digest byte-for-byte compatible for historical
+        # records that predate observation references.  A supplied revision is
+        # part of the payload; an omitted one remains an omitted key.
+        if external_note_revision_id is not None:
+            payload["external_note_revision_id"] = external_note_revision_id
     return _canonical_payload_sha256(payload)
 
 

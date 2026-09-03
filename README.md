@@ -240,6 +240,13 @@ them are documented in [AGENTS.md](AGENTS.md).
 
 - Static secrets live in the project-root `.env`, which is gitignored.
 - Rotating provider OAuth tokens live under `data/secrets/`, which is also gitignored.
+- Installed tools derive every mutable token, lock, attachment, backup, and
+  Observation path from the owner-only runtime directory created by
+  `trading-partner-init`; package installation directories contain code and static
+  defaults only.
+- Owner-specific account-basis checkpoints belong in the runtime
+  `data/secrets/account_basis_checkpoints.yaml`; the repository ships only an empty
+  example and never packages account references, quantities, costs, or document hashes.
 - Durable research and account state stays in your configured local database.
 - Credentials are redacted from logs, MCP envelopes, exceptions, and audit payloads.
 - Each user should supply their own provider credentials and maintain their own data

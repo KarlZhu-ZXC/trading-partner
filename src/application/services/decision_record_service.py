@@ -118,6 +118,7 @@ class DecisionRecordService:
         trade_plan_id: str | None = None,
         trade_plan_version: int | None = None,
         review_due_at: datetime | None = None,
+        external_note_revision_id: str | None = None,
     ) -> ToolEnvelope[DecisionRecordDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
@@ -203,6 +204,12 @@ class DecisionRecordService:
                 else None
             )
 
+            note_revision_id_n = optional_text(
+                external_note_revision_id,
+                field="external_note_revision_id",
+                max_len=128,
+            )
+
             primary: str | None
             if primary_instrument_id is None:
                 primary = None
@@ -259,6 +266,7 @@ class DecisionRecordService:
                 trade_plan_id=plan_id_n,
                 trade_plan_version=trade_plan_version,
                 review_due_at=review_due,
+                external_note_revision_id=note_revision_id_n,
             )
 
             with self._uow_factory() as uow:
@@ -284,6 +292,7 @@ class DecisionRecordService:
                         trade_plan_id=existing.trade_plan_id,
                         trade_plan_version=existing.trade_plan_version,
                         review_due_at=existing.review_due_at,
+                        external_note_revision_id=existing.external_note_revision_id,
                     )
                     if existing_sha != payload_sha:
                         raise DuplicateIdempotencyKey(
@@ -371,6 +380,7 @@ class DecisionRecordService:
                     trade_plan_id=plan_id_n,
                     trade_plan_version=trade_plan_version,
                     review_due_at=review_due,
+                    external_note_revision_id=note_revision_id_n,
                 )
                 # Frozen order: business → Research Subject cache → Search → Audit → commit.
                 uow.decisions.add(
@@ -390,6 +400,8 @@ class DecisionRecordService:
                     linked.append(supersedes)
                 if plan_id_n is not None:
                     linked.append(plan_id_n)
+                if note_revision_id_n is not None:
+                    linked.append(note_revision_id_n)
                 uow.audit.append(
                     "phase1c.decision.recorded",
                     audit_summary(

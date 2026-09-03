@@ -46,6 +46,7 @@ EVENT_ID_UUID7_PATTERN = rf"^event_{_UUID7}$"
 REV_ID_UUID7_PATTERN = rf"^rev_{_UUID7}$"
 SNAPSHOT_ID_UUID7_PATTERN = rf"^snapshot_{_UUID7}$"
 TRADE_PLAN_ID_UUID7_PATTERN = rf"^trade_plan_{_UUID7}$"
+EXTERNAL_NOTE_REVISION_ID_UUID7_PATTERN = rf"^external_note_revision_{_UUID7}$"
 
 # Frozen Journal related-entity wire types → strict ``<prefix>_<uuid7>`` patterns.
 # Type strings mirror C4b2 ``JOURNAL_RELATED_ENTITY_TYPES``; no domain enum exists.
@@ -643,6 +644,9 @@ class DecisionRecordAppendInput(BaseModel):
     supersedes_decision_id: str | None = Field(default=None, pattern=DECISION_ID_UUID7_PATTERN)
     position_context_snapshot_id: str | None = Field(
         default=None, pattern=SNAPSHOT_ID_UUID7_PATTERN
+    )
+    external_note_revision_id: str | None = Field(
+        default=None, pattern=EXTERNAL_NOTE_REVISION_ID_UUID7_PATTERN
     )
     idempotency_key: str = Field(min_length=1, max_length=128)
     strategy_code: str | None = Field(default=None, min_length=1, max_length=128)

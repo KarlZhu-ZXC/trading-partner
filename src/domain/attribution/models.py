@@ -26,6 +26,46 @@ def _codes(values: tuple[str, ...], field: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class PositionBasisCheckpoint:
+    """Owner-verified broker position basis that replaces open FIFO lots only."""
+
+    checkpoint_id: str
+    provider: VendorId
+    account_ref: str
+    instrument_id: str
+    currency: str
+    effective_at: datetime
+    quantity: Decimal
+    total_cost_basis: Decimal
+    source_type: str
+    source_ref: str
+    source_document_sha256: str | None = None
+    replaces_activity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.checkpoint_id.strip() or not self.account_ref.strip():
+            raise DataContractError("basis checkpoint identity is invalid")
+        if not isinstance(self.provider, VendorId):
+            raise DataContractError("basis checkpoint provider is invalid")
+        parse_instrument_id(self.instrument_id)
+        if not self.currency.strip():
+            raise DataContractError("basis checkpoint currency is blank")
+        require_aware_datetime(self.effective_at, field_name="effective_at")
+        _decimal(self.quantity, "quantity")
+        _decimal(self.total_cost_basis, "total_cost_basis")
+        if self.quantity <= 0 or self.total_cost_basis < 0:
+            raise DataContractError("basis checkpoint quantity and cost are invalid")
+        if not self.source_type.strip() or not self.source_ref.strip():
+            raise DataContractError("basis checkpoint source is invalid")
+        if self.source_document_sha256 is not None:
+            value = self.source_document_sha256
+            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+                raise DataContractError("basis checkpoint document hash is invalid")
+        if self.replaces_activity_id is not None and not self.replaces_activity_id.strip():
+            raise DataContractError("basis checkpoint replacement activity is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class InstrumentPerformance:
     instrument_id: str
     currency: str
@@ -36,10 +76,14 @@ class InstrumentPerformance:
     unrealized_pnl_before_fees: Decimal | None
     broker_reported_unrealized_pnl: Decimal | None
     broker_reported_realized_pnl: Decimal | None
+    dividend_income: Decimal | None
+    net_trading_pnl: Decimal | None
+    total_pnl: Decimal | None
     known_fees: Decimal
     fees_complete: bool
     matched_quantity: Decimal
     activity_ids: tuple[str, ...]
+    basis_checkpoint_ids: tuple[str, ...]
     snapshot_id: str | None
     warning_codes: tuple[str, ...]
 
@@ -55,6 +99,9 @@ class InstrumentPerformance:
             "unrealized_pnl_before_fees",
             "broker_reported_unrealized_pnl",
             "broker_reported_realized_pnl",
+            "dividend_income",
+            "net_trading_pnl",
+            "total_pnl",
             "known_fees",
             "matched_quantity",
         ):
@@ -62,6 +109,7 @@ class InstrumentPerformance:
         if self.open_cost_basis < 0 or self.known_fees < 0 or self.matched_quantity < 0:
             raise DataContractError("performance basis, fees, and matched quantity are nonnegative")
         _codes(self.activity_ids, "activity_ids")
+        _codes(self.basis_checkpoint_ids, "basis_checkpoint_ids")
         _codes(self.warning_codes, "warning_codes")
 
 
@@ -123,7 +171,7 @@ class PerformanceAttribution:
     accounts: tuple[AccountPerformance, ...]
     status: AttributionStatus
     warning_codes: tuple[str, ...]
-    algorithm_version: str = "performance_attribution_v1"
+    algorithm_version: str = "performance_attribution_v2"
 
     def __post_init__(self) -> None:
         require_aware_datetime(self.start, field_name="start")

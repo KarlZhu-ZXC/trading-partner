@@ -50,7 +50,7 @@ from application.services.performance_attribution_calculator import (
 from application.services.performance_calculator import PerformanceCalculator
 from application.services.trade_cycle_calculator import TradeCycleCalculator
 from domain.attribution.enums import AttributionStatus
-from domain.attribution.models import PerformanceAttribution
+from domain.attribution.models import PerformanceAttribution, PositionBasisCheckpoint
 from domain.common.enums import Freshness, SourceRole, VendorId
 from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
@@ -181,6 +181,7 @@ class AccountTransactionCoordinator:
         activity_annotations: ActivityAnnotationRepository | None = None,
         trade_cycle_overrides: TradeCycleOverrideRepository | None = None,
         daily_equity: DailyEquityRepository | None = None,
+        basis_checkpoints: tuple[PositionBasisCheckpoint, ...] = (),
     ) -> None:
         self._providers = dict(providers)
         self._repository = repository
@@ -192,8 +193,8 @@ class AccountTransactionCoordinator:
         self._activity_annotations = activity_annotations
         self._trade_cycle_overrides = trade_cycle_overrides
         self._daily_equity = daily_equity
-        self._attribution = PerformanceAttributionCalculator()
-        self._trade_cycles = TradeCycleCalculator()
+        self._attribution = PerformanceAttributionCalculator(basis_checkpoints)
+        self._trade_cycles = TradeCycleCalculator(basis_checkpoints)
         self._performance_series = PerformanceCalculator()
         self._behavior = BehaviorSummaryCalculator()
 
@@ -271,11 +272,12 @@ class AccountTransactionCoordinator:
 
         request_id = self._ids.new(EntityIdPrefix.REQ)
         now = self._clock.now()
+        as_of = request.end or now
         try:
             transactions = self._repository.list(
                 providers=request.providers,
                 start=None,
-                end=now,
+                end=as_of,
                 limit=None,
             )
             transactions = tuple(
@@ -289,7 +291,7 @@ class AccountTransactionCoordinator:
             )
             projection = self._trade_cycles.calculate(
                 transactions=transactions,
-                as_of=now,
+                as_of=as_of,
                 coverage_status=AccountActivityCoverageStatus.INCOMPLETE,
                 limit=500,
                 coverage_warning_codes=("TRADE_CYCLE_COVERAGE_INCOMPLETE",),
@@ -321,11 +323,13 @@ class AccountTransactionCoordinator:
                 currency=request.currency,
                 classifications=request.classifications,
                 minimum_sample_size=request.minimum_sample_size,
+                start=request.start,
+                end=request.end,
             )
             return ToolEnvelope.success(
                 request_id=request_id,
                 market=None,
-                as_of=now,
+                as_of=as_of,
                 fetched_at=now,
                 freshness=Freshness.UNKNOWN,
                 sources=(),

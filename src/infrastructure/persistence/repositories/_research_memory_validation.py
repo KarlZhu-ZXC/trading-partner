@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from domain.common.errors import DataContractError, InvalidResearchLink
 from domain.common.time import require_aware_datetime
 from infrastructure.persistence.orm import (
+    ExternalNoteIdentityRow,
+    ExternalNoteRevisionRow,
     InstrumentRow,
     ResearchEvidenceRow,
     ResearchReportRow,
@@ -296,6 +298,76 @@ def require_thesis_revision_ids_visible(
                     "thesis_revision_id": revision_id,
                 },
             )
+
+
+def require_external_note_revision_visible(
+    session: Session,
+    *,
+    subject_id: str,
+    external_note_revision_id: str | None,
+    visible_at: datetime,
+) -> None:
+    """Validate an optional exact observation revision reference.
+
+    External observations do not carry a Research Subject foreign key: their
+    durable identity is source/external-id plus an optional instrument.  A
+    Decision may therefore reference a revision only when the note identity
+    and the Research Subject expose the same primary instrument.  This is the
+    existing observation-to-Subject ownership boundary and deliberately fails
+    closed for unscoped notes.  The revision must also have been visible by
+    the Decision's recorded time, preserving the point-in-time contract used
+    by the other Decision source links.
+    """
+
+    if external_note_revision_id is None:
+        return
+    require_aware_datetime(visible_at, field_name="visible_at")
+    revision = session.get(ExternalNoteRevisionRow, external_note_revision_id)
+    if revision is None:
+        raise InvalidResearchLink(
+            "referenced external note revision does not exist",
+            details={
+                "entity_type": "external_note_revision",
+                "external_note_revision_id": external_note_revision_id,
+                "subject_id": subject_id,
+            },
+        )
+    identity = session.get(ExternalNoteIdentityRow, revision.note_id)
+    subject = session.get(ResearchSubjectRow, subject_id)
+    if identity is None or subject is None:
+        # The normal Subject check runs before this helper, but keep the
+        # boundary explicit if this validator is called independently.
+        raise InvalidResearchLink(
+            "external note revision ownership cannot be established",
+            details={
+                "entity_type": "external_note_revision",
+                "external_note_revision_id": external_note_revision_id,
+                "subject_id": subject_id,
+            },
+        )
+    if (
+        identity.primary_instrument_id is None
+        or subject.primary_instrument_id is None
+        or identity.primary_instrument_id != subject.primary_instrument_id
+    ):
+        raise InvalidResearchLink(
+            "external note revision does not belong to the same research subject",
+            details={
+                "entity_type": "external_note_revision",
+                "external_note_revision_id": external_note_revision_id,
+                "subject_id": subject_id,
+            },
+        )
+    visible_text = dt_to_db(visible_at)
+    if revision.observed_at > visible_text:
+        raise InvalidResearchLink(
+            "external note revision is not yet visible at record time",
+            details={
+                "entity_type": "external_note_revision",
+                "external_note_revision_id": external_note_revision_id,
+                "subject_id": subject_id,
+            },
+        )
 
 
 def require_report_ids_visible(

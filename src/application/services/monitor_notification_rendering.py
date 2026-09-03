@@ -15,6 +15,9 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from application.ports.id_generator import IdGenerator
 from application.ports.market_session_calendar import MarketSession, MarketSessionCalendar
+from application.services.monitor_event_analysis_service import (
+    MONITOR_EVENT_ANALYSIS_MAX_CHARS,
+)
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 from domain.monitoring.enums import (
@@ -100,7 +103,6 @@ def _latest_completed_session(
     return session
 
 
-
 def _notification_messages(
     monitor: MonitorDefinition,
     events: tuple[MonitorEvent, ...],
@@ -163,8 +165,7 @@ def _notification_messages(
         lines.append(f"数据来源：{', '.join(data_sources)}")
     if unavailable_event_count:
         lines.append(
-            f"数据状态：部分中断 · {unavailable_event_count} 条规则暂停计算；"
-            "未使用旧值改变其结论"
+            f"数据状态：部分中断 · {unavailable_event_count} 条规则暂停计算；未使用旧值改变其结论"
         )
     recovered_count = sum(
         1
@@ -278,9 +279,7 @@ def _data_interruption_message(
     if diagnostics:
         lines.append(
             "诊断："
-            + "；".join(
-                f"{provider} / {stage} / {code}" for provider, stage, code in diagnostics
-            )
+            + "；".join(f"{provider} / {stage} / {code}" for provider, stage, code in diagnostics)
         )
     elif error_codes:
         lines.append("错误：" + ", ".join(error_codes))
@@ -348,6 +347,34 @@ def _append_judgment_notification(
         channel=base.channel,
         title=base.title,
         body=prefix + judgment_body,
+        created_at=base.created_at,
+    )
+
+
+def _append_model_analysis(
+    base: NotificationMessage,
+    analysis: str,
+    *,
+    max_chars: int = MONITOR_EVENT_ANALYSIS_MAX_CHARS,
+) -> NotificationMessage:
+    """Append one bounded model interpretation after deterministic content."""
+
+    normalized = " ".join(analysis.split()).strip()
+    limit = max(40, min(max_chars, 300))
+    if len(normalized) > limit:
+        normalized = normalized[: max(1, limit - 1)].rstrip("，。；、 ") + "…"
+    suffix = f"\n\nMODEL_ANALYSIS\n{normalized}"
+    available = max(0, 4096 - len(suffix))
+    base_body = base.body
+    if len(base_body) > available:
+        base_body = base_body[: max(0, available - 1)].rstrip() + "…"
+    return NotificationMessage(
+        notification_id=base.notification_id,
+        source_type=base.source_type,
+        source_id=base.source_id,
+        channel=base.channel,
+        title=base.title,
+        body=base_body + suffix,
         created_at=base.created_at,
     )
 
@@ -666,6 +693,7 @@ def _post_market_summary_message(
     previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] | None = None,
     monitor_sources_by_monitor: dict[str, tuple[str, ...]] | None = None,
     judgment_notifications_by_monitor: dict[str, NotificationMessage] | None = None,
+    event_analyses_by_monitor: dict[str, str] | None = None,
 ) -> NotificationMessage:
     if run.cadence is MonitorCadence.A_SHARE_POST_MARKET:
         market_label = "A股"
@@ -744,9 +772,7 @@ def _post_market_summary_message(
             )
             for observation in observations
         )
-        judgment_notification = (judgment_notifications_by_monitor or {}).get(
-            monitor.monitor_id
-        )
+        judgment_notification = (judgment_notifications_by_monitor or {}).get(monitor.monitor_id)
         if judgment_notification is not None:
             lines.append("JUDGMENT")
             lines.extend(judgment_notification.body.splitlines())
@@ -765,8 +791,7 @@ def _post_market_summary_message(
                 *tuple(
                     warning
                     for warning in item.warning_codes
-                    if warning
-                    not in (_DUKASCOPY_PROVENANCE_WARNINGS | _WEEKEND_PROXY_WARNINGS)
+                    if warning not in (_DUKASCOPY_PROVENANCE_WARNINGS | _WEEKEND_PROXY_WARNINGS)
                 ),
             )
         )
@@ -789,6 +814,12 @@ def _post_market_summary_message(
         lines.append(f"数据提示：{'、'.join(warning_codes)}")
     if error_codes:
         lines.append(f"运行错误：{'、'.join(error_codes)}")
+    event_analyses = event_analyses_by_monitor or {}
+    if event_analyses:
+        lines.append("MODEL_ANALYSIS")
+        for monitor in monitors:
+            if analysis := event_analyses.get(monitor.monitor_id):
+                lines.append(f"{monitor.name}：{analysis}")
     return NotificationMessage(
         notification_id=id_generator.new(EntityIdPrefix.MONITOR_NOTIFICATION),
         source_type=NotificationSourceType.MONITOR_RUN,

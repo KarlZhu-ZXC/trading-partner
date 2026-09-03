@@ -35,10 +35,15 @@ class PostMarketSyncResultDTO(BaseModel):
     run_status: PostMarketSyncRunStatus | None = None
     portfolio_status: PostMarketSyncStepStatus | None = None
     watchlist_status: PostMarketSyncStepStatus | None = None
+    observation_status: PostMarketSyncStepStatus | None = None
     account_snapshot_ids: tuple[str, ...] = ()
     holding_count: int = 0
     watchlist_groups_synced: int | None = None
     watchlist_membership_relations_synced: int | None = None
+    observation_notes_seen: int | None = None
+    observation_revisions_created: int | None = None
+    observation_full_count: int | None = None
+    observation_summary_only_count: int | None = None
     schwab_oauth: SchwabOAuthHealthDTO | None = None
     warning_codes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
@@ -54,6 +59,7 @@ class PostMarketSyncStatusDTO(BaseModel):
     run_status: PostMarketSyncRunStatus | None = None
     portfolio_status: PostMarketSyncStepStatus | None = None
     watchlist_status: PostMarketSyncStepStatus | None = None
+    observation_status: PostMarketSyncStepStatus | None = None
     attempt_count: int | None = None
     schwab_oauth: SchwabOAuthHealthDTO | None = None
     warning_codes: tuple[str, ...] = ()

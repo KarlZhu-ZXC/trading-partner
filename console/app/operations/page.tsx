@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ConfirmationDialog, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, PageActionMenu, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ConfirmationDialog, Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, PageActionMenu, displayJson, formatBytes, formatDate } from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -179,8 +179,8 @@ export default function OperationsPage() {
           <Card className="span-4" kicker="RETENTION" title="Retention Policy">
             <div className="retention-list">{retention.map((rule) => <div key={String(rule.area)}><span>{String(rule.area)}</span><strong>{String(rule.policy).replaceAll("_", " ")}</strong><small>{rule.days ? `${String(rule.days)} days` : "Never deleted automatically"}</small></div>)}</div>
           </Card>
-          <Card className="span-12" kicker="TABLE INVENTORY" title="Durable Data Volume">
-            <div className="table-inventory">{tableCounts.map((item) => <div key={String(item.table)}><span className="mono">{String(item.table)}</span><strong>{String(item.rows)}</strong></div>)}</div>
+          <Card className="span-12" kicker="TABLE INVENTORY" title="Durable Data Volume" action={<Badge value={`${tableCounts.length} TABLES`} />}>
+            <Disclosure title="View Table-Level Row Counts" variant="compact"><div className="table-inventory">{tableCounts.map((item) => <div key={String(item.table)}><span className="mono">{String(item.table)}</span><strong>{String(item.rows)}</strong></div>)}</div></Disclosure>
           </Card>
           <Card className="span-12" kicker="SYNC RECEIPTS" title="Post-Market Sync History">
             <div className="table-wrap"><table><thead><tr><th>Session</th><th>Completed</th><th>Accounts</th><th>Watchlist</th><th>Snapshots</th><th>Attempts</th><th>Errors</th><th>Status</th></tr></thead><tbody>{syncReceipts.map((receipt) => <tr key={String(receipt.run_id)}><td><strong>{String(receipt.market_session_date)}</strong><small className="mono">{String(receipt.run_id)}</small></td><td>{formatDate(receipt.completed_at)}</td><td>{String(receipt.portfolio_status)}</td><td>{String(receipt.watchlist_status)}</td><td>{String(receipt.account_snapshot_count ?? 0)}</td><td>{String(receipt.attempt_count ?? 0)}</td><td className="mono">{listOf<string>(receipt, "error_codes").join(" · ") || "—"}</td><td><Badge value={String(receipt.status)} /></td></tr>)}</tbody></table></div>

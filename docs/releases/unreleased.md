@@ -1,5 +1,182 @@
 # Unreleased
 
+- Hardened the repository and installed-runtime boundary without expanding product
+  scope. Private Observation inbox files and real account-basis checkpoints are now
+  Git-ignored; Wheels ship only an empty checkpoint example. Installed runtimes pin a
+  stable `RUNTIME_ROOT`, and every mutable token, lock, attachment, backup, Observation,
+  and reconciliation artifact derives from it instead of the package directory.
+  Console note bodies load only when Journal Notes is opened, background analysis tasks
+  consume unexpected failures into closed codes, and infrastructure no longer imports
+  Telegram interface policy. Complexity ceilings now ratchet both Python and Console
+  hotspots. LAN passwords require 16 characters, login throttling is client-scoped, and
+  Console-authenticated fetches reject non-relative targets. CI runs security, backend,
+  Console, and packaging/migration gates in parallel; Alembic checks are explicitly
+  forward-only for irreversible data repairs. Dependency automation was added and pypdf
+  was raised to a fixed release.
+
+- Added strict owner-verified Broker position-basis checkpoints for transferred or
+  imported holdings whose acquisition basis is absent from the activity API. FIFO
+  and Trade Cycle projections now rebase only open lots, exclude a replaced zero-cash
+  position import from trade counts, and retain exact source IDs/document hashes.
+  Real checkpoint values now live only in the owner-controlled runtime secret directory;
+  the repository and Wheel contain an empty example. Portfolio separates net trading
+  P/L, dividend income, and total P/L without double-counting dividends. Timestamped
+  market value supplies a deterministic unit-price fallback when a position snapshot
+  omits `marketPrice`.
+
+- Removed duplicated Journal Behavior summaries and corrected numeric numerator /
+  denominator rendering. Win Rate, Payoff Ratio, coverage, and the remaining
+  behavior metrics now show one verified result with their calculation, exclusions,
+  sample status, and fail-closed handling for inconsistent payloads.
+- Replaced Journal’s five-item `Contributors` excerpt with a complete, paginated
+  Traded Instruments table. The table is built from durable Broker fills, supports
+  autosuggest multi-filtering and sortable headers, and discloses fill, quantity,
+  account, Cycle, known P/L coverage, and first/last trade facts.
+- Canonicalized Moomoo SOXL account positions, orders, and transactions to the
+  Instrument Master ETF identity (`etf:US:SOXL`). Existing Moomoo history is
+  migrated from the former assumed-equity identity so Portfolio and Trade Cycle
+  projections no longer split SOXL into two Instruments.
+- Standardized Console content accordions and cross-page shortcuts with shared
+  `Disclosure` and `QuickLink` primitives. Replaced the raw Trade Cycle override
+  form with a guided Split / Merge / Relink editor using searchable Cycle choices,
+  readable activity assignment, and mandatory impact preview before append.
+
+- Replaced line-local Moomoo viewpoint attribution with a deterministic dated-section
+  state machine. Each date starts as USER; an explicit person owns following unlabeled
+  paragraphs until the next date, explicit speaker, or explicit USER label. Structural
+  headings such as 整体观点、风险、结论 inherit the current speaker. Sanitized regression
+  fixtures verify continuation ownership and reset the next dated section to USER; the
+  same strict OpenCode Go interpretation succeeds. Model-output failures now retain
+  closed tool/JSON/schema/attribution error categories without storing raw output.
+  Note date order is now detected independently per revision as newest-first,
+  oldest-first, mixed, or unknown and passed explicitly to the model. Summary-only proof recovery
+  preserves prior editor boundaries while accepting a strictly proven newer prefix
+  and/or older suffix; any middle insertion or rewrite remains fail-closed until FULL
+  editor text is available.
+  Observation CLIs now support explicit `--reanalyze-all` for every latest FULL
+  revision. Forced reanalysis includes prior successes and failures, reports aggregate
+  closed error codes, and never lets a failed new attempt overwrite a usable prior
+  success. The 2026-08-30 full rerun attempted all 16 notes and initially retained
+  14 successful interpretations under DeepSeek Flash.
+  Private-note model calls now allow 120 seconds per attempt (up from 80, still at
+  most one schema repair). The default interpretation model then moved to OpenCode Go
+  `qwen3.8-flash` at `max`; targeted sanitized runs satisfied the same strict schema and
+  restored the latest observed set to complete successful interpretation coverage.
+
+- Extended the existing XNYS due-checked post-market automation instead of adding a
+  second scheduler. After account/transaction, Daily Equity, and exact Watchlist work,
+  it now runs one read-only `MOOMOO_NOTE` Observation sync with `analyze=false`.
+  Observation step status, notes seen, revisions created, and FULL/summary counts are
+  stored on the same durable per-session receipt. Authentication or source failures
+  degrade only this step and remain retryable without rolling back completed portfolio
+  or Watchlist facts. The migration chain later advanced to
+  `0070_retire_unlinked_review_items`.
+
+- Separated Trade Cycle lifecycle, classification, and data-quality presentation. OPEN is now
+  active green, CLOSED remains clearly neutral, UNRESOLVED is red, and incomplete/unclassified
+  facts are amber. Journal's header now names the aggregate as Data Quality with incomplete and
+  unresolved counts, adds an inline status guide, and replaces the raw Portfolio text link with a
+  consistent `Open Portfolio` quick action.
+
+- Replaced Journal's long Account, Instrument, Research Subject, and Classification selectors with
+  shared autosuggest multi-select filters. Typed text only searches durable options; it does not
+  affect results until the user selects a suggestion. Selected values remain removable chips and
+  multiple values compose without accepting custom identities. Trade Cycle page capacity is now
+  derived only from the browser viewport (4/6/8/10 rows); fixed list rows and an independently
+  scrolling detail pane prevent either side's content from changing the other's height.
+
+- Enriched Moomoo historical deals with bounded exact order-fee reads. Fee totals are allocated
+  once across partial fills and incomplete fee responses fail open without dropping trades. Journal
+  and Portfolio now show explicitly labelled Gross P/L with `Fees unavailable` when Net P/L cannot
+  be established; aggregate behavior and Results continue to use only Net-complete Cycles.
+
+- Migrated the Console Journal to an account-wide review workspace. Journal now opens on the
+  complete durable portfolio scope, keeps Research Subject as an optional filter, adds compact
+  Period/Account/Instrument/Quality controls, and places Trade Cycles in a master-detail review
+  browser. The Reviews tab now owns immutable Trade Retro review revisions; the legacy `/retro`
+  route redirects to Journal instead of maintaining a second editor.
+- Reworked imported Moomoo living notes into the provider-neutral Journal Notes master-detail
+  view. Full-text revisions show exact change summaries, USER scenario drafts, attribution,
+  Position/Cycle context, and revision history. `SUMMARY_ONLY` content remains non-adoptable, and
+  `Review as Decision` still requires explicit user review with an exact Observation Revision
+  reference.
+
+- Audited the live Console workflow and removed several high-friction states. Home now
+  groups Review Queue work instead of showing contradictory zero-action/217-review
+  messages, zero-sample durations remain unavailable, and Monitor posture summarizes
+  quiet rules. Journal can browse all observations, jump to a matching Subject, groups
+  repeated review sources, fixes numeric Plan versions, hides historical model output
+  for summary-only notes, and opens a prefilled Research Subject draft for unmatched
+  observations. Observation filtering and exact background Analyze/Retry avoid a full
+  source refresh or repeated 500 KiB Journal polling. Monitor Overview surfaces exact triggered/unavailable rules;
+  Research option labels and Portfolio side/type values are consistently cased; Operations
+  table inventory is collapsed by default. Read pages boundedly recover through a real
+  15–16 second local API restart without retrying business errors.
+  Observation cards now load bounded revision history and line-level additions/removals on
+  demand. Journal renders strategy_v1 as four scenario blocks with the full Thesis behind a
+  disclosure, and Portfolio Exposure defaults to the eight highest-priority rows. At 390px
+  and a 720px effective zoom width the audited Journal has no horizontal overflow; Card
+  actions stack on mobile. Dialogs trap Tab/Shift+Tab and restore focus, analysis completion
+  is announced through a polite live region, and shared small metadata colors now exceed
+  4.5:1 contrast in both themes. The same audit now covers specialist pages: Agenda hides its
+  rare Provider-sync form behind a disclosure and fixes the field layout; Trade Retro groups
+  repeated immutable attempts by period; Scorecards removes the zero-result paginator and gives
+  actionable empty-state guidance; and Capabilities collapses its 27 tools into 16 searchable
+  categories while removing duplicate entry controls.
+
+- Added a Moomoo-first living-note intake to the existing Journal rather than a new
+  research module. Local private notes are imported as immutable revisions; dated-section
+  state deterministically carries explicit speakers across continuation paragraphs. OpenCode Go
+  `qwen3.8-flash` at `max` effort creates a strict, read-only four-scenario
+  and revision-change draft in the background. `Review as Decision` only prefills the
+  existing confirmation-gated Decision dialog. The current migration head is
+  `0070_retire_unlinked_review_items`;
+  the public MCP surface remains 27 tools. Summary-only list text is now blocked from
+  model analysis and Decision adoption, and cache eviction no longer creates a false
+  content revision when the prior full revision has the same visible summary.
+  Observation ingestion is now provider-neutral: source capability metadata, multi-source
+  aggregation, `/api/observations/sync`, and the closed full-text Local Observation Bridge
+  let a later TradingView adapter reuse the same revisions, attribution, model draft, and
+  Decision handoff without another product module.
+  Stable source-revision keys replace content-hash uniqueness so adapter replay is
+  idempotent, late stale observations fail closed, and a later genuine reversion to
+  historical content remains a new immutable revision. The current migration head is
+  `0070_retire_unlinked_review_items`.
+  A bounded cross-process observation lock now coordinates Console, CLI, and capture
+  adapters; contention returns typed retryable `OBSERVATION_SYNC_BUSY`.
+  Moomoo full-text enrichment can now read the authenticated internal note-list and
+  editor HTML without controlling the desktop UI when the user provides a separately
+  authenticated Web-session Cookie over stdin. Investigation confirmed that the
+  desktop CEF Cookie database contains only locale state; native-bridge authentication
+  is not reusable as a standard Cookie. Computer Use/UI automation remains prohibited;
+  explicitly authorized read-only process, IPC, and protocol diagnostics may be used
+  without changing app, proxy/certificate, account, or trading state or exposing any
+  recovered secret. The configured Cookie is stored only in an owner-only secret file;
+  serial list/detail reads sample a new
+  bounded random delay before every request and cap both stock and note counts.
+  Authentication, rate-limit, transport, or page-shape failures expose only closed
+  warning codes, fall back to cache, and never promote list summaries to full text.
+  A user-authorized CEF NetLog acceptance run recovered the in-memory Web Cookie
+  without UI automation, deleted the raw NetLog/TLS keys after extraction, and
+  improved the current Moomoo set's FULL coverage. Proven list-tail
+  promotion now preserves prior editor paragraph boundaries and appends only a
+  strictly ordered, punctuation-separated tail as USER text. This prevents a named
+  viewpoint from swallowing later user-dated updates. A sanitized fixture reproduced
+  `NOTE_INTERPRETATION_INVALID_OUTPUT`; the corrected revision passed the same
+  strict model schema.
+  Historical summary-only identities were then backfilled through the same randomized
+  authenticated editor path, bringing the durable Observation Inbox to complete FULL
+  coverage for every identity Trading Partner has
+  observed; Moomoo still exposes no global account-level note index that can prove no
+  never-observed stock note exists.
+
+- Every Monitor state-transition notification now ends with one read-only Chinese
+  model analysis capped at 160 characters. Same-Monitor transitions in one run share
+  one call; successful composite judgment summaries are reused. No-change runs make
+  no analysis call. Analysis uses `max` effort; an 80-second timeout or invalid output appends an
+  unavailable note without blocking or changing the deterministic event. Post-market
+  digests collect analyses in a final mobile-readable section.
+
 - Added persistent authenticated LAN mode to the Console supervisor. `console
   install --lan` generates/reuses an owner-only password file, stores only its path
   in launchd, keeps the API loopback-only, and makes normal Console restarts bring up
@@ -61,12 +238,19 @@
   Activity annotations and ReviewItems, deterministic native-currency TWR/MWR-XIRR/drawdown,
   and no-score behavior cohorts with explicit denominators and exclusions. The Journal can
   classify an exact unmatched trade in one save, Portfolio renders return coverage, and the
-  post-market job now synchronizes transactions and materializes Unlinked Activity before the
-  Watchlist refresh. Follow-up slices add durable Daily Equity/Journal activation, mandatory
+  post-market job originally materialized Unlinked Activity before the Watchlist refresh. The
+  current Journal removes that Timeline section and retires Unlinked Activity as a Review Queue
+  source while retaining the read-only projection and append-only annotations. Follow-up slices add durable Daily Equity/Journal activation, mandatory
   preview plus append-only Cycle split/merge/relink, period action recurrence, a unified
   Decision→Order→Activity timeline, and optional exact Decision/Plan links on order previews.
-  Migration head is `0063_agent_image_attachments`; the 27-tool compact surface remains
+  Migration head is now `0070_retire_unlinked_review_items`; the 27-tool compact surface remains
   below its schema budget.
+
+- Added fail-closed Schwab dividend identity enrichment and per-Instrument performance
+  decomposition. Cash-only dividend rows now use a description symbol only when it uniquely
+  matches an exact same-account equity/ETF candidate; existing NULL identities are enriched
+  only when every other normalized fact matches. Performance exposes Net Trading P/L,
+  Dividend Income, and Total P/L while unsupported corporate actions remain incomplete.
 
 - Added a no-live-side-effect Phase 4 acceptance flow and Journal Playwright flow. The backend
   test uses one temporary database to prove Decision/Plan-linked fake order preview+submit,

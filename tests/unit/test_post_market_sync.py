@@ -23,7 +23,8 @@ from application.dto.schwab_oauth import (
 from application.ports.market_session_calendar import MarketSession
 from application.services.operational_job_runtime import OperationalJobExecution
 from application.services.post_market_sync_service import PostMarketSyncService
-from domain.operations.enums import PostMarketSyncRunStatus
+from domain.external_note.enums import NoteSyncStatus
+from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 from domain.operations.models import OperationalJobRun, PostMarketSyncRun
 from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.system.process_file_lock import ProcessFileLock
@@ -117,6 +118,35 @@ class _Watchlist:
             ),
             warnings=(),
             errors=() if self.ok else (SimpleNamespace(code="WATCHLIST_READ_FAILED"),),
+        )
+
+
+class _Observations:
+    def __init__(
+        self,
+        calls: list[str],
+        *,
+        status: NoteSyncStatus = NoteSyncStatus.SUCCEEDED,
+        warning_codes: tuple[str, ...] = (),
+        error_codes: tuple[str, ...] = (),
+    ) -> None:
+        self.calls = calls
+        self.status = status
+        self.warning_codes = warning_codes
+        self.error_codes = error_codes
+
+    async def sync(self, *, analyze: bool, source_code: str) -> SimpleNamespace:
+        assert analyze is False
+        assert source_code == "MOOMOO_NOTE"
+        self.calls.append("observations")
+        return SimpleNamespace(
+            status=self.status,
+            notes_seen=16,
+            revisions_created=2,
+            full_count=16,
+            summary_only_count=0,
+            warning_codes=self.warning_codes,
+            error_codes=self.error_codes,
         )
 
 
@@ -241,6 +271,7 @@ def _service(
     repository: _Repository | None = None,
     portfolio_ok: bool = True,
     watchlist_ok: bool = True,
+    observations: object | None = None,
     schwab_oauth_health: object | None = None,
 ) -> tuple[PostMarketSyncService, _Repository, list[str]]:
     calls: list[str] = []
@@ -253,6 +284,7 @@ def _service(
         clock=_Clock(now),
         id_generator=_Ids(),
         schwab_oauth_health=schwab_oauth_health,
+        external_notes=observations,  # type: ignore[arg-type]
     )
     return service, repo, calls
 
@@ -316,7 +348,7 @@ async def test_success_is_idempotent_for_same_session() -> None:
     assert repository.value is not None and repository.value.attempt_count == 1
 
 
-async def test_success_syncs_transactions_and_materializes_unlinked_before_watchlist() -> None:
+async def test_success_syncs_transactions_without_materializing_unlinked_review_work() -> None:
     close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
     calls: list[str] = []
     service = PostMarketSyncService(
@@ -339,7 +371,6 @@ async def test_success_syncs_transactions_and_materializes_unlinked_before_watch
     assert calls == [
         "portfolio",
         "transactions",
-        "unlinked",
         "activate-journal",
         "read-snapshot",
         "read-transactions",
@@ -384,6 +415,83 @@ async def test_runs_portfolio_before_exact_watchlist_sync_and_persists_receipt()
     assert result.watchlist_groups_synced == 24
     assert result.watchlist_membership_relations_synced == 143
     assert repository.value is not None
+
+
+async def test_runs_moomoo_observations_after_watchlist_and_persists_counts() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    calls: list[str] = []
+    repository = _Repository()
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(date(2026, 7, 17), close_at)),
+        repository=repository,
+        portfolio=_Portfolio(calls),
+        watchlist=_Watchlist(calls),
+        external_notes=_Observations(calls),  # type: ignore[arg-type]
+        clock=_Clock(datetime(2026, 7, 17, 20, 10, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+
+    result = await service.run_if_due()
+
+    assert calls == ["portfolio", "watchlist", "observations"]
+    assert result.run_status is PostMarketSyncRunStatus.SUCCEEDED
+    assert result.observation_status is PostMarketSyncStepStatus.SUCCEEDED
+    assert result.observation_notes_seen == 16
+    assert result.observation_revisions_created == 2
+    assert result.observation_full_count == 16
+    assert result.observation_summary_only_count == 0
+    assert repository.value is not None
+    assert repository.value.observation_status is PostMarketSyncStepStatus.SUCCEEDED
+
+
+async def test_observation_failure_is_partial_and_does_not_block_other_steps() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    calls: list[str] = []
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(date(2026, 7, 17), close_at)),
+        repository=_Repository(),
+        portfolio=_Portfolio(calls),
+        watchlist=_Watchlist(calls),
+        external_notes=_Observations(
+            calls,
+            status=NoteSyncStatus.FAILED,
+            error_codes=("OBSERVATION_SOURCES_UNAVAILABLE",),
+        ),  # type: ignore[arg-type]
+        clock=_Clock(datetime(2026, 7, 17, 20, 10, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+
+    result = await service.run_if_due()
+
+    assert calls == ["portfolio", "watchlist", "observations"]
+    assert result.run_status is PostMarketSyncRunStatus.PARTIAL
+    assert result.observation_status is PostMarketSyncStepStatus.FAILED
+    assert result.error_codes == ("OBSERVATION_SOURCES_UNAVAILABLE",)
+
+
+async def test_observation_partial_receipt_keeps_run_successful_with_warning() -> None:
+    close_at = datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+    calls: list[str] = []
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(date(2026, 7, 17), close_at)),
+        repository=_Repository(),
+        portfolio=_Portfolio(calls),
+        watchlist=_Watchlist(calls),
+        external_notes=_Observations(
+            calls,
+            status=NoteSyncStatus.PARTIAL,
+            warning_codes=("MOOMOO_NOTE_INTERPRETATION_PENDING",),
+        ),  # type: ignore[arg-type]
+        clock=_Clock(datetime(2026, 7, 17, 20, 10, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+
+    result = await service.run_if_due()
+
+    assert result.run_status is PostMarketSyncRunStatus.SUCCEEDED
+    assert result.observation_status is PostMarketSyncStepStatus.SUCCEEDED
+    assert result.warning_codes == ("MOOMOO_NOTE_INTERPRETATION_PENDING",)
+    assert result.error_codes == ()
 
 
 async def test_run_includes_schwab_token_age_and_persists_early_warning() -> None:

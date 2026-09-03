@@ -141,3 +141,13 @@ test("Reject Candidate keeps a failed decision error on its own card", async ({ 
   await expect(card.getByRole("alert")).toContainText("CANDIDATE_REJECT_FAILED");
   await expect(card).toBeVisible();
 });
+
+test("Observation without a Subject opens one prefilled Research draft", async ({ page }) => {
+  await mockResearchApi(page, true);
+  await page.goto("/research?create=observation&instrument_id=equity%3AUS%3AAFRM&title=AFRM");
+
+  await expect(page.getByLabel("Title")).toHaveValue("AFRM Research");
+  await expect(page.getByLabel("Primary Instrument ID")).toHaveValue("equity:US:AFRM");
+  await expect(page.getByLabel("Summary")).toHaveValue(/evolving external observations/);
+  await expect(page.getByRole("button", { name: "Create Research Subject" })).toBeVisible();
+});

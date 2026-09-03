@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
-import { ErrorNote, Paginator, Badge, Card, DataBoundary, Empty, PageActionMenu } from "../components/ui";
+import { ErrorNote, Paginator, Badge, Card, DataBoundary, Disclosure, Empty, PageActionMenu } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
 import { textDash as text } from "../lib/coerce";
@@ -58,6 +58,16 @@ function id(value: unknown): string {
 
 function upper(value: unknown): string {
   return String(value ?? "").trim().toUpperCase();
+}
+
+function optionLabel(value: unknown): string {
+  const normalized = text(value, "").trim();
+  if (!normalized) return "Unknown";
+  return normalized
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function short(value: string, max = 18): string {
@@ -192,8 +202,7 @@ function ScorecardCard({
           {warningCodes.map((warning) => <code key={warning}>{warning}</code>)}
         </p>
       )}
-      <details>
-        <summary>Dimension Outcome Details ({dimensions.length})</summary>
+      <Disclosure variant="compact" title={<>Dimension Outcome Details ({dimensions.length})</>}>
         {dimensions.length === 0 ? (
           <p className="mono">No dimension records were returned.</p>
         ) : (
@@ -240,7 +249,7 @@ function ScorecardCard({
             })}
           </div>
         )}
-      </details>
+      </Disclosure>
     </article>
   );
 }
@@ -374,7 +383,7 @@ export default function JudgmentScorecardsPage() {
                 <option value={ALL_SUBJECTS}>All Subjects (Browse Only)</option>
                 {subjects.map((subject) => (
                   <option key={id(subject.subject_id)} value={id(subject.subject_id)}>
-                    {text(subject.title)} ({text(subject.status)}) · {short(id(subject.primary_instrument_id))}
+                    {text(subject.title)} ({optionLabel(subject.status)}) · {short(id(subject.primary_instrument_id))}
                   </option>
                 ))}
               </select>
@@ -391,7 +400,7 @@ export default function JudgmentScorecardsPage() {
                 </option>
                 {thesisOptions.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.title} ({item.status})
+                    {item.title} ({optionLabel(item.status)})
                   </option>
                 ))}
               </select>
@@ -399,7 +408,7 @@ export default function JudgmentScorecardsPage() {
             <label>
               <span>Dimension Outcome</span>
               <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value)}>
-                {outcomeSet.length > 0 && [...outcomeSet].sort().map((item) => <option key={item} value={item}>{item}</option>)}
+                {outcomeSet.length > 0 && [...outcomeSet].sort().map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
               </select>
             </label>
           </div>
@@ -407,7 +416,11 @@ export default function JudgmentScorecardsPage() {
             Latest scorecards are shown first. Use filters for subject and outcome; the Generate button is disabled for browsing mode or when a thesis is not chosen.
           </p>
           {filtered.length === 0
-            ? <Empty>No matching Judgment Scorecards.</Empty>
+            ? <Empty>{subjectId === ALL_SUBJECTS
+              ? "Select a Research Subject to generate a scorecard, or adjust the filters to browse history."
+              : thesisId === ""
+                ? "Select a Thesis to generate a scorecard."
+                : "No matching Judgment Scorecards. Use Generate Scorecard to create the first immutable run."}</Empty>
             : (
               <div className="scorecard-run-grid">
                 {filtered.map((run) => (
@@ -418,13 +431,13 @@ export default function JudgmentScorecardsPage() {
                 ))}
               </div>
             )}
-          <Paginator
-            step={50}
-            offset={historyOffset}
-            hasMore={scorecardHasMore}
-            onOffsetChange={setHistoryOffset}
-            summary={<small>{scorecardTotal} Total · Showing {allScorecards.length === 0 ? 0 : historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>}
-          />
+          {scorecardTotal > 0 && <Paginator
+              step={50}
+              offset={historyOffset}
+              hasMore={scorecardHasMore}
+              onOffsetChange={setHistoryOffset}
+              summary={<small>{scorecardTotal} Total · Showing {historyOffset + 1}–{Math.min(historyOffset + allScorecards.length, scorecardTotal)}</small>}
+            />}
         </Card>
       </DataBoundary>
     </ConsoleShell>

@@ -7,6 +7,7 @@ from application.services.performance_attribution_calculator import (
     PerformanceAttributionCalculator,
 )
 from domain.attribution.enums import AttributionStatus, CostBasisMethod
+from domain.attribution.models import PositionBasisCheckpoint
 from domain.common.enums import VendorId
 from domain.portfolio.enums import (
     AccountEnvironment,
@@ -47,7 +48,11 @@ def _trade(
 
 
 def _snapshot(
-    *, side: AccountPositionSide, quantity: str, market_price: str
+    *,
+    side: AccountPositionSide,
+    quantity: str,
+    market_price: str | None,
+    market_value: str | None = None,
 ) -> AccountSnapshot:
     return AccountSnapshot(
         snapshot_id="snapshot_1",
@@ -69,9 +74,9 @@ def _snapshot(
                 sellable_quantity=None,
                 average_cost=Decimal("100"),
                 diluted_cost=None,
-                market_price=Decimal(market_price),
-                market_price_at=NOW,
-                market_value=None,
+                market_price=Decimal(market_price) if market_price is not None else None,
+                market_price_at=NOW if market_price is not None else None,
+                market_value=Decimal(market_value) if market_value is not None else None,
                 unrealized_pnl=Decimal("123"),
                 realized_pnl=None,
                 currency="USD",
@@ -178,3 +183,111 @@ def test_broker_reported_basis_never_relabels_position_pnl_as_period_realized() 
     assert instrument.realized_pnl_before_fees is None
     assert instrument.broker_reported_unrealized_pnl == Decimal("123")
     assert "BROKER_REPORTED_REALIZED_PERIOD_UNVERIFIED" in instrument.warning_codes
+
+
+def test_fifo_uses_timestamped_snapshot_market_value_when_unit_price_is_absent() -> None:
+    result = PerformanceAttributionCalculator().calculate_account(
+        account_ref="account_1",
+        provider=VendorId.SCHWAB,
+        currency="USD",
+        transactions=(
+            _trade(
+                "buy_1",
+                side=AccountTransactionSide.BUY,
+                quantity="10",
+                price="100",
+                fees="0",
+                occurred_at=START - timedelta(days=1),
+            ),
+        ),
+        snapshot=_snapshot(
+            side=AccountPositionSide.LONG,
+            quantity="10",
+            market_price=None,
+            market_value="1300",
+        ),
+        start=START,
+        end=NOW,
+        method=CostBasisMethod.FIFO,
+        opening_history_verified=True,
+    )
+
+    instrument = result.instruments[0]
+    assert instrument.unrealized_pnl_before_fees == Decimal("300")
+    assert instrument.net_trading_pnl == Decimal("300")
+    assert "TIMESTAMPED_VALUATION_UNAVAILABLE" not in instrument.warning_codes
+
+
+def test_fifo_checkpoint_replaces_import_activity_and_covers_older_corporate_action() -> None:
+    checkpoint_at = START - timedelta(days=1)
+    corporate_action = AccountTransaction(
+        provider_transaction_id="transfer_1",
+        account_ref="account_1",
+        provider=VendorId.SCHWAB,
+        instrument_id="equity:US:NVDA",
+        kind=AccountTransactionKind.CORPORATE_ACTION,
+        side=None,
+        quantity=Decimal("10"),
+        price=Decimal(0),
+        fees=Decimal(0),
+        cash_amount=Decimal(0),
+        currency="USD",
+        occurred_at=START - timedelta(days=2),
+        source_type="RECEIVE_AND_DELIVER",
+        mapping_version="test_v1",
+    )
+    imported_position = _trade(
+        "import_1",
+        side=AccountTransactionSide.BUY,
+        quantity="10",
+        price="50",
+        fees="0",
+        occurred_at=checkpoint_at,
+    )
+    checkpoint = PositionBasisCheckpoint(
+        checkpoint_id="basis_1",
+        provider=VendorId.SCHWAB,
+        account_ref="account_1",
+        instrument_id="equity:US:NVDA",
+        currency="USD",
+        effective_at=checkpoint_at,
+        quantity=Decimal("10"),
+        total_cost_basis=Decimal("900"),
+        source_type="BROKER_POSITION_IMPORT",
+        source_ref="test_import",
+        replaces_activity_id="import_1",
+    )
+
+    result = PerformanceAttributionCalculator((checkpoint,)).calculate_account(
+        account_ref="account_1",
+        provider=VendorId.SCHWAB,
+        currency="USD",
+        transactions=(
+            corporate_action,
+            imported_position,
+            _trade(
+                "sell_1",
+                side=AccountTransactionSide.SELL,
+                quantity="4",
+                price="120",
+                fees="4",
+                occurred_at=START + timedelta(days=1),
+            ),
+        ),
+        snapshot=_snapshot(side=AccountPositionSide.LONG, quantity="6", market_price="130"),
+        start=START,
+        end=NOW,
+        method=CostBasisMethod.FIFO,
+        opening_history_verified=True,
+    )
+
+    instrument = result.instruments[0]
+    assert instrument.ending_quantity == Decimal("6")
+    assert instrument.open_cost_basis == Decimal("540")
+    assert instrument.realized_pnl_before_fees == Decimal("120")
+    assert instrument.realized_pnl_after_fees == Decimal("116")
+    assert instrument.unrealized_pnl_before_fees == Decimal("240")
+    assert instrument.basis_checkpoint_ids == ("basis_1",)
+    assert instrument.activity_ids == ("sell_1",)
+    assert "ENDING_POSITION_MISMATCH" not in instrument.warning_codes
+    assert "CORPORATE_ACTION_LOT_EFFECT_UNSUPPORTED" not in result.warning_codes
