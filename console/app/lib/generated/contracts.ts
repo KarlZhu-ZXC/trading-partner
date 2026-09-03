@@ -538,6 +538,7 @@ export namespace AttentionDigestContractTypes {
     | "AGENT_ACTION_TERMINAL"
     | "DATA_QUALITY_ISSUE_CLEARED"
     | "DECISION_REVIEW_SUPERSEDED"
+    | "OBSERVATION_REVIEW_CONFIRMED"
     | "UNLINKED_ACTIVITY_ANNOTATED";
   export type Description = string;
   export type Detail = string;
@@ -564,6 +565,7 @@ export namespace AttentionDigestContractTypes {
     | "AGENT_PENDING_ACTION"
     | "DATA_QUALITY"
     | "DECISION_REVIEW_DUE"
+    | "OBSERVATION_REVIEW_DUE"
     | "UNLINKED_ACTIVITY";
   /**
    * This interface was referenced by `AttentionDigestContract`'s JSON-Schema

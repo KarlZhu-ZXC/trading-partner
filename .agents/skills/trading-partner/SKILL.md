@@ -7,8 +7,8 @@ description: "Use Trading Partner MCP for verified investment facts, research, p
 
 Use the live MCP schema and repository `AGENTS.md` as the detailed source of truth.
 Keep calls and explanations bounded; never copy the product specification into chat.
-The current repository boundary is implemented Phase 1–4D, 30 public tools, and
-migration head `0071_external_note_reviews`.
+The current repository boundary is implemented Phase 1–4D, 31 public tools, and
+migration head `0072_external_note_review_drafts`.
 
 ## Call contract
 
@@ -31,7 +31,9 @@ migration head `0071_external_note_reviews`.
   the inbox.
 - View intake: `view_inbox` lists structured pending note changes without private full
   bodies; `view_review_get` compares one exact revision with durable judgment and
-  portfolio context; `current_view_get` restores the latest exact confirmed view.
+  portfolio context; confirmation-gated `view_review_run` may append a configured
+  non-authoritative deep-review draft; `current_view_get` restores the latest exact
+  confirmed view.
 - Research: `investment_case_read`, `investment_case_manage`,
   `research_judgment_get`, `research_judgment_propose`,
   `research_judgment_confirm`, `research_memory_get`, `research_memory_append`.
@@ -112,9 +114,14 @@ must retain their token/perpetual/CFD identity and basis warnings.
   oldest-first, mixed, or unknown; the model must not assume one global order.
   Summary fallback may recover only a proven prefix/suffix around the prior FULL
   editor body, never a middle rewrite.
-  All note interpretation uses OpenCode Go
-  `qwen3.8-flash` at `max` with a 120-second per-attempt timeout; do not route note
-  interpretation to DeepSeek. The interpretation is a draft only, and `Review as Decision` still requires the
+  First-pass note interpretation uses OpenCode Go `qwen3.8-flash` at `max` with a
+  120-second per-attempt timeout; do not route it to DeepSeek. Escalated review may
+  use `muse-spark-1.3-contributor` at `high` only when
+  `EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true` records the owner's explicit
+  acceptance that prompts and completions may train future models. Muse 1.3 and Grok
+  4.6 use the Responses route. Do not default Muse review to `xhigh`: the sanitized
+  comparison was slower and over-propagated an EXIT action. Both interpretations are
+  drafts only, and `Review as Decision` still requires the
   user to review and save through the existing Decision contract. A saved Decision
   may carry the exact optional `external_note_revision_id`; never substitute a
   display string such as `note_id@vN`, and never treat the link as Thesis, Plan, or

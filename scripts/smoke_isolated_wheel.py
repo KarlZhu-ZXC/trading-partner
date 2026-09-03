@@ -115,7 +115,7 @@ try:
     server = create_mcp_server(container)
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert names == set(PUBLIC_TOOL_NAMES), (len(names), sorted(names))
-    assert len(names) == len(PUBLIC_TOOL_NAMES) == 27
+    assert names == PUBLIC_TOOL_NAMES
 finally:
     container.close()
 

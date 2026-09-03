@@ -38,6 +38,7 @@ type ObservationInboxResponse = {
   data?: {
     external_notes?: Dict[];
     observation_sources?: Dict[];
+    review_workflow_enabled?: boolean;
   };
 };
 type SubjectAggregate = { subject?: Dict; state?: Dict };
@@ -532,7 +533,7 @@ function CurrentViewCard({
     const decision = asDict(currentView.decision);
     const thesis = asDict(currentView.thesis);
     const plan = asDict(currentView.trade_plan);
-    content = <div className="journal-current-view"><div><span>Decision</span><strong>{text(decision.title, "Confirmed Decision")}</strong><p>{text(decision.rationale, "No rationale recorded.")}</p></div><div><span>Thesis</span><strong>{text(thesis.title, "No live Thesis")}</strong><p>{text(thesis.statement, "The confirmed Decision remains available without a live Thesis.")}</p></div><div><span>Trade Plan</span><strong>{currentView.trade_plan ? `${shortId(plan.plan_id)} · v${number(plan.version)}` : "No active Plan"}</strong><p>{currentView.trade_plan ? `${upper(plan.status)} · ${shortId(plan.instrument_id)}` : "No execution plan is implied by this view."}</p></div><div><span>Source</span><strong>{shortId(currentView.source_note_revision_id)}</strong><p>Exact immutable Observation revision</p></div></div>;
+    content = <div className="journal-current-view"><div><span>Decision</span><strong>{text(decision.title, "Confirmed Decision")}</strong><p>{text(decision.rationale, "No rationale recorded.")}</p></div><div><span>Thesis</span><strong>{text(thesis.title, "No live Thesis")}</strong><p>{text(thesis.statement, "The confirmed Decision remains available without a live Thesis.")}</p></div><div><span>Trade Plan</span><strong>{currentView.trade_plan ? `${shortId(plan.instrument_id)} · v${number(plan.version)}` : "No active Plan"}</strong><p>{currentView.trade_plan ? `${upper(plan.status)} · confirmed execution context` : "No execution plan is implied by this view."}</p></div><div><span>Source</span><strong>{text(currentView.source_title, "Imported Note")} · v{number(currentView.source_note_version)}</strong><p>Exact immutable Observation revision retained in provenance</p></div></div>;
   }
   return <Card kicker="JUDGMENT SYSTEM OF RECORD" title="Current Confirmed View" description={text(currentView.subject_title, text(subject.title, "Select a Research Subject"))} action={currentView.review ? <Badge value={upper(asDict(currentView.review).status, "CONFIRMED")} tone="good" /> : undefined}>{content}</Card>;
 }
@@ -573,6 +574,7 @@ export default function DecisionWorkbenchPage() {
   const [noteSyncError, setNoteSyncError] = useState<string | null>(null);
   const [noteSyncMessage, setNoteSyncMessage] = useState<string | null>(null);
   const [noteAnalysisBusyId, setNoteAnalysisBusyId] = useState<string | null>(null);
+  const [noteReviewBusyId, setNoteReviewBusyId] = useState<string | null>(null);
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("ALL");
   const [customPeriodStart, setCustomPeriodStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [customPeriodEnd, setCustomPeriodEnd] = useState(() => dateInputValue());
@@ -651,6 +653,7 @@ export default function DecisionWorkbenchPage() {
   const observationData = observationApi.data?.data;
   const externalNotes = listOf<Dict>(observationData, "external_notes");
   const observationSources = listOf<Dict>(observationData, "observation_sources");
+  const observationReviewWorkflowEnabled = observationData?.review_workflow_enabled !== false;
   const currentView = asDict(currentViewApi.data?.data);
 
   useEffect(() => {
@@ -1581,7 +1584,8 @@ export default function DecisionWorkbenchPage() {
     const revisionId = text(revision.note_revision_id, "");
     let reviewItem = item;
     let reviewPackage: Dict | null = null;
-    if (revisionId) {
+    if (revisionId && observationReviewWorkflowEnabled) {
+      setNoteReviewBusyId(revisionId);
       try {
         const response = await postApi<Dict>(
           `/api/observations/${encodeURIComponent(revisionId)}/review/ensure`,
@@ -1594,6 +1598,31 @@ export default function DecisionWorkbenchPage() {
           ),
         );
         reviewPackage = asDict(packageResponse.data);
+        if (reviewPackage.requires_deep_review === true) {
+          await postApi<Dict>(
+            `/api/observations/${encodeURIComponent(revisionId)}/deep-review`,
+            { force: false },
+          );
+          const refreshedPackage = asDict(
+            await getJson(
+              `/api/observations/${encodeURIComponent(revisionId)}/review`,
+            ),
+          );
+          reviewPackage = asDict(refreshedPackage.data);
+          const deepReview = asDict(reviewPackage.deep_review);
+          const deepPayload = asDict(deepReview.payload);
+          if (upper(deepReview.status) === "SUCCEEDED" && Object.keys(deepPayload).length > 0) {
+            reviewItem = {
+              ...reviewItem,
+              interpretation: {
+                ...asDict(reviewItem.interpretation),
+                payload: deepPayload,
+                model: deepReview.model,
+                review_layer: "DEEP",
+              },
+            };
+          }
+        }
       } catch (cause) {
         setNoteSyncError(
           cause instanceof Error
@@ -1601,6 +1630,8 @@ export default function DecisionWorkbenchPage() {
             : "Observation review could not be prepared.",
         );
         return;
+      } finally {
+        setNoteReviewBusyId(null);
       }
     }
     setDecisionReviewPackage(reviewPackage);
@@ -1920,6 +1951,7 @@ export default function DecisionWorkbenchPage() {
               onReviewDecision={reviewNoteAsDecision}
               onDeferReview={deferNoteReview}
               analysisBusyId={noteAnalysisBusyId}
+              reviewBusyId={noteReviewBusyId}
               onAnalyzeRevision={(revisionId) => { void analyzeObservation(revisionId); }}
               positionContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allPositions.filter((position) => text(position.instrument_id, "") === noteInstrumentId); const quantity = matches.reduce((total, position) => total + number(position.quantity), 0); return <div><strong>{matches.length ? quantity : "No Position"}</strong><small>{matches.length ? `${matches.length} account position${matches.length === 1 ? "" : "s"}` : "No durable holding in the current snapshot"}</small></div>; }}
               cyclesContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allTradeCycles.filter((cycle) => text(cycle.instrument_id, "") === noteInstrumentId); const latest = [...matches].sort((left, right) => cycleReviewTime(right) - cycleReviewTime(left))[0]; const pnl = latest ? cyclePnlPresentation(latest) : null; return <div><strong>{matches.length} Cycle{matches.length === 1 ? "" : "s"}</strong><small>{latest && pnl ? `${upper(latest.status)} · ${pnl.label} ${pnl.value}${pnl.detail ? ` · ${pnl.detail}` : ""}` : "No durable Trade Cycle"}</small></div>; }}
@@ -2005,7 +2037,7 @@ export default function DecisionWorkbenchPage() {
           <div className="journal-capture-form">
             <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small>{upper(subject.status, "UNKNOWN")}</small></span><span>Trade Plan<strong>{planLinkReady ? `${shortId(plan?.instrument_id)} · v${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceNote || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
             {decisionSourceRevisionId ? <Disclosure className="journal-capture-wide" variant="code" title="Exact Durable Provenance"><pre>{JSON.stringify({ subject_id: subjectId, trade_plan_id: planLinkReady ? planId : null, trade_plan_version: planLinkReady ? planVersion : null, note_revision_id: decisionSourceRevisionId }, null, 2)}</pre></Disclosure> : null}
-            {decisionReviewPackage ? <div className="journal-capture-wide notes-review-baseline"><span className="card-kicker">CONFIRMED BASELINE COMPARISON</span><div className="confirmation-facts"><span>What Changed<strong>{text(decisionReviewPackage.material_change_summary, "No change summary available")}</strong></span><span>Current Thesis<strong>{text(asDict(decisionReviewPackage.thesis).statement, "No live Thesis")}</strong></span><span>Prior Decision<strong>{text(asDict(decisionReviewPackage.latest_decision).title, "No prior Decision")}</strong></span><span>Deterministic Checks<strong>{listOf<string>(decisionReviewPackage, "deterministic_flags").map((item) => item.replaceAll("_", " ")).join(" · ") || "No structural conflict detected"}</strong></span></div><small>Model text is a draft. Thesis, Plan, Position, Monitor, and coverage checks above come from durable local records.</small></div> : null}
+            {decisionReviewPackage ? <div className="journal-capture-wide notes-review-baseline"><span className="card-kicker">CONFIRMED BASELINE COMPARISON</span><div className="confirmation-facts"><span>What Changed<strong>{text(decisionReviewPackage.material_change_summary, "No change summary available")}</strong></span><span>Current Thesis<strong>{text(asDict(decisionReviewPackage.thesis).statement, "No live Thesis")}</strong></span><span>Prior Decision<strong>{text(asDict(decisionReviewPackage.latest_decision).title, "No prior Decision")}</strong></span><span>Deep Review<strong>{text(asDict(decisionReviewPackage.deep_review).status, "Not Configured")}</strong><small>{text(asDict(decisionReviewPackage.deep_review).model, "Flash draft remains available")}</small></span><span>Deterministic Checks<strong>{listOf<string>(decisionReviewPackage, "deterministic_flags").map((item) => item.replaceAll("_", " ")).join(" · ") || "No structural conflict detected"}</strong></span></div><small>Flash and Max text are drafts. Thesis, Plan, Position, Monitor, and coverage checks above come from durable local records.</small></div> : null}
             <FormField label="Action" required><select required value={decisionAction} onChange={(event) => setDecisionAction(event.target.value as DecisionAction)}>{DECISION_ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></FormField>
             <FormField label="Current Scenario" required><select required value={decisionScenario} onChange={(event) => setDecisionScenario(event.target.value as DecisionScenario)}>{DECISION_SCENARIOS.map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></FormField>
             <FormField label="Reason" required className="journal-capture-wide"><textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>

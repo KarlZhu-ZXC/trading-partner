@@ -50,7 +50,7 @@ closeout without changing the tool count or introducing order methods.
 ## 3. Public MCP boundary
 
 The authoritative Phase 1 runtime inventory is exposed through the consolidated
-public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 30 tools.
+public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 31 tools.
 
 ```text
 system_health                 instrument_resolve
@@ -314,7 +314,7 @@ Phase 1 remains accepted through the current repository gates:
 - strict Mypy and the repository coverage floor;
 - focused, integration, migration, and public-surface tests;
 - the historical Phase 1 closeout revision `0008_phase1l_workflows` remains in the
-  forward migration chain to current head `0071_external_note_reviews`;
+  forward migration chain to current head `0072_external_note_review_drafts`;
 - sdist/wheel build and fresh Python 3.13 isolated-wheel smoke;
 - 80 declarative dialogue scenarios;
 - three longitudinal Research Subject fixtures;

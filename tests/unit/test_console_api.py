@@ -603,7 +603,8 @@ class _ViewReviewsService:
     def __init__(self) -> None:
         self.reads: list[str] = []
 
-    def get(self, note_revision_id: str) -> Any:
+    def get(self, note_revision_id: str, *, explicit_review: bool = False) -> Any:
+        assert explicit_review is True
         self.reads.append(note_revision_id)
         return SimpleNamespace(
             model_dump=lambda **_kwargs: {
@@ -622,6 +623,32 @@ class _ViewReviewsService:
                 "decision": {"decision_id": "decision_current"},
             }
         )
+
+
+class _ReviewDraftsService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool, bool]] = []
+        self.value: Any = None
+
+    async def review(
+        self,
+        note_revision_id: str,
+        *,
+        explicit_review: bool,
+        force: bool,
+    ) -> Any:
+        self.calls.append((note_revision_id, explicit_review, force))
+        self.value = SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "note_revision_id": note_revision_id,
+                "status": "SUCCEEDED",
+                "model": "qwen3.8-max",
+            }
+        )
+        return self.value
+
+    def latest(self, _note_revision_id: str) -> Any:
+        return self.value
 
 
 class _AgendaContainer:
@@ -650,6 +677,7 @@ class _AgendaContainer:
             ),
             external_notes=_ExternalNotesService(current),
             external_note_reviews=_ExternalNoteReviewsService(),
+            external_note_review_drafts=_ReviewDraftsService(),
             view_reviews=_ViewReviewsService(),
             review_items=SimpleNamespace(
                 reconcile=lambda *_args, **_kwargs: (),
@@ -672,6 +700,7 @@ class _AgendaContainer:
             clock=_AgendaClock(current),
             secret_redactor=SimpleNamespace(redact_text=lambda value: value),
         )
+        self.settings = SimpleNamespace(observation_review_workflow_enabled=True)
 
     async def aclose(self) -> None:
         return None
@@ -752,7 +781,11 @@ async def test_observation_source_hub_lists_capabilities_and_syncs_all_sources(
         await asyncio.sleep(0)
 
     assert inbox.status_code == 200
-    assert set(inbox.json()["data"]) == {"external_notes", "observation_sources"}
+    assert set(inbox.json()["data"]) == {
+        "external_notes",
+        "observation_sources",
+        "review_workflow_enabled",
+    }
     assert sources.status_code == 200
     assert sources.json()["items"][0]["source_code"] == "MOOMOO_NOTE"
     assert history.status_code == 200
@@ -909,6 +942,46 @@ async def test_observation_review_package_uses_the_shared_deterministic_service(
     assert response.status_code == 200
     assert response.json()["data"]["allowed_actions"] == ["DEFER", "RECORD_DECISION"]
     assert container.services.view_reviews.reads == [revision_id]
+
+
+@pytest.mark.asyncio
+async def test_observation_deep_review_is_explicit_session_gated_and_readable(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    revision_id = "external_note_revision_afrm"
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post(
+            f"/api/observations/{revision_id}/deep-review",
+            json={"force": False},
+        )
+        headers = await _console_headers(client)
+        reviewed = await client.post(
+            f"/api/observations/{revision_id}/deep-review",
+            json={"force": False},
+            headers=headers,
+        )
+        latest = await client.get(
+            f"/api/observations/{revision_id}/deep-review"
+        )
+
+    assert denied.status_code == 403
+    assert reviewed.status_code == 200
+    assert reviewed.json()["data"]["model"] == "qwen3.8-max"
+    assert latest.json()["data"]["status"] == "SUCCEEDED"
+    assert container.services.external_note_review_drafts.calls == [
+        (revision_id, True, False)
+    ]
 
 
 @pytest.mark.asyncio

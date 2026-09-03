@@ -14,8 +14,11 @@ from domain.common.errors import (
     PersistenceError,
 )
 from domain.external_note.enums import ExternalNoteReviewStatus
-from domain.external_note.models import ExternalNoteReview
-from infrastructure.persistence.orm.operations import ExternalNoteReviewRevisionRow
+from domain.external_note.models import ExternalNoteReview, ExternalNoteReviewDraft
+from infrastructure.persistence.orm.operations import (
+    ExternalNoteReviewDraftRow,
+    ExternalNoteReviewRevisionRow,
+)
 
 
 def _domain(row: ExternalNoteReviewRevisionRow) -> ExternalNoteReview:
@@ -47,6 +50,26 @@ def _same_payload(left: ExternalNoteReview, right: ExternalNoteReview) -> bool:
         and left.due_at == right.due_at
         and left.actor == right.actor
         and left.authorization_note == right.authorization_note
+    )
+
+
+def _draft_domain(row: ExternalNoteReviewDraftRow) -> ExternalNoteReviewDraft:
+    from datetime import datetime
+
+    return ExternalNoteReviewDraft(
+        draft_id=row.draft_id,
+        review_id=row.review_id,
+        note_revision_id=row.note_revision_id,
+        status=row.status,
+        provider=row.provider,
+        model=row.model,
+        reasoning_effort=row.reasoning_effort,
+        schema_version=row.schema_version,
+        trigger_codes=row.trigger_codes,
+        payload_json=row.payload_json,
+        error_code=row.error_code,
+        idempotency_key=row.idempotency_key,
+        created_at=datetime.fromisoformat(row.created_at),
     )
 
 
@@ -191,3 +214,80 @@ class SqlAlchemyExternalNoteReviewRepository(ExternalNoteReviewRepository):
                 ExternalNoteReviewRevisionRow.review_id.desc(),
             ).limit(limit)
             return tuple(_domain(row) for row in session.scalars(statement))
+
+    def append_draft(self, value: ExternalNoteReviewDraft) -> ExternalNoteReviewDraft:
+        with Session(self._engine) as session, session.begin():
+            duplicate = session.scalar(
+                select(ExternalNoteReviewDraftRow).where(
+                    ExternalNoteReviewDraftRow.idempotency_key == value.idempotency_key
+                )
+            )
+            if duplicate is not None:
+                existing = _draft_domain(duplicate)
+                if (
+                    existing.review_id != value.review_id
+                    or existing.note_revision_id != value.note_revision_id
+                    or existing.model != value.model
+                    or existing.trigger_codes != value.trigger_codes
+                ):
+                    raise IdempotencyConflict(
+                        "Observation review draft idempotency key was reused"
+                    )
+                return existing
+            session.add(
+                ExternalNoteReviewDraftRow(
+                    draft_id=value.draft_id,
+                    review_id=value.review_id,
+                    note_revision_id=value.note_revision_id,
+                    status=value.status,
+                    provider=value.provider,
+                    model=value.model,
+                    reasoning_effort=value.reasoning_effort,
+                    schema_version=value.schema_version,
+                    trigger_codes=value.trigger_codes,
+                    payload_json=value.payload_json,
+                    error_code=value.error_code,
+                    idempotency_key=value.idempotency_key,
+                    created_at=value.created_at.isoformat(),
+                )
+            )
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                raise PersistenceError(
+                    "Observation review draft append conflict"
+                ) from exc
+            return value
+
+    def latest_draft(self, note_revision_id: str) -> ExternalNoteReviewDraft | None:
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(ExternalNoteReviewDraftRow)
+                .where(
+                    ExternalNoteReviewDraftRow.note_revision_id == note_revision_id
+                )
+                .order_by(
+                    ExternalNoteReviewDraftRow.created_at.desc(),
+                    ExternalNoteReviewDraftRow.draft_id.desc(),
+                )
+                .limit(1)
+            )
+            return _draft_domain(row) if row is not None else None
+
+    def latest_successful_draft(
+        self, note_revision_id: str
+    ) -> ExternalNoteReviewDraft | None:
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(ExternalNoteReviewDraftRow)
+                .where(
+                    ExternalNoteReviewDraftRow.note_revision_id == note_revision_id,
+                    ExternalNoteReviewDraftRow.status == "SUCCEEDED",
+                )
+                .order_by(
+                    ExternalNoteReviewDraftRow.created_at.desc(),
+                    ExternalNoteReviewDraftRow.draft_id.desc(),
+                )
+                .limit(1)
+            )
+            return _draft_domain(row) if row is not None else None

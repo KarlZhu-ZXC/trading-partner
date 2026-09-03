@@ -260,6 +260,67 @@ class ExternalNoteReview:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalNoteReviewDraft:
+    """Append-only escalated model draft; never a confirmed judgment."""
+
+    draft_id: str
+    review_id: str
+    note_revision_id: str
+    status: str
+    provider: str
+    model: str
+    reasoning_effort: str
+    schema_version: str
+    trigger_codes: tuple[str, ...]
+    payload_json: str
+    error_code: str | None
+    idempotency_key: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.draft_id.startswith("external_note_review_draft_"):
+            raise DataContractError(
+                "draft_id must use external_note_review_draft_ prefix"
+            )
+        object.__setattr__(self, "review_id", _text(self.review_id, "review id", 128))
+        object.__setattr__(
+            self,
+            "note_revision_id",
+            _text(self.note_revision_id, "note revision id", 128),
+        )
+        if self.status not in {"SUCCEEDED", "FAILED"}:
+            raise DataContractError("external note review draft status is invalid")
+        object.__setattr__(self, "provider", _text(self.provider, "provider", 80))
+        object.__setattr__(self, "model", _text(self.model, "model", 160))
+        object.__setattr__(
+            self,
+            "reasoning_effort",
+            _text(self.reasoning_effort, "reasoning effort", 40),
+        )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _text(self.schema_version, "schema version", 80),
+        )
+        _codes(self.trigger_codes, "review draft trigger codes")
+        if not isinstance(self.payload_json, str) or len(self.payload_json) > 100_000:
+            raise DataContractError("review draft payload is invalid")
+        object.__setattr__(
+            self,
+            "error_code",
+            _optional_text(self.error_code, "review draft error code", 128),
+        )
+        if (self.status == "FAILED") != (self.error_code is not None):
+            raise DataContractError("review draft failure state is inconsistent")
+        object.__setattr__(
+            self,
+            "idempotency_key",
+            _text(self.idempotency_key, "review draft idempotency key", 200),
+        )
+        require_aware_datetime(self.created_at, field_name="created_at")
+
+
+@dataclass(frozen=True, slots=True)
 class ExternalNoteSyncReceipt:
     receipt_id: str
     status: NoteSyncStatus

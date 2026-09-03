@@ -22,6 +22,7 @@ from domain.external_note.models import (
     ExternalNoteIdentity,
     ExternalNoteInterpretation,
     ExternalNoteReview,
+    ExternalNoteReviewDraft,
     ExternalNoteRevision,
 )
 from infrastructure.persistence.external_note_repository import (
@@ -359,6 +360,36 @@ def test_sql_repository_appends_versions_and_filters_latest(
             ),
             expected_version=0,
         )
+    draft = ExternalNoteReviewDraft(
+        draft_id=id_generator.new(EntityIdPrefix.EXTERNAL_NOTE_REVIEW_DRAFT),
+        review_id=review_id,
+        note_revision_id=REVISION_ID,
+        status="SUCCEEDED",
+        provider="opencode_go",
+        model="qwen3.8-max",
+        reasoning_effort="max",
+        schema_version="external-note-review-draft-v1",
+        trigger_codes=("EXPLICIT_USER_REVIEW",),
+        payload_json="{}",
+        error_code=None,
+        idempotency_key="repo-deep-review",
+        created_at=NOW + timedelta(minutes=2),
+    )
+    assert reviews.append_draft(draft) == draft
+    assert reviews.latest_draft(REVISION_ID) == draft
+    assert reviews.latest_successful_draft(REVISION_ID) == draft
+    failed_draft = replace(
+        draft,
+        draft_id=id_generator.new(EntityIdPrefix.EXTERNAL_NOTE_REVIEW_DRAFT),
+        status="FAILED",
+        payload_json="{}",
+        error_code="NOTE_REVIEW_PROVIDER_TIMEOUT",
+        idempotency_key="repo-deep-review-failed",
+        created_at=NOW + timedelta(minutes=3),
+    )
+    reviews.append_draft(failed_draft)
+    assert reviews.latest_draft(REVISION_ID) == failed_draft
+    assert reviews.latest_successful_draft(REVISION_ID) == draft
     with pytest.raises(ExternalNoteReviewVersionConflict):
         reviews.append(
             replace(

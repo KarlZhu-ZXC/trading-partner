@@ -1,6 +1,6 @@
 # Trading Partner MCP 能力与使用边界
 
-> 适用版本：Phase 1–4D + MCP vNext Shadow（30 个 public MCP tools）
+> 适用版本：Phase 1–4D + MCP vNext Shadow（31 个 public MCP tools）
 > 状态：可供 Codex 以本地 stdio MCP 方式使用
 
 ## 1. 它是什么
@@ -23,7 +23,7 @@ Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex
 
 | 层级 | 含义 | 当前状态 |
 |---|---|---|
-| 服务可用 | MCP 能启动、30 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
+| 服务可用 | MCP 能启动、31 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
 | 数据可用 | 对应网络 Provider 已启用、凭据和网络正常 | 按 Provider 分别检查 |
 | 账户可用 | Schwab OAuth、Moomoo OpenD 或严格格式的手工持仓 CSV | 实时券商默认未启用 |
 
@@ -60,7 +60,7 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 
 ## 3. 公开能力总览
 
-公开工具面为 30 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
+公开工具面为 31 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
 所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内。
 为降低 Host 上下文，较大的 group 发布扁平 operation schema；服务端在 dispatch 前仍使用
 精确 closed variant 再验证 required/owned fields，因此跨 operation 字段不会进入应用服务。
@@ -74,7 +74,7 @@ FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成�
 union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
 
 Shared Agent Runtime 的 `tp_capability_search`、`tp_read`、`tp_propose`、`tp_prepare_action` 和
-`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 30。
+`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 31。
 Agent-A 只允许 durable/provider reads、
 instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
 schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
@@ -94,12 +94,13 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 |---|---|
 | `system_health` | 检查应用、数据库和全文检索，并嵌入 durable-only Data Quality Center：汇总最新账户快照的估值/价格时间覆盖、账户活动 coverage receipt、研究档案/Thesis/Trade Plan 生命周期冲突、Active Monitor 最近运行与 `NOT_EVALUATED` 盲区，以及最近 24 小时 Provider route/fallback/失败聚合；不请求券商或行情上游。运行健康与证据质量保留独立 status。Provider 检查保留 `live_probe`/`configuration` 标签，配置不等于实时连通。路由账本只保存安全枚举、error/warning code 和耗时，固定保留 30 天且最多 5,000 条，不保存请求指纹、响应 payload 或异常文本。基础诊断本身可能以 degraded envelope 返回 |
 
-### 3.2 观点收口与复核（3）
+### 3.2 观点收口与复核（4）
 
 | 工具 | 能力与边界 |
 |---|---|
 | `view_inbox` | 列出等待用户复核的 FULL Observation 修订、变化摘要和映射状态；不返回私人完整笔记正文，不访问 Provider，不确认判断 |
 | `view_review_get` | 对照一个精确 Note Revision、模型草稿、当前 Thesis、Trade Plan、既有 Decision、持久化仓位和关联 Monitor；模型文本与确定性事实分开标记，只给出允许的下一步 |
+| `view_review_run` | 经明确确认后调用配置的高级复核模型并追加非权威 review draft；不确认 Decision/Thesis/Plan、不激活 Monitor、不产生订单 |
 | `current_view_get` | 从最新已采纳 Observation Review 与其精确 Decision 派生当前正式观点；不建立第二套可变观点真相，不刷新行情或账户 |
 
 ### 3.3 标的研究档案与投资判断（Research Subject / Thesis，9）
@@ -868,7 +869,7 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0071_external_note_reviews`。当前链覆盖 append-only Trade Plan、Risk v2、Monitoring、
+`0072_external_note_review_drafts`。当前链覆盖 append-only Trade Plan、Risk v2、Monitoring、
 通知 Outbox、Provider 路由回执、Shared Agent Runtime、ReviewItem、Trade Retro、Catalyst
 Agenda、Judgment Scorecard、Journal/Decision、Trade Cycle override、Daily Equity、外部
 Observation revision 与账户 Instrument identity 修复。`0069`/`0070` 属于显式不可逆的数据

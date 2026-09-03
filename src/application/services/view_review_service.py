@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from application.dto.external_note_review import ExternalNoteReviewDTO
+from application.dto.external_note_review import (
+    ExternalNoteReviewDraftDTO,
+    ExternalNoteReviewDTO,
+)
 from application.dto.view_review import (
     CurrentViewDTO,
     ExternalViewpointDTO,
@@ -57,12 +60,20 @@ class ViewReviewService:
         self._account_snapshots = account_snapshots
         self._monitors = monitors
 
-    def get(self, note_revision_id: str) -> ViewReviewPackageDTO:
+    def get(
+        self,
+        note_revision_id: str,
+        *,
+        explicit_review: bool = False,
+    ) -> ViewReviewPackageDTO:
         revision = self._notes.revision_by_id(note_revision_id.strip())
         if revision is None:
             raise ExternalNoteReviewNotFound("Observation revision was not found")
         identity = self._notes.get(revision.note_id)
         review = self._reviews.latest_for_revision(revision.note_revision_id)
+        deep_review = self._reviews.latest_successful_draft(revision.note_revision_id)
+        if deep_review is None:
+            deep_review = self._reviews.latest_draft(revision.note_revision_id)
         interpretation = self._notes.interpretation_for_revision(revision.note_revision_id)
         if identity is None or review is None:
             raise ExternalNoteReviewNotFound("Observation review is not materialized")
@@ -230,6 +241,20 @@ class ViewReviewService:
                     )
                 )
 
+        escalation_reasons: list[str] = []
+        if relation in {"SUPERSEDES", "INVALIDATES"}:
+            escalation_reasons.append(f"CHANGE_{relation}")
+        scenario_actions = {item.action for item in scenarios}
+        for action in ("ADD", "REDUCE", "EXIT"):
+            if action in scenario_actions:
+                escalation_reasons.append(f"ACTION_{action}")
+        if "REVIEW_THESIS_IMPACT" in flags:
+            escalation_reasons.append("THESIS_IMPACT")
+        if suggested in {"PROPOSE_DECISION", "PROPOSE_PLAN"}:
+            escalation_reasons.append(f"NEXT_STEP_{suggested}")
+        if explicit_review:
+            escalation_reasons.append("EXPLICIT_USER_REVIEW")
+
         open_review = review.status in {
             ExternalNoteReviewStatus.PENDING,
             ExternalNoteReviewStatus.DEFERRED,
@@ -249,6 +274,11 @@ class ViewReviewService:
 
         return ViewReviewPackageDTO(
             review=ExternalNoteReviewDTO.from_domain(review),
+            deep_review=(
+                ExternalNoteReviewDraftDTO.from_domain(deep_review)
+                if deep_review is not None
+                else None
+            ),
             note_id=revision.note_id,
             note_revision_id=revision.note_revision_id,
             note_version=revision.version,
@@ -274,6 +304,8 @@ class ViewReviewService:
             monitors=tuple(monitor_values),
             positions=tuple(positions),
             deterministic_flags=tuple(dict.fromkeys(flags)),
+            escalation_reasons=tuple(dict.fromkeys(escalation_reasons)),
+            requires_deep_review=bool(escalation_reasons),
             coverage=coverage,
             allowed_actions=tuple(actions),
         )
@@ -325,6 +357,8 @@ class ViewReviewService:
             subject_status=package.subject_status,
             instrument_id=package.instrument_id,
             source_note_revision_id=review.note_revision_id,
+            source_title=package.title,
+            source_note_version=package.note_version,
             review=ExternalNoteReviewDTO.from_domain(review),
             decision=decision_dto,
             thesis=package.thesis,

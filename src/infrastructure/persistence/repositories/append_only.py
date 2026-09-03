@@ -19,6 +19,7 @@ from infrastructure.persistence.orm import (
     CatalystAgendaVersionRow,
     DecisionRecordRow,
     EvidenceAssessmentRow,
+    ExternalNoteReviewDraftRow,
     ExternalNoteReviewRevisionRow,
     JournalEntryRow,
     ResearchEventRow,
@@ -46,6 +47,7 @@ _PHASE1C_IMMUTABLE_ROWS: tuple[type[Any], ...] = (
     TransactionDecisionLinkRow,
     TradeCycleOverrideRevisionRow,
     ExternalNoteReviewRevisionRow,
+    ExternalNoteReviewDraftRow,
 )
 
 _PHASE1C_ID_ATTR: dict[type[Any], str] = {
@@ -62,6 +64,7 @@ _PHASE1C_ID_ATTR: dict[type[Any], str] = {
     TransactionDecisionLinkRow: "annotation_id",
     TradeCycleOverrideRevisionRow: "override_id",
     ExternalNoteReviewRevisionRow: "review_id",
+    ExternalNoteReviewDraftRow: "draft_id",
 }
 
 _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
@@ -78,6 +81,7 @@ _PHASE1C_ENTITY_TYPE: dict[type[Any], str] = {
     TransactionDecisionLinkRow: "transaction_decision_link",
     TradeCycleOverrideRevisionRow: "trade_cycle_override_revision",
     ExternalNoteReviewRevisionRow: "external_note_review_revision",
+    ExternalNoteReviewDraftRow: "external_note_review_draft",
 }
 
 

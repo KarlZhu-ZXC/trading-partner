@@ -23,7 +23,7 @@ Monitoring, and XKRX post-market dispatch. It does not add DART/company research
 KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizing.
 
 Two post-3D judgment-continuity slices are also implemented without expanding the
-30-tool MCP vNext Shadow surface: Catalyst Agenda C0–C3 separates future known events from
+31-tool MCP vNext Shadow surface: Catalyst Agenda C0–C3 separates future known events from
 observed facts and syncs free current Yahoo/FRED dates explicitly; Judgment Scorecard
 S1 persists nine deterministic calibration cards for one exact Thesis revision,
 including Agenda outcome calibration. Neither produces a total score, order, or

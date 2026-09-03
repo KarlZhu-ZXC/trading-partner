@@ -347,9 +347,7 @@ class AppSettings(BaseSettings):
     llm_model: str | None = None
     llm_reasoning_mode: Literal["none", "effort", "thinking"] = "none"
     llm_native_web_search: Literal["disabled", "responses_web_search"] = "disabled"
-    llm_native_web_extractor: Literal[
-        "disabled", "responses_web_extractor"
-    ] = "disabled"
+    llm_native_web_extractor: Literal["disabled", "responses_web_extractor"] = "disabled"
     llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     llm_max_output_tokens: int = Field(default=8000, gt=0, le=100_000)
 
@@ -362,9 +360,7 @@ class AppSettings(BaseSettings):
     tavily_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
 
     monitor_judgment_enabled: bool = False
-    llm_provider: Literal[
-        "bailian", "deepseek", "opencode_zen", "opencode_go"
-    ] = "bailian"
+    llm_provider: Literal["bailian", "deepseek", "opencode_zen", "opencode_go"] = "bailian"
     bailian_api_key: str | None = None
     bailian_base_url: str = Field(
         default="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -450,6 +446,20 @@ class AppSettings(BaseSettings):
     )
     external_note_analysis_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
     external_note_analysis_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
+    external_note_review_model: str = Field(
+        default="qwen3.8-max",
+        validation_alias=AliasChoices(
+            "external_note_review_model",
+            "EXTERNAL_NOTE_REVIEW_MODEL",
+        ),
+    )
+    external_note_review_reasoning_effort: (
+        Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None
+    ) = None
+    external_note_review_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
+    external_note_review_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
+    external_note_contributor_training_opt_in: bool = False
+    observation_review_workflow_enabled: bool = True
     observation_inbox_dir: Path = Path("data/observations/inbox")
     moomoo_notes_remote_enabled: bool = True
     moomoo_notes_cookie_path: Path = Path("data/secrets/moomoo_notes_cookie.txt")
@@ -474,9 +484,9 @@ class AppSettings(BaseSettings):
         ),
     )
     monitor_judgment_reasoning_effort: str | None = None
-    monitor_judgment_fallback_provider: Literal[
-        "bailian", "deepseek", "opencode_zen", "opencode_go"
-    ] | None = None
+    monitor_judgment_fallback_provider: (
+        Literal["bailian", "deepseek", "opencode_zen", "opencode_go"] | None
+    ) = None
     monitor_judgment_fallback_model: str | None = None
     monitor_judgment_fallback_reasoning_effort: str | None = None
     # Trade Retro always persists deterministic findings. This switch controls
@@ -572,7 +582,11 @@ class AppSettings(BaseSettings):
             return stripped or None
         return value
 
-    @field_validator("llm_reasoning_effort", mode="before")
+    @field_validator(
+        "llm_reasoning_effort",
+        "external_note_review_reasoning_effort",
+        mode="before",
+    )
     @classmethod
     def _normalize_llm_reasoning_effort(cls, value: object) -> object:
         if value is None:
@@ -595,7 +609,7 @@ class AppSettings(BaseSettings):
             return None
         if isinstance(value, str):
             stripped = value.strip()
-            return (stripped.lower() or None)
+            return stripped.lower() or None
         return value
 
     @field_validator("alpha_vantage_api_keys", mode="before")
@@ -828,9 +842,7 @@ class AppSettings(BaseSettings):
                 and self.llm_provider in {"deepseek", "opencode_zen", "opencode_go"}
                 and self.llm_reasoning_effort == "xhigh"
             ):
-                raise ValueError(
-                    "DeepSeek/OpenCode Monitor judgment supports high or max effort"
-                )
+                raise ValueError("DeepSeek/OpenCode Monitor judgment supports high or max effort")
             try:
                 fallback = self.resolved_monitor_judgment_fallback_config
             except ConfigurationError as exc:
@@ -927,9 +939,7 @@ class AppSettings(BaseSettings):
             deepseek_base_url=self.deepseek_base_url,
             deepseek_model=self.deepseek_model,
             opencode_zen_api_key=(
-                self.opencode_zen_api_key
-                or self.opencode_api_key
-                or self.opencode_go_api_key
+                self.opencode_zen_api_key or self.opencode_api_key or self.opencode_go_api_key
             ),
             opencode_zen_base_url=self.opencode_zen_base_url,
             opencode_zen_model=self.opencode_zen_model,
@@ -996,11 +1006,7 @@ class AppSettings(BaseSettings):
                 timeout_seconds=self.llm_timeout_seconds,
                 max_output_tokens=self.llm_max_output_tokens,
             )
-        zen_api_key = (
-            self.opencode_zen_api_key
-            or self.opencode_api_key
-            or self.opencode_go_api_key
-        )
+        zen_api_key = self.opencode_zen_api_key or self.opencode_api_key or self.opencode_go_api_key
         if zen_api_key is not None:
             configs["opencode_zen"] = LLMEndpointConfig(
                 api_style="responses",
@@ -1036,6 +1042,54 @@ class AppSettings(BaseSettings):
             max_output_tokens=self.external_note_analysis_max_output_tokens,
         )
 
+    @model_validator(mode="after")
+    def _require_contributor_training_opt_in(self) -> Self:
+        """Never send private notes to a training model without durable consent."""
+
+        api_key = self.opencode_go_api_key or self.opencode_api_key
+        configured_models = (
+            self.external_note_analysis_model,
+            self.external_note_review_model,
+        )
+        if (
+            self.external_note_analysis_enabled
+            and api_key is not None
+            and any("-contributor" in model for model in configured_models)
+            and not self.external_note_contributor_training_opt_in
+        ):
+            raise ValueError(
+                "EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true is required "
+                "before a Contributor model may receive private note content"
+            )
+        return self
+
+    @property
+    def resolved_external_note_review_config(self) -> LLMEndpointConfig | None:
+        """Resolve the escalated private-note reviewer independently from first pass."""
+
+        api_key = self.opencode_go_api_key or self.opencode_api_key
+        if not self.external_note_analysis_enabled or api_key is None:
+            return None
+        return LLMEndpointConfig(
+            api_style="chat_completions",
+            base_url=self.opencode_go_base_url,
+            api_key=api_key,
+            model=self.external_note_review_model,
+            reasoning_mode="thinking",
+            reasoning_effort=(
+                self.external_note_review_reasoning_effort
+                or (
+                    "high"
+                    if self.external_note_review_model == "muse-spark-1.3-contributor"
+                    else "max"
+                )
+            ),
+            native_web_search="disabled",
+            native_web_extractor="disabled",
+            timeout_seconds=self.external_note_review_timeout_seconds,
+            max_output_tokens=self.external_note_review_max_output_tokens,
+        )
+
     @property
     def default_agent_llm_id(self) -> str | None:
         configs = self.resolved_agent_llm_configs
@@ -1068,9 +1122,7 @@ class AppSettings(BaseSettings):
                 model=self.monitor_judgment_model,
                 reasoning_mode="thinking",
                 reasoning_effort=(
-                    self.monitor_judgment_reasoning_effort
-                    or config.reasoning_effort
-                    or "max"
+                    self.monitor_judgment_reasoning_effort or config.reasoning_effort or "max"
                 ),
                 native_web_search="disabled",
                 native_web_extractor="disabled",
@@ -1127,9 +1179,7 @@ class AppSettings(BaseSettings):
         if provider in {"opencode_zen", "opencode_go"}:
             is_zen = provider == "opencode_zen"
             open_code_api_key = (
-                self.opencode_zen_api_key
-                or self.opencode_api_key
-                or self.opencode_go_api_key
+                self.opencode_zen_api_key or self.opencode_api_key or self.opencode_go_api_key
                 if is_zen
                 else self.opencode_go_api_key or self.opencode_api_key
             )
@@ -1140,9 +1190,7 @@ class AppSettings(BaseSettings):
                 )
             return LLMEndpointConfig(
                 api_style="responses" if is_zen else "chat_completions",
-                base_url=(
-                    self.opencode_zen_base_url if is_zen else self.opencode_go_base_url
-                ),
+                base_url=(self.opencode_zen_base_url if is_zen else self.opencode_go_base_url),
                 api_key=open_code_api_key,
                 model=model,
                 reasoning_mode="effort" if is_zen else "thinking",
@@ -1381,9 +1429,7 @@ class AppSettings(BaseSettings):
     @model_validator(mode="after")
     def _otel_exporter_contract(self) -> Self:
         if self.otel_exporter == "otlp_http" and self.otel_exporter_otlp_endpoint is None:
-            raise ValueError(
-                "otel_exporter_otlp_endpoint is required when otel_exporter=otlp_http"
-            )
+            raise ValueError("otel_exporter_otlp_endpoint is required when otel_exporter=otlp_http")
         return self
 
     @model_validator(mode="after")

@@ -28,11 +28,11 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 ## Current source of truth
 
 - Implemented scope is Phase 1–4D. The current runtime snapshot exposes the single
-  30-tool `mcp_vnext_shadow` surface, but the count is not a future product invariant:
+  31-tool `mcp_vnext_shadow` surface, but the count is not a future product invariant:
   tools may be split, grouped, added, deprecated, or removed through an explicit
   compatibility migration when that improves intent discovery and workflow cohesion.
 - Application version is read from `src/application/__init__.py`; the current database
-  migration head is `0071_external_note_reviews`.
+  migration head is `0072_external_note_review_drafts`.
 - This file owns agent-facing invariants. `docs/phases/` owns implemented product
   contracts, `docs/guide/` and `docs/operations/` own current instructions,
   `docs/roadmap/` owns genuinely deferred work, and `docs/releases/` owns historical
@@ -45,7 +45,7 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Implemented boundary
 
-The current public MCP vNext Shadow surface contains **30** tools
+The current public MCP vNext Shadow surface contains **31** tools
 (`mcp_vnext_shadow`). This is an implemented snapshot, not a target count. Grouped
 tools accept one required `request` object. Large
 groups publish a flattened operation schema to reduce host context, then revalidate
@@ -144,6 +144,9 @@ order authorization.
   returns private full note bodies.
 - `view_review_get` — one exact structured draft plus deterministic comparison with
   confirmed Thesis/Plan/Decision, durable Position, Monitor, and coverage context.
+- `view_review_run` — explicitly confirmation-gated Provider evaluation that appends
+  a non-authoritative configured escalated-review draft; it never confirms or mutates
+  judgment. Contributor models additionally require the explicit training opt-in.
 - `current_view_get` — the latest formal view derived from an exact adopted
   Observation review and Decision; it is not another mutable truth store.
 
@@ -182,7 +185,13 @@ do not change attribution.
 With the user's explicit private-content authorization, new
 revisions may be interpreted in the background by OpenCode Go
 `qwen3.8-flash` at `max` effort under a strict schema and 120-second
-timeout. The model draft compares the prior successful revision and covers USER
+timeout. Escalated review drafts may use OpenCode Go
+`muse-spark-1.3-contributor` at `high` effort only when the owner has explicitly
+accepted Contributor prompt/completion training through
+`EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true`; `xhigh` is not the production
+default because the sanitized comparison was slower and over-propagated an EXIT
+action. The configured protocol router must send Muse Spark 1.3 and Grok 4.6 through
+Responses rather than Chat Completions. The model draft compares the prior successful revision and covers USER
 `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION`. It cannot confirm a Thesis,
 Decision, Plan, Monitor, position, or order. Console `Review as Decision` only
 prefills the existing Decision confirmation dialog with the exact note revision.

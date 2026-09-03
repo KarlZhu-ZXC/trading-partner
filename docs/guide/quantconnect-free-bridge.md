@@ -28,7 +28,7 @@ artifacts are written with owner-only permissions under the gitignored
 
 ## MCP operations
 
-The public inventory is the 30-tool MCP vNext Shadow surface. Two variants extend the
+The public inventory is the 31-tool MCP vNext Shadow surface. Two variants extend the
 existing `research_workflow_run` tool.
 
 ### `historical_validation_prepare`

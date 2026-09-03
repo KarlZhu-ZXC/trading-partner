@@ -222,6 +222,7 @@ function workbench() {
 
 async function mockApi(page: Page) {
   const writes: Array<{ path: string; body: unknown }> = [];
+  let deepReviewed = false;
   await page.route("**/api/console/api/**", async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api/console", "");
@@ -240,10 +241,20 @@ async function mockApi(page: Page) {
       } });
     }
     if (path === "/api/observations/external_note_revision_aapl_2/review") return json({ data: {
-      material_change_summary: "Range-top evidence remains inconclusive.",
+      material_change_summary: deepReviewed ? "Max review confirms that range-top evidence remains inconclusive." : "Range-top evidence remains inconclusive.",
       thesis: { statement: "Wait for a confirmed breakout." },
       latest_decision: { title: "No action while range-bound" },
       deterministic_flags: ["REVIEW_THESIS_IMPACT"],
+      requires_deep_review: true,
+      deep_review: deepReviewed ? { status: "SUCCEEDED", model: "qwen3.8-max", payload: {
+        material_change_summary: "Max review confirms that range-top evidence remains inconclusive.",
+        user_scenarios: [
+          { scenario: "UPSIDE", action: "REVIEW", condition: "Confirm breakout." },
+          { scenario: "SIDEWAYS", action: "NO_ACTION", condition: "Remain in range." },
+          { scenario: "PULLBACK", action: "REVIEW", condition: "Reassess support." },
+          { scenario: "INVALIDATION", action: "REVIEW", condition: "Exit thesis range." },
+        ],
+      } } : null,
     } });
     if (path === "/api/current-view") return json({ data: {
       subject_title: "Phase 4 Console E2E",
@@ -259,6 +270,7 @@ async function mockApi(page: Page) {
       writes.push({ path, body: request.postDataJSON() });
       if (path === "/api/tools/invoke") return json({ result: { ok: true, data: { decision_id: "decision_note_review" } } });
       if (path.endsWith("/review/ensure")) return json({ data: { review_id: "external_note_review_aapl_2", version: 1, status: "PENDING" } });
+      if (path.endsWith("/deep-review")) { deepReviewed = true; return json({ data: { status: "SUCCEEDED", model: "qwen3.8-max" } }); }
       if (path === "/api/observation-reviews/external_note_review_aapl_2") return json({ data: { review_id: "external_note_review_aapl_2", version: 2, status: "NO_ACTION", decision_id: "decision_note_review" } });
       if (path === "/api/trade-cycle-overrides/preview") return json({ impacts: [{ operation: "SPLIT" }] });
       if (path === "/api/trade-cycle-overrides") return json({ version: 1 });
@@ -326,8 +338,9 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   const noteDecisionDialog = page.getByRole("dialog");
   await expect(noteDecisionDialog.getByLabel("Current Scenario")).toHaveValue("SIDEWAYS");
   await expect(noteDecisionDialog.getByRole("combobox").first()).toHaveValue("no_action");
-  await expect(noteDecisionDialog.getByLabel("Reason")).toHaveValue(/Range-top evidence remains inconclusive\./);
+  await expect(noteDecisionDialog.getByLabel("Reason")).toHaveValue(/Max review confirms that range-top evidence remains inconclusive\./);
   await expect(noteDecisionDialog.getByText("Wait for a confirmed breakout.")).toBeVisible();
+  await expect(noteDecisionDialog.getByText("qwen3.8-max")).toBeVisible();
   await noteDecisionDialog.getByRole("button", { name: "Confirm & Record Decision" }).click();
   await expect.poll(() => writes.some((item) => item.path === "/api/tools/invoke")).toBe(true);
   const decisionWrite = writes.find((item) => item.path === "/api/tools/invoke" && (item.body as { tool_name?: string }).tool_name === "research_memory_append")?.body as { arguments?: { request?: { external_note_revision_id?: string } } };

@@ -37,7 +37,12 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
     ) -> dict[str, Any]:
         """Compare one exact Observation draft with confirmed local judgment context."""
         try:
-            return success(container.services.view_reviews.get(note_revision_id))
+            return success(
+                container.services.view_reviews.get(
+                    note_revision_id,
+                    explicit_review=True,
+                )
+            )
         except Exception as exc:  # noqa: BLE001 - return typed/redacted Tool Envelope
             return _unexpected_failure(container, exc)
 
@@ -50,8 +55,31 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
         except Exception as exc:  # noqa: BLE001 - return typed/redacted Tool Envelope
             return _unexpected_failure(container, exc)
 
+    async def view_review_run(
+        note_revision_id: Annotated[str, Field(min_length=1, max_length=128)],
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Run the configured escalated review model; never confirm a judgment."""
+        try:
+            value = await container.services.external_note_review_drafts.review(
+                note_revision_id,
+                explicit_review=True,
+                force=force,
+            )
+            return success(
+                value
+                if value is not None
+                else {
+                    "note_revision_id": note_revision_id,
+                    "status": "NOT_REQUIRED_OR_NOT_CONFIGURED",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - return typed/redacted Tool Envelope
+            return _unexpected_failure(container, exc)
+
     return SimpleNamespace(
         view_inbox=view_inbox,
         view_review_get=view_review_get,
+        view_review_run=view_review_run,
         current_view_get=current_view_get,
     )

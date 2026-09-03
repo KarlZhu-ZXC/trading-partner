@@ -49,6 +49,7 @@ export type ObservationInboxProps = {
   onReviewDecision: NoteReviewDecisionHandler;
   onDeferReview: NoteDeferReviewHandler;
   analysisBusyId: string | null;
+  reviewBusyId: string | null;
   onAnalyzeRevision: (revisionId: string) => void;
   /** Optional host-provided portfolio context for the selected note. */
   positionContext?: ReactNode | ((instrumentId: string) => ReactNode);
@@ -116,18 +117,16 @@ function researchHref(identity: Dict, matchingSubjectId: string | null): string 
   return researchDraftHref(identity) ?? "/research";
 }
 
-function matchingSubjectIdFor(
+function matchingSubjectsFor(
   identity: Dict,
   activeSubjects: SubjectAggregate[],
-): string | null {
+): SubjectAggregate[] {
   const instrumentId = text(identity.primary_instrument_id, "");
-  if (!instrumentId) return null;
-  const matchingSubject = activeSubjects.find(
+  if (!instrumentId) return [];
+  return activeSubjects.filter(
     (candidate) =>
       text(candidate.subject?.primary_instrument_id, "") === instrumentId,
   );
-  const subjectId = text(matchingSubject?.subject?.subject_id, "");
-  return subjectId || null;
 }
 
 function noteSummary(revision: Dict, payload: Dict): string {
@@ -276,6 +275,7 @@ export function ObservationInbox({
   onReviewDecision,
   onDeferReview,
   analysisBusyId,
+  reviewBusyId,
   onAnalyzeRevision,
   positionContext,
   cyclesContext,
@@ -288,6 +288,7 @@ export function ObservationInbox({
   );
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<Record<string, string>>({});
+  const [subjectOverrides, setSubjectOverrides] = useState<Record<string, string>>({});
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -394,9 +395,17 @@ export function ObservationInbox({
   const selectedAttributionSections = attributionSections(selectedBlocks);
   const selectedNoteId = text(selectedIdentity.note_id, "");
   const selectedRevisionId = text(selectedRevision.note_revision_id, "");
-  const selectedMatchingSubjectId = selected
-    ? matchingSubjectIdFor(selectedIdentity, activeSubjects)
-    : null;
+  const selectedMatchingSubjects = selected
+    ? matchingSubjectsFor(selectedIdentity, activeSubjects)
+    : [];
+  const selectedSubjectOverride = subjectOverrides[selectedNoteId] ?? "";
+  const selectedMatchingSubjectId = selectedMatchingSubjects.some(
+    (item) => text(item.subject?.subject_id, "") === selectedSubjectOverride,
+  )
+    ? selectedSubjectOverride
+    : selectedMatchingSubjects.length === 1
+      ? text(selectedMatchingSubjects[0].subject?.subject_id, "")
+      : null;
   const selectedResearchHref = researchHref(
     selectedIdentity,
     selectedMatchingSubjectId,
@@ -697,6 +706,7 @@ export function ObservationInbox({
                 </section>
 
                 <div className="portfolio-form-actions notes-actions">
+                  {selectedMatchingSubjects.length > 1 ? <label className="research-field"><span><b className="required-mark" aria-hidden="true">*</b>Research Subject</span><select value={selectedMatchingSubjectId ?? ""} onChange={(event) => { const value = event.target.value; setSubjectOverrides((current) => ({ ...current, [selectedNoteId]: value })); if (value) onSelectSubject(value); }}><option value="">Choose the exact Research Subject</option>{selectedMatchingSubjects.map((item) => { const candidate = asDict(item.subject); const candidateId = text(candidate.subject_id, ""); return <option key={candidateId} value={candidateId}>{text(candidate.title, "Untitled Research Subject")} · {upper(candidate.status)}</option>; })}</select><small>More than one Research Subject uses this Instrument. Selection is required; the system will not guess.</small></label> : null}
                   <Link
                     className="action-button default"
                     href={selectedResearchHref}
@@ -710,6 +720,8 @@ export function ObservationInbox({
                   </Link>
                   {selectedReady && selectedMatchingSubjectId ? (
                     <ActionButton
+                      busy={reviewBusyId === text(selectedRevision.note_revision_id, "")}
+                      busyLabel="Preparing Deep Review…"
                       onClick={() => { void onReviewDecision(selected, selectedMatchingSubjectId); }}
                     >
                       Review View Change

@@ -1069,6 +1069,7 @@ async def test_successful_analysis_enqueues_only_deterministic_user_text_changes
     stock_db = tmp_path / "stock.db"
     _stock_database(stock_db)
     materialized: list[str] = []
+    escalated: list[str] = []
 
     class Interpretation:
         async def analyze(
@@ -1095,6 +1096,19 @@ async def test_successful_analysis_enqueues_only_deterministic_user_text_changes
             materialized.append(note_revision_id)
             return object()
 
+    class DeepReviewer:
+        async def review(
+            self,
+            note_revision_id: str,
+            *,
+            explicit_review: bool = False,
+            force: bool = False,
+        ) -> object:
+            assert explicit_review is False
+            assert force is False
+            escalated.append(note_revision_id)
+            return object()
+
     provider = MoomooNotesCacheProvider(
         cache_data_dir=cache,
         stock_database_path=stock_db,
@@ -1107,6 +1121,7 @@ async def test_successful_analysis_enqueues_only_deterministic_user_text_changes
         id_generator,
         Interpretation(),  # type: ignore[arg-type]
         review_materializer=Reviews(),  # type: ignore[arg-type]
+        deep_reviewer=DeepReviewer(),  # type: ignore[arg-type]
     )
     fixed_clock.set(NOW)
     _cache(cache, user_text="继续观察", external_text="突破后看多")
@@ -1119,6 +1134,7 @@ async def test_successful_analysis_enqueues_only_deterministic_user_text_changes
     assert len(materialized) == 2
     revisions = repository.list_revisions(repository.list_latest()[0][0].note_id)
     assert materialized == [revisions[2].note_revision_id, revisions[0].note_revision_id]
+    assert escalated == materialized
     engine.dispose()
 
 
@@ -1426,6 +1442,7 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
     _cache(cache)
     captured: list[str | None] = []
     review_revision_ids: list[str] = []
+    deep_review_attempts: list[str] = []
 
     class ReviewMaterializer:
         def ensure_pending(
@@ -1433,6 +1450,19 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
         ) -> None:
             assert subject_id is None
             review_revision_ids.append(note_revision_id)
+
+    class FailingDeepReviewer:
+        async def review(
+            self,
+            note_revision_id: str,
+            *,
+            explicit_review: bool = False,
+            force: bool = False,
+        ) -> None:
+            assert explicit_review is False
+            assert force is False
+            deep_review_attempts.append(note_revision_id)
+            raise RuntimeError("deep review must not fail first-pass analysis")
 
     class Interpretation:
         async def analyze(
@@ -1465,6 +1495,7 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
         id_generator,
         Interpretation(),  # type: ignore[arg-type]
         review_materializer=ReviewMaterializer(),  # type: ignore[arg-type]
+        deep_reviewer=FailingDeepReviewer(),  # type: ignore[arg-type]
     )
     fixed_clock.set(NOW)
     await service.sync(analyze=False)
@@ -1477,6 +1508,7 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
     assert captured == [None, '{"revision": 1, "change_relation": "REVISION"}']
     assert len(review_revision_ids) == 2
     assert review_revision_ids[0] != review_revision_ids[1]
+    assert deep_review_attempts == review_revision_ids
     revisions = repository.list_latest()
     assert revisions[0][1].version == 2
     engine.dispose()

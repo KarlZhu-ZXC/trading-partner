@@ -22,6 +22,9 @@ from application.services.daily_equity_materialization_service import (
 )
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
+from application.services.external_note_review_draft_service import (
+    ExternalNoteReviewDraftService,
+)
 from application.services.external_note_review_service import ExternalNoteReviewService
 from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.health_service import HealthService
@@ -95,6 +98,7 @@ class ApplicationServices:
     attention: AttentionQueryService
     external_notes: ExternalNoteSyncService
     external_note_reviews: ExternalNoteReviewService
+    external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
 
 

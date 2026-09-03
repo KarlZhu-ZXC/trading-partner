@@ -26,7 +26,7 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
    Plan, risk-policy, Watchlist, journal, decision, and Monitor writes retain actor,
    confirmation, version, and idempotency gates.
 5. **The MCP surface follows user intent.** The current public profile is
-   `mcp_vnext_shadow` with 30 tools, but tool count may change through an explicit
+   `mcp_vnext_shadow` with 31 tools, but tool count may change through an explicit
    compatibility migration. Closed schemas, authority gates, and discoverability are
    invariants; an arbitrary count is not.
 6. **LLMs do interpretation, not data ownership.** Ordinary facts, rule evaluation,

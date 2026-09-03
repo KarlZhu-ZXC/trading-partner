@@ -1,6 +1,6 @@
 # Trading Partner
 
-**The local-first memory and monitoring layer for serious investment conversations.**
+**The local-first system of record for reviewed investment judgment.**
 
 [![CI](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml/badge.svg)](https://github.com/KarlZhu-ZXC/trading-partner/actions/workflows/quality.yml)
 [![Release](https://img.shields.io/github/v/release/KarlZhu-ZXC/trading-partner)](https://github.com/KarlZhu-ZXC/trading-partner/releases)
@@ -16,17 +16,17 @@ Most AI investment chats can summarize today's market. They do not remember why 
 bought, what would invalidate the idea, how the plan changed, or whether new evidence
 contradicts last month's judgment.
 
-Trading Partner gives Codex and other
-[Model Context Protocol](https://modelcontextprotocol.io/) hosts that missing layer:
-durable research memory, read-only portfolio context, provider-backed facts, and
-transition-aware monitoring—without giving the model permission to trade.
+Trading Partner makes Moomoo the analysis and note-authoring edge, then gives Console,
+Codex, and other [Model Context Protocol](https://modelcontextprotocol.io/) hosts the
+missing review layer: immutable note revisions, model-assisted drafts, durable
+research memory, read-only portfolio context, and transition-aware monitoring—without
+giving a model permission to confirm a judgment or trade.
 
-> **Ask:** “Review my gold position. What changed since the original thesis, and
-> what evidence would make the current plan invalid?”
+> **Write in Moomoo:** update the view where you already inspect price and charts.
 >
-> **Trading Partner restores:** the confirmed position, Research Subject, competing
-> Theses, Trade Plan, latest market facts, Monitor observations, provenance, and data
-> quality warnings. The AI host interprets and challenges them in the conversation.
+> **Review in Trading Partner:** see exactly what changed, compare it with the
+> confirmed Thesis, Decision, Trade Plan, Position, and Monitors, then explicitly
+> record a Decision or `NO_ACTION` tied to that exact note revision.
 
 <p align="center">
   <a href="#product-tour"><strong>See the product flow</strong></a>
@@ -44,21 +44,22 @@ transition-aware monitoring—without giving the model permission to trade.
 ## <img src="docs/assets/readme/sections/why.svg" alt="" width="24" /> 60-second product tour
 
 ```text
-You ask in Codex
+You update a view in Moomoo
     ↓
-Trading Partner restores your portfolio, Watchlist, research history, and active plan
+Trading Partner stores one immutable FULL Observation revision
     ↓
-Provider-backed facts arrive with source, timestamp, freshness, and typed warnings
+Flash produces a non-authoritative first-pass structure; critical changes may receive an escalated review draft
     ↓
-Codex compares the new evidence with PRIMARY, SUB, COMPETITOR, and BEAR Theses
+Deterministic rules compare it with confirmed Thesis, Plan, Decision, Position, and Monitors
     ↓
-Deterministic or composite Monitors persist every observation and notify only on change
+You review the meaning once and explicitly confirm Decision / NO_ACTION
     ↓
-You explicitly confirm durable judgments and every live broker order
+Current View is derived from that exact Observation Review + Decision; follow-up Thesis/Plan/Monitor changes remain separately confirmed
 ```
 
 | Built for | What it changes |
 |---|---|
+| Moomoo-first judgment intake | Analyze where you already trade; Trading Partner becomes the single reviewed system of record. |
 | Long-horizon research | One durable file keeps the question, evidence, Thesis history, decisions, and open questions together. |
 | Portfolio-aware conversations | The host can use persisted positions, transactions, Watchlists, performance, and risk without silently refreshing a broker. |
 | Judgment monitoring | Price, technical, relative-strength, fundamental, macro, sentiment, and portfolio-risk conditions can be evaluated on a schedule. |
@@ -69,6 +70,9 @@ ETF, theme, macro question, catalyst, or portfolio concern—not only an equity.
 
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Core capabilities
 
+- **View intake:** provider-neutral immutable Observations, deterministic speaker
+  attribution, Flash first-pass structure, optional escalated review, View Inbox,
+  exact Decision adoption, and derived Current View.
 - **Research memory:** Research Subjects, multiple Thesis threads, journals,
   decisions, evidence, Catalyst Agenda, Judgment Scorecards, Challenge Reviews,
   and versioned Trade Plans.

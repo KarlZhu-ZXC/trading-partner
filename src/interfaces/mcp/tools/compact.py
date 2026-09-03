@@ -1374,7 +1374,7 @@ def create_compact_capability_registry(
             container,
             surface_profile="mcp_vnext_shadow",
             public_tool_count=len(MCP_VNEXT_TOOL_NAMES),
-            surface_schema_version="mcp-vnext-shadow-v3",
+            surface_schema_version="mcp-vnext-shadow-v4",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -1409,6 +1409,11 @@ def create_compact_capability_registry(
         registry,
         adapter=adapters.view_review.view_review_get,
         policy=READ_DURABLE,
+    )
+    _copy_handler(
+        registry,
+        adapter=adapters.view_review.view_review_run,
+        policy=EVALUATE,
     )
     _copy_handler(
         registry,

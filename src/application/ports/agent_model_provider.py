@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 type ModelRole = Literal["system", "user", "assistant", "tool"]
-type ModelReasoningEffort = Literal["low", "medium", "high", "max"]
+type ModelReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 type ModelContent = str | tuple[Mapping[str, Any], ...]
 
 

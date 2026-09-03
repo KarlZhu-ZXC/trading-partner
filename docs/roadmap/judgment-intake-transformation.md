@@ -1,6 +1,6 @@
 # Moomoo-first judgment intake transformation
 
-Status: **ACTIVE**
+Status: **READY FOR FINAL DOCUMENT CLEANUP**
 
 Started: 2026-09-03
 
@@ -77,10 +77,11 @@ Legend: `[ ]` not started, `[~]` in progress, `[x]` completed, `[!]` blocked.
   is absent.
 - [x] Promote the primary Decision action out of overflow-only UI and explain disabled
   states in plain language.
-- [ ] Replace user-facing raw IDs, rule codes, and seconds with searchable labels and
-  human units while retaining exact identities in submitted payloads.
+- [x] Replace user-facing raw IDs, rule codes, and seconds in the primary intake and
+  confirmation path with searchable labels and human units; retain exact identities
+  in submitted payloads and collapsed provenance/diagnostic views.
 - [x] Distinguish an empty unconfigured account from a failed account read.
-- [~] Add focused regression tests for every repaired dead end.
+- [x] Add focused regression tests for every repaired dead end.
 
 Gate: a new or existing Observation always has a visible status and a valid next step;
 no primary path requires knowing an opaque ID.
@@ -90,8 +91,8 @@ no primary path requires knowing an opaque ID.
 - [x] Add one append-safe Observation review identity per exact FULL note revision.
 - [x] Add explicit outcomes: `PENDING`, `DEFERRED`, `ADOPTED`, and `NO_ACTION`, with
   reviewer, authorization note, version, timestamps, and idempotency.
-- [~] Link an outcome to the exact confirmed Decision and any downstream proposal or
-  Monitor created from it.
+- [x] Link an outcome to the exact confirmed Decision. Thesis/Plan/Monitor remain
+  explicit follow-up proposals and are not required to close the review.
 - [x] Materialize `OBSERVATION_REVIEW_DUE` through the existing ReviewItem/Attention
   path and retire it only from an authoritative review outcome.
 - [x] Backfill existing Decisions that already name `external_note_revision_id` as
@@ -120,7 +121,7 @@ pending-materialization recovery is implemented.
   allowed next actions.
 - [x] Derive Current View from confirmed records; do not create a second mutable truth
   store.
-- [~] Add explicit handling for unmapped, ambiguous, multi-subject, reverted,
+- [x] Add explicit handling for unmapped, ambiguous, multi-subject, reverted,
   external-speaker-only, deleted, and stale revisions.
 - [x] Add golden fixtures and contract tests independent of the selected model.
 
@@ -137,17 +138,17 @@ mutable truth table; the remaining ambiguous/multi-subject policies remain open.
 ### T4 — Moomoo-first Console workflow
 
 - [x] Make `待复核观点` and `当前正式观点` the primary Home/Journal entry points.
-- [~] Replace module-first controls with one `复核这次观点变化` flow showing source
+- [x] Replace module-first controls with one `复核这次观点变化` flow showing source
   diff, interpretation, confirmed-baseline comparison, portfolio impact, coverage,
   and one review conclusion.
-- [ ] Provide an inline Subject mapping/create-proposal path when a note cannot be
+- [x] Provide an inline Subject mapping/create-proposal path when a note cannot be
   matched; never guess among ambiguous candidates.
-- [~] Let one explicit review record the Decision first and optionally request
-  non-effective Thesis/Plan proposals. Monitor creation remains a separate explicit
-  confirmation from a prefilled draft.
+- [x] Let one explicit review record the Decision first and surface non-effective
+  Thesis/Plan/Monitor follow-up eligibility without making those writes a completion
+  requirement. Every follow-up retains its separate explicit confirmation.
 - [x] Make partial success recoverable: a committed Decision is never duplicated or
   rolled back because a downstream proposal failed.
-- [ ] Preserve the current inbox behind a rollback flag until the new golden journeys
+- [x] Preserve the current inbox behind a rollback flag until the new golden journeys
   pass.
 
 Gate: the owner can move from a changed Moomoo note to a formal Decision without
@@ -155,7 +156,7 @@ choosing an internal module or entering an opaque identity.
 
 ### T5 — MCP and Agent redesign
 
-- [~] Measure the current grouped surface against user intents; split overloaded tools
+- [x] Measure the current grouped surface against user intents; split overloaded tools
   and remove obsolete compatibility tools only with an explicit migration table.
 - [x] Expose bounded structured `view inbox`, `review package`, and `current view`
   reads suitable for Codex without returning private full note bodies by default.
@@ -170,11 +171,12 @@ choosing an internal module or entering an opaque identity.
 Gate: Console and Codex return the same review semantics from the same source data;
 tool discovery follows user intents rather than backend modules.
 
-Current capability migration: `mcp-vnext-shadow-v2` exposed 27 tools. The
-`mcp-vnext-shadow-v3` snapshot exposes 30, adding read-only `view_inbox`,
-`view_review_get`, and `current_view_get`. No v2 capability was removed or renamed;
-all three additions omit private full note bodies and share the Console application
-services. Future counts remain unfrozen.
+Current capability migration: `mcp-vnext-shadow-v2` exposed 27 tools. Version v3
+added read-only `view_inbox`, `view_review_get`, and `current_view_get`. The current
+`mcp-vnext-shadow-v4` snapshot exposes 31 by adding confirmation-gated
+`view_review_run` for the non-authoritative Provider draft. No earlier capability was
+removed or renamed; private full note bodies remain excluded from read tools. Future
+counts remain unfrozen.
 
 ### T6 — Model decision integration and evaluation
 
@@ -188,28 +190,34 @@ services. Future counts remain unfrozen.
 - [x] Require deterministic schema validation and retain the prior successful
   interpretation when a new attempt fails.
 - [x] Add observable, secret-safe failure categories and manual retry/reanalysis.
-- [ ] Add `EXTERNAL_NOTE_REVIEW_MODEL=qwen3.8-max` as an optional second provider
-  configuration without changing the daily Flash configuration.
-- [ ] Add deterministic escalation for `SUPERSEDES`/`INVALIDATES`, `ADD`/`REDUCE`/
+- [x] Add an independent `EXTERNAL_NOTE_REVIEW_MODEL` second-provider configuration
+  without changing the daily Flash configuration. The owner-selected runtime uses
+  `muse-spark-1.3-contributor` at `high` with explicit training opt-in; Qwen 3.8 Max
+  remains the zero-training fallback.
+- [x] Add deterministic escalation for `SUPERSEDES`/`INVALIDATES`, `ADD`/`REDUCE`/
   `EXIT`, a Thesis conflict flag, a requested Thesis/Plan proposal, or an explicit
   user review. Model text must never decide its own escalation authority.
-- [ ] Persist the Max review draft separately from the immutable source Observation,
+- [x] Persist the escalated review draft separately from the immutable source Observation,
   first-pass Flash interpretation, Observation Review outcome, and formal Decision.
-- [ ] Add the exact Flash-versus-Max benchmark cases to sanitized regression fixtures;
+- [x] Add the exact first-pass-versus-escalated benchmark cases to sanitized regression fixtures;
   treat invented timing, confirmation conditions, and action propagation as failures.
 
 Gate: the selected and fallback models pass the same closed fixture suite, and model
 failure leaves the review usable with explicit degradation.
 
-Model decision (parallel evaluation completed 2026-09-03): use `qwen3.8-flash` for
-continuous first-pass structure and `qwen3.8-max` for escalated View Review. If only
-one model can be configured, prefer Max for semantic fidelity. Do not use LongCat 2.0
+Model decision (parallel evaluation completed 2026-09-03 and corrected by the owner):
+use `qwen3.8-flash` for continuous first-pass structure and the explicitly authorized
+`muse-spark-1.3-contributor` at `high` for escalated View Review. Contributor content
+is allowed only while the separate training opt-in remains true. Qwen 3.8 Max remains
+the zero-training fallback. Do not use LongCat 2.0
 for formal review because it incorrectly propagated a withdrawn add plan into HOLD/
 EXIT actions. Do not use DeepSeek as the private-note fallback because the test added
 unstated timing/confirmation conditions and the reviewed privacy basis was not current.
-GLM, Kimi, MiniMax, MiMo, and Hy directory visibility did not establish reliable
-completion of this strict contract. The second layer remains a draft producer and has
-no confirmation, research-write, Monitor, portfolio, or order authority.
+GLM, Kimi, MiniMax, MiMo, and Hy directory visibility alone did not establish reliable
+completion of this strict contract; later protocol-specific tests keep them as
+regression challengers rather than production defaults. The second layer remains a
+draft producer and has no confirmation, research-write, Monitor, portfolio, or order
+authority.
 
 ### T7 — Automation, quality, documentation, and release
 
@@ -219,10 +227,10 @@ no confirmation, research-write, Monitor, portfolio, or order authority.
   cannot suppress a real USER text change because the model is non-authoritative.
 - [x] Add review freshness, pending age, sync/analysis coverage, duplicate prevention,
   and adoption provenance to Data Quality/Operations.
-- [~] Run focused tests, full Python quality, Console tests/lint/typecheck/build,
+- [x] Run focused tests, full Python quality, Console tests/lint/typecheck/build,
   packaging, migrations, secret scan, and a real local smoke with private output kept
   outside Git.
-- [~] Update `AGENTS.md`, Trading Partner Skill, Phase specification, README, Console
+- [x] Update `AGENTS.md`, Trading Partner Skill, Phase specification, README, Console
   and MCP guides, operations/known issues, and unreleased notes.
 - [ ] Delete superseded workflow documentation and this active plan after its lasting
   decisions and final completion receipt have been folded into current truth.
@@ -230,6 +238,11 @@ no confirmation, research-write, Monitor, portfolio, or order authority.
 
 Gate: the complete judgment loop is documented, tested, reversible, and usable from
 both Console and Codex without weakening confirmation or privacy.
+
+Final verification receipt before cleanup: Ruff and strict Mypy passed; all 2,706
+Python tests passed; Console contract generation check, ESLint, production build, 46
+unit tests, and 7 Playwright journeys passed; isolated Wheel install/runtime smoke,
+Python and Node dependency audits, and tracked/untracked change secret scans passed.
 
 ## Rollback and migration strategy
 
@@ -260,6 +273,5 @@ both Console and Codex without weakening confirmation or privacy.
 | 2026-09-03 | Moomoo is the primary authoring edge; Trading Partner is the durable judgment system of record. | This matches the owner's real workflow and removes duplicate analysis entry. |
 | 2026-09-03 | Formal adoption starts with Decision/NO_ACTION; other durable objects are consequences. | The user should review meaning once instead of selecting modules. |
 | 2026-09-03 | MCP tool count is flexible. | Discoverability and coherent intent routing are more important than preserving an arbitrary count. |
-| 2026-09-03 | Model choice is a replaceable implementation decision pending a parallel evaluation. | Product authority and deterministic gates must not depend on one model vendor. |
-| 2026-09-03 | Do not switch the formal interpretation model from partial benchmark evidence. | LongCat 2.0 completed quickly but mis-propagated an explicit withdrawal; other directory-visible candidates have not yet completed the strict contract reliably. |
-| 2026-09-03 | Use Qwen 3.8 Flash for continuous structure and Qwen 3.8 Max for deterministically escalated review. | The completed benchmark found Max most faithful on withdrawal/invalidation semantics while Flash remained suitable for high-volume first-pass extraction. |
+| 2026-09-03 | Keep Qwen 3.8 Flash at `max` for continuous structure; use Muse Spark 1.3 Contributor at `high` for escalated review only after explicit training opt-in, with Qwen 3.8 Max as the zero-training fallback. | The completed sanitized comparison found `high` faster and more faithful than `xhigh`; LongCat propagated a withdrawn action and DeepSeek invented missing conditions. Product authority remains deterministic and provider-neutral. |
+| 2026-09-03 | Close the intake review with an exact Decision/NO_ACTION; do not require automatic Thesis, Plan, or Monitor propagation. | The owner's immediate need is one trustworthy judgment record. Follow-up objects remain explicit proposals so the unified intake does not silently broaden authority. |
