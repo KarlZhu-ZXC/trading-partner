@@ -24,7 +24,9 @@
   `muse-spark-1.3-contributor` at `high`; generic installs fail closed unless the
   separate Contributor-training opt-in is present, and Qwen 3.8 Max remains the
   zero-training fallback. Known withdrawn-action and invented-condition failures are
-  frozen as sanitized regression benchmarks.
+  frozen as sanitized regression benchmarks. The completed transformation ledger was
+  folded into `AGENTS.md`, Phase 4, current guides, and this release record, then
+  removed as a parallel specification; Git history retains its full progress.
 
 - Consolidated project documentation around one current source-of-truth hierarchy.
   `AGENTS.md`, the Trading Partner Skill, roadmap, capability guide, Phase 4 spec,
