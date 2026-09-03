@@ -45,9 +45,7 @@ _REVIEW_ITEM_SOURCE: dict[str, AttentionSourceType] = {
     ReviewItemSourceType.AGENT_PENDING_ACTION.value: AttentionSourceType.AGENT_PENDING_ACTION,
     ReviewItemSourceType.BROKER_ORDER_INTENT.value: AttentionSourceType.BROKER_ORDER_INTENT,
     ReviewItemSourceType.DECISION_REVIEW_DUE.value: AttentionSourceType.DECISION_REVIEW_DUE,
-    ReviewItemSourceType.OBSERVATION_REVIEW_DUE.value: (
-        AttentionSourceType.OBSERVATION_REVIEW_DUE
-    ),
+    ReviewItemSourceType.OBSERVATION_REVIEW_DUE.value: (AttentionSourceType.OBSERVATION_REVIEW_DUE),
     ReviewItemSourceType.UNLINKED_ACTIVITY.value: AttentionSourceType.UNLINKED_ACTIVITY,
 }
 
@@ -167,8 +165,8 @@ def next_read_for(
         return AttentionNextReadDTO(tool="research_memory_get", request=timeline_request)
     if source_type is AttentionSourceType.OBSERVATION_REVIEW_DUE:
         return AttentionNextReadDTO(
-            tool="view_review_get",
-            request={"note_revision_id": source_ref},
+            tool="view_get",
+            request={"operation": "review", "note_revision_id": source_ref},
         )
     if source_type is AttentionSourceType.UNLINKED_ACTIVITY:
         return AttentionNextReadDTO(
@@ -269,9 +267,7 @@ def project_pending_candidate(
             else item.proposed_by_rationale
         ),
         recommended_action=(
-            "RECONCILE_EXPIRED_CANDIDATE"
-            if expired
-            else "CONFIRM_OR_REJECT_CANDIDATE"
+            "RECONCILE_EXPIRED_CANDIDATE" if expired else "CONFIRM_OR_REJECT_CANDIDATE"
         ),
         severity=AttentionSeverity.ERROR if expired else AttentionSeverity.ATTENTION,
         first_seen_at=item.proposed_at,
@@ -443,9 +439,7 @@ def project_monitor_blind_spot(item: MonitorQualityDTO) -> AttentionItemDTO | No
         action = "INSPECT_MONITOR_RUN"
     else:
         title = f"Monitor not evaluated · {item.name}"
-        detail = (
-            f"{item.not_evaluated_count} rule(s) were NOT_EVALUATED on the latest run."
-        )
+        detail = f"{item.not_evaluated_count} rule(s) were NOT_EVALUATED on the latest run."
         action = "INSPECT_MONITOR_RUN"
     return _live_item(
         key=f"monitor-blind-{item.monitor_id}",
@@ -505,8 +499,7 @@ def project_unresolved_agent_fields(
         source_ref=action_id,
         title=f"Agent action requires reconciliation · {status}",
         detail=(
-            f"{capability}/{operation} was not safely resolved; "
-            "it will not retry automatically."
+            f"{capability}/{operation} was not safely resolved; it will not retry automatically."
         ),
         recommended_action="RECONCILE_AGENT_ACTION",
         severity=AttentionSeverity.ERROR if status == "UNKNOWN" else AttentionSeverity.ATTENTION,
@@ -525,16 +518,12 @@ def project_unresolved_agent(action: AgentPendingAction) -> AttentionItemDTO:
 
 
 def project_data_quality_issue(issue: DataQualityIssueDTO) -> AttentionItemDTO:
-    raw_severity = (
-        issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity)
-    )
+    raw_severity = issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity)
     try:
         severity = AttentionSeverity(raw_severity)
     except ValueError:
         severity = (
-            AttentionSeverity.ERROR
-            if raw_severity == "error"
-            else AttentionSeverity.ATTENTION
+            AttentionSeverity.ERROR if raw_severity == "error" else AttentionSeverity.ATTENTION
         )
     subject = issue.subject_ref or "global"
     return _live_item(
@@ -704,8 +693,7 @@ def assemble_attention_digest(
         case_id=request.case_id,
         total_count=len(ordered),
         total_count_is_lower_bound=any(
-            str(item.state) != AttentionCoverageState.COMPLETE.value
-            for item in coverage
+            str(item.state) != AttentionCoverageState.COMPLETE.value for item in coverage
         ),
         returned_count=len(clipped),
         truncated=len(clipped) < len(ordered),

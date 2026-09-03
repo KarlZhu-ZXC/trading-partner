@@ -5,7 +5,7 @@
 控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。普通页面读取不调用
 Provider 或 LLM；只有用户显式运行 Agent、启用复合判断的 Monitor、Observation 分析等入口
 才调用配置好的服务端模型。它不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
-备份和缓存清理，也可以从 MCP 工作台调用全部 31 个公开工具。它不会在页面加载时隐式
+备份和缓存清理，也可以从 MCP 工作台调用全部 28 个公开工具。它不会在页面加载时隐式
 访问 Provider，也不提供订单能力。
 
 终端一：
@@ -258,7 +258,7 @@ uv run trading-partner-agent console install --lan
 绑定 LAN 地址。可用 `--lan-port 3001` 选择其他端口。
 
 页面包括：总览、全部
-研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、31 个 MCP 能力、持久化账户、
+研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、28 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
 
 总览 Review Queue 是内部持久化决策闭环，不增加公开 MCP 工具。Acknowledge 可选填期限；
@@ -367,7 +367,7 @@ Trade Plan 或研究记录的确认。缓存删除另有二次确认；Console �
 确认门禁的 Schwab 下单只存在于 `broker_order_manage` MCP。
 
 Console 的 MCP 工作台与 Codex MCP 不是两套业务实现：两种 transport 都由同一份
-31-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
+28-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
 自选、Research 及 Monitor 等一一对应的前端查询也通过 Registry 调用；`overview`、
 `research`、`monitors` 等路由
 只负责把多项读取合并成适合页面的 BFF 响应。收盘任务、通知、备份和缓存维护仍是

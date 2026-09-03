@@ -83,7 +83,7 @@ READ_ONLY_NEXT_READ_TOOLS = frozenset(
         "monitor_read",
         "broker_order_manage",
         "portfolio_analyze",
-        "view_review_get",
+        "view_get",
     }
 )
 

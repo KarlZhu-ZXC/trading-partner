@@ -83,11 +83,14 @@ def test_attention_next_reads_match_the_current_exact_public_schemas() -> None:
             (AttentionSourceType.BROKER_ORDER_INTENT, "order_1", None),
             (AttentionSourceType.DATA_QUALITY, "ACCOUNT_SNAPSHOT_DEGRADED", None),
         )
-        if (item := next_read_for(
-            source_type,
-            source_ref=source_ref,
-            subject_id=subject_id,
-        )) is not None
+        if (
+            item := next_read_for(
+                source_type,
+                source_ref=source_ref,
+                subject_id=subject_id,
+            )
+        )
+        is not None
     )
     assert len(requests) == 7
     for item in requests:
@@ -174,10 +177,7 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
     assert [tool.name for tool in tools] == [
         "system_health",
         "instrument_resolve",
-        "view_inbox",
-        "view_review_get",
-        "view_review_run",
-        "current_view_get",
+        "view_get",
         "investment_case_read",
         "investment_case_manage",
         "research_judgment_get",
@@ -205,8 +205,8 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
         "monitor_evaluate",
     ]
     # Exact inventory bytes freeze the current compact registration output.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_173
-    assert _wire_size(tools) == 39_646
+    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_321
+    assert _wire_size(tools) == 39_023
 
 
 @pytest.mark.asyncio
@@ -222,11 +222,14 @@ async def test_intent_first_view_tools_are_bounded_durable_reads() -> None:
     )
     registry = create_capability_registry(container)
 
-    result = await registry.invoke("view_inbox", {"limit": 10})
+    result = await registry.invoke(
+        "view_get",
+        {"request": {"operation": "inbox", "limit": 10}},
+    )
 
     assert result["ok"] is True
     assert result["data"] == {"items": [], "returned_count": 0, "has_more": False}
-    descriptor = registry.find_operation("view_inbox", None)
+    descriptor = registry.find_operation("view_get", "inbox")
     assert descriptor.policy is READ_DURABLE
     assert descriptor.arguments_schema["properties"]["limit"]["maximum"] == 100
 
@@ -242,13 +245,23 @@ async def test_escalated_view_review_is_explicit_and_never_a_read_side_effect() 
 
     with pytest.raises(CapabilityConfirmationRequiredError):
         await registry.invoke(
-            "view_review_run",
-            {"note_revision_id": "external_note_revision_test"},
+            "research_workflow_run",
+            {
+                "request": {
+                    "operation": "evaluate_view",
+                    "note_revision_id": "external_note_revision_test",
+                }
+            },
         )
     result = await registry.invoke(
-        "view_review_run",
-        {"note_revision_id": "external_note_revision_test"},
-        confirmation="view_review_run",
+        "research_workflow_run",
+        {
+            "request": {
+                "operation": "evaluate_view",
+                "note_revision_id": "external_note_revision_test",
+            }
+        },
+        confirmation="research_workflow_run",
     )
 
     assert result["ok"] is True
@@ -458,10 +471,7 @@ async def test_local_uncompacted_invocation_keeps_validated_full_result() -> Non
         return {
             "ok": True,
             "data": {
-                "items": [
-                    {"item_id": f"item_{index}", "detail": "x" * 1000}
-                    for index in range(40)
-                ]
+                "items": [{"item_id": f"item_{index}", "detail": "x" * 1000} for index in range(40)]
             },
         }
 
@@ -474,9 +484,7 @@ async def test_local_uncompacted_invocation_keeps_validated_full_result() -> Non
     )
 
     compacted = await registry.invoke("large_read", {"request": {"operation": "items"}})
-    full = await registry.invoke_uncompacted(
-        "large_read", {"request": {"operation": "items"}}
-    )
+    full = await registry.invoke_uncompacted("large_read", {"request": {"operation": "items"}})
 
     assert compacted["_truncated"] is True
     assert len(full["data"]["items"]) == 40
@@ -745,7 +753,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
         "public_tool_count": len(MCP_VNEXT_TOOL_NAMES),
-        "surface_schema_version": "mcp-vnext-shadow-v4",
+        "surface_schema_version": "mcp-vnext-shadow-v5",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",
@@ -961,7 +969,7 @@ async def test_trade_retro_review_routes_through_existing_grouped_tool() -> None
     assert review_input.run_id == request["run_id"]
     assert review_input.expected_version == 0
     assert review_input.finding_reviews[0].finding_key == f"finding_{'a' * 64}"
-    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
+    assert "view_get" in MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -1009,7 +1017,7 @@ async def test_judgment_scorecard_run_and_history_route_without_new_public_tools
     assert history_input.thesis_id is None
     assert history_input.limit == 12
     assert history_input.offset == 2
-    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
+    assert "view_get" in MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -1090,7 +1098,7 @@ async def test_catalyst_agenda_read_and_confirmed_append_reuse_memory_tools() ->
     assert manage_input.payload.evidence_id == "evidence_1"
     actor_context = container.services.catalyst_agenda.manage.call_args.kwargs["actor_context"]
     assert actor_context is not None
-    assert {"view_inbox", "view_review_get", "current_view_get"} <= MCP_VNEXT_TOOL_NAMES
+    assert "view_get" in MCP_VNEXT_TOOL_NAMES
 
 
 @pytest.mark.asyncio

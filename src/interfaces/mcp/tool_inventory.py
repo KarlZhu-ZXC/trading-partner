@@ -29,10 +29,7 @@ MCP_VNEXT_TOOL_NAMES = frozenset(
         "monitor_read",
         "monitor_manage",
         "monitor_evaluate",
-        "view_inbox",
-        "view_review_get",
-        "view_review_run",
-        "current_view_get",
+        "view_get",
     }
 )
 
@@ -81,6 +78,10 @@ RETIRED_PUBLIC_TOOL_NAMES = frozenset(
         "watchlist_get_items",
         "monitor_get",
         "monitor_list",
+        "view_inbox",
+        "view_review_get",
+        "view_review_run",
+        "current_view_get",
     }
 )
 

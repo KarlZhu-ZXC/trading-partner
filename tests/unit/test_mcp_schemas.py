@@ -76,7 +76,13 @@ def test_schema_rejects_naive_as_of_string() -> None:
 
 
 def test_public_tool_surface_excludes_forbidden_and_retired_names() -> None:
-    assert {"view_inbox", "view_review_get", "current_view_get"} <= PUBLIC_TOOL_NAMES
+    assert "view_get" in PUBLIC_TOOL_NAMES
+    assert {
+        "view_inbox",
+        "view_review_get",
+        "view_review_run",
+        "current_view_get",
+    } <= RETIRED_PUBLIC_TOOL_NAMES
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
 

@@ -28,7 +28,7 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 ## Current source of truth
 
 - Implemented scope is Phase 1–4D. The current runtime snapshot exposes the single
-  31-tool `mcp_vnext_shadow` surface, but the count is not a future product invariant:
+  28-tool `mcp_vnext_shadow` surface, but the count is not a future product invariant:
   tools may be split, grouped, added, deprecated, or removed through an explicit
   compatibility migration when that improves intent discovery and workflow cohesion.
 - Application version is read from `src/application/__init__.py`; the current database
@@ -45,7 +45,7 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Implemented boundary
 
-The current public MCP vNext Shadow surface contains **31** tools
+The current public MCP vNext Shadow surface contains **28** tools
 (`mcp_vnext_shadow`). This is an implemented snapshot, not a target count. Grouped
 tools accept one required `request` object. Large
 groups publish a flattened operation schema to reduce host context, then revalidate
@@ -140,15 +140,15 @@ another primary Strategy, keep BossMo only as a risk/process check. This discipl
 is model interpretation, not a Provider fact, confirmation, position mutation, or
 order authorization.
 
-- `view_inbox` — bounded durable list of pending/deferred Observation reviews; never
-  returns private full note bodies.
-- `view_review_get` — one exact structured draft plus deterministic comparison with
-  confirmed Thesis/Plan/Decision, durable Position, Monitor, and coverage context.
-- `view_review_run` — explicitly confirmation-gated Provider evaluation that appends
-  a non-authoritative configured escalated-review draft; it never confirms or mutates
-  judgment. Contributor models additionally require the explicit training opt-in.
-- `current_view_get` — the latest formal view derived from an exact adopted
-  Observation review and Decision; it is not another mutable truth store.
+- `view_get` (`inbox`, `review`, `current`) — bounded durable View intake reads. Inbox
+  lists pending/deferred Observation reviews, review compares one exact revision with
+  confirmed Thesis/Plan/Decision, Position, Monitor, and coverage context, and current
+  derives the latest formal view from an exact adopted review plus Decision. These
+  operations never return private full note bodies or contact a Provider.
+- `research_workflow_run/evaluate_view` — explicitly confirmation-gated Provider
+  evaluation that appends a non-authoritative configured escalated-review draft; it
+  never confirms or mutates judgment. Contributor models additionally require the
+  explicit training opt-in.
 
 - `investment_case_read` (`query`, `context`, `attention`)
 - `investment_case_manage` (`create`, `update`, `archive`)

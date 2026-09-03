@@ -1,5 +1,15 @@
 # Unreleased
 
+- Reduced the public MCP surface from 31 to 28 tools under
+  `mcp-vnext-shadow-v5`. The three durable Moomoo-first reads are now closed
+  `view_get/inbox|review|current` operations, while escalated model review is
+  `research_workflow_run/evaluate_view` under the existing confirmation-gated,
+  open-world workflow boundary. The former `view_inbox`, `view_review_get`,
+  `current_view_get`, and `view_review_run` names are retired; application services
+  and durable data remain unchanged. Attention next-read hints, Agent routing,
+  evaluation fixtures, Console contract export, and current documentation now use
+  the v5 operation paths.
+
 - Fixed the Console CI contract gate to install and synchronize the Python schema
   exporter before `npm run check:contracts`; fresh Linux runners no longer depend on
   an ambient `uv` executable or environment.

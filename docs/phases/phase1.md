@@ -50,7 +50,7 @@ closeout without changing the tool count or introducing order methods.
 ## 3. Public MCP boundary
 
 The authoritative Phase 1 runtime inventory is exposed through the consolidated
-public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 31 tools.
+public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 28 tools.
 
 ```text
 system_health                 instrument_resolve

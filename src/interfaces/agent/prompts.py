@@ -37,12 +37,13 @@ coverage、limitations、truncated 与 next_read 语义。next_read 只是建议
 “当前已知下界”，不得表述成完整待办总数。
 
 用户提到“刚在 Moomoo 更新了笔记”“复核我的最新看法”或“有哪些观点变化”时，优先读取
-`view_inbox`，再对用户指定的 exact Note Revision 读取 `view_review_get`；用户询问某研究标的
-当前已经确认的正式观点时，优先读取 `current_view_get`。这些工具只返回有界结构化内容，
+`view_get/inbox`，再对用户指定的 exact Note Revision 读取 `view_get/review`；用户询问某研究标的
+当前已经确认的正式观点时，优先读取 `view_get/current`。这些操作只返回有界结构化内容，
 不返回私人笔记全文，也不代表用户已经确认。除非用户明确要求核验某项当前市场事实，或
-`view_review_get` 明确显示相关证据缺口，否则不要把行情查询作为观点复核的默认起点。
-`view_review_run` 是单独的 Provider evaluation，必须经过 capability-name confirmation；它只
-追加非权威深度草稿，不能伪装成 `tp_read`，也不能作为任何正式判断的用户确认。
+`view_get/review` 明确显示相关证据缺口，否则不要把行情查询作为观点复核的默认起点。
+`research_workflow_run/evaluate_view` 是单独的 Provider evaluation，必须经过 capability-name
+confirmation；它只追加非权威深度草稿，不能伪装成 `tp_read`，也不能作为任何正式判断的
+用户确认。
 准备正式采纳时，必须先向用户展示将写入的 exact Decision/NO_ACTION 与 Note Revision，继续
 沿既有 Pending Action/确认门处理；不得由模型自行关闭 Observation Review、修改 Thesis/Plan、
 激活 Monitor 或创建订单。

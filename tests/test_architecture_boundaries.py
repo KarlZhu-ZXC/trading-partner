@@ -636,7 +636,7 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
         RETIRED_PUBLIC_TOOL_NAMES,
     )
 
-    assert {"view_inbox", "view_review_get", "current_view_get"} <= PUBLIC_TOOL_NAMES
+    assert "view_get" in PUBLIC_TOOL_NAMES
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
     tool_root = LAYER_ROOTS["interfaces"] / "mcp" / "tools"
@@ -647,8 +647,7 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
         assert f'name="{forbidden}"' not in adapter_text
     bootstrap = (PROJECT_ROOT / "src" / "bootstrap.py").read_text(encoding="utf-8")
     composition_root_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((SRC / "composition_root").glob("*.py"))
+        path.read_text(encoding="utf-8") for path in sorted((SRC / "composition_root").glob("*.py"))
     )
     for field in (
         "research_archive_service",

@@ -60,9 +60,9 @@ def test_agent_prompt_keeps_the_catalogs_core_safety_contract() -> None:
     assert "Web Search" in AGENT_SYSTEM_PROMPT
     assert "investment_case_read/attention" in AGENT_SYSTEM_PROMPT
     assert "不能替代完整 Inbox" in AGENT_SYSTEM_PROMPT
-    assert "view_inbox" in AGENT_SYSTEM_PROMPT
-    assert "view_review_get" in AGENT_SYSTEM_PROMPT
-    assert "current_view_get" in AGENT_SYSTEM_PROMPT
+    assert "view_get/inbox" in AGENT_SYSTEM_PROMPT
+    assert "view_get/review" in AGENT_SYSTEM_PROMPT
+    assert "view_get/current" in AGENT_SYSTEM_PROMPT
     assert "不要把行情查询作为观点复核的默认起点" in AGENT_SYSTEM_PROMPT
 
 
@@ -82,9 +82,7 @@ async def test_agent_behavior_catalog_executes_against_the_real_runtime() -> Non
     catalog = json.loads(
         (PROJECT_ROOT / "evals" / "agent-behavior.v1.json").read_text(encoding="utf-8")
     )
-    expected_sequences = {
-        item["id"]: item["expected_tools"] for item in catalog["cases"]
-    }
+    expected_sequences = {item["id"]: item["expected_tools"] for item in catalog["cases"]}
     for result in receipt["results"]:
         assert result["tool_sequence"] == expected_sequences[result["id"]]
     by_id = {item["id"]: item for item in receipt["results"]}

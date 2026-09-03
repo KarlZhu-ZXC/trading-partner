@@ -91,9 +91,10 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "审阅",
         (
-            "view_inbox",
-            "view_review_get",
-            "current_view_get",
+            "view_get",
+            "inbox",
+            "review",
+            "current",
             "decision_workbench_review_queue",
             "open_items",
             "summary",
@@ -103,19 +104,20 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "复核",
         (
-            "view_inbox",
-            "view_review_get",
-            "current_view_get",
+            "view_get",
+            "inbox",
+            "review",
+            "current",
             "decision_workbench_review_queue",
             "open_items",
             "summary",
             "subject",
         ),
     ),
-    ("笔记", ("view_inbox", "view_review_get", "current_view_get")),
-    ("观点", ("view_inbox", "view_review_get", "current_view_get")),
-    ("当前看法", ("current_view_get",)),
-    ("当前观点", ("current_view_get",)),
+    ("笔记", ("view_get", "inbox", "review", "current")),
+    ("观点", ("view_get", "inbox", "review", "current")),
+    ("当前看法", ("view_get", "current")),
+    ("当前观点", ("view_get", "current")),
     (
         "工作台",
         ("decision_workbench_review_queue", "open_items", "summary", "subject"),
@@ -159,10 +161,10 @@ class AgentToolResultError(RuntimeError):
     """Safe typed error raised only when result compaction cannot proceed."""
 
 
-
 _safe_code = safe_code
 _safe_request_id = safe_request_id
 _serialized_size = serialized_size
+
 
 def _review_queue_schema(operation: str) -> dict[str, Any]:
     """Return an exact private schema for one durable Review Queue read."""
@@ -484,23 +486,16 @@ class AgentCapabilityGateway(AgentToolGateway):
             return ()
         bounded_limit = min(limit, self._search_limit, MAX_SEARCH_LIMIT)
         normalized = " ".join(str(query).lower().split())
-        ascii_terms = tuple(
-            item for item in re.split(r"[^a-z0-9_]+", normalized) if item
-        )
+        ascii_terms = tuple(item for item in re.split(r"[^a-z0-9_]+", normalized) if item)
         alias_terms = tuple(
-            term
-            for alias, expanded in _SEARCH_ALIASES
-            if alias in normalized
-            for term in expanded
+            term for alias, expanded in _SEARCH_ALIASES if alias in normalized for term in expanded
         )
         terms = tuple(dict.fromkeys((*ascii_terms, *alias_terms)))
         candidates: list[CompactOperationDescriptor] = []
         review_candidates: list[AgentToolDescriptor] = []
         if mode == "read":
             candidates = [
-                item
-                for item in self._registry.operation_descriptors()
-                if item.auto_allowed
+                item for item in self._registry.operation_descriptors() if item.auto_allowed
             ]
             if self._review_item_service is not None:
                 # The Review Queue is a Console-only durable capability.  It
@@ -537,7 +532,8 @@ class AgentCapabilityGateway(AgentToolGateway):
                 item
                 for item in candidates
                 if any(
-                    term in " ".join(
+                    term
+                    in " ".join(
                         part
                         for part in (
                             item.capability,
@@ -554,7 +550,8 @@ class AgentCapabilityGateway(AgentToolGateway):
                 item
                 for item in review_candidates
                 if any(
-                    term in " ".join(
+                    term
+                    in " ".join(
                         part
                         for part in (
                             item.capability,
@@ -568,9 +565,7 @@ class AgentCapabilityGateway(AgentToolGateway):
                 )
             ]
             review_operation_terms = set(terms).intersection(
-                _REVIEW_QUEUE_OPERATIONS
-                if mode == "read"
-                else _REVIEW_ACTION_OPERATIONS
+                _REVIEW_QUEUE_OPERATIONS if mode == "read" else _REVIEW_ACTION_OPERATIONS
             )
             if review_operation_terms:
                 review_candidates = [

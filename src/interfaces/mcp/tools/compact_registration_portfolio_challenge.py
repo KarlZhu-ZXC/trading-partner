@@ -13,6 +13,7 @@ def _register_portfolio_challenge_workflows(
     registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
     workflows: SimpleNamespace,
+    view_review: SimpleNamespace,
 ) -> None:
     """Register portfolio analysis and durable workflow operations in order."""
 
@@ -106,8 +107,8 @@ def _register_portfolio_challenge_workflows(
         name="research_workflow_run",
         description=(
             "Run one closed research, market, portfolio, peer-comparison, or manual "
-            "historical-validation workflow, one durable Trade Retro, or one deterministic "
-            "Judgment Scorecard."
+            "historical-validation workflow, one durable Trade Retro, one deterministic "
+            "Judgment Scorecard, or one explicitly requested escalated View review."
         ),
         variants=(
             _spec(
@@ -177,6 +178,11 @@ def _register_portfolio_challenge_workflows(
                 "judgment_scorecard",
                 workflows.judgment_scorecard,
                 _all_fields(workflows.judgment_scorecard),
+            ),
+            _spec(
+                "evaluate_view",
+                view_review.view_review_run,
+                _all_fields(view_review.view_review_run),
             ),
         ),
         policy=APPEND_OPEN_WORLD,
