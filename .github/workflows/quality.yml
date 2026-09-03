@@ -116,15 +116,6 @@ jobs:
           cache: npm
           cache-dependency-path: console/package-lock.json
 
-      - name: Install uv for shared contract export
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          python-version: "3.13"
-          enable-cache: true
-
-      - name: Sync Python contract dependencies
-        run: uv sync --group dev
-
       - name: Console install and vulnerability audit
         working-directory: console
         run: |
