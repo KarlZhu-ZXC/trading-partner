@@ -390,6 +390,12 @@ policy 的 Monitor 会复用同轮成功判断摘要，避免第二次调用。T
 确定性事实；搜索用量与有限来源 URL 会被持久化，价格/账户事实始终由确定性 Provider
 所有。完整契约见 AGENTS.md。
 
+独立的美股盘后编排任务在交易日收盘十分钟后运行账户、Watchlist、Observation 与
+`US_POST_MARKET` Monitor 链路，并以交易日回执保证幂等。launchd 使用精简环境；外层任务
+可由绝对 `uv` 路径启动，但 Python 编排器的子任务必须通过当前 `sys.executable -m` 调用，
+不得再次依赖 `PATH` 查找 `uv`。运维验收需要同时检查最新 durable receipt 与 launchd
+`last exit code = 0`，其中任何一项成功都不能单独证明自动链路完整。
+
 Schwab SGOV 自动现金管理属于 operational capability，不增加 MCP 工具：
 
 ```bash
