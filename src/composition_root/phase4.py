@@ -17,6 +17,7 @@ from application.services.daily_equity_materialization_service import (
 )
 from application.services.review_item_service import ReviewItemService
 from application.services.trade_cycle_override_service import TradeCycleOverrideService
+from domain.attribution.models import PositionBasisCheckpoint
 from domain.common.enums import VendorId
 from infrastructure.composition.persistence import PersistenceInfrastructure
 
@@ -38,6 +39,7 @@ def build_phase4_services(
     id_generator: IdGenerator,
     secret_redactor: SecretRedactor,
     review_items: ReviewItemService,
+    basis_checkpoints: tuple[PositionBasisCheckpoint, ...] = (),
 ) -> Phase4ServiceBundle:
     return Phase4ServiceBundle(
         account_transactions=AccountTransactionCoordinator(
@@ -51,6 +53,7 @@ def build_phase4_services(
             persistence.activity_annotations,
             persistence.trade_cycle_overrides,
             persistence.daily_equity,
+            basis_checkpoints,
         ),
         activity_annotations=ActivityAnnotationService(
             transactions=persistence.account_transactions,

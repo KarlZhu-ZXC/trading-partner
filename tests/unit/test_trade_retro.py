@@ -188,6 +188,22 @@ async def test_trade_retro_weekly_runs_exports_and_prepares_next_window(
     assert payload["ok"] is True
     assert payload["export"]["ok"] is True
     assert payload["behavior_review"]["status"] == "COMPLETE"
+    assert payload["schedule"] == {
+        "review": {
+            "iso_year": 2026,
+            "iso_week": 32,
+            "week_label": "2026-W32",
+            "start": "2026-08-03T00:00:00+00:00",
+            "end": "2026-08-08T00:00:00+00:00",
+        },
+        "next_snapshot": {
+            "iso_year": 2026,
+            "iso_week": 33,
+            "week_label": "2026-W33",
+            "start": "2026-08-10T00:00:00+00:00",
+            "end": "2026-08-15T00:00:00+00:00",
+        },
+    }
     review = container.behavior_requests[0]
     assert review.period_end - review.period_start == timedelta(days=7)
 
@@ -272,6 +288,27 @@ def test_weekly_windows_close_after_friday_and_prepare_next_week() -> None:
         datetime(2026, 7, 27, tzinfo=UTC),
         datetime(2026, 8, 1, tzinfo=UTC),
     )
+
+
+def test_weekly_windows_identify_august_31_as_iso_week_36() -> None:
+    review_start, review_end, prepare_start, prepare_end = _weekly_windows(
+        datetime(2026, 8, 29, 10, tzinfo=UTC)
+    )
+
+    assert trade_retro_cli._week_window_payload(review_start, review_end) == {
+        "iso_year": 2026,
+        "iso_week": 35,
+        "week_label": "2026-W35",
+        "start": "2026-08-24T00:00:00+00:00",
+        "end": "2026-08-29T00:00:00+00:00",
+    }
+    assert trade_retro_cli._week_window_payload(prepare_start, prepare_end) == {
+        "iso_year": 2026,
+        "iso_week": 36,
+        "week_label": "2026-W36",
+        "start": "2026-08-31T00:00:00+00:00",
+        "end": "2026-09-05T00:00:00+00:00",
+    }
 
 
 def test_markdown_section_extracts_only_retro(tmp_path) -> None:

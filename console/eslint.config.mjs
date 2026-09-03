@@ -15,6 +15,15 @@ export default defineConfig([
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      complexity: ["error", 160],
+    },
+  },
+  {
+    files: ["app/decision-workbench/page.tsx"],
+    rules: {
+      // Journal is the remaining consolidation hotspot. Ratchet its current
+      // ceiling separately while extracted tabs and queries continue shrinking it.
+      complexity: ["error", 240],
     },
   },
 ]);

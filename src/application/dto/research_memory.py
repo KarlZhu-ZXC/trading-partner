@@ -622,6 +622,7 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     trade_plan_id: str | None = None
     trade_plan_version: int | None = Field(default=None, ge=1)
     review_due_at: datetime | None = None
+    external_note_revision_id: str | None = None
     execution_effect: Literal[False] = False
 
     @field_validator("decision_id")
@@ -691,6 +692,15 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
     def _review_due_at(cls, value: datetime | None) -> datetime | None:
         return _optional_aware(value, field="review_due_at")
 
+    @field_validator("external_note_revision_id")
+    @classmethod
+    def _external_note_revision_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(
+            value,
+            field="external_note_revision_id",
+            prefix=EntityIdPrefix.EXTERNAL_NOTE_REVISION,
+        )
+
     @model_validator(mode="after")
     def _trade_plan_pair(self) -> Self:
         if (self.trade_plan_id is None) != (self.trade_plan_version is None):
@@ -727,6 +737,7 @@ class DecisionRecordDTO(_BaseResearchMemoryDTO):
             trade_plan_id=decision.trade_plan_id,
             trade_plan_version=decision.trade_plan_version,
             review_due_at=decision.review_due_at,
+            external_note_revision_id=decision.external_note_revision_id,
             execution_effect=False,
         )
 
@@ -1051,6 +1062,7 @@ class ResearchTimelineItemDTO(_BaseResearchMemoryDTO):
     visible_at: datetime
     instrument_ids: tuple[str, ...]
     source_name: str | None
+    external_note_revision_id: str | None = None
 
     @field_validator("subject_id")
     @classmethod
@@ -1066,6 +1078,15 @@ class ResearchTimelineItemDTO(_BaseResearchMemoryDTO):
     @classmethod
     def _instrument_ids(cls, value: object) -> tuple[str, ...]:
         return _require_unique_str_tuple(value, field="instrument_ids")
+
+    @field_validator("external_note_revision_id")
+    @classmethod
+    def _external_note_revision_id(cls, value: str | None) -> str | None:
+        return _require_optional_entity_id(
+            value,
+            field="external_note_revision_id",
+            prefix=EntityIdPrefix.EXTERNAL_NOTE_REVISION,
+        )
 
     @model_validator(mode="after")
     def _entity_id(self) -> Self:

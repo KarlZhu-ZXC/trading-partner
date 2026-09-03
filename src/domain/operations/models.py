@@ -95,6 +95,11 @@ class PostMarketSyncRun:
     warning_codes: tuple[str, ...]
     error_codes: tuple[str, ...]
     attempt_count: int = 1
+    observation_status: PostMarketSyncStepStatus | None = None
+    observation_notes_seen: int | None = None
+    observation_revisions_created: int | None = None
+    observation_full_count: int | None = None
+    observation_summary_only_count: int | None = None
 
     def __post_init__(self) -> None:
         if not self.run_id or len(self.run_id) > 128:
@@ -109,13 +114,14 @@ class PostMarketSyncRun:
             raise DataContractError("completed_at must be >= started_at")
         if self.attempt_count < 1:
             raise DataContractError("attempt_count must be positive")
+        steps = [self.portfolio_status, self.watchlist_status]
+        if self.observation_status is not None:
+            steps.append(self.observation_status)
         expected = (
             PostMarketSyncRunStatus.SUCCEEDED
-            if self.portfolio_status is PostMarketSyncStepStatus.SUCCEEDED
-            and self.watchlist_status is PostMarketSyncStepStatus.SUCCEEDED
+            if all(item is PostMarketSyncStepStatus.SUCCEEDED for item in steps)
             else PostMarketSyncRunStatus.FAILED
-            if self.portfolio_status is PostMarketSyncStepStatus.FAILED
-            and self.watchlist_status is PostMarketSyncStepStatus.FAILED
+            if all(item is PostMarketSyncStepStatus.FAILED for item in steps)
             else PostMarketSyncRunStatus.PARTIAL
         )
         if self.status is not expected:
@@ -123,6 +129,10 @@ class PostMarketSyncRun:
         for count in (
             self.watchlist_groups_synced,
             self.watchlist_membership_relations_synced,
+            self.observation_notes_seen,
+            self.observation_revisions_created,
+            self.observation_full_count,
+            self.observation_summary_only_count,
         ):
             if count is not None and count < 0:
                 raise DataContractError("watchlist counts must be nonnegative")
@@ -131,6 +141,20 @@ class PostMarketSyncRun:
             or self.watchlist_membership_relations_synced is None
         ):
             raise DataContractError("successful watchlist step requires synchronization counts")
+        observation_counts = (
+            self.observation_notes_seen,
+            self.observation_revisions_created,
+            self.observation_full_count,
+            self.observation_summary_only_count,
+        )
+        if self.observation_status is None and any(
+            value is not None for value in observation_counts
+        ):
+            raise DataContractError("absent Observation step cannot carry synchronization counts")
+        if self.observation_status is PostMarketSyncStepStatus.SUCCEEDED and any(
+            value is None for value in observation_counts
+        ):
+            raise DataContractError("successful Observation step requires synchronization counts")
         _unique_codes(self.account_snapshot_ids, field="account_snapshot_ids")
         _unique_codes(self.warning_codes, field="warning_codes")
         _unique_codes(self.error_codes, field="error_codes")

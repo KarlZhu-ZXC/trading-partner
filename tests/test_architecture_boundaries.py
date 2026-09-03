@@ -158,6 +158,17 @@ def test_interfaces_do_not_import_infrastructure() -> None:
     assert not violations, "Interfaces boundary violations:\n" + "\n".join(violations)
 
 
+def test_infrastructure_does_not_import_interfaces() -> None:
+    """Infrastructure implements ports and must not depend on delivery adapters."""
+
+    violations: list[str] = []
+    for path in _iter_py_files(LAYER_ROOTS["infrastructure"]):
+        for imp in _imports(path):
+            if _is_module(imp, "interfaces"):
+                violations.append(f"{path}: imports interfaces ({imp})")
+    assert not violations, "Infrastructure boundary violations:\n" + "\n".join(violations)
+
+
 def test_only_bootstrap_is_composition_root() -> None:
     """Only bootstrap.py and the composition_root package may wire app+infra."""
     violations: list[str] = []

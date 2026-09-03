@@ -17,6 +17,118 @@ from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.orm.common import JsonStringTuple
 
 
+class ExternalNoteIdentityRow(Base):
+    __tablename__ = "external_note_identities"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_external_note_source_id"),
+        Index("ix_external_note_instrument_seen", "primary_instrument_id", "last_seen_at"),
+    )
+
+    note_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    primary_instrument_id: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    last_seen_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ExternalNoteRevisionRow(Base):
+    __tablename__ = "external_note_revisions"
+    __table_args__ = (
+        UniqueConstraint("note_id", "version", name="uq_external_note_revision_version"),
+        UniqueConstraint(
+            "note_id", "source_revision_key", name="uq_external_note_revision_source_key"
+        ),
+        CheckConstraint("version >= 1", name="ck_external_note_revision_version"),
+        CheckConstraint(
+            "coverage IN ('FULL','SUMMARY_ONLY')",
+            name="ck_external_note_revision_coverage",
+        ),
+        Index("ix_external_note_revision_observed", "observed_at"),
+    )
+
+    note_revision_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    note_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("external_note_identities.note_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source_revision_key: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    full_body: Mapped[str | None] = mapped_column(Text)
+    coverage: Mapped[str] = mapped_column(Text, nullable=False)
+    source_timestamp: Mapped[str | None] = mapped_column(Text)
+    observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    visibility: Mapped[str] = mapped_column(Text, nullable=False)
+    related_stock_ids: Mapped[tuple[str, ...]] = mapped_column(
+        "related_stock_ids_json", JsonStringTuple(), nullable=False
+    )
+    related_codes: Mapped[tuple[str, ...]] = mapped_column(
+        "related_codes_json", JsonStringTuple(), nullable=False
+    )
+    blocks_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ExternalNoteInterpretationRow(Base):
+    __tablename__ = "external_note_interpretations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('SUCCEEDED','FAILED')",
+            name="ck_external_note_interpretation_status",
+        ),
+    )
+
+    interpretation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    note_revision_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("external_note_revisions.note_revision_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ExternalNoteSyncReceiptRow(Base):
+    __tablename__ = "external_note_sync_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('SUCCEEDED','PARTIAL','FAILED')",
+            name="ck_external_note_sync_status",
+        ),
+        Index("ix_external_note_sync_completed", "completed_at"),
+    )
+
+    receipt_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    cache_files_scanned: Mapped[int] = mapped_column(Integer, nullable=False)
+    notes_seen: Mapped[int] = mapped_column(Integer, nullable=False)
+    identities_created: Mapped[int] = mapped_column(Integer, nullable=False)
+    revisions_created: Mapped[int] = mapped_column(Integer, nullable=False)
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    full_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary_only_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    interpretations_created: Mapped[int] = mapped_column(Integer, nullable=False)
+    warning_codes: Mapped[tuple[str, ...]] = mapped_column(
+        "warning_codes_json", JsonStringTuple(), nullable=False
+    )
+    error_codes: Mapped[tuple[str, ...]] = mapped_column(
+        "error_codes_json", JsonStringTuple(), nullable=False
+    )
+    started_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class IndustryMetricObservationRow(Base):
     __tablename__ = "industry_metric_observations"
     __table_args__ = (
@@ -113,6 +225,10 @@ class PostMarketSyncRunRow(Base):
             "watchlist_status IN ('SUCCEEDED','FAILED')",
             name="ck_post_market_sync_watchlist_status",
         ),
+        CheckConstraint(
+            "observation_status IS NULL OR observation_status IN ('SUCCEEDED','FAILED')",
+            name="ck_post_market_sync_observation_status",
+        ),
         CheckConstraint("completed_at >= started_at", name="ck_post_market_sync_time_order"),
         CheckConstraint("attempt_count >= 1", name="ck_post_market_sync_attempt_count"),
         CheckConstraint(
@@ -123,6 +239,22 @@ class PostMarketSyncRunRow(Base):
             "watchlist_membership_relations_synced IS NULL"
             " OR watchlist_membership_relations_synced >= 0",
             name="ck_post_market_sync_membership_count",
+        ),
+        CheckConstraint(
+            "observation_notes_seen IS NULL OR observation_notes_seen >= 0",
+            name="ck_post_market_sync_observation_notes_seen",
+        ),
+        CheckConstraint(
+            "observation_revisions_created IS NULL OR observation_revisions_created >= 0",
+            name="ck_post_market_sync_observation_revisions_created",
+        ),
+        CheckConstraint(
+            "observation_full_count IS NULL OR observation_full_count >= 0",
+            name="ck_post_market_sync_observation_full_count",
+        ),
+        CheckConstraint(
+            "observation_summary_only_count IS NULL OR observation_summary_only_count >= 0",
+            name="ck_post_market_sync_observation_summary_only_count",
         ),
         Index("ix_post_market_sync_completed_at", "completed_at"),
     )
@@ -135,9 +267,14 @@ class PostMarketSyncRunRow(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     portfolio_status: Mapped[str] = mapped_column(Text, nullable=False)
     watchlist_status: Mapped[str] = mapped_column(Text, nullable=False)
+    observation_status: Mapped[str | None] = mapped_column(Text)
     account_snapshot_ids: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     watchlist_groups_synced: Mapped[int | None] = mapped_column(Integer)
     watchlist_membership_relations_synced: Mapped[int | None] = mapped_column(Integer)
+    observation_notes_seen: Mapped[int | None] = mapped_column(Integer)
+    observation_revisions_created: Mapped[int | None] = mapped_column(Integer)
+    observation_full_count: Mapped[int | None] = mapped_column(Integer)
+    observation_summary_only_count: Mapped[int | None] = mapped_column(Integer)
     warning_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     error_codes: Mapped[tuple[str, ...]] = mapped_column(JsonStringTuple(), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)

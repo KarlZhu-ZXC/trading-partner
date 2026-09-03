@@ -32,7 +32,18 @@ class SqlAlchemyAccountTransactionRepository:
         with Session(self._engine) as session, session.begin():
             for item in transactions:
                 key = (item.provider.value, item.account_ref, item.provider_transaction_id)
-                if key in seen or session.get(AccountTransactionRow, key) is not None:
+                existing = session.get(AccountTransactionRow, key)
+                if key in seen:
+                    continue
+                if existing is not None:
+                    current = self._hydrate(existing)
+                    if (
+                        current.instrument_id is None
+                        and item.instrument_id is not None
+                        and self._same_fact_except_identity(current, item)
+                    ):
+                        existing.instrument_id = item.instrument_id
+                        existing.mapping_version = item.mapping_version
                     continue
                 seen.add(key)
                 session.add(
@@ -57,6 +68,26 @@ class SqlAlchemyAccountTransactionRepository:
                 )
                 inserted.append(item)
         return tuple(inserted)
+
+    @staticmethod
+    def _same_fact_except_identity(
+        current: AccountTransaction,
+        incoming: AccountTransaction,
+    ) -> bool:
+        return (
+            current.provider is incoming.provider
+            and current.account_ref == incoming.account_ref
+            and current.provider_transaction_id == incoming.provider_transaction_id
+            and current.kind is incoming.kind
+            and current.side is incoming.side
+            and current.quantity == incoming.quantity
+            and current.price == incoming.price
+            and current.fees == incoming.fees
+            and current.currency == incoming.currency
+            and current.occurred_at == incoming.occurred_at
+            and current.cash_amount == incoming.cash_amount
+            and current.source_type == incoming.source_type
+        )
 
     def list(
         self,

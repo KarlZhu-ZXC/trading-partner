@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -67,6 +69,7 @@ from infrastructure.system.clock import SystemClock
 
 _BASE_URL = "https://api.schwabapi.com"
 _MAX_BROKER_QUOTE_CLOCK_SKEW = timedelta(seconds=5)
+_DESCRIPTION_SYMBOL_TOKEN = re.compile(r"(?<![A-Z0-9.])[A-Z][A-Z0-9.]{1,9}(?![A-Z0-9.])")
 
 _ACTIVE_ORDER_STATUSES = frozenset(
     {
@@ -93,7 +96,14 @@ class SchwabReadClient(Protocol):
     def accounts_with_positions(self) -> object: ...
     def orders(self, account_hash: str, start: datetime, end: datetime) -> object: ...
     def quote(self, symbol: str) -> object: ...
-    def transactions(self, account_hash: str, start: datetime, end: datetime) -> object: ...
+    def transactions(
+        self,
+        account_hash: str,
+        start: datetime,
+        end: datetime,
+        *,
+        symbol: str | None = None,
+    ) -> object: ...
 
 
 class SchwabOrderClient(Protocol):
@@ -167,10 +177,20 @@ class SchwabPyReadClient:
             operation="quote",
         )
 
-    def transactions(self, account_hash: str, start: datetime, end: datetime) -> object:
+    def transactions(
+        self,
+        account_hash: str,
+        start: datetime,
+        end: datetime,
+        *,
+        symbol: str | None = None,
+    ) -> object:
+        params = {"startDate": start.isoformat(), "endDate": end.isoformat()}
+        if symbol is not None:
+            params["symbol"] = symbol
         return self._get(
             f"/trader/v1/accounts/{account_hash}/transactions",
-            params={"startDate": start.isoformat(), "endDate": end.isoformat()},
+            params=params,
             operation="transactions",
         )
 
@@ -680,7 +700,12 @@ def _instrument_id(instrument: Mapping[str, object]) -> str | None:
         kind = AssetType.OPTION
     else:
         return None
-    return build_instrument_id(kind, Market.US, symbol.upper())
+    canonical_symbol = (
+        symbol.replace(" ", "").upper()
+        if kind is AssetType.OPTION
+        else symbol.upper()
+    )
+    return build_instrument_id(kind, Market.US, canonical_symbol)
 
 
 class SchwabAccountAdapter:
@@ -1005,9 +1030,15 @@ class SchwabAccountAdapter:
             warnings.add("SCHWAB_TRANSACTION_WINDOW_PAGED")
         values: list[AccountTransaction] = []
         account_refs: list[str] = []
+        current_candidates = self._current_instrument_candidates(client, warnings)
         for account_hash in sorted(self._account_hashes):
             account_ref = _stable_ref("account", account_hash, prefix="schwab_")
             account_refs.append(account_ref)
+            raw_transactions: list[tuple[Mapping[str, object], datetime]] = []
+            instrument_candidates = {
+                symbol: set(instrument_ids)
+                for symbol, instrument_ids in current_candidates.get(account_hash, {}).items()
+            }
             for window_start, window_end in windows:
                 rows = _sequence(
                     client.transactions(account_hash, window_start, window_end),
@@ -1018,67 +1049,95 @@ class SchwabAccountAdapter:
                     occurred_at = _aware_datetime(transaction.get("time"), "transaction time")
                     if occurred_at < window_start or occurred_at > window_end:
                         continue
-                    raw_kind = (_text(transaction.get("type")) or "").upper()
-                    description = (_text(transaction.get("description")) or "").upper()
-                    if raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
-                        warnings.add("SCHWAB_CORPORATE_ACTION_DETAILS_PARTIAL")
-                    if "REVERS" in description or "CANCEL" in description:
-                        warnings.add("SCHWAB_REVERSAL_LINK_UNAVAILABLE")
-                    items = _sequence(transaction.get("transferItems") or [], "transfer items")
-                    transaction_value_count = len(values)
-                    for index, raw_item in enumerate(items):
+                    raw_transactions.append((transaction, occurred_at))
+                    for raw_item in _sequence(
+                        transaction.get("transferItems") or [], "transfer items"
+                    ):
                         item = _mapping(raw_item, "transfer item")
-                        instrument = _mapping(item.get("instrument"), "transaction instrument")
-                        instrument_id = _instrument_id(instrument)
-                        if instrument_id is None:
-                            asset_type = (_text(instrument.get("assetType")) or "").upper()
-                            if asset_type == "CURRENCY":
-                                normalized = self._cash_transaction(
-                                    account_hash,
-                                    transaction,
-                                    item,
-                                    index,
-                                    occurred_at,
-                                )
-                                if normalized is not None:
-                                    values.append(normalized)
-                            else:
-                                warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
-                            continue
-                        normalized, side_inferred = self._transaction(
-                            account_hash,
-                            transaction,
-                            item,
-                            index,
-                            instrument_id,
-                            occurred_at,
+                        instrument = _mapping(
+                            item.get("instrument"), "transaction instrument"
                         )
-                        if side_inferred:
-                            warnings.add("SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN")
-                        if normalized is not None:
-                            values.append(normalized)
+                        instrument_id = _instrument_id(instrument)
+                        symbol = _text(instrument.get("symbol"))
+                        if (
+                            instrument_id is not None
+                            and symbol is not None
+                            and instrument_id.startswith(("equity:US:", "etf:US:"))
+                        ):
+                            instrument_candidates.setdefault(symbol.upper(), set()).add(
+                                instrument_id
+                            )
+
+            for transaction, occurred_at in raw_transactions:
+                raw_kind = (_text(transaction.get("type")) or "").upper()
+                description = (_text(transaction.get("description")) or "").upper()
+                dividend_instrument_id = self._dividend_instrument_from_description(
+                    raw_kind=raw_kind,
+                    description=description,
+                    candidates=instrument_candidates,
+                    warnings=warnings,
+                )
+                if raw_kind in {"RECEIVE_AND_DELIVER", "CORPORATE_ACTION"}:
+                    warnings.add("SCHWAB_CORPORATE_ACTION_DETAILS_PARTIAL")
+                if "REVERS" in description or "CANCEL" in description:
+                    warnings.add("SCHWAB_REVERSAL_LINK_UNAVAILABLE")
+                items = _sequence(transaction.get("transferItems") or [], "transfer items")
+                transaction_value_count = len(values)
+                for index, raw_item in enumerate(items):
+                    item = _mapping(raw_item, "transfer item")
+                    instrument = _mapping(item.get("instrument"), "transaction instrument")
+                    instrument_id = _instrument_id(instrument)
+                    if instrument_id is None:
+                        asset_type = (_text(instrument.get("assetType")) or "").upper()
+                        if asset_type == "CURRENCY":
+                            normalized = self._cash_transaction(
+                                account_hash,
+                                transaction,
+                                item,
+                                index,
+                                occurred_at,
+                                instrument_id=dividend_instrument_id,
+                            )
+                            if normalized is not None:
+                                values.append(normalized)
                         else:
                             warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
-                    if (
-                        len(values) == transaction_value_count
-                        and _decimal(transaction.get("netAmount")) is not None
-                    ):
-                        synthetic_cash_item: Mapping[str, object] = {
-                            "amount": transaction.get("netAmount"),
-                            "instrument": {
-                                "assetType": "CURRENCY",
-                                "symbol": "CURRENCY_USD",
-                            },
-                        }
-                        cash = self._cash_transaction(
-                            account_hash,
-                            transaction,
-                            synthetic_cash_item,
-                            0,
-                            occurred_at,
-                        )
-                        if cash is not None:
-                            values.append(cash)
+                        continue
+                    normalized, side_inferred = self._transaction(
+                        account_hash,
+                        transaction,
+                        item,
+                        index,
+                        instrument_id,
+                        occurred_at,
+                    )
+                    if side_inferred:
+                        warnings.add("SCHWAB_TRANSACTION_SIDE_INFERRED_FROM_SIGN")
+                    if normalized is not None:
+                        values.append(normalized)
+                    else:
+                        warnings.add("SCHWAB_TRANSACTION_ITEM_OMITTED")
+                if (
+                    len(values) == transaction_value_count
+                    and _decimal(transaction.get("netAmount")) is not None
+                ):
+                    synthetic_cash_item: Mapping[str, object] = {
+                        "amount": transaction.get("netAmount"),
+                        "instrument": {
+                            "assetType": "CURRENCY",
+                            "symbol": "CURRENCY_USD",
+                        },
+                    }
+                    cash = self._cash_transaction(
+                        account_hash,
+                        transaction,
+                        synthetic_cash_item,
+                        0,
+                        occurred_at,
+                        instrument_id=dividend_instrument_id,
+                    )
+                    if cash is not None:
+                        values.append(cash)
         values.sort(key=lambda item: (item.occurred_at, item.provider_transaction_id), reverse=True)
         truncated = len(values) > limit
         if truncated:
@@ -1116,6 +1175,67 @@ class SchwabAccountAdapter:
             self._meta(fetched_at, tuple(sorted(warnings))),
         )
 
+    def _current_instrument_candidates(
+        self,
+        client: SchwabReadClient,
+        warnings: set[str],
+    ) -> dict[str, dict[str, set[str]]]:
+        try:
+            hashes = self._account_hash_by_number(client)
+            rows = _sequence(client.accounts_with_positions(), "accounts")
+            result: dict[str, dict[str, set[str]]] = defaultdict(dict)
+            for raw in rows:
+                account = _mapping(
+                    _mapping(raw, "account").get("securitiesAccount"),
+                    "securitiesAccount",
+                )
+                number = _text(account.get("accountNumber"))
+                if number is None or number not in hashes:
+                    continue
+                account_hash = hashes[number]
+                candidates = result[account_hash]
+                for raw_position in _sequence(account.get("positions") or [], "positions"):
+                    position = _mapping(raw_position, "position")
+                    instrument = _mapping(
+                        position.get("instrument"), "position instrument"
+                    )
+                    instrument_id = _instrument_id(instrument)
+                    symbol = _text(instrument.get("symbol"))
+                    if (
+                        instrument_id is not None
+                        and symbol is not None
+                        and instrument_id.startswith(("equity:US:", "etf:US:"))
+                    ):
+                        candidates.setdefault(symbol.upper(), set()).add(instrument_id)
+            return dict(result)
+        except Exception:  # noqa: BLE001 - optional identity enrichment only
+            warnings.add("SCHWAB_DIVIDEND_POSITION_CANDIDATES_UNAVAILABLE")
+            return {}
+
+    @staticmethod
+    def _dividend_instrument_from_description(
+        *,
+        raw_kind: str,
+        description: str,
+        candidates: Mapping[str, set[str]],
+        warnings: set[str],
+    ) -> str | None:
+        if raw_kind != "DIVIDEND_OR_INTEREST" or "DIVIDEND" not in description:
+            return None
+        matched = {
+            instrument_id
+            for symbol in _DESCRIPTION_SYMBOL_TOKEN.findall(description)
+            for instrument_id in candidates.get(symbol, set())
+        }
+        if len(matched) == 1:
+            return next(iter(matched))
+        warnings.add(
+            "SCHWAB_DIVIDEND_INSTRUMENT_AMBIGUOUS"
+            if matched
+            else "SCHWAB_DIVIDEND_INSTRUMENT_UNAVAILABLE"
+        )
+        return None
+
     @staticmethod
     def _transaction_windows(
         start: datetime, end: datetime
@@ -1137,6 +1257,8 @@ class SchwabAccountAdapter:
         item: Mapping[str, object],
         index: int,
         occurred_at: datetime,
+        *,
+        instrument_id: str | None = None,
     ) -> AccountTransaction | None:
         raw_id_value = transaction.get("activityId")
         raw_id = str(raw_id_value) if isinstance(raw_id_value, int) else _text(raw_id_value)
@@ -1185,7 +1307,7 @@ class SchwabAccountAdapter:
             ),
             account_ref=_stable_ref("account", account_hash, prefix="schwab_"),
             provider=VendorId.SCHWAB,
-            instrument_id=None,
+            instrument_id=instrument_id,
             kind=kind,
             side=None,
             quantity=None,
@@ -1195,7 +1317,9 @@ class SchwabAccountAdapter:
             occurred_at=occurred_at,
             cash_amount=amount,
             source_type=raw_kind,
-            mapping_version="schwab_activity_v1",
+            mapping_version=(
+                "schwab_activity_v2" if instrument_id is not None else "schwab_activity_v1"
+            ),
         )
 
     @staticmethod

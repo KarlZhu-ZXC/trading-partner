@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from application.dto.behavior import BehaviorSummaryDTO
+import pytest
+from pydantic import ValidationError
+
+from application.dto.behavior import BehaviorSummaryDTO, BehaviorSummaryQueryInput
 from application.services.behavior_summary_calculator import BehaviorSummaryCalculator
 from domain.behavior.enums import BehaviorMetricAvailability
 from domain.common.enums import ConfirmationMode, DecisionScenario, DecisionType, VendorId
@@ -153,6 +156,28 @@ def test_win_denominator_excludes_open_unresolved_missing_pnl_and_sgov() -> None
     assert result.invalidation_adherence.availability is BehaviorMetricAvailability.NOT_SUPPORTED
 
 
+def test_payoff_ratio_uses_average_win_and_average_loss() -> None:
+    cycles = (
+        _cycle("win-one", "5"),
+        _cycle("win-two", "7"),
+        _cycle("loss", "-2"),
+    )
+
+    result = BehaviorSummaryCalculator().calculate(
+        cycles,
+        (),
+        minimum_sample_size=1,
+    )
+
+    assert result.avg_win.value == Decimal("6")
+    assert result.avg_loss.value == Decimal("-2")
+    assert result.payoff_ratio.value == Decimal("3")
+    assert result.payoff_ratio.note == (
+        "Payoff ratio is average winning-cycle P/L divided by absolute average "
+        "losing-cycle P/L."
+    )
+
+
 def test_plan_decision_invalidation_proxy_and_scenario_distribution() -> None:
     cycle = _cycle("planned", "2")
     decision = _decision("decision_00000000-0000-7000-8000-000000000001")
@@ -270,6 +295,60 @@ def test_strategy_and_instrument_cohort_filters_are_explicit() -> None:
     assert result.cohort.instrument_ids == (INSTRUMENT,)
     assert result.closed_active_trade_cycles.numerator == 1
     assert result.no_action_count.denominator == 1
+
+
+def test_date_window_filters_cycle_and_decision_cohort_without_losing_prefill_links() -> None:
+    before = _cycle(
+        "before-window",
+        "2",
+        opened_at=T0 - timedelta(days=10),
+        closed_at=T0 - timedelta(days=9),
+    )
+    inside = _cycle("inside-window", "3")
+    prefill = _decision(
+        "decision_00000000-0000-7000-8000-000000000020",
+        decided_at=T0 - timedelta(hours=1),
+    )
+    in_window_no_action = _decision(
+        "decision_00000000-0000-7000-8000-000000000021",
+        decision_type=DecisionType.NO_ACTION,
+        decided_at=T0 + timedelta(hours=1),
+        trade_plan_id=None,
+        trade_plan_version=None,
+    )
+    after_window = _decision(
+        "decision_00000000-0000-7000-8000-000000000022",
+        decision_type=DecisionType.NO_ACTION,
+        decided_at=T0 + timedelta(days=3),
+        trade_plan_id=None,
+        trade_plan_version=None,
+    )
+
+    result = BehaviorSummaryCalculator().calculate(
+        (before, inside),
+        (prefill, in_window_no_action, after_window),
+        cycle_decision_links={inside.cycle_id: (prefill.decision_id,)},
+        start=T0,
+        end=T0 + timedelta(days=2),
+    )
+
+    assert result.cohort.start == T0
+    assert result.cohort.end == T0 + timedelta(days=2)
+    assert result.cohort_cycle_ids == (inside.cycle_id,)
+    assert result.cohort_excluded_cycle_ids == (before.cycle_id,)
+    assert "COHORT_DATE_BEFORE_START" in result.cohort_exclusion_reasons
+    assert result.pre_fill_decision_coverage.numerator == 1
+    assert result.no_action_count.numerator == 1
+
+
+def test_behavior_summary_query_rejects_naive_or_inverted_date_window() -> None:
+    with pytest.raises(ValidationError):
+        BehaviorSummaryQueryInput(start=datetime(2026, 1, 1))
+    with pytest.raises(ValidationError):
+        BehaviorSummaryQueryInput(
+            start=T0 + timedelta(days=1),
+            end=T0,
+        )
 
 
 def test_missing_exact_links_never_uses_temporal_instrument_proximity() -> None:

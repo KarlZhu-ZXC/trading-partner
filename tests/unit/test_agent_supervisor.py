@@ -50,16 +50,32 @@ def test_console_lan_launchd_uses_owner_only_password_file(
 
 def test_console_lan_password_file_preserves_existing_password(
     tmp_path: Path,
+) -> None:
+    path = tmp_path / agent.CONSOLE_LAN_PASSWORD_RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text("existing-password-123\n", encoding="utf-8")
+
+    result = agent._ensure_console_lan_password(tmp_path)
+
+    assert result == path
+    assert path.read_text(encoding="utf-8").strip() == "existing-password-123"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_console_lan_password_file_rotates_legacy_short_password(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / agent.CONSOLE_LAN_PASSWORD_RELATIVE_PATH
     path.parent.mkdir(parents=True)
     path.write_text("short-password\n", encoding="utf-8")
+    monkeypatch.delenv("TRADING_PARTNER_CONSOLE_LAN_PASSWORD", raising=False)
 
-    result = agent._ensure_console_lan_password(tmp_path)
+    agent._ensure_console_lan_password(tmp_path)
 
-    assert result == path
-    assert path.read_text(encoding="utf-8").strip() == "short-password"
+    password = path.read_text(encoding="utf-8").strip()
+    assert password != "short-password"
+    assert len(password) >= agent.CONSOLE_LAN_PASSWORD_MIN_LENGTH
     assert path.stat().st_mode & 0o777 == 0o600
 
 

@@ -18,6 +18,8 @@ trading-partner-init --json
 
 - 创建当前用户专用的运行目录；
 - 生成权限为 `0600` 的 `runtime.env`；
+- 将 `RUNTIME_ROOT` 固定到该目录，使 token、锁、附件、备份、Observation 与账户成本
+  checkpoint 不会落入 Wheel 或虚拟环境目录；
 - 创建或幂等升级本地 SQLite 数据库；
 - 输出 MCP 可执行文件和 `--env-file` 的绝对路径。
 

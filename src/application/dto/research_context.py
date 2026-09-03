@@ -88,6 +88,7 @@ class ContextDecisionDTO(_DTO):
     rationale: str
     decided_at: datetime
     confirmation_mode: ConfirmationMode
+    external_note_revision_id: str | None = None
     execution_effect: Literal[False] = False
 
 

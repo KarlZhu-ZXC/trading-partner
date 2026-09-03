@@ -25,9 +25,11 @@ from application.services.activity_annotation_service import ActivityAnnotationS
 from application.services.daily_equity_materialization_service import (
     DailyEquityMaterializationService,
 )
+from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.watchlist_hub_service import WatchlistHubService
 from domain.common.ids import EntityIdPrefix
+from domain.external_note.enums import NoteSyncStatus
 from domain.operations.enums import PostMarketSyncRunStatus, PostMarketSyncStepStatus
 from domain.operations.models import PostMarketSyncRun
 from domain.performance.enums import DailyEquityMaterializationMode
@@ -50,6 +52,7 @@ class PostMarketSyncService:
         account_snapshots: AccountSnapshotRepository | None = None,
         transaction_repository: AccountTransactionRepository | None = None,
         daily_equity: DailyEquityMaterializationService | None = None,
+        external_notes: ExternalNoteSyncService | None = None,
     ) -> None:
         self._calendar = calendar
         self._repository = repository
@@ -60,10 +63,13 @@ class PostMarketSyncService:
         self._delay = timedelta(minutes=delay_minutes)
         self._schwab_oauth_health = schwab_oauth_health
         self._transactions = transactions
-        self._activity_annotations = activity_annotations
+        # Kept as a compatibility constructor argument. Unlinked Activity is
+        # read-only and no longer materializes Review Queue work.
+        _ = activity_annotations
         self._account_snapshots = account_snapshots
         self._transaction_repository = transaction_repository
         self._daily_equity = daily_equity
+        self._external_notes = external_notes
 
     async def run_if_due(self) -> PostMarketSyncResultDTO:
         now = self._clock.now()
@@ -112,6 +118,7 @@ class PostMarketSyncService:
                 run_status=latest.status if latest else None,
                 portfolio_status=latest.portfolio_status if latest else None,
                 watchlist_status=latest.watchlist_status if latest else None,
+                observation_status=latest.observation_status if latest else None,
                 attempt_count=latest.attempt_count if latest else None,
                 schwab_oauth=schwab_oauth,
                 warning_codes=tuple(
@@ -145,6 +152,7 @@ class PostMarketSyncService:
             run_status=receipt.status,
             portfolio_status=receipt.portfolio_status,
             watchlist_status=receipt.watchlist_status,
+            observation_status=receipt.observation_status,
             attempt_count=receipt.attempt_count,
             schwab_oauth=schwab_oauth,
             warning_codes=tuple(
@@ -209,12 +217,6 @@ class PostMarketSyncService:
             )
             transactions_ok = transaction_result.ok
             transaction_error_codes.extend(item.code for item in transaction_result.errors)
-            if transaction_result.ok and self._activity_annotations is not None:
-                try:
-                    self._activity_annotations.sync_unlinked(limit=500)
-                except Exception:  # noqa: BLE001 - source sync remains durable and retryable
-                    transactions_ok = False
-                    transaction_error_codes.append("UNLINKED_ACTIVITY_PROJECTION_FAILED")
         if (
             portfolio.ok
             and portfolio.data is not None
@@ -245,6 +247,16 @@ class PostMarketSyncService:
                 transactions_ok = False
                 transaction_error_codes.append("DAILY_EQUITY_MATERIALIZATION_FAILED")
         watchlist = await self._watchlist.sync_all()
+        observation_receipt = None
+        observation_error_codes: list[str] = []
+        if self._external_notes is not None:
+            try:
+                observation_receipt = await self._external_notes.sync(
+                    analyze=False,
+                    source_code="MOOMOO_NOTE",
+                )
+            except Exception:  # noqa: BLE001 - other post-market steps remain usable
+                observation_error_codes.append("POST_MARKET_OBSERVATION_SYNC_FAILED")
         completed_at = self._clock.now()
 
         portfolio_status = (
@@ -255,11 +267,22 @@ class PostMarketSyncService:
         watchlist_status = (
             PostMarketSyncStepStatus.SUCCEEDED if watchlist.ok else PostMarketSyncStepStatus.FAILED
         )
+        observation_status = (
+            None
+            if self._external_notes is None
+            else PostMarketSyncStepStatus.SUCCEEDED
+            if observation_receipt is not None
+            and observation_receipt.status is not NoteSyncStatus.FAILED
+            else PostMarketSyncStepStatus.FAILED
+        )
+        step_statuses = [portfolio_status, watchlist_status]
+        if observation_status is not None:
+            step_statuses.append(observation_status)
         status = (
             PostMarketSyncRunStatus.SUCCEEDED
-            if portfolio_status is PostMarketSyncStepStatus.SUCCEEDED and watchlist.ok
+            if all(item is PostMarketSyncStepStatus.SUCCEEDED for item in step_statuses)
             else PostMarketSyncRunStatus.FAILED
-            if portfolio_status is PostMarketSyncStepStatus.FAILED and not watchlist.ok
+            if all(item is PostMarketSyncStepStatus.FAILED for item in step_statuses)
             else PostMarketSyncRunStatus.PARTIAL
         )
         account_snapshot_ids = (
@@ -272,6 +295,13 @@ class PostMarketSyncService:
                 [item.code for item in portfolio.warnings]
                 + [item.code for item in watchlist.warnings]
                 + (
+                    list(observation_receipt.warning_codes)
+                    + list(observation_receipt.error_codes)
+                    if observation_receipt is not None
+                    and observation_status is PostMarketSyncStepStatus.SUCCEEDED
+                    else []
+                )
+                + (
                     list(schwab_oauth.warning_codes)
                     if schwab_oauth is not None
                     else []
@@ -283,6 +313,12 @@ class PostMarketSyncService:
                 [item.code for item in portfolio.errors]
                 + [item.code for item in watchlist.errors]
                 + transaction_error_codes
+                + (
+                    list(observation_receipt.error_codes)
+                    if observation_receipt is not None
+                    and observation_status is PostMarketSyncStepStatus.FAILED
+                    else observation_error_codes
+                )
             )
         )
         if status is not PostMarketSyncRunStatus.SUCCEEDED and not errors:
@@ -300,6 +336,7 @@ class PostMarketSyncService:
             status=status,
             portfolio_status=portfolio_status,
             watchlist_status=watchlist_status,
+            observation_status=observation_status,
             account_snapshot_ids=account_snapshot_ids,
             watchlist_groups_synced=(
                 watchlist.data.groups_synced
@@ -309,6 +346,22 @@ class PostMarketSyncService:
             watchlist_membership_relations_synced=(
                 watchlist.data.membership_relations_synced
                 if watchlist.ok and watchlist.data is not None
+                else None
+            ),
+            observation_notes_seen=(
+                observation_receipt.notes_seen if observation_receipt is not None else None
+            ),
+            observation_revisions_created=(
+                observation_receipt.revisions_created
+                if observation_receipt is not None
+                else None
+            ),
+            observation_full_count=(
+                observation_receipt.full_count if observation_receipt is not None else None
+            ),
+            observation_summary_only_count=(
+                observation_receipt.summary_only_count
+                if observation_receipt is not None
                 else None
             ),
             warning_codes=warnings,
@@ -348,10 +401,15 @@ class PostMarketSyncService:
             run_status=run.status,
             portfolio_status=run.portfolio_status,
             watchlist_status=run.watchlist_status,
+            observation_status=run.observation_status,
             account_snapshot_ids=run.account_snapshot_ids,
             holding_count=holding_count,
             watchlist_groups_synced=run.watchlist_groups_synced,
             watchlist_membership_relations_synced=run.watchlist_membership_relations_synced,
+            observation_notes_seen=run.observation_notes_seen,
+            observation_revisions_created=run.observation_revisions_created,
+            observation_full_count=run.observation_full_count,
+            observation_summary_only_count=run.observation_summary_only_count,
             schwab_oauth=oauth_health,
             warning_codes=tuple(
                 dict.fromkeys(

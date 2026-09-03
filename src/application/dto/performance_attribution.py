@@ -58,10 +58,14 @@ class InstrumentPerformanceDTO(_DTO):
     unrealized_pnl_before_fees: DecimalWire | None
     broker_reported_unrealized_pnl: DecimalWire | None
     broker_reported_realized_pnl: DecimalWire | None
+    dividend_income: DecimalWire | None
+    net_trading_pnl: DecimalWire | None
+    total_pnl: DecimalWire | None
     known_fees: DecimalWire
     fees_complete: bool
     matched_quantity: DecimalWire
     activity_ids: tuple[str, ...]
+    basis_checkpoint_ids: tuple[str, ...]
     snapshot_id: str | None
     warning_codes: tuple[str, ...]
 

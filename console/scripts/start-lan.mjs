@@ -31,8 +31,8 @@ if (!password) {
     process.exit(2);
   }
 }
-if (password.length < 1) {
-  console.error("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must not be empty.");
+if (password.length < 16) {
+  console.error("TRADING_PARTNER_CONSOLE_LAN_PASSWORD must contain at least 16 characters.");
   console.error("Set it directly or use an owner-only TRADING_PARTNER_CONSOLE_LAN_PASSWORD_FILE.");
   console.error("Never place the password in NEXT_PUBLIC_* or a URL.");
   process.exit(2);

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from application.dto.market import DecimalWire
 from domain.behavior.enums import BehaviorMetricAvailability
@@ -22,6 +24,8 @@ class BehaviorCohortDTO(_DTO):
     instrument_ids: tuple[str, ...] = ()
     currency: str | None = None
     classifications: tuple[TradeCycleClassification, ...] = ()
+    start: datetime | None = None
+    end: datetime | None = None
 
     @classmethod
     def from_domain(cls, value: BehaviorCohort) -> BehaviorCohortDTO:
@@ -211,6 +215,14 @@ class BehaviorSummaryQueryInput(_DTO):
     currency: str | None = Field(default=None, min_length=1, max_length=32)
     classifications: tuple[TradeCycleClassification, ...] = ()
     minimum_sample_size: int = Field(default=3, ge=0, le=100)
+    start: AwareDatetime | None = None
+    end: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_window(self) -> BehaviorSummaryQueryInput:
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("behavior summary start must be <= end")
+        return self
 
 
 __all__ = [

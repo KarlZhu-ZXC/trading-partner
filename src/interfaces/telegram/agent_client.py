@@ -1,8 +1,8 @@
-"""Telegram Bot API transport for the Shared Agent Runtime.
+"""Telegram Bot API adapter for the Shared Agent Runtime.
 
-Polling policy lives in :mod:`interfaces.telegram.agent_poller`; this module
-owns only the HTTP client and keeps the historical import path as a compatibility
-facade for local callers.
+Polling policy lives in :mod:`interfaces.telegram.agent_poller`; this sibling
+module owns the protocol-specific HTTP adapter. Keeping both at the interface
+boundary prevents infrastructure from depending back on an outer layer.
 """
 
 from __future__ import annotations

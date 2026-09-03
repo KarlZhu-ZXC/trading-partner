@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from application.services.trade_cycle_calculator import TradeCycleCalculator
+from domain.attribution.models import PositionBasisCheckpoint
 from domain.common.enums import VendorId
 from domain.portfolio.enums import (
     AccountActivityCoverageStatus,
@@ -229,3 +230,36 @@ def test_sgov_cycle_is_cash_management_not_active_trade() -> None:
     )
 
     assert result.cycles[0].classification is TradeCycleClassification.CASH_MANAGEMENT
+
+
+def test_basis_checkpoint_rebases_open_cycle_without_counting_import_as_trade() -> None:
+    checkpoint = PositionBasisCheckpoint(
+        checkpoint_id="basis_1",
+        provider=VendorId.SCHWAB,
+        account_ref="account_a",
+        instrument_id="equity:US:ABC",
+        currency="USD",
+        effective_at=T0 + timedelta(days=2),
+        quantity=Decimal("10"),
+        total_cost_basis=Decimal("900"),
+        source_type="BROKER_POSITION_IMPORT",
+        source_ref="test_import",
+        replaces_activity_id="import",
+    )
+    result = TradeCycleCalculator((checkpoint,)).calculate(
+        transactions=(
+            _trade("open", AccountTransactionSide.BUY, "3", "100", "0", day=1),
+            _trade("import", AccountTransactionSide.BUY, "10", "50", "0", day=2),
+            _trade("sell", AccountTransactionSide.SELL, "4", "120", "4", day=3),
+        ),
+        as_of=T0 + timedelta(days=30),
+        coverage_status=AccountActivityCoverageStatus.COMPLETE,
+    )
+
+    cycle = result.cycles[0]
+    assert cycle.activity_ids == ("open", "sell")
+    assert cycle.add_count == 0
+    assert cycle.ending_quantity == Decimal("6")
+    assert cycle.gross_realized_pnl == Decimal("120")
+    assert cycle.net_realized_pnl == Decimal("116")
+    assert cycle.maximum_deployed_capital == Decimal("900")

@@ -23,16 +23,24 @@ import venv
 from contextlib import closing
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+from interfaces.cli.initialize import migration_script_location
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PROBE_SCRIPT = r"""
 from __future__ import annotations
 
 import asyncio
+import os
 from importlib.util import find_spec
+from pathlib import Path
 
 from bootstrap import build_application
 from domain.common.enums import AppEnvironment, LogLevel
+import infrastructure.config.settings as settings_module
 from infrastructure.config.settings import (
     PACKAGED_A_SHARE_TRADING_CALENDAR_PATH,
     PACKAGED_CNINFO_ORG_MAP_PATH,
@@ -76,6 +84,14 @@ assert settings.vendor_chain_path == PACKAGED_VENDOR_CHAIN_PATH.resolve(), (
 )
 assert settings.app_name == "trading-partner-wheel-smoke"
 assert settings.database_url.startswith("sqlite:///")
+assert settings.runtime_root == Path(os.environ["RUNTIME_ROOT"]).resolve()
+assert settings.paths.data == settings.runtime_root / "data"
+assert settings.schwab_token_path.is_relative_to(settings.paths.secrets)
+assert settings.observation_inbox_dir.is_relative_to(settings.paths.observations)
+packaged_checkpoint = (
+    Path(settings_module.__file__).resolve().parent / "account_basis_checkpoints.yaml"
+)
+assert not packaged_checkpoint.exists()
 
 # Optional constructor sanity: packaged default still resolves without kwargs env.
 ctor = AppSettings(
@@ -151,8 +167,29 @@ def main() -> int:
 
         if sys.platform == "win32":
             init_command = venv_dir / "Scripts" / "trading-partner-init.exe"
+            notes_cookie_command = (
+                venv_dir / "Scripts" / "trading-partner-moomoo-notes-cookie.exe"
+            )
+            post_market_automation_command = (
+                venv_dir / "Scripts" / "trading-partner-us-post-market-automation.exe"
+            )
         else:
             init_command = venv_dir / "bin" / "trading-partner-init"
+            notes_cookie_command = venv_dir / "bin" / "trading-partner-moomoo-notes-cookie"
+            post_market_automation_command = (
+                venv_dir / "bin" / "trading-partner-us-post-market-automation"
+            )
+        missing_commands = tuple(
+            path
+            for path in (notes_cookie_command, post_market_automation_command)
+            if not path.is_file()
+        )
+        if missing_commands:
+            print(
+                f"installed operational commands are missing: {missing_commands}",
+                file=sys.stderr,
+            )
+            return 1
         runtime_home = work / "runtime"
         init_result = subprocess.run(
             [
@@ -179,10 +216,11 @@ def main() -> int:
             return 1
         runtime_db = runtime_home / "trading_partner.db"
         with closing(sqlite3.connect(runtime_db)) as connection:
-            revision = connection.execute(
-                "SELECT version_num FROM alembic_version"
-            ).fetchone()
-        if revision != ("0063_agent_image_attachments",):
+            revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+        alembic_config = Config()
+        alembic_config.set_main_option("script_location", str(migration_script_location()))
+        expected_heads = tuple(ScriptDirectory.from_config(alembic_config).get_heads())
+        if revision is None or revision[0] not in expected_heads or len(expected_heads) != 1:
             print(f"unexpected packaged migration head: {revision}", file=sys.stderr)
             return 1
 
@@ -208,6 +246,7 @@ def main() -> int:
                 "MCP_SERVER_NAME": "trading-partner-wheel-smoke",
                 "DEFAULT_TIMEZONE": "UTC",
                 "PROVIDER_TIMEOUT_SECONDS": "5.0",
+                "RUNTIME_ROOT": str(runtime_home),
             }
         )
 

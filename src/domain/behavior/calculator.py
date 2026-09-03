@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from decimal import Decimal
 
 from domain.behavior.enums import BehaviorMetricAvailability
@@ -109,6 +110,8 @@ class BehaviorSummaryCalculator:
         cycle_decision_links: Mapping[str, tuple[str, ...]] | None = None,
         cycle_plan_links: Mapping[str, tuple[tuple[str, int], ...]] | None = None,
         activity_annotations: tuple[ActivityAnnotation, ...] | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> BehaviorSummary:
         """Return one deterministic summary.
 
@@ -136,6 +139,8 @@ class BehaviorSummaryCalculator:
             instrument_id=instrument_id,
             currency=currency,
             classifications=classifications,
+            start=start,
+            end=end,
         )
         ordered_cycles = tuple(sorted(cycles, key=lambda item: item.cycle_id))
         ordered_decisions = tuple(sorted(decisions, key=lambda item: item.decision_id))
@@ -161,11 +166,21 @@ class BehaviorSummaryCalculator:
         if plan_links is None:
             plan_links = annotation_plan_links
 
+        visible_decisions = tuple(
+            item
+            for item in ordered_decisions
+            if selected_cohort.end is None or item.decided_at <= selected_cohort.end
+        )
+        cohort_decisions = tuple(
+            item for item in visible_decisions if self._decision_in_cohort(item, selected_cohort)
+        )
         selected_decisions = tuple(
-            item for item in ordered_decisions if self._decision_in_cohort(item, selected_cohort)
+            item
+            for item in cohort_decisions
+            if selected_cohort.start is None or item.decided_at >= selected_cohort.start
         )
         cycle_link_decisions = (
-            ordered_decisions if selected_cohort.horizon is not None else selected_decisions
+            visible_decisions if selected_cohort.horizon is not None else cohort_decisions
         )
         selected_cycles, cohort_excluded = self._select_cycles(
             ordered_cycles,
@@ -369,7 +384,7 @@ class BehaviorSummaryCalculator:
         plan_metric = self._coverage_metric(
             "plan_coverage",
             closed_active,
-            selected_decisions,
+            cohort_decisions,
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
@@ -382,7 +397,7 @@ class BehaviorSummaryCalculator:
         decision_metric = self._coverage_metric(
             "pre_fill_decision_coverage",
             closed_active,
-            selected_decisions,
+            cohort_decisions,
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
@@ -396,7 +411,7 @@ class BehaviorSummaryCalculator:
         invalidation_metric = self._coverage_metric(
             "pre_fill_invalidation_proxy",
             closed_active,
-            selected_decisions,
+            cohort_decisions,
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
@@ -421,7 +436,7 @@ class BehaviorSummaryCalculator:
         )
         third_metric = self._third_attempt_metric(
             selected_cycles,
-            selected_decisions,
+            cohort_decisions,
             ordered_findings,
             cohort_excluded=cohort_excluded,
             minimum_sample_size=min_sample,
@@ -436,7 +451,7 @@ class BehaviorSummaryCalculator:
         )
         no_action_count, no_action_review = self._no_action_metrics(
             selected_decisions,
-            ordered_decisions,
+            visible_decisions,
             selected_cycles,
             minimum_sample_size=min_sample,
             decision_links=decision_links,
@@ -509,6 +524,8 @@ class BehaviorSummaryCalculator:
         instrument_id: str | None,
         currency: str | None,
         classifications: tuple[TradeCycleClassification, ...],
+        start: datetime | None,
+        end: datetime | None,
     ) -> BehaviorCohort:
         base = cohort or BehaviorCohort()
         selected_instruments = instrument_ids or base.instrument_ids
@@ -523,6 +540,8 @@ class BehaviorSummaryCalculator:
             instrument_ids=tuple(selected_instruments),
             currency=currency if currency is not None else base.currency,
             classifications=classifications or base.classifications,
+            start=start if start is not None else base.start,
+            end=end if end is not None else base.end,
         )
 
     @staticmethod
@@ -553,6 +572,16 @@ class BehaviorSummaryCalculator:
         selected: list[TradeCycle] = []
         excluded: dict[str, str] = {}
         for cycle in cycles:
+            cycle_at = cycle.closed_at or cycle.opened_at
+            if cycle_at is None and (cohort.start is not None or cohort.end is not None):
+                excluded[cycle.cycle_id] = "COHORT_DATE_UNAVAILABLE"
+                continue
+            if cohort.start is not None and cycle_at is not None and cycle_at < cohort.start:
+                excluded[cycle.cycle_id] = "COHORT_DATE_BEFORE_START"
+                continue
+            if cohort.end is not None and cycle_at is not None and cycle_at > cohort.end:
+                excluded[cycle.cycle_id] = "COHORT_DATE_AFTER_END"
+                continue
             if cohort.instrument_ids and cycle.instrument_id not in cohort.instrument_ids:
                 excluded[cycle.cycle_id] = "COHORT_INSTRUMENT_MISMATCH"
                 continue
@@ -1029,9 +1058,17 @@ class BehaviorSummaryCalculator:
             (abs(item.net_realized_pnl or Decimal(0)) for item in valid_losses),
             Decimal(0),
         )
+        average_win = (
+            gross_wins / Decimal(len(valid_wins)) if valid_wins else Decimal(0)
+        )
+        average_loss = (
+            gross_losses / Decimal(len(valid_losses)) if valid_losses else Decimal(0)
+        )
         value = (
-            gross_wins / gross_losses
-            if len(valid_losses) >= minimum_sample_size and gross_losses != 0
+            average_win / average_loss
+            if len(valid_wins) >= minimum_sample_size
+            and len(valid_losses) >= minimum_sample_size
+            and average_loss != 0
             else None
         )
         return cls._scalar_metric(
@@ -1045,6 +1082,10 @@ class BehaviorSummaryCalculator:
             exclusion_reasons=pnl_reasons,
             minimum_sample_size=minimum_sample_size,
             native_currencies=currencies,
+            note=(
+                "Payoff ratio is average winning-cycle P/L divided by absolute "
+                "average losing-cycle P/L."
+            ),
         )
 
     @classmethod

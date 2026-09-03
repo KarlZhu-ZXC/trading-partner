@@ -246,11 +246,28 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         currency: str | None = None,
         classifications: tuple[str, ...] = (),
         minimum_sample_size: int = 3,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> dict[str, Any]:
         """Calculate explainable behavior metrics without an aggregate score."""
 
         try:
-            request = BehaviorSummaryQueryInput.model_validate(locals())
+            request = BehaviorSummaryQueryInput.model_validate(
+                {
+                    "case_id": case_id,
+                    "providers": providers,
+                    "account_refs": account_refs,
+                    "instrument_ids": instrument_ids,
+                    "strategy_code": strategy_code,
+                    "strategy_version": strategy_version,
+                    "horizon": horizon,
+                    "currency": currency,
+                    "classifications": classifications,
+                    "minimum_sample_size": minimum_sample_size,
+                    "start": start,
+                    "end": end,
+                }
+            )
             return container.services.account_transactions.get_behavior_summary(
                 request
             ).model_dump(mode="json")

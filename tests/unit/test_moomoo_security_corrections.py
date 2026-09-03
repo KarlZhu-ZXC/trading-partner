@@ -19,6 +19,14 @@ def test_tracked_correction_file_contains_audited_spg_override() -> None:
     assert correction.display_name == "Simon Property Group, Inc."
 
 
+def test_tracked_correction_file_identifies_soxl_as_an_etf() -> None:
+    correction = MoomooSecurityCorrections.load_default().for_code("US.SOXL")
+
+    assert correction is not None
+    assert correction.asset_type is AssetType.ETF
+    assert correction.display_name == "Direxion Daily Semiconductor Bull 3X Shares"
+
+
 def test_correction_file_rejects_unknown_fields(tmp_path: Path) -> None:
     path = tmp_path / "corrections.yaml"
     path.write_text(

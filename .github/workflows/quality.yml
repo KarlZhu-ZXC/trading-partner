@@ -11,21 +11,20 @@ concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  quality:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+env:
+  APP_NAME: trading-partner-ci
+  APP_ENV: test
+  LOG_LEVEL: INFO
+  DATABASE_URL: sqlite:////tmp/trading-partner-ci.db
+  MCP_SERVER_NAME: trading-partner-ci
+  DEFAULT_TIMEZONE: UTC
+  PROVIDER_TIMEOUT_SECONDS: "5"
+  FRED_API_KEY: ""
 
-    env:
-      APP_NAME: trading-partner-ci
-      APP_ENV: test
-      LOG_LEVEL: INFO
-      DATABASE_URL: sqlite:////tmp/trading-partner-ci.db
-      MCP_SERVER_NAME: trading-partner-ci
-      DEFAULT_TIMEZONE: UTC
-      PROVIDER_TIMEOUT_SECONDS: "5"
-      # Explicit empty secrets — never set real keys in CI.
-      FRED_API_KEY: ""
+jobs:
+  security-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -60,11 +59,46 @@ jobs:
           --output-format JSON
           --output-file trading-partner-python.cdx.json
 
+      - name: Upload Python SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: trading-partner-python-sbom
+          path: trading-partner-python.cdx.json
+          if-no-files-found: error
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv (Python 3.13)
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
       - name: Ruff
         run: uv run ruff check .
 
       - name: Mypy
         run: uv run mypy src
+
+      - name: Full pytest with coverage floor
+        run: uv run pytest --cov --cov-report=term
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Set up Node.js for local console
         uses: actions/setup-node@v7
@@ -91,31 +125,42 @@ jobs:
         working-directory: console
         run: >-
           npm sbom --package-lock-only --sbom-format cyclonedx
-          --sbom-type application > ../trading-partner-console.cdx.json
+          --sbom-type application > trading-partner-console.cdx.json
 
-      - name: Upload SBOMs
+      - name: Upload Console SBOM
         uses: actions/upload-artifact@v7
         with:
-          name: trading-partner-sboms
-          path: |
-            trading-partner-python.cdx.json
-            trading-partner-console.cdx.json
+          name: trading-partner-console-sbom
+          path: console/trading-partner-console.cdx.json
           if-no-files-found: error
 
-      - name: Full pytest with coverage floor
-        run: uv run pytest --cov --cov-report=term
+  packaging-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv (Python 3.13)
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
 
       - name: Isolated wheel smoke
         run: uv run python scripts/smoke_isolated_wheel.py
 
-      - name: Alembic upgrade → downgrade -1 → upgrade (isolated SQLite)
+      - name: Alembic forward-only idempotency (isolated SQLite)
         env:
           DATABASE_URL: sqlite:////tmp/trading-partner-alembic-rt.db
         run: |
           set -euo pipefail
           rm -f /tmp/trading-partner-alembic-rt.db
           uv run alembic upgrade head
-          uv run alembic downgrade -1
           uv run alembic upgrade head
 
       - name: Phase 1B data-preservation migration test

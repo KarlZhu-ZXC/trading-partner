@@ -67,11 +67,20 @@ class SqlAlchemyPostMarketSyncRunRepository:
                     status=run.status.value,
                     portfolio_status=run.portfolio_status.value,
                     watchlist_status=run.watchlist_status.value,
+                    observation_status=(
+                        run.observation_status.value
+                        if run.observation_status is not None
+                        else None
+                    ),
                     account_snapshot_ids=run.account_snapshot_ids,
                     watchlist_groups_synced=run.watchlist_groups_synced,
                     watchlist_membership_relations_synced=(
                         run.watchlist_membership_relations_synced
                     ),
+                    observation_notes_seen=run.observation_notes_seen,
+                    observation_revisions_created=run.observation_revisions_created,
+                    observation_full_count=run.observation_full_count,
+                    observation_summary_only_count=run.observation_summary_only_count,
                     warning_codes=run.warning_codes,
                     error_codes=run.error_codes,
                     attempt_count=run.attempt_count,
@@ -84,11 +93,20 @@ class SqlAlchemyPostMarketSyncRunRepository:
                 row.status = run.status.value
                 row.portfolio_status = run.portfolio_status.value
                 row.watchlist_status = run.watchlist_status.value
+                row.observation_status = (
+                    run.observation_status.value
+                    if run.observation_status is not None
+                    else None
+                )
                 row.account_snapshot_ids = run.account_snapshot_ids
                 row.watchlist_groups_synced = run.watchlist_groups_synced
                 row.watchlist_membership_relations_synced = (
                     run.watchlist_membership_relations_synced
                 )
+                row.observation_notes_seen = run.observation_notes_seen
+                row.observation_revisions_created = run.observation_revisions_created
+                row.observation_full_count = run.observation_full_count
+                row.observation_summary_only_count = run.observation_summary_only_count
                 row.warning_codes = run.warning_codes
                 row.error_codes = run.error_codes
                 row.attempt_count = run.attempt_count
@@ -105,11 +123,20 @@ class SqlAlchemyPostMarketSyncRunRepository:
             status=PostMarketSyncRunStatus(row.status),
             portfolio_status=PostMarketSyncStepStatus(row.portfolio_status),
             watchlist_status=PostMarketSyncStepStatus(row.watchlist_status),
+            observation_status=(
+                PostMarketSyncStepStatus(row.observation_status)
+                if row.observation_status is not None
+                else None
+            ),
             account_snapshot_ids=row.account_snapshot_ids,
             watchlist_groups_synced=row.watchlist_groups_synced,
             watchlist_membership_relations_synced=(
                 row.watchlist_membership_relations_synced
             ),
+            observation_notes_seen=row.observation_notes_seen,
+            observation_revisions_created=row.observation_revisions_created,
+            observation_full_count=row.observation_full_count,
+            observation_summary_only_count=row.observation_summary_only_count,
             warning_codes=row.warning_codes,
             error_codes=row.error_codes,
             attempt_count=row.attempt_count,

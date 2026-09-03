@@ -105,6 +105,7 @@ class ResearchContextBuilder:
                         rationale=_clip(item.rationale, 1_000),
                         decided_at=item.decided_at,
                         confirmation_mode=item.confirmation_mode,
+                        external_note_revision_id=item.external_note_revision_id,
                         execution_effect=False,
                     )
                     for item in uow.decisions.list_by_subject(subject.subject_id, as_of=now)[-10:]

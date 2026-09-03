@@ -20,6 +20,7 @@ from infrastructure.persistence.repositories._mapping import (
 )
 from infrastructure.persistence.repositories._research_memory_validation import (
     require_evidence_ids_linked_and_visible,
+    require_external_note_revision_visible,
     require_idempotency_storage,
     require_instruments_exist,
     require_report_ids_visible,
@@ -54,6 +55,7 @@ def _to_domain(row: DecisionRecordRow) -> DecisionRecord:
         trade_plan_id=row.trade_plan_id,
         trade_plan_version=row.trade_plan_version,
         review_due_at=dt_opt_from_db(row.review_due_at, field_name="review_due_at"),
+        external_note_revision_id=row.external_note_revision_id,
     )
 
 
@@ -88,6 +90,7 @@ def _to_row(
         trade_plan_id=decision.trade_plan_id,
         trade_plan_version=decision.trade_plan_version,
         review_due_at=dt_opt_to_db(decision.review_due_at),
+        external_note_revision_id=decision.external_note_revision_id,
     )
 
 
@@ -130,6 +133,12 @@ class SqlAlchemyDecisionRecordRepository:
             self._session,
             subject_id=decision.subject_id,
             thesis_revision_ids=decision.thesis_revision_ids,
+            visible_at=decision.recorded_at,
+        )
+        require_external_note_revision_visible(
+            self._session,
+            subject_id=decision.subject_id,
+            external_note_revision_id=decision.external_note_revision_id,
             visible_at=decision.recorded_at,
         )
         if decision.supersedes_decision_id is not None:

@@ -3,28 +3,78 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ClipboardPenLine, RefreshCw } from "lucide-react";
-import { ErrorNote, ActionButton, Badge, Card, ConfirmationDialog, DataBoundary, Empty, FormField, HorizontalTabs, PageActionMenu, Paginator, TextInputDialog, formatDate, shortId } from "../components/ui";
+import { ErrorNote, ActionButton, Badge, Card, ConfirmationDialog, DataBoundary, Disclosure, Empty, FormField, HorizontalTabs, PageActionMenu, Paginator, QuickLink, SortableTableHeader, TextInputDialog, formatDate, formatDecimal, shortId } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
-import { envelopeData, listOf, postApi, useApi } from "../lib/api";
+import { MultiSelectAutosuggest, type AutosuggestOption } from "../components/multi-select-autosuggest";
+import { envelopeData, getJson, listOf, postApi, useApi } from "../lib/api";
 import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
 import { useAgentPageContext } from "../lib/agent-page-context";
+import { ObservationInbox } from "./observation-inbox";
+import { RetroReviewList } from "./retro-review-list";
+import { ScenarioDigest } from "./scenario-digest";
+import { CycleAdjustmentEditor } from "./cycle-adjustment-editor";
 
 type Dict = Record<string, unknown>;
+
+type JournalWorkbenchResponse = {
+  selected_subject_id?: unknown;
+  subjects?: SubjectAggregate[];
+  partial_failures?: string[];
+  review_items?: Dict[];
+  review_item_metrics?: Dict;
+  activity_annotations?: Dict[];
+  order_intents?: Dict[];
+  behavior_review_runs?: Dict[];
+  accounts?: unknown;
+  behavior?: unknown;
+  performance_series?: unknown;
+  timeline?: unknown;
+  trade_cycles?: unknown;
+  transactions?: unknown;
+};
+
+type ObservationInboxResponse = {
+  data?: {
+    external_notes?: Dict[];
+    observation_sources?: Dict[];
+  };
+};
 type SubjectAggregate = { subject?: Dict; state?: Dict };
 type NextStep = { key: string; severity: string; title: string; detail: string; href: string; reviewItem?: Dict };
 type ReviewInput = { kind: "resolution" | "due"; item: Dict; status: "ACKNOWLEDGED" | "RESOLVED" };
+type WeeklyReviewPreview = { start: string; end: string; nextStart: string; nextEnd: string };
 type DecisionAction = "watch" | "no_action" | "initiate_intent" | "add_intent" | "hold" | "reduce_intent" | "exit_intent" | "avoid" | "research_more";
 type DecisionScenario = "UPSIDE" | "SIDEWAYS" | "PULLBACK" | "INVALIDATION";
-type JournalTab = "overview" | "timeline" | "cycles" | "behavior" | "reviews";
-type ActivityStatus = "LINKED_DECISION_PLAN" | "UNPLANNED" | "CASH_MANAGEMENT" | "TRANSFER_OR_CORPORATE_ACTION" | "PROVIDER_CORRECTION";
+type JournalTab = "overview" | "cycles" | "behavior" | "notes" | "reviews" | "timeline";
+type PeriodFilter = "ALL" | "30D" | "90D" | "YTD" | "CUSTOM";
 type ActivityClassification = "ACTIVE_TRADE" | "LONG_TERM_INVESTMENT" | "HEDGE" | "CASH_MANAGEMENT" | "TRANSFER_OR_ADMIN" | "UNCLASSIFIED";
+type CycleStatusFilter = "OPEN" | "CLOSED" | "UNRESOLVED";
+type CycleSortMode = "LATEST_DESC" | "LATEST_ASC" | "OPENED_DESC" | "OPENED_ASC" | "INSTRUMENT_ASC" | "INSTRUMENT_DESC";
+type InstrumentTableSortKey = "instrument" | "fills" | "bought" | "sold" | "accounts" | "closedCycles" | "knownPnl" | "lastTradeAt";
+type InstrumentTableSort = { key: InstrumentTableSortKey; direction: "asc" | "desc" };
+type InstrumentTradeRow = {
+  instrument: string;
+  fills: number;
+  bought: number;
+  sold: number;
+  accounts: number;
+  closedCycles: number;
+  knownPnl: number;
+  pnlCycles: number;
+  firstTradeAt: string;
+  lastTradeAt: string;
+};
+
+const INSTRUMENT_TABLE_PAGE_SIZE = 15;
+const TIMELINE_PAGE_SIZE = 50;
 
 const JOURNAL_TABS: Array<{ id: JournalTab; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "timeline", label: "Timeline" },
   { id: "cycles", label: "Trade Cycles" },
   { id: "behavior", label: "Behavior" },
+  { id: "notes", label: "Notes" },
   { id: "reviews", label: "Reviews" },
+  { id: "timeline", label: "Timeline" },
 ];
 
 const DECISION_ACTIONS: Array<{ value: DecisionAction; label: string }> = [
@@ -40,6 +90,19 @@ const DECISION_ACTIONS: Array<{ value: DecisionAction; label: string }> = [
 ];
 
 const DECISION_SCENARIOS: DecisionScenario[] = ["UPSIDE", "SIDEWAYS", "PULLBACK", "INVALIDATION"];
+const CLASSIFICATION_OPTIONS: AutosuggestOption[] = [
+  { value: "ACTIVE_TRADE", label: "Active Trade" },
+  { value: "LONG_TERM_INVESTMENT", label: "Long-Term Investment" },
+  { value: "HEDGE", label: "Hedge" },
+  { value: "CASH_MANAGEMENT", label: "Cash Management" },
+  { value: "TRANSFER_OR_ADMIN", label: "Transfer or Admin" },
+  { value: "UNCLASSIFIED", label: "Unclassified" },
+];
+const CYCLE_STATUS_OPTIONS: AutosuggestOption[] = [
+  { value: "OPEN", label: "Open", description: "Position quantity remains above zero." },
+  { value: "CLOSED", label: "Closed", description: "Matched activity returned quantity to zero." },
+  { value: "UNRESOLVED", label: "Unresolved", description: "Available history cannot reconstruct a valid long-only Cycle." },
+];
 
 function asDict(value: unknown): Dict {
   return value && typeof value === "object" ? value as Dict : {};
@@ -56,6 +119,98 @@ function upper(value: unknown, fallback = "UNKNOWN"): string {
 function number(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function periodStart(filter: PeriodFilter): number | null {
+  if (filter === "ALL" || filter === "CUSTOM") return null;
+  const now = new Date();
+  if (filter === "YTD") return new Date(now.getFullYear(), 0, 1).getTime();
+  const days = filter === "30D" ? 30 : 90;
+  now.setHours(0, 0, 0, 0);
+  now.setDate(now.getDate() - days);
+  return now.getTime();
+}
+
+function dateInputValue(value = new Date()): string {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+function startOfDayIsoOrNull(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function cycleReviewTime(cycle: Dict): number {
+  return Date.parse(text(cycle.closed_at, text(cycle.opened_at, ""))) || 0;
+}
+
+function cyclePageSizeForViewport(width: number, height: number): 4 | 6 | 8 | 10 {
+  if (width <= 700 || height < 760) return 4;
+  if (height < 930) return 6;
+  if (height < 1_100) return 8;
+  return 10;
+}
+
+function formatMoney(value: number, currency = "USD"): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function journalReviewTitle(value: unknown): string {
+  return text(value, "Review required").replace(/^Trade Retro\b/i, "Period Review");
+}
+
+function cyclePnlPresentation(cycle: Dict): {
+  label: string;
+  value: string;
+  detail: string | null;
+  tone: "positive" | "negative" | "";
+} {
+  const currency = text(cycle.currency, "USD");
+  if (cycle.net_realized_pnl != null) {
+    const value = number(cycle.net_realized_pnl);
+    return {
+      label: "Net P/L",
+      value: formatMoney(value, currency),
+      detail: "After known fees",
+      tone: value < 0 ? "negative" : value > 0 ? "positive" : "",
+    };
+  }
+  if (cycle.gross_realized_pnl != null) {
+    const value = number(cycle.gross_realized_pnl);
+    return {
+      label: "Gross P/L",
+      value: formatMoney(value, currency),
+      detail: "Fees unavailable",
+      tone: value < 0 ? "negative" : value > 0 ? "positive" : "",
+    };
+  }
+  return { label: "P/L", value: "Unavailable", detail: null, tone: "" };
+}
+
+function cycleStatusTone(value: unknown): "good" | "bad" | "neutral" {
+  const status = upper(value);
+  if (status === "OPEN") return "good";
+  if (status === "UNRESOLVED") return "bad";
+  return "neutral";
+}
+
+function cycleQualityTone(value: unknown): "good" | "warn" | "neutral" {
+  const quality = upper(value);
+  if (quality === "COMPLETE") return "good";
+  if (quality === "INCOMPLETE") return "warn";
+  return "neutral";
+}
+
+function cycleClassificationTone(value: unknown): "good" | "warn" | "neutral" {
+  const classification = upper(value);
+  if (["ACTIVE_TRADE", "LONG_TERM_INVESTMENT"].includes(classification)) return "good";
+  if (classification === "UNCLASSIFIED") return "warn";
+  return "neutral";
 }
 
 function futureDateInput(days: number): string {
@@ -105,34 +260,200 @@ function StepList({ items, busy, onTransition }: { items: NextStep[]; busy: stri
   return <div className="decision-next-list">{items.map((item) => <article key={item.key}><Link href={item.href}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>{item.reviewItem ? <div className="review-item-actions"><ActionButton busy={busy === item.reviewItem.review_item_id} onClick={() => onTransition(item.reviewItem!, "ACKNOWLEDGED")}>{upper(item.reviewItem.status) === "ACKNOWLEDGED" ? "Update Due" : "Acknowledge"}</ActionButton><ActionButton busy={busy === item.reviewItem.review_item_id} tone="warning" onClick={() => onTransition(item.reviewItem!, "RESOLVED")}>Resolve</ActionButton></div> : null}</article>)}</div>;
 }
 
-const BEHAVIOR_DETAILS = [
-  "win_rate", "avg_win", "avg_loss", "payoff_ratio", "average_holding_duration",
-  "median_holding_duration", "turnover", "plan_coverage", "pre_fill_decision_coverage",
-  "pre_fill_invalidation_proxy", "invalidation_adherence", "same_day_reentry",
-  "entry_attempt_count", "third_attempt_without_new_plan", "add_confirmation_risk_control",
-  "planned_holding_period_mismatch", "no_action_review_completion",
+const BEHAVIOR_PRIMARY_METRICS = [
+  { name: "closed_active_trade_cycles", label: "Closed Active Cycles", kind: "count" },
+  { name: "win_rate", label: "Win Rate", kind: "rate" },
+  { name: "payoff_ratio", label: "Payoff Ratio", kind: "payoff" },
+  { name: "plan_coverage", label: "Plan Coverage", kind: "rate" },
+  { name: "pre_fill_decision_coverage", label: "Pre-Fill Decision Coverage", kind: "rate" },
+] as const;
+
+const BEHAVIOR_SECONDARY_METRICS = [
+  "wins", "losses", "flat", "avg_win", "avg_loss", "average_holding_duration",
+  "median_holding_duration", "turnover", "pre_fill_invalidation_proxy",
+  "invalidation_adherence", "same_day_reentry", "entry_attempt_count",
+  "same_entry_logic_attempt_count", "third_attempt_without_new_plan",
+  "add_confirmation_risk_control", "planned_holding_period_mismatch",
+  "no_action_count", "no_action_review_completion",
 ];
 
-function behaviorPercent(metric: Dict): string {
-  return metric.value == null ? "—" : `${(number(metric.value) * 100).toFixed(1)}%`;
+const BEHAVIOR_RATE_METRICS = new Set([
+  "win_rate", "plan_coverage", "pre_fill_decision_coverage",
+  "pre_fill_invalidation_proxy", "invalidation_adherence", "same_day_reentry",
+  "third_attempt_without_new_plan", "add_confirmation_risk_control",
+  "planned_holding_period_mismatch", "no_action_review_completion",
+]);
+const BEHAVIOR_MONEY_METRICS = new Set(["avg_win", "avg_loss"]);
+const BEHAVIOR_DURATION_METRICS = new Set(["average_holding_duration", "median_holding_duration"]);
+const BEHAVIOR_AVERAGE_METRICS = new Set(["entry_attempt_count"]);
+
+type BehaviorMetricPresentation = {
+  result: string;
+  formula: string;
+  status: "AVAILABLE" | "LIMITED" | "UNAVAILABLE" | "NOT_SUPPORTED" | "INCONSISTENT";
+};
+
+function metricNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function metricInteger(value: unknown): string {
+  const parsed = metricNumber(value);
+  return parsed == null ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(parsed);
+}
+
+function metricLabel(name: string): string {
+  return name.replaceAll(":", " · ").split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function exclusionLabel(code: string): string {
+  const known: Record<string, string> = {
+    FEES_UNAVAILABLE: "Fees unavailable",
+    CYCLE_INCOMPLETE: "Incomplete Cycle",
+    CLASSIFICATION_EXCLUDED: "Classification excluded",
+    MISSING_PLAN: "No eligible pre-period Plan",
+    MISSING_DECISION: "No eligible pre-fill Decision",
+  };
+  return known[code] ?? metricLabel(code);
+}
+
+function metricCurrency(metric: Dict): string {
+  const currencies = listOf<string>(metric, "native_currencies");
+  return currencies.length === 1 ? currencies[0] : "USD";
+}
+
+function metricMoney(value: unknown, metric: Dict): string {
+  const parsed = metricNumber(value);
+  if (parsed == null) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: metricCurrency(metric),
+    maximumFractionDigits: 2,
+  }).format(parsed);
+}
+
+function metricDuration(value: unknown): string {
+  const seconds = metricNumber(value);
+  if (seconds == null) return "—";
+  const days = seconds / 86_400;
+  return days >= 1 ? `${days.toFixed(1)}d` : `${(seconds / 3_600).toFixed(1)}h`;
+}
+
+function metricBaseStatus(metric: Dict): BehaviorMetricPresentation["status"] {
+  const availability = upper(metric.availability, "AVAILABLE");
+  if (availability === "NOT_SUPPORTED") return "NOT_SUPPORTED";
+  if (availability !== "AVAILABLE") return "UNAVAILABLE";
+  if (metric.sample_sufficient === false) return "LIMITED";
+  return metric.value == null ? "UNAVAILABLE" : "AVAILABLE";
+}
+
+function ratePresentation(metric: Dict): BehaviorMetricPresentation {
+  const numerator = metricNumber(metric.numerator);
+  const denominator = metricNumber(metric.denominator);
+  const wireValue = metricNumber(metric.value);
+  const formula = `${metricInteger(metric.numerator)} ÷ ${metricInteger(metric.denominator)}`;
+  const status = metricBaseStatus(metric);
+  if (status !== "AVAILABLE" || numerator == null || denominator == null || denominator <= 0 || wireValue == null) {
+    return { result: "—", formula, status };
+  }
+  const calculated = numerator / denominator;
+  if (Math.abs(calculated - wireValue) > 1e-9) {
+    return { result: "—", formula: `${formula} · payload value does not match`, status: "INCONSISTENT" };
+  }
+  return { result: `${(calculated * 100).toFixed(1)}%`, formula: `${formula} = ${(calculated * 100).toFixed(1)}%`, status };
+}
+
+function payoffPresentation(summary: Dict): BehaviorMetricPresentation {
+  const payoff = asDict(summary.payoff_ratio);
+  const avgWin = asDict(summary.avg_win);
+  const avgLoss = asDict(summary.avg_loss);
+  const win = metricNumber(avgWin.value);
+  const loss = Math.abs(metricNumber(avgLoss.value) ?? 0);
+  const wireValue = metricNumber(payoff.value);
+  const formula = `${metricMoney(avgWin.value, avgWin)} avg win ÷ ${metricMoney(loss || null, avgLoss)} avg loss`;
+  const status = metricBaseStatus(payoff);
+  if (status !== "AVAILABLE" || win == null || loss <= 0 || wireValue == null) {
+    return { result: "—", formula, status };
+  }
+  const calculated = win / loss;
+  if (Math.abs(calculated - wireValue) > 1e-9) {
+    return { result: "—", formula: `${formula} · payload value does not match`, status: "INCONSISTENT" };
+  }
+  return { result: calculated.toFixed(2), formula: `${formula} = ${calculated.toFixed(2)}`, status };
+}
+
+function countPresentation(metric: Dict): BehaviorMetricPresentation {
+  const status = metricBaseStatus(metric);
+  return {
+    result: metricInteger(metric.numerator),
+    formula: `${metricInteger(metric.numerator)} counted ÷ ${metricInteger(metric.denominator)} selected`,
+    status,
+  };
+}
+
+function secondaryMetricPresentation(name: string, metric: Dict): BehaviorMetricPresentation {
+  const status = metricBaseStatus(metric);
+  if (status === "NOT_SUPPORTED" || status === "UNAVAILABLE") return {
+    result: "—",
+    formula: "Not computable from current durable facts",
+    status,
+  };
+  if (BEHAVIOR_RATE_METRICS.has(name)) return ratePresentation(metric);
+  if (BEHAVIOR_MONEY_METRICS.has(name)) return {
+    result: status === "AVAILABLE" ? metricMoney(metric.value, metric) : "—",
+    formula: `${metricMoney(metric.numerator, metric)} total ÷ ${metricInteger(metric.denominator)} Cycles`,
+    status,
+  };
+  if (BEHAVIOR_DURATION_METRICS.has(name)) return {
+    result: status === "AVAILABLE" ? metricDuration(metric.value) : "—",
+    formula: name === "median_holding_duration"
+      ? `Median of ${metricInteger(metric.denominator)} Cycles`
+      : `${metricDuration(metric.numerator)} total ÷ ${metricInteger(metric.denominator)} Cycles`,
+    status,
+  };
+  if (BEHAVIOR_AVERAGE_METRICS.has(name)) {
+    const average = metricNumber(metric.value);
+    return {
+      result: status === "AVAILABLE" && average != null ? average.toFixed(2) : "—",
+      formula: `${metricInteger(metric.numerator)} attempts ÷ ${metricInteger(metric.denominator)} Cycles${average == null ? "" : ` = ${average.toFixed(2)}`}`,
+      status,
+    };
+  }
+  return {
+    result: status === "AVAILABLE" ? metricInteger(metric.value) : "—",
+    formula: metric.denominator == null
+      ? `${metricInteger(metric.numerator)} observations`
+      : `${metricInteger(metric.numerator)} ÷ ${metricInteger(metric.denominator)}`,
+    status,
+  };
 }
 
 function BehaviorPanel({ value }: { value: Dict }) {
   if (Object.keys(value).length === 0) return <Empty>Behavior summary is unavailable.</Empty>;
-  const winRate = asDict(value.win_rate);
-  const planCoverage = asDict(value.plan_coverage);
-  const decisionCoverage = asDict(value.pre_fill_decision_coverage);
-  const noActionReview = asDict(value.no_action_review_completion);
+  const primary = BEHAVIOR_PRIMARY_METRICS.map((item) => {
+    const metric = asDict(value[item.name]);
+    const presentation = item.kind === "rate"
+      ? ratePresentation(metric)
+      : item.kind === "payoff"
+        ? payoffPresentation(value)
+        : countPresentation(metric);
+    return { ...item, metric, presentation };
+  });
+  const scenarioMetrics = listOf<Dict>(value, "scenario_action_distribution");
+  const secondary = [
+    ...BEHAVIOR_SECONDARY_METRICS.map((name) => ({ name, metric: asDict(value[name]) })),
+    ...scenarioMetrics.map((metric) => ({ name: text(metric.name, "scenario_action"), metric })),
+  ];
   return <>
-    <div className="decision-metrics">
-      <span>Closed Active Cycles<strong>{text(asDict(value.closed_active_trade_cycles).numerator, "0")}</strong></span>
-      <span>Win Rate<strong>{behaviorPercent(winRate)}</strong><small>{text(winRate.numerator, "0")} / {text(winRate.denominator, "0")}</small></span>
-      <span>Payoff Ratio<strong>{text(asDict(value.payoff_ratio).value)}</strong></span>
-      <span>Plan Coverage<strong>{behaviorPercent(planCoverage)}</strong><small>{text(planCoverage.numerator, "0")} / {text(planCoverage.denominator, "0")}</small></span>
-      <span>Pre-Fill Decision Coverage<strong>{behaviorPercent(decisionCoverage)}</strong></span>
-      <span>No Action Reviews Completed<strong>{behaviorPercent(noActionReview)}</strong></span>
-    </div>
-    <details><summary>All Metrics, Denominators & Exclusions</summary><div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Numerator / Denominator</th><th>Excluded</th><th>Availability</th></tr></thead><tbody>{BEHAVIOR_DETAILS.map((name) => { const metric = asDict(value[name]); return <tr key={name}><td>{name.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")}</td><td>{text(metric.value)}</td><td>{text(metric.numerator)} / {text(metric.denominator)}</td><td>{text(metric.excluded_count, "0")}</td><td>{metric.unavailable_reason ? text(metric.unavailable_reason) : <Badge value={metric.sample_sufficient === true ? "SUFFICIENT" : "LIMITED"} />}</td></tr>; })}</tbody></table></div></details>
+    <div className="behavior-primary-grid">{primary.map(({ name, label, metric, presentation }) => <article key={name}>
+      <header><span>{label}</span><Badge value={presentation.status} tone={presentation.status === "AVAILABLE" ? "good" : presentation.status === "INCONSISTENT" ? "bad" : "warn"} /></header>
+      <strong>{presentation.result}</strong>
+      <code>{presentation.formula}</code>
+      <small>{metricInteger(metric.excluded_count)} excluded · minimum sample {metricInteger(metric.minimum_sample_size)}</small>
+    </article>)}</div>
+    <Disclosure variant="compact" title="Other Metrics & Audit Details" meta={`${secondary.length} METRICS`}><div className="table-wrap behavior-audit-table"><table><thead><tr><th>Metric</th><th>Result</th><th>Calculation</th><th>Excluded</th><th>Status</th></tr></thead><tbody>{secondary.map(({ name, metric }) => { const presentation = secondaryMetricPresentation(name, metric); return <tr key={name}><td data-label="Metric"><strong>{metricLabel(name)}</strong>{metric.note ? <small className="table-sub">{text(metric.note)}</small> : null}</td><td data-label="Result">{presentation.result}</td><td data-label="Calculation"><code>{presentation.formula}</code></td><td data-label="Excluded">{metricInteger(metric.excluded_count)}<small className="table-sub">{listOf<string>(metric, "exclusion_reasons").map(exclusionLabel).join(" · ") || "None"}</small></td><td data-label="Status"><Badge value={presentation.status} tone={presentation.status === "AVAILABLE" ? "good" : presentation.status === "INCONSISTENT" ? "bad" : "warn"} />{metric.unavailable_reason ? <small className="table-sub">{exclusionLabel(text(metric.unavailable_reason))}</small> : null}</td></tr>; })}</tbody></table></div></Disclosure>
   </>;
 }
 
@@ -143,10 +464,14 @@ export default function DecisionWorkbenchPage() {
   const [reviewInput, setReviewInput] = useState<ReviewInput | null>(null);
   const [reviewInputValue, setReviewInputValue] = useState("");
   const [reviewInputError, setReviewInputError] = useState<string | null>(null);
+  const [reviewAcknowledgement, setReviewAcknowledgement] = useState<Dict | null>(null);
   const [decisionOpen, setDecisionOpen] = useState(false);
   const [decisionAction, setDecisionAction] = useState<DecisionAction>("no_action");
   const [decisionScenario, setDecisionScenario] = useState<DecisionScenario>("SIDEWAYS");
   const [decisionReason, setDecisionReason] = useState("");
+  const [decisionSourceNote, setDecisionSourceNote] = useState<string | null>(null);
+  const [decisionSourceRevisionId, setDecisionSourceRevisionId] = useState<string | null>(null);
+  const [decisionDraftScenarios, setDecisionDraftScenarios] = useState<Dict[]>([]);
   const [decisionReviewDate, setDecisionReviewDate] = useState(() => futureDateInput(7));
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -155,29 +480,54 @@ export default function DecisionWorkbenchPage() {
   const [supersedesDecisionId, setSupersedesDecisionId] = useState<string | null>(null);
   const [journalTab, setJournalTab] = useState<JournalTab>("overview");
   const [cycleOffset, setCycleOffset] = useState(0);
-  const [activityStatuses, setActivityStatuses] = useState<Record<string, ActivityStatus>>({});
-  const [activityClassifications, setActivityClassifications] = useState<Record<string, ActivityClassification>>({});
-  const [activityOrderLinks, setActivityOrderLinks] = useState<Record<string, string>>({});
-  const [activityBusy, setActivityBusy] = useState<string | null>(null);
-  const [activityError, setActivityError] = useState<string | null>(null);
-  const [overrideOperation, setOverrideOperation] = useState<"SPLIT" | "MERGE" | "RELINK">("SPLIT");
-  const [overrideRoot, setOverrideRoot] = useState("");
-  const [overrideCycles, setOverrideCycles] = useState("");
-  const [overrideActivities, setOverrideActivities] = useState("");
-  const [overrideSplitGroups, setOverrideSplitGroups] = useState("");
-  const [overrideTarget, setOverrideTarget] = useState("");
-  const [overrideNote, setOverrideNote] = useState("");
-  const [overridePreview, setOverridePreview] = useState<Dict | null>(null);
-  const [overrideBusy, setOverrideBusy] = useState<"preview" | "apply" | null>(null);
-  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [cyclePageSize, setCyclePageSize] = useState<4 | 6 | 8 | 10>(6);
   const [behaviorReviewBusy, setBehaviorReviewBusy] = useState(false);
   const [behaviorReviewError, setBehaviorReviewError] = useState<string | null>(null);
-  const [behaviorClassification, setBehaviorClassification] = useState<ActivityClassification | "ALL">("ALL");
-  const workbenchApi = useApi<Dict>(
-    requestedSubjectId
-      ? `/api/decision-workbench?subject_id=${encodeURIComponent(requestedSubjectId)}${behaviorClassification === "ALL" ? "" : `&classification=${encodeURIComponent(behaviorClassification)}`}`
-      : `/api/decision-workbench${behaviorClassification === "ALL" ? "" : `?classification=${encodeURIComponent(behaviorClassification)}`}`,
-  );
+  const [weeklyReviewPreview, setWeeklyReviewPreview] = useState<WeeklyReviewPreview | null>(null);
+  const [noteSyncBusy, setNoteSyncBusy] = useState(false);
+  const [noteSyncError, setNoteSyncError] = useState<string | null>(null);
+  const [noteSyncMessage, setNoteSyncMessage] = useState<string | null>(null);
+  const [noteAnalysisBusyId, setNoteAnalysisBusyId] = useState<string | null>(null);
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("ALL");
+  const [customPeriodStart, setCustomPeriodStart] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [customPeriodEnd, setCustomPeriodEnd] = useState(() => dateInputValue());
+  const [accountFilters, setAccountFilters] = useState<string[]>([]);
+  const [instrumentFilters, setInstrumentFilters] = useState<string[]>([]);
+  const [subjectFilters, setSubjectFilters] = useState<string[]>([]);
+  const [classificationFilters, setClassificationFilters] = useState<ActivityClassification[]>([]);
+  const [qualityFilter, setQualityFilter] = useState("ALL");
+  const [cycleStatusFilters, setCycleStatusFilters] = useState<CycleStatusFilter[]>([]);
+  const [cycleSortMode, setCycleSortMode] = useState<CycleSortMode>("LATEST_DESC");
+  const [selectedCycleId, setSelectedCycleId] = useState("");
+  const [pendingNoteDecision, setPendingNoteDecision] = useState<Dict | null>(null);
+  const [reviewOffset, setReviewOffset] = useState(0);
+  const [timelineOffset, setTimelineOffset] = useState(0);
+  const [instrumentTableFilters, setInstrumentTableFilters] = useState<string[]>([]);
+  const [instrumentTableSort, setInstrumentTableSort] = useState<InstrumentTableSort>({ key: "lastTradeAt", direction: "desc" });
+  const [instrumentTableOffset, setInstrumentTableOffset] = useState(0);
+  const presetPeriodStart = periodStart(periodFilter);
+  const selectedPeriodStart = periodFilter === "CUSTOM"
+    ? startOfDayIsoOrNull(customPeriodStart)
+    : presetPeriodStart === null
+      ? null
+      : new Date(presetPeriodStart).toISOString();
+  const selectedPeriodEnd = periodFilter === "CUSTOM"
+    ? endOfDayIsoOrNull(customPeriodEnd)
+    : null;
+  const periodWindowValid = !selectedPeriodStart || !selectedPeriodEnd
+    || Date.parse(selectedPeriodStart) <= Date.parse(selectedPeriodEnd);
+  const workbenchQuery = [
+    requestedSubjectId ? `subject_id=${encodeURIComponent(requestedSubjectId)}` : "",
+    ...classificationFilters.map((value) => `classifications=${encodeURIComponent(value)}`),
+    ...accountFilters.map((value) => `account_refs=${encodeURIComponent(value)}`),
+    ...instrumentFilters.map((value) => `instrument_ids=${encodeURIComponent(value)}`),
+    selectedPeriodStart && periodWindowValid ? `behavior_start=${encodeURIComponent(selectedPeriodStart)}` : "",
+    selectedPeriodEnd && periodWindowValid ? `behavior_end=${encodeURIComponent(selectedPeriodEnd)}` : "",
+  ].filter(Boolean).join("&");
+  const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`);
+  const observationApi = useApi<ObservationInboxResponse>("/api/observations?limit=100", {
+    enabled: journalTab === "notes",
+  });
   const subjects = listOf<SubjectAggregate>(workbenchApi.data, "subjects");
   const activeSubjects = useMemo(
     () => subjects.filter((item) => upper(item.subject?.status) !== "ARCHIVED"),
@@ -198,17 +548,29 @@ export default function DecisionWorkbenchPage() {
   const accountsUnavailable = partialFailures.includes("accounts");
   const transactionsUnavailable = partialFailures.includes("transactions");
   const tradeCyclesUnavailable = partialFailures.includes("trade_cycles");
-  const orderIntentsUnavailable = partialFailures.includes("order_intents");
   const retroUnavailable = partialFailures.includes("retro");
   const scorecardsUnavailable = partialFailures.includes("scorecards");
   const reviewItemsUnavailable = partialFailures.includes("review_items");
-  const reviewItems = listOf<Dict>(workbenchApi.data, "review_items");
+  const allReviewItems = listOf<Dict>(workbenchApi.data, "review_items");
+  const reviewItems = allReviewItems.filter((item) =>
+    subjectFilters.length === 0 || subjectFilters.includes(text(item.subject_id, ""))
+  );
+  const reviewItemMetrics = asDict(workbenchApi.data?.review_item_metrics);
+  const openReviewCount = subjectFilters.length > 1
+    ? reviewItems.length
+    : number(reviewItemMetrics.open_count) || reviewItems.length;
   const behaviorReviewRuns = listOf<Dict>(workbenchApi.data, "behavior_review_runs");
+  const observationData = observationApi.data?.data;
+  const externalNotes = listOf<Dict>(observationData, "external_notes");
+  const observationSources = listOf<Dict>(observationData, "observation_sources");
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const requested = query.get("subject_id");
-    if (requested) setRequestedSubjectId(requested);
+    if (requested) {
+      setRequestedSubjectId(requested);
+      setSubjectFilters([requested]);
+    }
     if (query.get("capture") === "decision") setCaptureRequested(true);
     const supersedes = query.get("supersedes_decision_id");
     if (supersedes?.startsWith("decision_")) setSupersedesDecisionId(supersedes);
@@ -224,23 +586,67 @@ export default function DecisionWorkbenchPage() {
     return () => window.removeEventListener("hashchange", update);
   }, []);
 
+  useEffect(() => {
+    function updateCyclePageSize() {
+      setCyclePageSize(cyclePageSizeForViewport(window.innerWidth, window.innerHeight));
+    }
+    updateCyclePageSize();
+    window.addEventListener("resize", updateCyclePageSize);
+    return () => window.removeEventListener("resize", updateCyclePageSize);
+  }, []);
+
   function selectJournalTab(value: JournalTab) {
     setJournalTab(value);
     window.history.replaceState(null, "", `#${value}`);
+  }
+
+  function updateSubjectFilters(values: string[]) {
+    setSubjectFilters(values);
+    setRequestedSubjectId(values.length === 1 ? values[0] : "");
+  }
+
+  function selectSubjectContext(value: string) {
+    // Switching Decision context must not silently narrow the cross-note and
+    // Review filters.  Explicit filter state remains visible and user-owned.
+    setRequestedSubjectId(value);
   }
 
   useEffect(() => {
     if (workbenchApi.loading) return;
     if (activeSubjects.length === 0) {
       setRequestedSubjectId("");
+      setSubjectFilters([]);
       return;
     }
+    const validSubjectIds = new Set(
+      activeSubjects.map((item) => text(item.subject?.subject_id, "")).filter(Boolean),
+    );
+    setSubjectFilters((current) => {
+      const next = current.filter((value) => validSubjectIds.has(value));
+      return next.length === current.length ? current : next;
+    });
     if (requestedSubjectId && !activeSubjects.some(
       (item) => text(item.subject?.subject_id, "") === requestedSubjectId
     )) {
       setRequestedSubjectId("");
     }
   }, [activeSubjects, requestedSubjectId, workbenchApi.loading]);
+
+  useEffect(() => {
+    setInstrumentFilters([]);
+    setSelectedCycleId("");
+    setCycleOffset(0);
+  }, [subjectId]);
+
+  useEffect(() => {
+    setSelectedCycleId("");
+    setCycleOffset(0);
+  }, [accountFilters, classificationFilters, cycleSortMode, cycleStatusFilters, instrumentFilters, periodFilter, qualityFilter]);
+
+  useEffect(() => {
+    setSelectedCycleId("");
+    setCycleOffset(0);
+  }, [cyclePageSize]);
 
   const selected = subjects.find((item) => text(item.subject?.subject_id, "") === subjectId);
   const subject = selected?.subject ?? {};
@@ -266,24 +672,58 @@ export default function DecisionWorkbenchPage() {
   const planLinkReady = Boolean(planId && planVersion >= 1);
   const instrumentId = text(plan?.instrument_id, text(subject.primary_instrument_id, ""));
   const accountRows = listOf<Dict>(unwrap(asDict(workbenchApi.data?.accounts)), "accounts");
-  const relatedPositions = accountRows.flatMap((account) =>
+  const allPositions = accountRows.flatMap((account) =>
     listOf<Dict>(account, "positions")
-      .filter((position) => text(position.instrument_id, "") === instrumentId)
       .map((position): Dict => ({ ...position, account_ref: account.account_ref, provider: account.provider })),
   );
   const allTransactions = listOf<Dict>(
     unwrap(asDict(workbenchApi.data?.transactions)),
     "transactions",
   );
+  const subjectInstrumentFilters = activeSubjects
+    .filter((item) => subjectFilters.includes(text(item.subject?.subject_id, "")))
+    .map((item) => text(item.subject?.primary_instrument_id, ""))
+    .filter(Boolean);
+  const activeInstrumentFilters = instrumentFilters.length > 0
+    ? instrumentFilters
+    : subjectInstrumentFilters.length > 0
+      ? Array.from(new Set(subjectInstrumentFilters))
+      : [];
+  const contextInstrumentFilters = activeInstrumentFilters.length > 0
+    ? activeInstrumentFilters
+    : instrumentId
+      ? [instrumentId]
+      : [];
+  const filteredExternalNotes = externalNotes.filter((item) =>
+    activeInstrumentFilters.length === 0
+      || activeInstrumentFilters.includes(text(asDict(item.identity).primary_instrument_id, ""))
+  );
+  const activePeriodStart = selectedPeriodStart ? Date.parse(selectedPeriodStart) : null;
+  const activePeriodEnd = selectedPeriodEnd ? Date.parse(selectedPeriodEnd) : null;
+  const relatedPositions = allPositions
+    .filter((position) => contextInstrumentFilters.length === 0 || contextInstrumentFilters.includes(text(position.instrument_id, "")))
+    .filter((position) => accountFilters.length === 0 || accountFilters.includes(text(position.account_ref, "")));
+  const filteredTransactions = allTransactions
+    .filter((item) => activeInstrumentFilters.length === 0 || activeInstrumentFilters.includes(text(item.instrument_id, "")))
+    .filter((item) => accountFilters.length === 0 || accountFilters.includes(text(item.account_ref, "")))
+    .filter((item) => activePeriodStart === null || (Date.parse(text(item.occurred_at, "")) || 0) >= activePeriodStart)
+    .filter((item) => activePeriodEnd === null || (Date.parse(text(item.occurred_at, "")) || 0) <= activePeriodEnd)
+    .sort((left, right) =>
+      (Date.parse(text(right.occurred_at, "")) || 0)
+      - (Date.parse(text(left.occurred_at, "")) || 0),
+    );
   const relatedTransactions = allTransactions
-    .filter((item) => text(item.instrument_id, "") === instrumentId)
+    .filter((item) => contextInstrumentFilters.length === 0 || contextInstrumentFilters.includes(text(item.instrument_id, "")))
+    .filter((item) => accountFilters.length === 0 || accountFilters.includes(text(item.account_ref, "")))
+    .filter((item) => activePeriodStart === null || (Date.parse(text(item.occurred_at, "")) || 0) >= activePeriodStart)
+    .filter((item) => activePeriodEnd === null || (Date.parse(text(item.occurred_at, "")) || 0) <= activePeriodEnd)
     .sort((left, right) =>
       (Date.parse(text(right.occurred_at, "")) || 0)
       - (Date.parse(text(left.occurred_at, "")) || 0),
     );
   const relatedOrderIntents = listOf<Dict>(workbenchApi.data, "order_intents")
-    .filter((item) => text(item.instrument_id, "") === instrumentId)
-    .filter((item) => !item.case_id || text(item.case_id, "") === subjectId);
+    .filter((item) => activeInstrumentFilters.length === 0 || activeInstrumentFilters.includes(text(item.instrument_id, "")))
+    .filter((item) => subjectFilters.length === 0 || !item.case_id || subjectFilters.includes(text(item.case_id, "")));
   const transactionWindowLimited = allTransactions.length >= 500;
   const latestTransaction = relatedTransactions[0] ?? null;
   const heldQuantity = relatedPositions.reduce(
@@ -301,31 +741,227 @@ export default function DecisionWorkbenchPage() {
     unwrap(asDict(workbenchApi.data?.performance_series)),
     "series",
   );
-  const dailyEquityData = unwrap(asDict(workbenchApi.data?.daily_equity));
-  const dailyEquityItems = listOf<Dict>(dailyEquityData, "items");
-  const completeDailyEquity = dailyEquityItems.filter(
-    (item) => upper(item.quality_status) === "COMPLETE",
-  ).length;
   const activityAnnotations = listOf<Dict>(workbenchApi.data, "activity_annotations");
   const annotationByTransaction = new Map(activityAnnotations.map((item) => [
     `${text(item.provider, "")}:${text(item.account_ref, "")}:${text(item.provider_transaction_id, "")}`,
     item,
   ]));
-  const unlinkedActivities = listOf<Dict>(asDict(workbenchApi.data?.unlinked_activity), "activities");
-  const relatedUnlinkedActivities = unlinkedActivities.filter((item) =>
-    text(asDict(item.transaction).instrument_id, "") === instrumentId
-  );
   const tradeCycleData = unwrap(asDict(workbenchApi.data?.trade_cycles));
-  const tradeCycles = listOf<Dict>(tradeCycleData, "cycles");
+  const allTradeCycles = listOf<Dict>(tradeCycleData, "cycles");
+  const transactionTimeByActivity = new Map(allTransactions.map((transaction) => [
+    `${text(transaction.account_ref, "")}:${text(transaction.provider_transaction_id, "")}`,
+    Date.parse(text(transaction.occurred_at, "")) || 0,
+  ]));
+  function cycleLatestActivityTime(cycle: Dict): number {
+    const accountRef = text(cycle.account_ref, "");
+    const exactTimes = listOf<string>(cycle, "activity_ids")
+      .map((activityId) => transactionTimeByActivity.get(`${accountRef}:${activityId}`) ?? 0)
+      .filter((value) => value > 0);
+    return exactTimes.length > 0
+      ? Math.max(...exactTimes)
+      : cycleReviewTime(cycle);
+  }
+  const overallCycleQuality = upper(tradeCycleData.status, "UNKNOWN");
+  const incompleteCycleCount = allTradeCycles.filter((cycle) => upper(cycle.quality) === "INCOMPLETE").length;
+  const unresolvedCycleCount = allTradeCycles.filter((cycle) => upper(cycle.status) === "UNRESOLVED").length;
+  const cycleCandidates = allTradeCycles
+    .filter((cycle) => activeInstrumentFilters.length === 0 || activeInstrumentFilters.includes(text(cycle.instrument_id, "")))
+    .filter((cycle) => accountFilters.length === 0 || accountFilters.includes(text(cycle.account_ref, "")))
+    .filter((cycle) => classificationFilters.length === 0 || classificationFilters.includes(upper(cycle.classification) as ActivityClassification))
+    .filter((cycle) => activePeriodStart === null || cycleReviewTime(cycle) >= activePeriodStart)
+    .filter((cycle) => activePeriodEnd === null || cycleReviewTime(cycle) <= activePeriodEnd);
+  const cycleStatusCounts = Object.fromEntries(
+    (["OPEN", "CLOSED", "UNRESOLVED"] as CycleStatusFilter[]).map((status) => [
+      status,
+      cycleCandidates.filter((cycle) => upper(cycle.status) === status).length,
+    ]),
+  ) as Record<CycleStatusFilter, number>;
+  const cycleIncompleteCount = cycleCandidates.filter((cycle) => upper(cycle.quality) === "INCOMPLETE").length;
+  const tradeCycles = cycleCandidates
+    .filter((cycle) => cycleStatusFilters.length === 0 || cycleStatusFilters.includes(upper(cycle.status) as CycleStatusFilter))
+    .filter((cycle) => qualityFilter === "ALL" || upper(cycle.quality) === qualityFilter)
+    .sort((left, right) => {
+      const instrumentOrder = text(left.instrument_id, "").localeCompare(text(right.instrument_id, ""), "en", { numeric: true });
+      const latestOrder = cycleLatestActivityTime(left) - cycleLatestActivityTime(right);
+      const openedOrder = (Date.parse(text(left.opened_at, "")) || 0) - (Date.parse(text(right.opened_at, "")) || 0);
+      const comparison = cycleSortMode === "LATEST_ASC" ? latestOrder
+        : cycleSortMode === "OPENED_DESC" ? -openedOrder
+          : cycleSortMode === "OPENED_ASC" ? openedOrder
+            : cycleSortMode === "INSTRUMENT_ASC" ? instrumentOrder
+              : cycleSortMode === "INSTRUMENT_DESC" ? -instrumentOrder
+                : -latestOrder;
+      return comparison || -latestOrder || text(left.cycle_id, "").localeCompare(text(right.cycle_id, ""));
+    });
+
+  const subjectTradeCycles = tradeCycles.filter((cycle) =>
+    contextInstrumentFilters.length === 0
+      || contextInstrumentFilters.includes(text(cycle.instrument_id, ""))
+  );
   const tradeCycleOverrides = listOf<Dict>(tradeCycleData, "override_revisions");
-  const overrideSelectedCycleIds = overrideCycles.split(",").map((item) => item.trim()).filter(Boolean);
-  const overrideActivityOptions = tradeCycles
-    .filter((cycle) => overrideSelectedCycleIds.includes(text(cycle.cycle_id, "")) || (!overrideSelectedCycleIds.length && text(cycle.cycle_id, "") === overrideRoot))
-    .flatMap((cycle) => listOf<string>(cycle, "activity_ids"));
-  const latestTradeCycle = tradeCycles[0] ?? null;
+  const latestTradeCycle = subjectTradeCycles[0] ?? null;
+  const latestCyclePnl = latestTradeCycle ? cyclePnlPresentation(latestTradeCycle) : null;
   const tradeCycleProjectionIncomplete = upper(tradeCycleData.status) !== "COMPLETE";
-  const cyclePageSize = 6;
   const visibleTradeCycles = tradeCycles.slice(cycleOffset, cycleOffset + cyclePageSize);
+  const selectedCycle = tradeCycles.find((cycle) => text(cycle.cycle_id, "") === selectedCycleId)
+    ?? visibleTradeCycles[0]
+    ?? null;
+  const selectedCyclePnl = selectedCycle ? cyclePnlPresentation(selectedCycle) : null;
+  const selectedCycleActivityIds = new Set(listOf<string>(selectedCycle, "activity_ids"));
+  const selectedCycleTransactions = allTransactions.filter((transaction) =>
+    selectedCycleActivityIds.has(text(transaction.provider_transaction_id, ""))
+  );
+  const closedPnlCycles = tradeCycles.filter((cycle) =>
+    upper(cycle.status) === "CLOSED"
+      && upper(cycle.classification) !== "CASH_MANAGEMENT"
+      && cycle.net_realized_pnl != null
+  );
+  const wins = closedPnlCycles.filter((cycle) => number(cycle.net_realized_pnl) > 0);
+  const losses = closedPnlCycles.filter((cycle) => number(cycle.net_realized_pnl) < 0);
+  const grossWins = wins.reduce((total, cycle) => total + number(cycle.net_realized_pnl), 0);
+  const grossLosses = Math.abs(losses.reduce((total, cycle) => total + number(cycle.net_realized_pnl), 0));
+  const realizedPnl = grossWins - grossLosses;
+  const averageWin = wins.length ? grossWins / wins.length : null;
+  const averageLoss = losses.length ? grossLosses / losses.length : null;
+  const payoffRatio = averageWin != null && averageLoss ? averageWin / averageLoss : null;
+  const profitFactor = grossLosses ? grossWins / grossLosses : null;
+  const winRate = closedPnlCycles.length ? wins.length / closedPnlCycles.length : null;
+  const holdingDurations = closedPnlCycles
+    .map((cycle) => number(cycle.holding_duration_seconds))
+    .filter((value) => value > 0)
+    .sort((left, right) => left - right);
+  const medianHoldingDays = holdingDurations.length
+    ? holdingDurations[Math.floor(holdingDurations.length / 2)] / 86_400
+    : null;
+  const accountOptions = Array.from(new Set([
+    ...accountRows.map((account) => text(account.account_ref, "")),
+    ...allTradeCycles.map((cycle) => text(cycle.account_ref, "")),
+  ].filter(Boolean))).sort();
+  const instrumentOptions = Array.from(new Set([
+    ...allTradeCycles.map((cycle) => text(cycle.instrument_id, "")),
+    ...allTransactions.map((transaction) => text(transaction.instrument_id, "")),
+  ].filter(Boolean))).sort();
+  const accountAutosuggestOptions: AutosuggestOption[] = accountOptions.map((value) => {
+    const account = accountRows.find((item) => text(item.account_ref, "") === value);
+    return {
+      value,
+      label: `${upper(account?.provider, "ACCOUNT")} · ${shortId(value)}`,
+      description: `${listOf<Dict>(account, "positions").length} durable position${listOf<Dict>(account, "positions").length === 1 ? "" : "s"}`,
+    };
+  });
+  const instrumentAutosuggestOptions: AutosuggestOption[] = instrumentOptions.map((value) => ({
+    value,
+    label: shortId(value),
+    description: value,
+  }));
+  const subjectAutosuggestOptions: AutosuggestOption[] = activeSubjects.map((item) => ({
+    value: text(item.subject?.subject_id, ""),
+    label: text(item.subject?.title, "Untitled Research Subject"),
+    description: `${upper(item.subject?.subject_type, "RESEARCH SUBJECT")} · ${shortId(item.subject?.primary_instrument_id)}`,
+  })).filter((option) => option.value);
+  const holdingBuckets = [
+    { label: "Same Day", minimum: 0, maximum: 1 },
+    { label: "1–5 Days", minimum: 1, maximum: 5 },
+    { label: "5–20 Days", minimum: 5, maximum: 20 },
+    { label: "20+ Days", minimum: 20, maximum: Number.POSITIVE_INFINITY },
+  ].map((bucket) => {
+    const cycles = closedPnlCycles.filter((cycle) => {
+      const days = number(cycle.holding_duration_seconds) / 86_400;
+      return days >= bucket.minimum && days < bucket.maximum;
+    });
+    return {
+      ...bucket,
+      count: cycles.length,
+      pnl: cycles.reduce((total, cycle) => total + number(cycle.net_realized_pnl), 0),
+    };
+  });
+  const cycleStatsByInstrument = tradeCycles.reduce((groups, cycle) => {
+    if (upper(cycle.status) !== "CLOSED") return groups;
+    const instrument = text(cycle.instrument_id, "");
+    if (!instrument) return groups;
+    const current = groups.get(instrument) ?? { closedCycles: 0, knownPnl: 0, pnlCycles: 0 };
+    current.closedCycles += 1;
+    const knownPnl = cycle.net_realized_pnl ?? cycle.gross_realized_pnl;
+    if (knownPnl != null) {
+      current.knownPnl += number(knownPnl);
+      current.pnlCycles += 1;
+    }
+    groups.set(instrument, current);
+    return groups;
+  }, new Map<string, { closedCycles: number; knownPnl: number; pnlCycles: number }>());
+  const tradedInstrumentRows: InstrumentTradeRow[] = Array.from(filteredTransactions
+    .filter((transaction) => upper(transaction.kind) === "TRADE" && text(transaction.instrument_id, ""))
+    .reduce((groups, transaction) => {
+      const instrument = text(transaction.instrument_id, "");
+      const occurredAt = text(transaction.occurred_at, "");
+      const current = groups.get(instrument) ?? {
+        instrument,
+        fills: 0,
+        bought: 0,
+        sold: 0,
+        accountRefs: new Set<string>(),
+        firstTradeAt: occurredAt,
+        lastTradeAt: occurredAt,
+      };
+      current.fills += 1;
+      if (upper(transaction.side) === "BUY") current.bought += number(transaction.quantity);
+      if (upper(transaction.side) === "SELL") current.sold += number(transaction.quantity);
+      const accountRef = text(transaction.account_ref, "");
+      if (accountRef) current.accountRefs.add(accountRef);
+      if ((Date.parse(occurredAt) || 0) < (Date.parse(current.firstTradeAt) || 0)) current.firstTradeAt = occurredAt;
+      if ((Date.parse(occurredAt) || 0) > (Date.parse(current.lastTradeAt) || 0)) current.lastTradeAt = occurredAt;
+      groups.set(instrument, current);
+      return groups;
+    }, new Map<string, {
+      instrument: string;
+      fills: number;
+      bought: number;
+      sold: number;
+      accountRefs: Set<string>;
+      firstTradeAt: string;
+      lastTradeAt: string;
+    }>()).values())
+    .map((row) => {
+      const cycleStats = cycleStatsByInstrument.get(row.instrument);
+      return {
+        instrument: row.instrument,
+        fills: row.fills,
+        bought: row.bought,
+        sold: row.sold,
+        accounts: row.accountRefs.size,
+        closedCycles: cycleStats?.closedCycles ?? 0,
+        knownPnl: cycleStats?.knownPnl ?? 0,
+        pnlCycles: cycleStats?.pnlCycles ?? 0,
+        firstTradeAt: row.firstTradeAt,
+        lastTradeAt: row.lastTradeAt,
+      };
+    });
+  const instrumentTableOptions: AutosuggestOption[] = tradedInstrumentRows
+    .map((row) => ({
+      value: row.instrument,
+      label: shortId(row.instrument),
+      description: `${row.instrument} · ${row.fills} fill${row.fills === 1 ? "" : "s"}`,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, "en", { numeric: true }));
+  const filteredInstrumentRows = tradedInstrumentRows
+    .filter((row) => instrumentTableFilters.length === 0 || instrumentTableFilters.includes(row.instrument))
+    .sort((left, right) => {
+      const key = instrumentTableSort.key;
+      const comparison = key === "instrument"
+        ? left.instrument.localeCompare(right.instrument, "en", { numeric: true, sensitivity: "base" })
+        : key === "lastTradeAt"
+          ? (Date.parse(left.lastTradeAt) || 0) - (Date.parse(right.lastTradeAt) || 0)
+          : left[key] - right[key];
+      return (instrumentTableSort.direction === "asc" ? comparison : -comparison)
+        || left.instrument.localeCompare(right.instrument, "en", { numeric: true });
+    });
+  const visibleInstrumentRows = filteredInstrumentRows.slice(
+    instrumentTableOffset,
+    instrumentTableOffset + INSTRUMENT_TABLE_PAGE_SIZE,
+  );
+  const visibleInstrumentFillCount = filteredInstrumentRows.reduce(
+    (total, row) => total + row.fills,
+    0,
+  );
   const journalTimelineRows = [
     ...timelineItems.map((item) => ({
       key: text(item.entity_id),
@@ -334,7 +970,7 @@ export default function DecisionWorkbenchPage() {
       detail: text(item.summary),
       occurredAt: text(item.occurred_at, ""),
     })),
-    ...relatedTransactions.map((item) => {
+    ...filteredTransactions.map((item) => {
       const annotation = annotationByTransaction.get(
         `${text(item.provider, "")}:${text(item.account_ref, "")}:${text(item.provider_transaction_id, "")}`,
       );
@@ -357,14 +993,48 @@ export default function DecisionWorkbenchPage() {
     (left, right) =>
       (Date.parse(right.occurredAt) || 0) - (Date.parse(left.occurredAt) || 0),
   );
+  const visibleTimelineRows = journalTimelineRows.slice(
+    timelineOffset,
+    timelineOffset + TIMELINE_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setTimelineOffset(0);
+  }, [accountFilters, instrumentFilters, periodFilter, subjectFilters]);
+
+  useEffect(() => {
+    if (timelineOffset >= journalTimelineRows.length && timelineOffset !== 0) {
+      setTimelineOffset(0);
+    }
+  }, [journalTimelineRows.length, timelineOffset]);
 
   useEffect(() => {
     if (cycleOffset >= tradeCycles.length && cycleOffset !== 0) setCycleOffset(0);
   }, [cycleOffset, tradeCycles.length]);
 
   useEffect(() => {
+    setInstrumentTableOffset(0);
+  }, [instrumentTableFilters, instrumentTableSort.key, instrumentTableSort.direction]);
+
+  useEffect(() => {
+    if (instrumentTableOffset >= filteredInstrumentRows.length && instrumentTableOffset !== 0) {
+      setInstrumentTableOffset(0);
+    }
+  }, [filteredInstrumentRows.length, instrumentTableOffset]);
+
+  function changeInstrumentTableSort(key: InstrumentTableSortKey) {
+    setInstrumentTableSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
+    }));
+  }
+
+  useEffect(() => {
     if (!captureRequested || !selected) return;
     setDecisionError(null);
+    setDecisionSourceNote(null);
+    setDecisionSourceRevisionId(null);
+    setDecisionDraftScenarios([]);
     setDecisionOpen(true);
     setCaptureRequested(false);
     const url = new URL(window.location.href);
@@ -373,92 +1043,57 @@ export default function DecisionWorkbenchPage() {
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [captureRequested, selected]);
 
-  async function classifyActivity(item: Dict) {
-    const transaction = asDict(item.transaction);
-    const key = text(item.source_key, text(transaction.provider_transaction_id));
-    const status = activityStatuses[key] ?? (planLinkReady && latestDecision ? "LINKED_DECISION_PLAN" : "UNPLANNED");
-    setActivityBusy(key); setActivityError(null);
-    try {
-      const linked = status === "LINKED_DECISION_PLAN";
-      const defaultClassification: ActivityClassification = status === "CASH_MANAGEMENT" ? "CASH_MANAGEMENT" : status === "TRANSFER_OR_CORPORATE_ACTION" ? "TRANSFER_OR_ADMIN" : linked ? "ACTIVE_TRADE" : "UNCLASSIFIED";
-      await postApi<Dict>("/api/activity-annotations", {
-        provider: transaction.provider,
-        account_ref: transaction.account_ref,
-        provider_transaction_id: transaction.provider_transaction_id,
-        status,
-        classification: activityClassifications[key] ?? defaultClassification,
-        order_intent_id: activityOrderLinks[key] || null,
-        decision_id: linked ? latestDecision?.entity_id : undefined,
-        trade_plan_id: linked ? planId : undefined,
-        trade_plan_version: linked ? planVersion : undefined,
-        subject_id: linked ? subjectId : undefined,
-        expected_version: 0,
-        idempotency_key: `console-activity-annotation-${crypto.randomUUID()}`,
-        authorization_note: `User classified the exact Broker activity as ${status} in Journal.`,
-      });
-      workbenchApi.refresh();
-    } catch (cause) {
-      setActivityError(cause instanceof Error ? cause.message : "Activity classification failed");
-    } finally { setActivityBusy(null); }
-  }
-
-  function overridePayload() {
-    const csv = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
-    const root = overrideRoot.trim();
-    const cycles = csv(overrideCycles);
-    const latestVersion = tradeCycleOverrides
-      .filter((item) => text(item.root_cycle_id, "") === root)
-      .reduce((current, item) => Math.max(current, number(item.version)), 0);
-    return {
-      root_cycle_id: root,
-      operation: overrideOperation,
-      cycle_ids: cycles.length > 0 ? cycles : [root],
-      activity_ids: csv(overrideActivities),
-      split_groups: overrideSplitGroups.split(/\n|;/).map(csv).filter((group) => group.length > 0),
-      target_cycle_id: overrideTarget.trim() || null,
-      note: overrideNote.trim() || null,
-      expected_version: latestVersion,
-      idempotency_key: `console-trade-cycle-override-${crypto.randomUUID()}`,
-      authorization_note: `User confirmed the ${overrideOperation} impact for the exact Trade Cycle projection.`,
-    };
-  }
-
-  function updateSplitGroup(index: number, values: string[]) {
-    const groups = overrideSplitGroups.split(/\n|;/).map((value) => value.trim()).filter(Boolean);
-    while (groups.length < 2) groups.push("");
-    groups[index] = values.join(",");
-    setOverrideSplitGroups(groups.join(";")); setOverridePreview(null);
-  }
-
-  async function previewCycleOverride() {
-    setOverrideBusy("preview"); setOverrideError(null); setOverridePreview(null);
-    try {
-      const value = await postApi<Dict>("/api/trade-cycle-overrides/preview", overridePayload());
-      setOverridePreview(value);
-    } catch (cause) {
-      setOverrideError(cause instanceof Error ? cause.message : "Trade Cycle preview failed");
-    } finally { setOverrideBusy(null); }
-  }
-
-  async function applyCycleOverride() {
-    if (!overridePreview) { setOverrideError("Preview the exact impact before applying it."); return; }
-    setOverrideBusy("apply"); setOverrideError(null);
-    try {
-      await postApi<Dict>("/api/trade-cycle-overrides", overridePayload());
-      setOverridePreview(null); workbenchApi.refresh();
-    } catch (cause) {
-      setOverrideError(cause instanceof Error ? cause.message : "Trade Cycle override failed");
-    } finally { setOverrideBusy(null); }
-  }
-
-  async function runWeeklyBehaviorReview() {
+  async function prepareWeeklyReview() {
     setBehaviorReviewBusy(true); setBehaviorReviewError(null);
     try {
-      const now = new Date();
-      const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      const daysSinceMonday = (end.getUTCDay() + 6) % 7;
-      end.setUTCDate(end.getUTCDate() - daysSinceMonday);
-      const start = new Date(end); start.setUTCDate(start.getUTCDate() - 7);
+      const schedule = asDict(await getJson("/api/retro"));
+      const windows = asDict(schedule.console_windows);
+      const previousWindow = asDict(windows.previous);
+      const nextWindow = asDict(windows.next);
+      const start = new Date(text(previousWindow.start, ""));
+      const end = new Date(text(previousWindow.end, ""));
+      const nextStart = new Date(text(nextWindow.start, ""));
+      const nextEnd = new Date(text(nextWindow.end, ""));
+      if ([start, end, nextStart, nextEnd].some((value) => Number.isNaN(value.getTime()))) {
+        throw new Error("The canonical weekly review window is unavailable.");
+      }
+      setWeeklyReviewPreview({
+        start: start.toISOString(),
+        end: end.toISOString(),
+        nextStart: nextStart.toISOString(),
+        nextEnd: nextEnd.toISOString(),
+      });
+    } catch (cause) {
+      setBehaviorReviewError(cause instanceof Error ? cause.message : "Behavior Review preview failed");
+    } finally { setBehaviorReviewBusy(false); }
+  }
+
+  async function createWeeklyReview() {
+    if (!weeklyReviewPreview) return;
+    setBehaviorReviewBusy(true); setBehaviorReviewError(null);
+    const start = new Date(weeklyReviewPreview.start);
+    const end = new Date(weeklyReviewPreview.end);
+    const nextStart = new Date(weeklyReviewPreview.nextStart);
+    const nextEnd = new Date(weeklyReviewPreview.nextEnd);
+    try {
+      const retroResponse = await postApi<Dict>("/api/tools/invoke", {
+        tool_name: "research_workflow_run",
+        arguments: { request: {
+          operation: "trade_retro",
+          action: "run",
+          start: start.toISOString(),
+          end: end.toISOString(),
+          use_llm: false,
+          idempotency_key: `console-journal-retro-run-${start.toISOString().slice(0, 10)}`,
+        } },
+        confirmation: "research_workflow_run",
+        preserve_full_result: true,
+      });
+      const retroEnvelope = asDict(retroResponse.result);
+      if (retroEnvelope.ok !== true) {
+        const firstError = listOf<Dict>(retroEnvelope, "errors")[0];
+        throw new Error(text(firstError?.message, "The immutable period review could not be generated."));
+      }
       const actionItems = listOf<string>(retroReview, "action_items").map((actionText) => ({
         action_text: actionText,
         review_item_source_keys: reviewItems.map((item) => text(item.source_key, "")).filter(Boolean),
@@ -471,18 +1106,31 @@ export default function DecisionWorkbenchPage() {
         period_start: start.toISOString(),
         period_end: end.toISOString(),
         strategy_code: "strategy_v1",
-        instrument_ids: instrumentId ? [instrumentId] : [],
+        instrument_ids: activeInstrumentFilters,
         cycle_ids: tradeCycles.map((item) => text(item.cycle_id)),
         decision_ids: decisionItems.map((item) => text(item.entity_id)),
         retro_run_ids: latestRetro?.run_id ? [text(latestRetro.run_id)] : [],
         retro_review_ids: retroReview.review_id ? [text(retroReview.review_id)] : [],
         review_item_source_keys: reviewItems.map((item) => text(item.source_key, "")).filter(Boolean),
-        subject_ids: [subjectId],
+        subject_ids: subjectId ? [subjectId] : [],
         action_items: actionItems,
         source_read_complete: !retroUnavailable && !reviewItemsUnavailable,
         source_error_code: retroUnavailable || reviewItemsUnavailable ? "BEHAVIOR_REVIEW_SOURCE_UNAVAILABLE" : null,
-        idempotency_key: `console-behavior-review-${subjectId}-${start.toISOString().slice(0, 10)}`,
+        idempotency_key: `console-behavior-review-${subjectId || "global"}-${start.toISOString().slice(0, 10)}`,
       });
+      await postApi<Dict>("/api/tools/invoke", {
+        tool_name: "research_workflow_run",
+        arguments: { request: {
+          operation: "trade_retro",
+          action: "prepare",
+          start: nextStart.toISOString(),
+          end: nextEnd.toISOString(),
+          idempotency_key: `console-journal-retro-prepare-${nextStart.toISOString().slice(0, 10)}`,
+        } },
+        confirmation: "research_workflow_run",
+        preserve_full_result: true,
+      });
+      setWeeklyReviewPreview(null);
       workbenchApi.refresh();
     } catch (cause) {
       setBehaviorReviewError(cause instanceof Error ? cause.message : "Behavior Review failed");
@@ -520,7 +1168,9 @@ export default function DecisionWorkbenchPage() {
       || ["FAIL", "PARTIAL", "NOT_EVALUATED"].includes(upper(item.result_code)),
   );
 
-  const relatedRetro = retroRuns(workbenchApi.data).filter((run) => {
+  const allRetroRuns = retroRuns(workbenchApi.data);
+  const relatedRetro = allRetroRuns.filter((run) => {
+    if (!subjectId) return true;
     const snapshotSubjectIds = listOf<string>(run, "subject_ids");
     if (snapshotSubjectIds.length > 0) return snapshotSubjectIds.includes(subjectId);
     return listOf<Dict>(run, "findings").some(
@@ -551,7 +1201,7 @@ export default function DecisionWorkbenchPage() {
     nextSteps.push({ key: "catalyst", severity: "ATTENTION", title: `${overdueCatalysts.length} Catalyst outcome(s) overdue`, detail: "Link a durable Event, Report, or Evidence fact, or revise the expected window.", href: "/agenda#agenda-detail" });
   }
   if (reviewItemsUnavailable && latestRetro && ["UNREVIEWED", "OPEN", "DISPUTED"].includes(retroReviewStatus)) {
-    nextSteps.push({ key: "retro", severity: "REVIEW", title: `Trade Retro is ${retroReviewStatus.toLowerCase()}`, detail: "Review deterministic findings and record follow-up actions.", href: "/retro" });
+    nextSteps.push({ key: "retro", severity: "REVIEW", title: `Period review is ${retroReviewStatus.toLowerCase()}`, detail: "Review deterministic findings and record follow-up actions.", href: "#reviews" });
   }
   if (reviewItemsUnavailable && latestScorecard && scorecardGaps.length > 0) {
     nextSteps.push({ key: "scorecard", severity: "GAP", title: `${scorecardGaps.length} Scorecard dimension gap(s)`, detail: "Inspect evidence quality and repeated discipline gaps before revising judgment.", href: `/scorecards?subject_id=${encodeURIComponent(subjectId)}` });
@@ -560,7 +1210,7 @@ export default function DecisionWorkbenchPage() {
     nextSteps.push(...reviewItems.map((item) => ({
       key: text(item.source_key, text(item.review_item_id)),
       severity: text(item.severity, "ATTENTION"),
-      title: text(item.title, "Review required"),
+      title: journalReviewTitle(item.title),
       detail: `${text(item.detail, "Inspect the durable source.")} · ${upper(item.status)}`,
       href: text(item.href, "/"),
       reviewItem: item,
@@ -569,6 +1219,28 @@ export default function DecisionWorkbenchPage() {
   if (partialFailures.length > 0) {
     nextSteps.unshift({ key: "incomplete-context", severity: "UNAVAILABLE", title: "Decision context is incomplete", detail: `Retry before interpreting missing sections: ${partialFailures.join(", ")}.`, href: "#decision-context-status" });
   }
+  const compactNextSteps = Array.from(
+    nextSteps.reduce((groups, item) => {
+      const key = item.reviewItem
+        ? `${item.severity}\0${item.title}`
+        : `${item.severity}\0${item.title}\0${item.href}`;
+      const existing = groups.get(key);
+      if (existing) existing.push(item);
+      else groups.set(key, [item]);
+      return groups;
+    }, new Map<string, NextStep[]>()),
+  ).map(([key, items]) => items.length === 1 ? items[0] : ({
+    key: `group-${key}`,
+    severity: items[0].severity,
+    title: `${items[0].title} · ${items.length} Items`,
+    detail: `${items[0].detail} Open the Reviews tab to process each exact item.`,
+    href: "#reviews",
+  } satisfies NextStep));
+  const reviewPageSize = 12;
+  const visibleReviewSteps = nextSteps.slice(reviewOffset, reviewOffset + reviewPageSize);
+  useEffect(() => {
+    if (reviewOffset >= nextSteps.length && reviewOffset !== 0) setReviewOffset(0);
+  }, [nextSteps.length, reviewOffset]);
 
   function openReviewInput(kind: ReviewInput["kind"], item: Dict, status: ReviewInput["status"]) {
     setReviewInputValue("");
@@ -608,7 +1280,7 @@ export default function DecisionWorkbenchPage() {
       openReviewInput("due", item, status);
       return;
     }
-    void persistReviewItem(item, status);
+    setReviewAcknowledgement(item);
   }
 
   function submitReviewInput(value: string) {
@@ -682,6 +1354,7 @@ export default function DecisionWorkbenchPage() {
       `Review Due: ${decisionReviewDate || "Not Set"}`,
       "",
       ...scenarioLines,
+      ...(decisionSourceNote ? ["", `Source Note Revision: ${decisionSourceNote}`] : []),
       "",
       "This Decision Record does not submit, modify, or authorize an order.",
     ].join("\n");
@@ -713,6 +1386,7 @@ export default function DecisionWorkbenchPage() {
             report_ids: [],
             supersedes_decision_id: supersedesDecisionId,
             position_context_snapshot_id: null,
+            external_note_revision_id: decisionSourceRevisionId,
             idempotency_key: `console-journal-decision-${crypto.randomUUID()}`,
           },
         },
@@ -726,6 +1400,9 @@ export default function DecisionWorkbenchPage() {
       }
       setDecisionOpen(false);
       setDecisionReason("");
+      setDecisionSourceNote(null);
+      setDecisionSourceRevisionId(null);
+      setDecisionDraftScenarios([]);
       setDecisionReviewDate(futureDateInput(7));
       setSupersedesDecisionId(null);
       setDecisionMessage(`${decisionScenario} · ${selectedAction.replaceAll("_", " ")} recorded.`);
@@ -737,103 +1414,308 @@ export default function DecisionWorkbenchPage() {
     }
   }
 
-  const loading = workbenchApi.loading;
-  const error = workbenchApi.error;
+  function primeNoteDecision(item: Dict) {
+    const identity = asDict(item.identity);
+    const revision = asDict(item.revision);
+    const interpretation = asDict(item.interpretation);
+    const payload = asDict(interpretation.payload);
+    const scenarios = listOf<Dict>(payload, "user_scenarios");
+    const sideways = scenarios.find((scenario) => upper(scenario.scenario) === "SIDEWAYS");
+    const reason = text(
+      payload.material_change_summary,
+      text(revision.summary, "Review imported note."),
+    );
+    setDecisionScenario("SIDEWAYS");
+    setDecisionAction("no_action");
+    setDecisionReason(reason);
+    setDecisionSourceNote(`${text(identity.note_id)}@v${number(revision.version) || 1}`);
+    setDecisionSourceRevisionId(text(revision.note_revision_id, "") || null);
+    setDecisionDraftScenarios(scenarios);
+    setDecisionError(null);
+    setSupersedesDecisionId(null);
+    setDecisionOpen(true);
+    if (sideways && ["HOLD", "NO_ACTION"].includes(upper(sideways.action))) {
+      setDecisionAction(upper(sideways.action) === "HOLD" ? "hold" : "no_action");
+    }
+  }
+
+  function reviewNoteAsDecision(item: Dict, matchingSubjectId: string | null) {
+    if (!matchingSubjectId) {
+      setDecisionError("Create or select a matching Research Subject before reviewing this Note as a Decision.");
+      return;
+    }
+    if (matchingSubjectId !== subjectId || !selected) {
+      setPendingNoteDecision(item);
+      selectSubjectContext(matchingSubjectId);
+      return;
+    }
+    primeNoteDecision(item);
+  }
+
+  useEffect(() => {
+    if (!pendingNoteDecision || !selected || text(subject.subject_id, "") !== subjectId) return;
+    primeNoteDecision(pendingNoteDecision);
+    setPendingNoteDecision(null);
+  }, [pendingNoteDecision, selected, subject, subjectId]);
+
+  async function refreshObservationSources() {
+    setNoteSyncBusy(true);
+    setNoteSyncError(null);
+    setNoteSyncMessage(null);
+    try {
+      const result = await postApi<Dict>("/api/observations/sync", { source_code: null, analyze: false });
+      const receipt = asDict(result.data);
+      setNoteSyncMessage(
+        `${text(receipt.notes_seen, "0")} note(s) scanned · ${text(receipt.revisions_created, "0")} revision(s) added${receipt.analysis_started === true ? " · background analysis started" : ""}.`,
+      );
+      observationApi.refresh();
+    } catch (cause) {
+      setNoteSyncError(cause instanceof Error ? cause.message : "Observation source sync failed.");
+    } finally {
+      setNoteSyncBusy(false);
+    }
+  }
+
+  async function analyzeObservation(noteRevisionId: string) {
+    setNoteAnalysisBusyId(noteRevisionId);
+    setNoteSyncError(null);
+    setNoteSyncMessage(null);
+    try {
+      const started = await postApi<Dict>(
+        `/api/observations/${encodeURIComponent(noteRevisionId)}/analyze`,
+        { retry_failed: true },
+      );
+      if (asDict(started.data).analysis_started !== true) {
+        setNoteSyncMessage("Another observation analysis is already running. Retry this note after it finishes.");
+        return;
+      }
+      setNoteSyncMessage("Analysis started in the background.");
+      for (let attempt = 0; attempt < 45; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        const statusResponse = asDict(await getJson(
+          `/api/observations/${encodeURIComponent(noteRevisionId)}/analysis`,
+        ));
+        const status = asDict(statusResponse.data);
+        if (upper(status.status) === "PENDING") continue;
+        if (upper(status.status) === "SUCCEEDED") {
+          setNoteSyncMessage("Observation analysis is ready.");
+          observationApi.refresh();
+          return;
+        }
+        throw new Error(text(status.error_code, "Observation analysis failed."));
+      }
+      throw new Error("Observation analysis is still running; refresh later to see its durable result.");
+    } catch (cause) {
+      setNoteSyncError(cause instanceof Error ? cause.message : "Observation analysis failed.");
+    } finally {
+      setNoteAnalysisBusyId(null);
+    }
+  }
+
+  const loading = workbenchApi.loading || (journalTab === "notes" && observationApi.loading);
+  const error = workbenchApi.error || (journalTab === "notes" ? observationApi.error : null);
+  const readyNotes = filteredExternalNotes.filter((item) => {
+    const revision = asDict(item.revision);
+    const interpretation = asDict(item.interpretation);
+    return upper(revision.coverage) === "FULL" && upper(interpretation.status) === "SUCCEEDED";
+  }).length;
+  const journalTabs = JOURNAL_TABS.map((item) => ({
+    ...item,
+    suffix: item.id === "notes" && readyNotes > 0
+      ? <span className="horizontal-tab-count">{readyNotes} ready</span>
+      : item.id === "reviews" && openReviewCount > 0
+        ? <span className="horizontal-tab-count">{openReviewCount}</span>
+        : undefined,
+    attention: (item.id === "notes" && readyNotes > 0) || (item.id === "reviews" && openReviewCount > 0),
+  }));
 
   return <ConsoleShell active="decision-workbench" pageActions={<PageActionMenu ariaLabel="Journal Page Actions" items={[
-    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionError(null); setDecisionOpen(true); } },
+    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
     { id: "refresh", label: loading ? "Refreshing…" : "Refresh", description: "Reload durable workflow context", icon: <RefreshCw aria-hidden="true" className={loading ? "spin" : undefined} />, disabled: loading, onSelect: workbenchApi.refresh },
   ]} />}>
     <DataBoundary loading={loading} error={error}>
       <div className="decision-workbench">
-        <div className="workspace-controls decision-toolbar"><label className="decision-subject-picker"><span>Research Subject</span><select value={subjectId} onChange={(event) => setRequestedSubjectId(event.target.value)}>{activeSubjects.map((item) => <option key={text(item.subject?.subject_id)} value={text(item.subject?.subject_id)}>{text(item.subject?.title)} · {shortId(item.subject?.primary_instrument_id)}</option>)}</select></label></div>
+        <section className="journal-filter-bar" aria-label="Journal Filters">
+          <label><span>Period</span><select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as PeriodFilter)}><option value="ALL">All History</option><option value="30D">Last 30 Days</option><option value="90D">Last 90 Days</option><option value="YTD">Year to Date</option><option value="CUSTOM">Custom Range</option></select></label>
+          {periodFilter === "CUSTOM" ? <><label><span>Start Date</span><input type="date" value={customPeriodStart} onChange={(event) => setCustomPeriodStart(event.target.value)} /></label><label><span>End Date</span><input type="date" value={customPeriodEnd} onChange={(event) => setCustomPeriodEnd(event.target.value)} /></label></> : null}
+          <MultiSelectAutosuggest label="Account" placeholder="All Accounts" options={accountAutosuggestOptions} value={accountFilters} onChange={setAccountFilters} />
+          <MultiSelectAutosuggest label="Instrument" placeholder="All Instruments" options={instrumentAutosuggestOptions} value={instrumentFilters} onChange={setInstrumentFilters} />
+          <label><span>Quality{journalTab === "behavior" ? " · Cycle Browser Only" : ""}</span><select value={qualityFilter} disabled={journalTab === "behavior"} title={journalTab === "behavior" ? "Behavior preserves calculator exclusions instead of filtering by Cycle quality." : undefined} onChange={(event) => setQualityFilter(event.target.value)}><option value="ALL">All Quality</option><option value="COMPLETE">Complete</option><option value="INCOMPLETE">Incomplete</option></select></label>
+          <MultiSelectAutosuggest label="Status" placeholder="All Statuses" options={CYCLE_STATUS_OPTIONS} value={cycleStatusFilters} onChange={(values) => setCycleStatusFilters(values as CycleStatusFilter[])} />
+          <details className="journal-more-filters"><summary>More Filters{subjectFilters.length + classificationFilters.length ? ` (${subjectFilters.length + classificationFilters.length})` : ""}</summary><div><MultiSelectAutosuggest label="Research Subject" placeholder="All Research Subjects" options={subjectAutosuggestOptions} value={subjectFilters} onChange={updateSubjectFilters} /><MultiSelectAutosuggest label="Classification" placeholder="All Classifications" options={CLASSIFICATION_OPTIONS} value={classificationFilters} onChange={(values) => setClassificationFilters(values as ActivityClassification[])} /></div></details>
+          <p className="journal-filter-scope">Period, Account, Instrument, and Classification are applied to the durable Behavior cohort. Quality applies to the Cycle browser; Subject selects research context and Review scope.{!periodWindowValid ? " The custom date range is invalid: Start Date must not be after End Date." : ""}</p>
+        </section>
 
-        {!selected ? <Empty>Create or activate a Research Subject in the existing Research workspace first.</Empty> : <>
-          <section className="decision-subject-hero">
+        {selected ? <section className="decision-subject-hero journal-subject-context">
             <div><span>{upper(subject.subject_type, "RESEARCH SUBJECT")}</span><h2>{text(subject.title, "Unnamed Research Subject")}</h2><p>{text(subject.summary, "No stable research scope recorded.")}</p></div>
             <div className="decision-subject-meta"><Badge value={upper(subject.status)} /><strong>{shortId(subject.primary_instrument_id)}</strong><small className="mono">{subjectId}</small></div>
-          </section>
+          </section> : null}
 
-          <HorizontalTabs items={JOURNAL_TABS} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
+          <HorizontalTabs items={journalTabs} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
 
           <section id="journal-panel-overview" role="tabpanel" aria-labelledby="journal-tab-overview" hidden={journalTab !== "overview"} className="journal-panel-stack">
-          <Card kicker="DATA CONFIDENCE" title="Coverage" action={<Badge value={partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : "AVAILABLE"} />}>
-            <div className="decision-metrics"><span>Account Facts<strong>{accountsUnavailable ? "Unavailable" : "Durable"}</strong></span><span>Activity Window<strong>{transactionsUnavailable ? "Unavailable" : transactionWindowLimited ? "Limited" : "Visible"}</strong></span><span>Order Lifecycle<strong>{orderIntentsUnavailable ? "Unavailable" : `${relatedOrderIntents.length} Visible`}</strong></span><span>Daily Equity<strong>{dailyEquityItems.length === 0 ? "Unavailable" : `${completeDailyEquity} / ${dailyEquityItems.length} Complete`}</strong></span><span>Cycle Projection<strong>{tradeCyclesUnavailable ? "Unavailable" : text(tradeCycleData.status, "Unknown")}</strong></span></div>
+          <Card title="Data Confidence" action={<Badge value={partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : "AVAILABLE"} />}>
+            <div className="journal-confidence-strip">
+              <span>Transactions<strong>{transactionsUnavailable ? "—" : allTransactions.length}</strong><small>{transactionWindowLimited ? "Bounded read" : "Durable facts"}</small></span>
+              <span>Complete Cycles<strong>{allTradeCycles.filter((cycle) => upper(cycle.quality) === "COMPLETE").length} / {allTradeCycles.length}</strong><small>Long-only projection</small></span>
+              <span>Unresolved<strong>{allTradeCycles.filter((cycle) => upper(cycle.status) === "UNRESOLVED").length}</strong><small>Excluded from outcomes</small></span>
+              <span>Account Returns<strong>{performanceSeries.some((item) => item.twr != null) ? "Available" : "Unavailable"}</strong><small>TWR / XIRR / drawdown</small></span>
+            </div>
+            {partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? <div className="journal-remediation"><strong>Why confidence is partial</strong><ul>{partialFailures.map((failure) => <li key={failure}>{metricLabel(failure)} read failed; retry durable context before acting.</li>)}{transactionWindowLimited ? <li>Transaction history reached the 500-row local read boundary.</li> : null}{tradeCycleProjectionIncomplete ? <li>{incompleteCycleCount} Cycle(s) lack complete prices, fees, or reconstruction coverage.</li> : null}</ul><div className="page-actions"><ActionButton onClick={workbenchApi.refresh}>Retry Durable Reads</ActionButton><QuickLink href="/operations">Open Data Quality Center</QuickLink></div></div> : null}
           </Card>
-          <Card kicker="PERFORMANCE · NATIVE CURRENCY" title="Year-To-Date Returns" action={<Link href="/portfolio#performance">Portfolio Details →</Link>}>
-            {performanceSeries.length === 0 ? <Empty>No trustworthy account return series is available.</Empty> : <div className="decision-metrics">{performanceSeries.map((item, index) => <span key={`${text(item.account_ref)}-${text(item.currency)}-${index}`}>{text(item.currency)} · {shortId(item.account_ref)}<strong>{item.twr == null ? "TWR —" : `TWR ${(number(item.twr) * 100).toFixed(2)}%`}</strong><small>MWR {item.xirr == null ? "—" : `${(number(item.xirr) * 100).toFixed(2)}%`} · Drawdown {item.maximum_drawdown == null ? "—" : `${(number(item.maximum_drawdown) * 100).toFixed(2)}%`} · {text(item.status)}</small></span>)}</div>}
-          </Card>
-          <Card kicker="P/L COMPOSITION · DURABLE FACTS" title="Income, Fees & Closed Cycles">
-            {performanceSeries.length === 0 ? <Empty>P/L composition is unavailable with the current coverage.</Empty> : <div className="decision-metrics">{performanceSeries.map((item, index) => <span key={`composition-${text(item.account_ref)}-${index}`}>{text(item.currency)}<strong>Income {text(item.dividends, "0")} + {text(item.interest, "0")}</strong><small>Known Fees {text(item.known_fees, "—")} · {listOf<Dict>(item, "cycle_performance").length} closed Cycle return(s)</small></span>)}</div>}
-          </Card>
-          <Card kicker="BEHAVIOR SNAPSHOT · NO SCORE" title="Current Cohort" action={<button type="button" onClick={() => selectJournalTab("behavior")}>Open Behavior</button>}>
-            <div className="decision-metrics"><span>Closed Active Cycles<strong>{text(asDict(behaviorData.closed_active_trade_cycles).numerator, "0")}</strong></span><span>Win Rate<strong>{behaviorPercent(asDict(behaviorData.win_rate))}</strong></span><span>Plan Coverage<strong>{behaviorPercent(asDict(behaviorData.plan_coverage))}</strong></span><span>Pre-Fill Decision Coverage<strong>{behaviorPercent(asDict(behaviorData.pre_fill_decision_coverage))}</strong></span></div>
-          </Card>
-          <Card className="decision-next-card" kicker="WORKFLOW" title="Needs Attention" description="Only unresolved steps appear here. Catalyst, Scorecard, and Retro remain evidence sources instead of separate tasks to visit." action={<div className="page-actions"><Badge value={partialFailures.length ? "INCOMPLETE" : nextSteps.length ? `${nextSteps.length} ITEMS` : "READY"} /><Link href="/#review-queue">All Durable Items →</Link></div>}><StepList items={nextSteps} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} /><ErrorNote>{reviewError}</ErrorNote>{decisionMessage ? <div className="inline-success">{decisionMessage}</div> : null}</Card>
 
-          <div className="decision-stage-grid">
-            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><Link href={`/research#subject-${subjectId}`}>Open Research →</Link></div>}>
-              <div className="decision-stage-lead"><Badge value={researchUnavailable || timelineUnavailable ? "INCOMPLETE" : latestDecision ? "DECISION" : primaryThesis ? upper(primaryThesis.status) : "MISSING"} /><strong>{researchUnavailable ? "Research state read unavailable" : timelineUnavailable ? "Decision Timeline unavailable" : text(latestDecision?.title, text(primaryThesis?.title, "No live Thesis"))}</strong><p>{researchUnavailable || timelineUnavailable ? "Retry the missing durable read before interpreting the decision chain." : text(latestDecision?.summary, text(primaryRevision?.statement, "Create a falsifiable judgment before defining execution intent."))}</p></div>
-              <div className="workflow-support-line"><span>Trade Plan</span><Badge value={researchUnavailable ? "UNAVAILABLE" : plan ? upper(plan.status) : "MISSING"} /><strong>{plan ? `${shortId(plan.instrument_id)} · v${text(plan.version, "—")}` : "No Current Plan"}</strong></div>
+          <Card title="Results" action={<button type="button" onClick={() => selectJournalTab("cycles")}>Open Trade Cycles</button>}>
+            <div className="journal-result-grid">
+              <span>Closed Cycles<strong>{closedPnlCycles.length}</strong><small>{wins.length} wins · {losses.length} losses</small></span>
+              <span>Realized P/L<strong className={realizedPnl < 0 ? "negative" : "positive"}>{formatMoney(realizedPnl)}</strong><small>Known Cycle P/L · fee coverage may be incomplete</small></span>
+              <span>Win Rate<strong>{winRate == null ? "—" : `${(winRate * 100).toFixed(1)}%`}</strong><small>{wins.length} / {closedPnlCycles.length}</small></span>
+              <span>Payoff Ratio<strong>{payoffRatio == null ? "—" : payoffRatio.toFixed(2)}</strong><small>Average win / average loss</small></span>
+              <span>Profit Factor<strong>{profitFactor == null ? "—" : profitFactor.toFixed(2)}</strong><small>Gross wins / gross losses</small></span>
+              <span>Median Hold<strong>{medianHoldingDays == null ? "—" : `${medianHoldingDays.toFixed(1)}d`}</strong><small>Closed eligible Cycles</small></span>
+            </div>
+          </Card>
+
+          <div className="journal-overview-grid">
+            <Card title="Holding Patterns">
+              <div className="journal-pattern-list">{holdingBuckets.map((bucket) => <div key={bucket.label}><span>{bucket.label}<small>{bucket.count} cycles</small></span><strong className={bucket.pnl < 0 ? "negative" : "positive"}>{formatMoney(bucket.pnl)}</strong></div>)}</div>
+            </Card>
+            <Card title="Latest Changes" action={<button type="button" onClick={() => selectJournalTab("notes")}>Open Notes</button>}>
+              {filteredExternalNotes.length === 0 ? <Empty>No imported note revision matches the current filters.</Empty> : <div className="journal-change-list">{filteredExternalNotes.slice(0, 3).map((item) => { const identity = asDict(item.identity); const revision = asDict(item.revision); const interpretation = asDict(item.interpretation); const payload = asDict(interpretation.payload); return <button type="button" key={text(identity.note_id)} onClick={() => selectJournalTab("notes")}><span><strong>{text(identity.title, "Untitled Note")}</strong><small>{shortId(identity.primary_instrument_id)} · {formatDate(revision.observed_at)}</small></span><span><Badge value={text(interpretation.change_relation, text(interpretation.status, text(revision.coverage)))} /><small>{text(payload.material_change_summary, text(revision.summary, "Awaiting full-text analysis."))}</small></span></button>; })}</div>}
+            </Card>
+          </div>
+
+          <Card className="journal-instrument-card" title="Traded Instruments" action={<Badge value={transactionWindowLimited ? "BOUNDED" : `${tradedInstrumentRows.length} INSTRUMENTS`} />}>
+            <div className="journal-instrument-toolbar">
+              <MultiSelectAutosuggest label="Instrument Filter" placeholder="Search traded Instruments" options={instrumentTableOptions} value={instrumentTableFilters} onChange={setInstrumentTableFilters} closeOnSelect />
+              <span><strong>{filteredInstrumentRows.length}</strong> of {tradedInstrumentRows.length} Instruments · <strong>{visibleInstrumentFillCount}</strong> fills</span>
+            </div>
+            {visibleInstrumentRows.length === 0 ? <Empty>No traded Instrument matches the current filters.</Empty> : <>
+              <div className="table-wrap journal-instrument-table"><table><thead><tr>
+                <SortableTableHeader label="Instrument" column="instrument" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Fills" column="fills" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Bought" column="bought" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Sold" column="sold" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Accounts" column="accounts" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Closed Cycles" column="closedCycles" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Known P/L" column="knownPnl" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+                <SortableTableHeader label="Last Trade" column="lastTradeAt" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
+              </tr></thead><tbody>{visibleInstrumentRows.map((row) => <tr key={row.instrument}>
+                <td><strong>{shortId(row.instrument)}</strong><small className="table-sub mono">{row.instrument}</small></td>
+                <td>{row.fills}</td>
+                <td>{formatDecimal(row.bought, 4)}</td>
+                <td>{formatDecimal(row.sold, 4)}</td>
+                <td>{row.accounts}</td>
+                <td>{row.closedCycles}</td>
+                <td><strong className={row.knownPnl < 0 ? "negative" : row.knownPnl > 0 ? "positive" : ""}>{row.pnlCycles ? formatMoney(row.knownPnl) : "—"}</strong><small className="table-sub">P/L available for {row.pnlCycles} / {row.closedCycles} closed Cycles</small></td>
+                <td>{formatDate(row.lastTradeAt)}<small className="table-sub">First {formatDate(row.firstTradeAt)}</small></td>
+              </tr>)}</tbody></table></div>
+              <Paginator step={INSTRUMENT_TABLE_PAGE_SIZE} offset={instrumentTableOffset} hasMore={instrumentTableOffset + INSTRUMENT_TABLE_PAGE_SIZE < filteredInstrumentRows.length} onOffsetChange={setInstrumentTableOffset} summary={<small>{instrumentTableOffset + 1}–{Math.min(instrumentTableOffset + INSTRUMENT_TABLE_PAGE_SIZE, filteredInstrumentRows.length)} of {filteredInstrumentRows.length}</small>} />
+            </>}
+          </Card>
+
+          <Card className="decision-next-card" title="Needs Review" action={<Badge value={partialFailures.length ? "INCOMPLETE" : compactNextSteps.length ? `${compactNextSteps.length} GROUPS` : "READY"} />}><StepList items={compactNextSteps.slice(0, 4)} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} /><ErrorNote>{reviewError}</ErrorNote>{decisionMessage ? <div className="inline-success">{decisionMessage}</div> : null}</Card>
+
+          {selected ? <div className="decision-stage-grid journal-research-context">
+            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><QuickLink href={`/research#subject-${subjectId}`}>Open Research</QuickLink></div>}>
+              <div className="decision-stage-lead"><Badge value={researchUnavailable || timelineUnavailable ? "INCOMPLETE" : latestDecision ? "DECISION" : primaryThesis ? upper(primaryThesis.status) : "MISSING"} /><strong>{researchUnavailable ? "Research state read unavailable" : timelineUnavailable ? "Decision Timeline unavailable" : text(latestDecision?.title, text(primaryThesis?.title, "No live Thesis"))}</strong><ScenarioDigest value={researchUnavailable || timelineUnavailable ? "Retry the missing durable read before interpreting the decision chain." : text(latestDecision?.summary, text(primaryRevision?.statement, "Create a falsifiable judgment before defining execution intent."))} /></div>
+              <div className="workflow-support-line"><span>Trade Plan</span><Badge value={researchUnavailable ? "UNAVAILABLE" : plan ? upper(plan.status) : "MISSING"} /><strong>{plan ? `${shortId(plan.instrument_id)} · v${number(plan.version) || "—"}` : "No Current Plan"}</strong></div>
               <div className="decision-metrics"><span>Recent Decisions<strong>{decisionItems.length}</strong></span><span>Plan Conditions<strong>{listOf<Dict>(plan, "conditions").length}</strong></span><span>Pending Reviews<strong>{pendingCandidates.length + openQuestions.length}</strong></span></div>
             </Card>
 
-            <Card kicker="2 · OBSERVE" title="Evidence & Triggers" action={<Link href="/monitors">Open Monitors →</Link>}>
+            <Card kicker="2 · OBSERVE" title="Evidence & Triggers" action={<QuickLink href="/monitors">Open Monitors</QuickLink>}>
               <div className="decision-stage-lead"><Badge value={monitorsUnavailable ? "UNAVAILABLE" : activeMonitors.length ? "ACTIVE" : "UNCOVERED"} /><strong>{monitorsUnavailable ? "Monitor dashboard read unavailable" : `${linkedMonitors.length} linked · ${activeMonitors.length} active`}</strong><p>{monitorsUnavailable ? "Coverage is unknown; absence must not be interpreted as no Monitor." : latestMonitorRun ? `Latest run ${upper(latestMonitorRun.status)} · ${formatDate(latestMonitorRun.completed_at ?? latestMonitorRun.started_at)}` : "No linked Monitor run has been recorded."}</p></div>
               <div className="workflow-support-line"><span>Next Catalyst</span><Badge value={agendaUnavailable ? "UNAVAILABLE" : overdueCatalysts.length ? "OVERDUE" : "TRACKING"} /><strong>{agendaUnavailable ? "Agenda Unavailable" : upcomingCatalysts[0] ? `${text(upcomingCatalysts[0].title)} · ${formatDate(upcomingCatalysts[0].window_start)}` : "No Upcoming Catalyst"}</strong></div>
               <div className="decision-metrics"><span>Triggered Rules<strong>{triggeredRules.length}</strong></span><span>Upcoming Events<strong>{upcomingCatalysts.length}</strong></span><span>Overdue Outcomes<strong>{overdueCatalysts.length}</strong></span></div>
             </Card>
 
-            <Card kicker="3 · EXECUTE" title="Position & Trade Cycles" action={<Link href="/portfolio">Open Portfolio →</Link>}>
+            <Card kicker="3 · EXECUTE" title="Position & Trade Cycles" action={<QuickLink href="/portfolio">Open Portfolio</QuickLink>}>
               <div className="decision-stage-lead"><Badge value={accountsUnavailable || transactionsUnavailable || tradeCyclesUnavailable ? "INCOMPLETE" : transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : relatedPositions.length ? "HELD" : relatedTransactions.length ? "CLOSED / ACTIVITY" : "NO ACTIVITY"} /><strong>{instrumentId ? shortId(instrumentId) : "No Execution Instrument"}</strong><p>{transactionsUnavailable ? "Durable transaction history is unavailable; do not interpret the empty state as no trading." : latestTransaction ? `${upper(latestTransaction.side, upper(latestTransaction.kind))} · ${formatDate(latestTransaction.occurred_at)} · ${text(latestTransaction.quantity, "—")} @ ${text(latestTransaction.price, "—")}` : "No durable activity is linked to this execution Instrument."}</p></div>
-              <div className="workflow-support-line"><span>Latest Trade Cycle</span><Badge value={tradeCyclesUnavailable ? "UNAVAILABLE" : upper(latestTradeCycle?.status, "NOT READY")} /><strong>{tradeCyclesUnavailable ? "Cycle projection is unavailable" : latestTradeCycle ? `${formatDate(latestTradeCycle.opened_at)} → ${latestTradeCycle.closed_at ? formatDate(latestTradeCycle.closed_at) : "Open"} · Net P/L ${text(latestTradeCycle.net_realized_pnl, "Unavailable")} ${text(latestTradeCycle.currency, "")}${tradeCycleProjectionIncomplete ? " · Coverage Incomplete" : ""}` : relatedTransactions.length ? "No resolvable long-only Cycle; inspect durable activity coverage" : "A Fill is required before a Cycle can open"}</strong></div>
-              <div className="decision-metrics"><span>Held Quantity<strong>{heldQuantity || "—"}</strong></span><span>Trade Cycles<strong>{tradeCycles.length}</strong></span><span>Visible Activity<strong>{relatedTransactions.length}</strong></span></div>
+              <div className="workflow-support-line"><span>Latest Trade Cycle</span><Badge value={tradeCyclesUnavailable ? "UNAVAILABLE" : upper(latestTradeCycle?.status, "NOT READY")} /><strong>{tradeCyclesUnavailable ? "Cycle projection is unavailable" : latestTradeCycle && latestCyclePnl ? `${formatDate(latestTradeCycle.opened_at)} → ${latestTradeCycle.closed_at ? formatDate(latestTradeCycle.closed_at) : "Open"} · ${latestCyclePnl.label} ${latestCyclePnl.value}${latestCyclePnl.detail ? ` · ${latestCyclePnl.detail}` : ""}${tradeCycleProjectionIncomplete ? " · Coverage Incomplete" : ""}` : relatedTransactions.length ? "No resolvable long-only Cycle; inspect durable activity coverage" : "A Fill is required before a Cycle can open"}</strong></div>
+              <div className="decision-metrics"><span>Held Quantity<strong>{heldQuantity || "—"}</strong></span><span>Trade Cycles<strong>{subjectTradeCycles.length}</strong></span><span>Visible Activity<strong>{relatedTransactions.length}</strong></span></div>
             </Card>
 
-            <Card kicker="4 · REVIEW" title="Performance & Behavior" action={<div className="workflow-card-actions"><Link href="/portfolio">Performance →</Link><Link href="/retro">Review Details →</Link></div>}>
-              <div className="decision-stage-lead"><Badge value={retroUnavailable ? "UNAVAILABLE" : latestRetro ? retroReviewStatus : "NO RUN"} /><strong>{retroUnavailable ? "Trade Retro history read unavailable" : latestRetro ? `${text(latestRetro.period_start).slice(0, 10)} → ${text(latestRetro.period_end).slice(0, 10)}` : "No related review"}</strong><p>{retroUnavailable ? "Review status and findings are unknown until the durable read recovers." : latestRetro ? `${listOf<Dict>(latestRetro, "findings").length} deterministic finding(s) · generated ${formatDate(latestRetro.generated_at)}` : "Performance remains in Portfolio; behavior review begins after durable transactions and a pre-period plan snapshot exist."}</p></div>
+            <Card kicker="4 · REVIEW" title="Performance & Behavior" action={<div className="workflow-card-actions"><QuickLink href="/portfolio">Performance</QuickLink><ActionButton onClick={() => selectJournalTab("reviews")}>Review Details</ActionButton></div>}>
+              <div className="decision-stage-lead"><Badge value={retroUnavailable ? "UNAVAILABLE" : latestRetro ? retroReviewStatus : "NO RUN"} /><strong>{retroUnavailable ? "Period review history unavailable" : latestRetro ? `${text(latestRetro.period_start).slice(0, 10)} → ${text(latestRetro.period_end).slice(0, 10)}` : "No related review"}</strong><p>{retroUnavailable ? "Review status and findings are unknown until the durable read recovers." : latestRetro ? `${listOf<Dict>(latestRetro, "findings").length} deterministic finding(s) · generated ${formatDate(latestRetro.generated_at)}` : "Performance remains in Portfolio; behavior review begins after durable transactions and a pre-period plan snapshot exist."}</p></div>
               <div className="workflow-support-line"><span>Judgment Calibration</span><Badge value={scorecardsUnavailable ? "UNAVAILABLE" : scorecardGaps.length ? "GAPS" : latestScorecard ? "AVAILABLE" : "NO RUN"} /><strong>{latestScorecard ? `${scorecardGaps.length} gap(s) across ${listOf<Dict>(latestScorecard, "dimensions").length} dimensions` : "No Calibration Evidence Yet"}</strong></div>
-              <div className="decision-metrics"><span>Retro Findings<strong>{listOf<Dict>(latestRetro, "findings").length}</strong></span><span>Follow-Up Actions<strong>{listOf<string>(retroReview, "action_items").length}</strong></span><span>Calibration Gaps<strong>{scorecardGaps.length}</strong></span></div>
+              <div className="decision-metrics"><span>Review Findings<strong>{listOf<Dict>(latestRetro, "findings").length}</strong></span><span>Follow-Up Actions<strong>{listOf<string>(retroReview, "action_items").length}</strong></span><span>Calibration Gaps<strong>{scorecardGaps.length}</strong></span></div>
             </Card>
-          </div>
+          </div> : null}
           </section>
 
           <section id="journal-panel-timeline" role="tabpanel" aria-labelledby="journal-tab-timeline" hidden={journalTab !== "timeline"} className="journal-panel-stack">
-            <Card kicker="RECONCILE · APPEND ONLY" title="Unlinked Activity" action={<Badge value={`${relatedUnlinkedActivities.length} ITEMS`} />}>
-              <p className="card-note">Each unmatched Broker trade can be linked to the current exact Decision and Plan, or truthfully classified without inventing a pre-trade reason. Saving closes its durable Review item.</p>
-              {relatedUnlinkedActivities.length === 0 ? <Empty>No unlinked Broker trades for this execution Instrument.</Empty> : <div className="journal-cycle-list">{relatedUnlinkedActivities.map((item) => { const transaction = asDict(item.transaction); const key = text(item.source_key, text(transaction.provider_transaction_id)); const defaultStatus: ActivityStatus = planLinkReady && latestDecision ? "LINKED_DECISION_PLAN" : "UNPLANNED"; const defaultClassification: ActivityClassification = defaultStatus === "LINKED_DECISION_PLAN" ? "ACTIVE_TRADE" : "UNCLASSIFIED"; return <article key={key}><header><div><strong>{upper(transaction.side)} · {shortId(transaction.instrument_id)}</strong><small>{formatDate(transaction.occurred_at)} · {text(transaction.quantity)} @ {text(transaction.price)} {text(transaction.currency, "")}</small></div><Badge value="UNLINKED" /></header><div className="portfolio-form-actions"><select aria-label="Activity Classification" value={activityStatuses[key] ?? defaultStatus} onChange={(event) => setActivityStatuses((current) => ({ ...current, [key]: event.target.value as ActivityStatus }))}><option value="LINKED_DECISION_PLAN" disabled={!planLinkReady || !latestDecision}>Link Current Decision & Plan</option><option value="UNPLANNED">Unplanned</option><option value="CASH_MANAGEMENT">Cash Management</option><option value="TRANSFER_OR_CORPORATE_ACTION">Transfer / Corporate Action</option><option value="PROVIDER_CORRECTION">Provider Correction</option></select><select aria-label="Activity Classification Type" value={activityClassifications[key] ?? defaultClassification} onChange={(event) => setActivityClassifications((current) => ({ ...current, [key]: event.target.value as ActivityClassification }))}><option value="ACTIVE_TRADE">Active Trade</option><option value="LONG_TERM_INVESTMENT">Long-Term Investment</option><option value="HEDGE">Hedge</option><option value="CASH_MANAGEMENT">Cash Management</option><option value="TRANSFER_OR_ADMIN">Transfer or Admin</option><option value="UNCLASSIFIED">Unclassified</option></select><select aria-label="Linked Order Intent" value={activityOrderLinks[key] || ""} onChange={(event) => setActivityOrderLinks((current) => ({ ...current, [key]: event.target.value }))}><option value="">No Exact Order Link</option>{relatedOrderIntents.map((order) => <option value={String(order.order_intent_id)} key={String(order.order_intent_id)}>{String(order.instruction)} · {formatDate(order.created_at)} · {String(order.status)}</option>)}</select><ActionButton busy={activityBusy === key} onClick={() => { void classifyActivity(item); }}>Save Classification</ActionButton></div></article>; })}</div>}
-              <ErrorNote>{activityError}</ErrorNote>
-            </Card>
             <Card kicker="DECISIONS + ACTIVITY" title="Timeline" action={<Badge value={`${journalTimelineRows.length} ITEMS`} />}>
               <p className="card-note">Research Decisions, Trading Partner order intents/results, and durable Broker activities share one chronological view. Missing Provider history or an absent exact link remains a coverage gap; this page never refreshes a Broker.</p>
-              {journalTimelineRows.length === 0 ? <Empty>No Decision or durable activity is available for this Research Subject.</Empty> : <div className="journal-timeline-list">{journalTimelineRows.slice(0, 50).map((item) => <article key={`${item.kind}-${item.key}`}><Badge value={item.kind} /><div><header><strong>{item.title}</strong><time>{formatDate(item.occurredAt)}</time></header><p>{item.detail}</p></div></article>)}</div>}
+              {journalTimelineRows.length === 0 ? <Empty>No Decision or durable activity is available for this Research Subject.</Empty> : <><div className="journal-timeline-list">{visibleTimelineRows.map((item) => <article key={`${item.kind}-${item.key}`}><Badge value={item.kind} /><div><header><strong>{item.title}</strong><time>{formatDate(item.occurredAt)}</time></header><p>{item.detail}</p></div></article>)}</div><Paginator step={TIMELINE_PAGE_SIZE} offset={timelineOffset} hasMore={timelineOffset + TIMELINE_PAGE_SIZE < journalTimelineRows.length} onOffsetChange={setTimelineOffset} summary={<small>{timelineOffset + 1}–{Math.min(timelineOffset + TIMELINE_PAGE_SIZE, journalTimelineRows.length)} of {journalTimelineRows.length}</small>} /></>}
             </Card>
           </section>
 
           <section id="journal-panel-cycles" role="tabpanel" aria-labelledby="journal-tab-cycles" hidden={journalTab !== "cycles"} className="journal-panel-stack">
-            <Card kicker="DETERMINISTIC · LONG-ONLY" title="Trade Cycles" action={<div className="page-actions"><Badge value={text(tradeCycleData.status, "UNKNOWN")} />{tradeCycleOverrides.length > 0 ? <Badge value={`${tradeCycleOverrides.length} OVERRIDES`} /> : null}<Link href="/portfolio#activity">Portfolio Details →</Link></div>}>
+            <Card kicker="DETERMINISTIC · LONG-ONLY" title="Trade Cycles" action={<div className="cycle-header-actions"><div className={`cycle-quality-indicator ${overallCycleQuality === "COMPLETE" ? "complete" : "incomplete"}`}><span>Data Quality</span><strong>{overallCycleQuality === "COMPLETE" ? "Complete" : overallCycleQuality === "INCOMPLETE" ? "Incomplete" : "Unknown"}</strong><small>{overallCycleQuality === "COMPLETE" ? `${allTradeCycles.length} Cycles fully reconstructable` : `${incompleteCycleCount} incomplete · including ${unresolvedCycleCount} unresolved`}</small></div>{tradeCycleOverrides.length > 0 ? <Badge value={`${tradeCycleOverrides.length} OVERRIDES`} /> : null}<QuickLink href="/portfolio#activity">Open Portfolio</QuickLink></div>}>
               <p className="card-note">Cycles are rebuilt from durable transactions by account, Instrument, and native currency. Append-only split/merge/relink revisions change only the effective projection; the original algorithm Cycles remain retained.</p>
-              {tradeCycles.length === 0 ? <Empty>No resolvable Trade Cycle is available for this execution Instrument.</Empty> : <><div className="journal-cycle-list">{visibleTradeCycles.map((cycle) => <article key={text(cycle.cycle_id)}><header><div><strong>{shortId(cycle.instrument_id)}</strong><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small></div><div className="page-actions"><Badge value={text(cycle.classification, "UNCLASSIFIED")} /><Badge value={text(cycle.status, "UNKNOWN")} /></div></header><dl><div><dt>Net P/L</dt><dd>{text(cycle.net_realized_pnl)} {text(cycle.currency, "")}</dd></div><div><dt>Ending Quantity</dt><dd>{text(cycle.ending_quantity)}</dd></div><div><dt>Adds / Reductions</dt><dd>{text(cycle.add_count, "0")} / {text(cycle.reduce_count, "0")}</dd></div><div><dt>Quality</dt><dd>{text(cycle.quality)}</dd></div></dl></article>)}</div><Paginator step={cyclePageSize} offset={cycleOffset} hasMore={cycleOffset + cyclePageSize < tradeCycles.length} onOffsetChange={setCycleOffset} summary={<small>{cycleOffset + 1}–{Math.min(cycleOffset + cyclePageSize, tradeCycles.length)} of {tradeCycles.length}</small>} /></>}
-              <details><summary>Split, Merge, or Relink Cycles</summary><p className="card-note">Preview is mandatory. Choose visible Cycles and activities; no opaque ID needs to be copied. Applying appends a revision and preserves the original algorithm projection.</p><div className="portfolio-form-grid"><FormField label="Operation" required><select required value={overrideOperation} onChange={(event) => { setOverrideOperation(event.target.value as "SPLIT" | "MERGE" | "RELINK"); setOverridePreview(null); }}><option value="SPLIT">Split</option><option value="MERGE">Merge</option><option value="RELINK">Relink</option></select></FormField><FormField label="Root Cycle" required><select required value={overrideRoot} onChange={(event) => { setOverrideRoot(event.target.value); setOverrideCycles(event.target.value); setOverridePreview(null); }}><option value="">Select a Cycle</option>{tradeCycles.map((cycle) => <option value={text(cycle.cycle_id)} key={`root-${text(cycle.cycle_id)}`}>{shortId(cycle.instrument_id)} · {formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</option>)}</select></FormField><FormField label="Source Cycles" required><select required multiple value={overrideSelectedCycleIds} onChange={(event) => { setOverrideCycles(Array.from(event.currentTarget.selectedOptions, (option) => option.value).join(",")); setOverridePreview(null); }}>{tradeCycles.map((cycle) => <option value={text(cycle.cycle_id)} key={`source-${text(cycle.cycle_id)}`}>{shortId(cycle.instrument_id)} · {formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</option>)}</select></FormField>{overrideOperation === "SPLIT" ? <><FormField label="Split Group A" required><select required multiple onChange={(event) => updateSplitGroup(0, Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{overrideActivityOptions.map((activity) => <option value={activity} key={`a-${activity}`}>{activity}</option>)}</select></FormField><FormField label="Split Group B" required><select required multiple onChange={(event) => updateSplitGroup(1, Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{overrideActivityOptions.map((activity) => <option value={activity} key={`b-${activity}`}>{activity}</option>)}</select></FormField></> : null}{overrideOperation === "RELINK" ? <><FormField label="Activities to Move" required><select required multiple onChange={(event) => { setOverrideActivities(Array.from(event.currentTarget.selectedOptions, (option) => option.value).join(",")); setOverridePreview(null); }}>{overrideActivityOptions.map((activity) => <option value={activity} key={`move-${activity}`}>{activity}</option>)}</select></FormField><FormField label="Target Cycle" required><select required value={overrideTarget} onChange={(event) => { setOverrideTarget(event.target.value); setOverridePreview(null); }}><option value="">Select a Target</option>{tradeCycles.map((cycle) => <option value={text(cycle.cycle_id)} key={`target-${text(cycle.cycle_id)}`}>{shortId(cycle.instrument_id)} · {formatDate(cycle.opened_at)}</option>)}</select></FormField></> : null}<FormField label="Revision Note"><input value={overrideNote} onChange={(event) => { setOverrideNote(event.target.value); setOverridePreview(null); }} /></FormField></div><div className="portfolio-form-actions"><ActionButton busy={overrideBusy === "preview"} onClick={() => { void previewCycleOverride(); }}>Preview Impact</ActionButton><ActionButton busy={overrideBusy === "apply"} disabled={!overridePreview} onClick={() => { void applyCycleOverride(); }}>Apply Revision</ActionButton></div>{overridePreview ? <div className="inline-success">Preview ready · {listOf<Dict>(overridePreview, "impacts").length} impact(s) · original algorithm projection retained.</div> : null}<ErrorNote>{overrideError}</ErrorNote></details>
+              <div className="cycle-sort-toolbar"><span>Latest Activity uses the newest exact loaded activity in each Cycle; when that activity is outside the current transaction window, the Cycle close/open time is the explicit fallback.</span><label><span>Sort Cycles</span><select value={cycleSortMode} onChange={(event) => setCycleSortMode(event.target.value as CycleSortMode)}><option value="LATEST_DESC">Latest Activity · Newest First</option><option value="LATEST_ASC">Latest Activity · Oldest First</option><option value="OPENED_DESC">Opened · Newest First</option><option value="OPENED_ASC">Opened · Oldest First</option><option value="INSTRUMENT_ASC">Instrument · A to Z</option><option value="INSTRUMENT_DESC">Instrument · Z to A</option></select></label></div>
+              <div className="cycle-status-guide" aria-label="Trade Cycle Status and Quality Guide"><span><Badge value="OPEN" tone="good" /><strong>{cycleStatusCounts.OPEN}</strong><small>Position quantity remains above zero.</small></span><span><Badge value="CLOSED" tone="neutral" /><strong>{cycleStatusCounts.CLOSED}</strong><small>Matched activity returned quantity to zero.</small></span><span><Badge value="UNRESOLVED" tone="bad" /><strong>{cycleStatusCounts.UNRESOLVED}</strong><small>Available history cannot reconstruct a valid long-only Cycle.</small></span><span><Badge value="INCOMPLETE" tone="warn" /><strong>{cycleIncompleteCount}</strong><small>Cycle exists, but fees, prices, or coverage are missing.</small></span></div>
+              {tradeCycles.length === 0 ? <Empty>No resolvable Trade Cycle matches the current filters.</Empty> : <>
+                <div className={`journal-cycle-browser rows-${cyclePageSize}`}>
+                  <div className="journal-cycle-browser-list" role="list" aria-label="Trade Cycles">
+                    {visibleTradeCycles.map((cycle) => { const pnl = cyclePnlPresentation(cycle); const latestActivityTime = cycleLatestActivityTime(cycle); return <button type="button" role="listitem" className={text(selectedCycle?.cycle_id) === text(cycle.cycle_id) ? "selected" : ""} key={text(cycle.cycle_id)} onClick={() => setSelectedCycleId(text(cycle.cycle_id))}>
+                      <span><strong>{shortId(cycle.instrument_id)}</strong><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small><small>Latest Activity {latestActivityTime > 0 ? formatDate(new Date(latestActivityTime).toISOString()) : "Unavailable"}</small></span>
+                      <span><Badge value={text(cycle.status, "UNKNOWN")} tone={cycleStatusTone(cycle.status)} /><strong className={pnl.tone}>{pnl.label} {pnl.value}</strong>{pnl.detail ? <small>{pnl.detail}</small> : null}</span>
+                    </button>; })}
+                    <Paginator step={cyclePageSize} offset={cycleOffset} hasMore={cycleOffset + cyclePageSize < tradeCycles.length} onOffsetChange={(value) => { setCycleOffset(value); setSelectedCycleId(""); }} summary={<small>{cycleOffset + 1}–{Math.min(cycleOffset + cyclePageSize, tradeCycles.length)} of {tradeCycles.length}</small>} />
+                  </div>
+                  {selectedCycle ? <article className="journal-cycle-detail">
+                    <header><div><span>Trade Cycle</span><h3>{shortId(selectedCycle.instrument_id)}</h3><p>{formatDate(selectedCycle.opened_at)} → {selectedCycle.closed_at ? formatDate(selectedCycle.closed_at) : "Open"}</p></div><div className="page-actions"><Badge value={text(selectedCycle.classification, "UNCLASSIFIED")} tone={cycleClassificationTone(selectedCycle.classification)} /><Badge value={text(selectedCycle.status, "UNKNOWN")} tone={cycleStatusTone(selectedCycle.status)} /><Badge value={text(selectedCycle.quality, "UNKNOWN")} tone={cycleQualityTone(selectedCycle.quality)} /></div></header>
+                    <div className="journal-result-grid compact"><span>{selectedCyclePnl?.label ?? "P/L"}<strong className={selectedCyclePnl?.tone}>{selectedCyclePnl?.value ?? "Unavailable"}</strong>{selectedCyclePnl?.detail ? <small>{selectedCyclePnl.detail}</small> : null}</span><span>Maximum Deployed<strong>{selectedCycle.maximum_deployed_capital == null ? "Unavailable" : formatMoney(number(selectedCycle.maximum_deployed_capital), text(selectedCycle.currency, "USD"))}</strong></span><span>Ending Quantity<strong>{formatDecimal(selectedCycle.ending_quantity)}</strong></span><span>Adds / Reductions<strong>{text(selectedCycle.add_count, "0")} / {text(selectedCycle.reduce_count, "0")}</strong></span></div>
+                    <section><h4>Activity Path</h4>{selectedCycleTransactions.length === 0 ? <Empty>Exact activity details are unavailable in the current durable window.</Empty> : <div className="journal-timeline-list">{selectedCycleTransactions.map((transaction) => <article key={text(transaction.provider_transaction_id)}><Badge value={upper(transaction.side, upper(transaction.kind))} /><div><header><strong>{text(transaction.quantity)} @ {text(transaction.price)} {text(transaction.currency, "")}</strong><time>{formatDate(transaction.occurred_at)}</time></header><p>{shortId(transaction.account_ref)} · {text(transaction.provider)}</p></div></article>)}</div>}</section>
+                    <section><h4>Decision & Plan</h4><p className="card-note">{selected ? latestDecision ? `${text(latestDecision.title)} · ${planLinkReady ? `Trade Plan v${planVersion}` : "No exact Trade Plan link"}` : "No exact pre-fill Decision is linked in the selected Research Subject." : "Select a Research Subject to inspect exact Decision and Trade Plan context. Instrument and timing alone are not treated as proof of a link."}</p></section>
+                    {listOf<string>(selectedCycle, "warning_codes").length > 0 ? <section><h4>Data Warnings</h4><div className="retro-code-list">{listOf<string>(selectedCycle, "warning_codes").map((warning) => <code key={warning}>{warning}</code>)}</div></section> : null}
+                  </article> : null}
+                </div>
+              </>}
+              <CycleAdjustmentEditor cycles={tradeCycles} transactions={allTransactions} overrideRevisions={tradeCycleOverrides} onApplied={workbenchApi.refresh} />
             </Card>
           </section>
 
           <section id="journal-panel-behavior" role="tabpanel" aria-labelledby="journal-tab-behavior" hidden={journalTab !== "behavior"} className="journal-panel-stack">
-            <Card kicker="DISCIPLINE · DETERMINISTIC" title="Behavior" action={<div className="page-actions"><select aria-label="Behavior Classification" value={behaviorClassification} onChange={(event) => setBehaviorClassification(event.target.value as ActivityClassification | "ALL")}><option value="ALL">All Classifications</option><option value="ACTIVE_TRADE">Active Trade</option><option value="LONG_TERM_INVESTMENT">Long-Term Investment</option><option value="HEDGE">Hedge</option><option value="CASH_MANAGEMENT">Cash Management</option><option value="TRANSFER_OR_ADMIN">Transfer or Admin</option><option value="UNCLASSIFIED">Unclassified</option></select><Badge value={text(behaviorData.algorithm_version, "UNAVAILABLE")} /></div>}>
-              <p className="card-note">No aggregate score. Every ratio retains its denominator, exclusions, and exact Cycle or Decision references. Open, unresolved, mixed-currency monetary, and SGOV cash-management Cycles are excluded where required.</p>
-              <BehaviorPanel value={behaviorData} />
+            <Card title="Behavior" action={<Badge value={text(behaviorData.algorithm_version, "UNAVAILABLE")} />}>
+              <div className="journal-scope-notice"><strong>Cohort scope</strong><span>{subjectId ? shortId(subjectId) : "All Subjects"} · {accountFilters.length ? `${accountFilters.length} selected Account(s)` : "All Accounts"} · {instrumentFilters.length ? instrumentFilters.map(shortId).join(", ") : instrumentId ? shortId(instrumentId) : "All Instruments"} · {classificationFilters.length ? classificationFilters.join(", ") : "All Classifications"} · {asDict(behaviorData.cohort).start ? formatDate(asDict(behaviorData.cohort).start) : selectedPeriodStart ? formatDate(selectedPeriodStart) : "All Dates"} → {asDict(behaviorData.cohort).end ? formatDate(asDict(behaviorData.cohort).end) : selectedPeriodEnd ? formatDate(selectedPeriodEnd) : "Now"}</span></div>
+              {!periodWindowValid ? <ErrorNote>Start Date must not be after End Date. Behavior remains unavailable until the range is corrected.</ErrorNote> : null}
+              <p className="card-note">Each metric appears once. Ratios are recomputed from the returned numerator and denominator before display; inconsistent payloads fail closed. Exclusions and unsupported facts remain visible instead of becoming zero.</p>
+              {periodWindowValid ? <BehaviorPanel value={behaviorData} /> : <Empty>Correct the custom date range to calculate Behavior.</Empty>}
             </Card>
           </section>
 
+          <section id="journal-panel-notes" role="tabpanel" aria-labelledby="journal-tab-notes" hidden={journalTab !== "notes"} className="journal-panel-stack">
+            <ObservationInbox
+              items={filteredExternalNotes}
+              sources={observationSources}
+              activeSubjects={activeSubjects}
+              selectedInstrumentIds={activeInstrumentFilters}
+              busy={noteSyncBusy}
+              syncMessage={noteSyncMessage}
+              syncError={noteSyncError}
+              onRefresh={() => { void refreshObservationSources(); }}
+              onSelectSubject={selectSubjectContext}
+              onReviewDecision={reviewNoteAsDecision}
+              analysisBusyId={noteAnalysisBusyId}
+              onAnalyzeRevision={(revisionId) => { void analyzeObservation(revisionId); }}
+              positionContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allPositions.filter((position) => text(position.instrument_id, "") === noteInstrumentId); const quantity = matches.reduce((total, position) => total + number(position.quantity), 0); return <div><strong>{matches.length ? quantity : "No Position"}</strong><small>{matches.length ? `${matches.length} account position${matches.length === 1 ? "" : "s"}` : "No durable holding in the current snapshot"}</small></div>; }}
+              cyclesContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allTradeCycles.filter((cycle) => text(cycle.instrument_id, "") === noteInstrumentId); const latest = [...matches].sort((left, right) => cycleReviewTime(right) - cycleReviewTime(left))[0]; const pnl = latest ? cyclePnlPresentation(latest) : null; return <div><strong>{matches.length} Cycle{matches.length === 1 ? "" : "s"}</strong><small>{latest && pnl ? `${upper(latest.status)} · ${pnl.label} ${pnl.value}${pnl.detail ? ` · ${pnl.detail}` : ""}` : "No durable Trade Cycle"}</small></div>; }}
+            />
+          </section>
+
           <section id="journal-panel-reviews" role="tabpanel" aria-labelledby="journal-tab-reviews" hidden={journalTab !== "reviews"} className="journal-panel-stack">
-            <Card kicker="FOLLOW-UP" title="Reviews" action={<div className="workflow-card-actions"><ActionButton busy={behaviorReviewBusy} onClick={() => { void runWeeklyBehaviorReview(); }}>Run Weekly Review</ActionButton><Link href="/retro">Trade Retro →</Link><Link href={`/scorecards?subject_id=${encodeURIComponent(subjectId)}`}>Calibration →</Link></div>}>
-              <div className="decision-metrics"><span>Open Items<strong>{nextSteps.length}</strong></span><span>Retro Findings<strong>{listOf<Dict>(latestRetro, "findings").length}</strong></span><span>Calibration Gaps<strong>{scorecardGaps.length}</strong></span></div>
-              <StepList items={nextSteps} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} />
+            <Card title="Reviews" action={<div className="workflow-card-actions"><ActionButton busy={behaviorReviewBusy} onClick={() => { void prepareWeeklyReview(); }}>Preview Weekly Review</ActionButton>{subjectId ? <QuickLink href={`/scorecards?subject_id=${encodeURIComponent(subjectId)}`}>Calibration</QuickLink> : null}</div>}>
+              <div className="decision-metrics"><span>Active Queue<strong>{openReviewCount}</strong><small>Open + acknowledged</small></span><span>Latest Run Findings<strong>{listOf<Dict>(latestRetro, "findings").length}</strong><small>Not the queue total</small></span><span>Calibration Gaps<strong>{scorecardGaps.length}</strong></span></div>
+              <StepList items={visibleReviewSteps} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} />
+              {nextSteps.length > reviewPageSize ? <Paginator step={reviewPageSize} offset={reviewOffset} hasMore={reviewOffset + reviewPageSize < nextSteps.length} onOffsetChange={setReviewOffset} summary={<small>{reviewOffset + 1}–{Math.min(reviewOffset + reviewPageSize, nextSteps.length)} of {nextSteps.length} active items</small>} /> : null}
               <ErrorNote>{behaviorReviewError}</ErrorNote>
               {behaviorReviewRuns.length > 0 ? <div className="journal-cycle-list">{behaviorReviewRuns.slice(0, 8).map((run) => <article key={text(run.run_id)}><header><div><strong>{text(asDict(run.cohort).period_kind)} · {text(asDict(run.cohort).period_start).slice(0, 10)}</strong><small>{formatDate(run.generated_at)}</small></div><Badge value={text(run.status)} /></header><div className="page-actions">{listOf<Dict>(run, "action_observations").map((item) => <Badge key={text(item.observation_id)} value={text(item.status)} />)}</div><small className="table-sub">NEW, PERSISTENT, RESOLVED, and RECURRED are derived only from complete durable action-source reads.</small></article>)}</div> : <Empty>No period Behavior Review has been recorded yet.</Empty>}
             </Card>
+            <Card title="Period Review History" action={<Badge value={`${relatedRetro.length} RUNS`} />}>
+              <RetroReviewList runs={relatedRetro} onUpdated={workbenchApi.refresh} />
+            </Card>
           </section>
-        </>}
         {partialFailures.length ? <div id="decision-context-status" className="inline-error">Incomplete durable context: {partialFailures.join(", ")}. Available sections remain readable; retry before acting on the missing context.</div> : null}
         <TextInputDialog
           open={reviewInput !== null}
@@ -853,20 +1735,45 @@ export default function DecisionWorkbenchPage() {
           tone={reviewInput?.kind === "resolution" ? "warning" : "default"}
         />
         <ConfirmationDialog
+          open={reviewAcknowledgement !== null}
+          title="Acknowledge Review Item"
+          description={reviewAcknowledgement ? `Keep “${text(reviewAcknowledgement.title, "this review item")}" active while recording that you have seen it.` : undefined}
+          confirmLabel="Acknowledge Item"
+          busy={reviewAcknowledgement ? reviewBusy === text(reviewAcknowledgement.review_item_id, "") : false}
+          onConfirm={() => { if (reviewAcknowledgement) { const item = reviewAcknowledgement; setReviewAcknowledgement(null); void persistReviewItem(item, "ACKNOWLEDGED"); } }}
+          onCancel={() => setReviewAcknowledgement(null)}
+        >
+          <div className="confirmation-facts"><span>Status change<strong>OPEN → ACKNOWLEDGED</strong></span><span>Queue behavior<strong>Remains active</strong></span><p>This is a durable, versioned transition. It does not resolve the underlying source.</p></div>
+        </ConfirmationDialog>
+        <ConfirmationDialog
+          open={weeklyReviewPreview !== null}
+          title="Create Weekly Review"
+          description="This confirmed workflow performs three durable writes for the exact canonical windows shown below."
+          confirmLabel="Run 3-Step Review"
+          busy={behaviorReviewBusy}
+          onConfirm={() => { void createWeeklyReview(); }}
+          onCancel={() => { if (!behaviorReviewBusy) setWeeklyReviewPreview(null); }}
+        >
+          {weeklyReviewPreview ? <div className="confirmation-facts"><span>1 · Generate immutable Trade Retro<strong>{weeklyReviewPreview.start.slice(0, 10)} → {weeklyReviewPreview.end.slice(0, 10)}</strong></span><span>2 · Append Behavior Review<strong>{subjectId ? shortId(subjectId) : "Global cohort"}</strong><small>{tradeCycles.length} loaded Cycle refs · {decisionItems.length} Decision refs · {reviewItems.length} Review refs</small></span><span>3 · Prepare next period<strong>{weeklyReviewPreview.nextStart.slice(0, 10)} → {weeklyReviewPreview.nextEnd.slice(0, 10)}</strong></span><p>{retroUnavailable || reviewItemsUnavailable ? "Source reads are incomplete; the Behavior Review will preserve that limitation." : "Retro and Review Queue reads are currently available."}</p></div> : null}
+          <ErrorNote>{behaviorReviewError}</ErrorNote>
+        </ConfirmationDialog>
+        <ConfirmationDialog
           open={decisionOpen}
           title="Record Decision"
           description={supersedesDecisionId ? `Review and supersede ${shortId(supersedesDecisionId)} with a new durable Decision. This does not submit or authorize an order.` : "Save the current strategy decision in the existing durable Decision Record. This does not submit or authorize an order."}
           confirmLabel="Save Decision"
           busy={decisionBusy}
           onConfirm={() => { void saveDecision(); }}
-          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); } }}
+          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionDraftScenarios([]); } }}
         >
           <div className="journal-capture-form">
+            <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small className="mono">{subjectId || "—"}</small></span><span>Trade Plan<strong>{planLinkReady ? `${planId} · version ${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceRevisionId || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
             <FormField label="Action" required><select required value={decisionAction} onChange={(event) => setDecisionAction(event.target.value as DecisionAction)}>{DECISION_ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></FormField>
             <FormField label="Current Scenario" required><select required value={decisionScenario} onChange={(event) => setDecisionScenario(event.target.value as DecisionScenario)}>{DECISION_SCENARIOS.map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></FormField>
             <FormField label="Reason" required className="journal-capture-wide"><textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>
+            {decisionDraftScenarios.length ? <div className="notes-scenario-grid journal-capture-wide" aria-label="Imported Note Scenario Draft">{DECISION_SCENARIOS.map((scenario) => { const draft = decisionDraftScenarios.find((item) => upper(item.scenario) === scenario); return <article className="notes-scenario-card" key={scenario}><header><strong>{scenario}</strong><Badge value={upper(draft?.action, "REVIEW")} /></header><p>{text(draft?.condition, "No imported condition.")}</p></article>; })}</div> : null}
             <FormField label="Review Date" className="journal-capture-wide"><input type="date" value={decisionReviewDate} onChange={(event) => setDecisionReviewDate(event.target.value)} /></FormField>
-            <p className="card-note journal-capture-wide">Strategy is recorded as strategy_v1{planLinkReady ? ` and linked to Trade Plan v${planVersion}` : ""}. The selected scenario records this action; the other scenarios remain REVIEW under the current confirmed Plan.</p>
+            <p className="card-note journal-capture-wide">Strategy is recorded as strategy_v1{planLinkReady ? ` and linked to Trade Plan v${planVersion}` : ""}. The selected scenario records this action; the other scenarios remain REVIEW under the current confirmed Plan.{decisionSourceNote ? " This draft came from an exact imported Note revision; review and edit it before saving." : ""}</p>
             <ErrorNote role="alert">{decisionError}</ErrorNote>
           </div>
         </ConfirmationDialog>

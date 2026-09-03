@@ -97,7 +97,7 @@ async def test_transaction_requires_aware_time_and_moomoo_history_is_normalized(
     assert transaction.provider_transaction_id != "raw-deal"
     assert transaction.occurred_at.tzinfo is not None
     assert transaction.fees is None
-    assert result.value.coverage[0].mapping_version == "moomoo_deals_v1"
+    assert result.value.coverage[0].mapping_version == "moomoo_deals_v2"
     assert context.closed is True
 
 

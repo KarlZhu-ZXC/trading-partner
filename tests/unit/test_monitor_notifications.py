@@ -18,6 +18,7 @@ from application.dto.us_market import USQuoteDTO
 from application.services.monitor_evaluation_service import (
     MonitorEvaluationService,
 )
+from application.services.monitor_event_analysis_service import MonitorEventAnalysisResult
 from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.monitor_notification_rendering import (
     _append_judgment_notification,
@@ -702,6 +703,103 @@ async def test_evaluator_model_timeout_enqueues_one_same_run_operational_card(
     engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_evaluator_appends_short_model_analysis_to_event_without_judgment_policy(
+    migrated_sqlite_url, fixed_clock, id_generator
+) -> None:
+    engine = create_engine(migrated_sqlite_url)
+    repository = SqlAlchemyMonitorRepository(engine)
+    instrument_id = "equity:US:TEST"
+    monitor = MonitorDefinition(
+        monitor_id="monitor_00000000-0000-7000-8000-000000000205",
+        version=1,
+        name="TEST event analysis",
+        subject_id=None,
+        primary_instrument_id=instrument_id,
+        cadence=MonitorCadence.INTERVAL,
+        interval_minutes=60,
+        status=MonitorStatus.ACTIVE,
+        rules=(
+            MonitorRuleInput(
+                rule_code="TEST_BREAKOUT_100",
+                description="TEST 突破 100 后进入复核。",
+                rule_type=MonitorRuleType.PRICE_ABOVE,
+                severity=MonitorSeverity.HIGH,
+                instrument_id=instrument_id,
+                price_threshold=Decimal("100"),
+                max_fact_age_seconds=3600,
+            ).to_domain(),
+        ),
+        confirmed_by="user",
+        idempotency_key="test-event-analysis-evaluator",
+        created_at=NOW,
+    )
+    repository.create(monitor)
+    market = MagicMock()
+    market.get_market_snapshot = AsyncMock(
+        return_value=ToolEnvelope.success(
+            request_id="req_event_analysis_quote",
+            market=Market.US,
+            as_of=NOW,
+            fetched_at=NOW,
+            freshness=Freshness.FRESH,
+            sources=(SourceReference(name="moomoo", role=SourceRole.PRIMARY),),
+            data=USQuoteDTO(
+                instrument_id=instrument_id,
+                quote_at=NOW,
+                session=TradingSession.REGULAR,
+                last=Decimal("101"),
+                open=None,
+                high=None,
+                low=None,
+                previous_close=Decimal("99"),
+                volume=None,
+                average_volume=None,
+                market_cap=None,
+                beta=None,
+                week_52_low=None,
+                week_52_high=None,
+            ),
+        )
+    )
+    event_analysis = MagicMock()
+    event_analysis.analyze = AsyncMock(
+        return_value=MonitorEventAnalysisResult(
+            analysis="价格突破条件已触发，下一步只关注能否保持，不代表自动交易。"
+        )
+    )
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        market,
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+        event_analysis_service=event_analysis,
+    )
+    fixed_clock.set(NOW)
+
+    run = await evaluator.evaluate(
+        MonitorEvaluateInput(monitor_ids=(monitor.monitor_id,), as_of=NOW)
+    )
+
+    pending = repository.list_due_notifications(
+        MonitorNotificationChannel.TELEGRAM,
+        NOW,
+        20,
+    )
+    assert run.status is MonitorRunStatus.SUCCEEDED
+    assert run.events_created == 1
+    assert len(pending) == 1
+    assert pending[0].body.endswith(
+        "MODEL_ANALYSIS\n价格突破条件已触发，下一步只关注能否保持，不代表自动交易。"
+    )
+    rendered = _format_notification_html(pending[0].title, pending[0].body)
+    assert "🤖 <b>模型分析</b>" in rendered
+    event_analysis.analyze.assert_awaited_once()
+    engine.dispose()
+
+
 def test_post_market_model_degradation_stays_in_existing_digest() -> None:
     rule = MonitorRuleInput(
         rule_code="XAU_BREAKOUT_2400_DIGEST",
@@ -793,6 +891,7 @@ def test_post_market_model_degradation_stays_in_existing_digest() -> None:
         events=(event,),
         monitor_sources_by_monitor={monitor.monitor_id: ("dukascopy",)},
         judgment_notifications_by_monitor={monitor.monitor_id: degradation},
+        event_analyses_by_monitor={monitor.monitor_id: "突破事件需要复核，但不会自动改变仓位。"},
     )
 
     assert message.source_id == run.run_id
@@ -803,6 +902,8 @@ def test_post_market_model_degradation_stays_in_existing_digest() -> None:
     assert "当前价格：2405" in message.body
     assert "数据来源：dukascopy" in message.body
     assert "错误：<code>PROVIDER_TIMEOUT_ERROR</code>" in rendered
+    assert "🤖 <b>模型分析</b>" in rendered
+    assert "突破事件需要复核" in rendered
     assert "未定义" not in rendered
     assert "UNKNOWN" not in rendered
     assert "建议数量0" not in rendered
@@ -1113,18 +1214,18 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
             cadence=MonitorCadence.US_POST_MARKET,
             status=MonitorStatus.ACTIVE,
             rules=(
-                    MonitorRuleInput(
-                        rule_code="GC_PULLBACK_ALERT_4080",
-                        description="黄金回落至 4080 下方提醒。",
+                MonitorRuleInput(
+                    rule_code="GC_PULLBACK_ALERT_4080",
+                    description="黄金回落至 4080 下方提醒。",
                     rule_type=MonitorRuleType.PRICE_BELOW,
                     severity=MonitorSeverity.MEDIUM,
                     instrument_id="future:US:GC=F",
                     price_threshold=Decimal("4080"),
                     max_fact_age_seconds=3600,
                 ).to_domain(),
-                    MonitorRuleInput(
-                        rule_code="GC_ABOVE_4000",
-                        description="黄金保持在 4000 上方。",
+                MonitorRuleInput(
+                    rule_code="GC_ABOVE_4000",
+                    description="黄金保持在 4000 上方。",
                     rule_type=MonitorRuleType.PRICE_ABOVE,
                     severity=MonitorSeverity.MEDIUM,
                     instrument_id="future:US:GC=F",
@@ -1190,12 +1291,8 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
 
     request = MonitorEvaluateInput(cadence=MonitorCadence.US_POST_MARKET, as_of=NOW)
     first_run = await evaluator.evaluate(request)
-    counts_before = repository.notification_counts(
-        MonitorNotificationChannel.TELEGRAM
-    )
-    pending = repository.list_due_notifications(
-        MonitorNotificationChannel.TELEGRAM, NOW, 20
-    )
+    counts_before = repository.notification_counts(MonitorNotificationChannel.TELEGRAM)
+    pending = repository.list_due_notifications(MonitorNotificationChannel.TELEGRAM, NOW, 20)
     assert len(pending) == 1
     digest = pending[0]
     assert digest.source_event_id is None
@@ -1211,9 +1308,7 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     delivery = await service.flush_pending()
     second_run = await evaluator.evaluate(request)
     second_delivery = await service.flush_pending()
-    counts_after = repository.notification_counts(
-        MonitorNotificationChannel.TELEGRAM
-    )
+    counts_after = repository.notification_counts(MonitorNotificationChannel.TELEGRAM)
 
     assert first_run.events_created == 2
     assert counts_before == {MonitorNotificationStatus.PENDING: 1}
@@ -1226,9 +1321,7 @@ async def test_monitor_transition_and_post_market_digest_are_durable(
     assert all(item.source_event_id is None for item in messages)
     assert any("含义：黄金回落至 4080 下方提醒" in item.body for item in messages)
     assert any("含义：黄金保持在 4000 上方" in item.body for item in messages)
-    digests = tuple(
-        item for item in messages if item.body.startswith("POST_MARKET_SUMMARY")
-    )
+    digests = tuple(item for item in messages if item.body.startswith("POST_MARKET_SUMMARY"))
     assert len(digests) == 2
     assert all(item.source_run_id is not None for item in digests)
     assert all("当前价格：4070" in item.body for item in digests)
@@ -1318,12 +1411,8 @@ async def test_interval_transition_still_enqueues_event_notification(
         id_generator,
     )
 
-    run = await evaluator.evaluate(
-        MonitorEvaluateInput(cadence=MonitorCadence.INTERVAL, as_of=NOW)
-    )
-    pending = repository.list_due_notifications(
-        MonitorNotificationChannel.TELEGRAM, NOW, 20
-    )
+    run = await evaluator.evaluate(MonitorEvaluateInput(cadence=MonitorCadence.INTERVAL, as_of=NOW))
+    pending = repository.list_due_notifications(MonitorNotificationChannel.TELEGRAM, NOW, 20)
 
     assert run.events_created == 2
     assert len(pending) == 1

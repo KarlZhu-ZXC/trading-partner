@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
+from domain.attribution.models import PositionBasisCheckpoint
 from domain.common.enums import VendorId
 from domain.portfolio.enums import (
     AccountActivityCoverageStatus,
@@ -65,6 +66,11 @@ class TradeCycleCalculator:
 
     algorithm_version = "trade_cycle_v1"
 
+    def __init__(
+        self, checkpoints: tuple[PositionBasisCheckpoint, ...] = ()
+    ) -> None:
+        self._checkpoints = checkpoints
+
     def calculate(
         self,
         *,
@@ -78,11 +84,75 @@ class TradeCycleCalculator:
         groups: dict[tuple[str, str, str], _Cycle] = {}
         last_cycle_ids: dict[tuple[str, str, str], str] = {}
         completed: list[TradeCycle] = []
-        ordered = sorted(
-            (item for item in transactions if item.kind is AccountTransactionKind.TRADE),
-            key=lambda item: (item.occurred_at, item.provider_transaction_id),
+        transaction_scopes = {
+            (item.provider, item.account_ref, item.instrument_id, item.currency)
+            for item in transactions
+            if item.instrument_id is not None
+        }
+        applicable_checkpoints = tuple(
+            item
+            for item in self._checkpoints
+            if item.effective_at <= as_of
+            and (
+                item.provider,
+                item.account_ref,
+                item.instrument_id,
+                item.currency,
+            )
+            in transaction_scopes
         )
-        for activity in ordered:
+        replaced_activity_ids = {
+            item.replaces_activity_id
+            for item in applicable_checkpoints
+            if item.replaces_activity_id is not None
+        }
+        events: list[
+            tuple[datetime, int, str, AccountTransaction | PositionBasisCheckpoint]
+        ] = [
+            (item.occurred_at, 0, item.provider_transaction_id, item)
+            for item in transactions
+            if item.kind is AccountTransactionKind.TRADE
+            and item.provider_transaction_id not in replaced_activity_ids
+        ]
+        events.extend(
+            (item.effective_at, 1, item.checkpoint_id, item)
+            for item in applicable_checkpoints
+        )
+        events.sort(key=lambda item: (item[0], item[1], item[2]))
+        for _, _, _, event in events:
+            if isinstance(event, PositionBasisCheckpoint):
+                key = (event.account_ref, event.instrument_id, event.currency)
+                current = groups.get(key)
+                if current is None:
+                    current = _Cycle(
+                        cycle_id=self._cycle_id(
+                            event.provider,
+                            *key,
+                            event.checkpoint_id,
+                        ),
+                        account_ref=event.account_ref,
+                        provider=event.provider,
+                        instrument_id=event.instrument_id,
+                        currency=event.currency,
+                        opened_at=None,
+                        reentry_of_cycle_id=last_cycle_ids.get(key),
+                    )
+                    current.warnings.add("BASIS_CHECKPOINT_OPENING_DATE_UNAVAILABLE")
+                    groups[key] = current
+                current.lots.clear()
+                current.lots.append(
+                    _Lot(
+                        quantity=event.quantity,
+                        price=event.total_cost_basis / event.quantity,
+                        fee_per_unit=Decimal(0),
+                    )
+                )
+                current.quantity = event.quantity
+                current.maximum_deployed = max(
+                    current.maximum_deployed, event.total_cost_basis
+                )
+                continue
+            activity = event
             assert activity.instrument_id is not None
             assert activity.quantity is not None
             key = (activity.account_ref, activity.instrument_id, activity.currency)

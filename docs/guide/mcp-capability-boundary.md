@@ -1,6 +1,6 @@
 # Trading Partner MCP 能力与使用边界
 
-> 适用版本：Phase 1–3D + MCP vNext Shadow（27 个 public MCP tools）
+> 适用版本：Phase 1–4D + MCP vNext Shadow（27 个 public MCP tools）
 > 状态：可供 Codex 以本地 stdio MCP 方式使用
 
 ## 1. 它是什么
@@ -348,7 +348,7 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 | `portfolio_analyze` (`trade_cycle_override_preview`) | 对 split/merge/relink 做无写入影响预览，保留 algorithm projection |
 | `portfolio_analyze` (`behavior_summary`) | 以完整 CLOSED active Cycle 为分母，返回分子、分母、排除项和 exact refs；无综合纪律分，不按 Fill 计算胜率 |
 | `portfolio_analyze` (`behavior_review_history`) | 读取 weekly/monthly/quarterly action recurrence Run；NEW/PERSISTENT/RESOLVED/RECURRED 均保留 exact cohort refs |
-| `portfolio_analyze` (`unlinked_activity`) | 读取未关联 Broker trade 与稳定 ReviewItem；不联网、不推断历史意图 |
+| `portfolio_analyze` (`unlinked_activity`) | 按需读取未关联 Broker trade；不联网、不生成 ReviewItem、不推断历史意图 |
 | `research_memory_append` (`activity_annotation`) | 经明确确认追加 exact activity 的 Decision/Plan 关联或 UNPLANNED/CASH_MANAGEMENT/修正分类；不改写成交事实，不产生订单 |
 | `research_memory_append` (`trade_cycle_override`) | 预览后明确确认 append-only split/merge/relink revision；不删除算法 Cycle |
 | `research_memory_append` (`behavior_review`) | 写入确定性 period cohort/action recurrence Run；失败或分页不完整的 source read 不自动产生 RESOLVED |
@@ -410,6 +410,10 @@ TRAILING_STOP、TRAILING_STOP_LIMIT 卖单。无界 BUY MARKET/STOP/TRAILING 被
 - `ACCOUNT_AS_OF_FETCH_TIME`：Provider 没有权威账户时点，`account_as_of` 只能使用读取时刻；
 - `PRICE_TIME_UNAVAILABLE`：Provider 给了持仓市值，但没有可验证的逐仓价格时间，不能把读取
   时间伪装成报价时间；
+- `MOOMOO_ZERO_QUANTITY_POSITION_OMITTED`：OpenD 返回了清仓后的零数量行；该行不是当前持仓，
+  已忽略且不应使整份账户快照失败；
+- `MOOMOO_OPEN_ORDERS_UNAVAILABLE`：Moomoo 未结订单读取或标准化失败；资金与持仓仍可使用，
+  但 `open_orders=()` 不能解释为没有未成交订单；
 - `SCHWAB_OPEN_ORDERS_UNAVAILABLE`：本次订单读取失败，`open_orders=()` 不能解释为没有
   未成交订单；Shadow Preview 必须阻断；
 - `SCHWAB_COMPLEX_OPEN_ORDER_NOT_INGESTED` / `SCHWAB_UNSUPPORTED_OPEN_ORDER_*`：存在
@@ -525,8 +529,10 @@ Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保
 不是默认分组的分页读取。也可使用
 `uv run trading-partner-watchlist-sync` 单独刷新 Watchlist；盘后账户和 Watchlist 的
 组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户和标准化
-Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，并依据 XNYS 日历在真实收盘十分钟后运行，支持提前收盘、
-休市跳过、成功幂等和部分失败重试。
+Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，随后以 `analyze=false`
+同步一次 Moomoo Observation；同一 durable receipt 保留 Notes 状态、发现数、新 revision 数和
+FULL/摘要覆盖。Notes 失败不回滚已完成步骤。作业依据 XNYS 日历在真实收盘十分钟后运行，
+支持提前收盘、休市跳过、成功幂等和部分失败重试。
 
 Watchlist 上游严格二选一：Moomoo OpenD 或严格 Manual CSV。它们不会合并、对账、镜像或
 互相覆盖。Moomoo 使用 Quote Context，不需要交易账号、交易密码或解锁；Manual CSV 使用

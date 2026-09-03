@@ -375,6 +375,7 @@ class ResearchTimelineService:
         visible_at: datetime,
         instrument_ids: tuple[str, ...],
         source_name: str | None,
+        external_note_revision_id: str | None = None,
     ) -> ResearchTimelineItemDTO:
         return ResearchTimelineItemDTO(
             entity_type=entity_type,
@@ -386,6 +387,7 @@ class ResearchTimelineService:
             visible_at=visible_at,
             instrument_ids=instrument_ids,
             source_name=(None if source_name is None else self._redactor.redact_text(source_name)),
+            external_note_revision_id=external_note_revision_id,
         )
 
     def _from_evidence(
@@ -480,6 +482,7 @@ class ResearchTimelineService:
             visible_at=decision.recorded_at,
             instrument_ids=instruments,
             source_name=None,
+            external_note_revision_id=decision.external_note_revision_id,
         )
 
     def _from_journal(

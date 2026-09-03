@@ -7,7 +7,43 @@ export const API_BASE =
   process.env.NEXT_PUBLIC_TRADING_PARTNER_API ?? "/api/console";
 
 const CONSOLE_TOKEN_HEADER = "X-Trading-Partner-Console-Token";
+const TRANSIENT_READ_STATUSES = new Set([502, 503, 504]);
+const READ_RETRY_DELAYS_MS = [0, 1_000, 3_000, 7_000, 8_000] as const;
 let sessionTokenPromise: Promise<string> | null = null;
+
+class NonRetryableReadError extends Error {}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function readJsonWithRetry<T>(route: string, signal: AbortSignal): Promise<T> {
+  let latestError: unknown = new Error("Unable to connect to the local API");
+  for (let attempt = 0; attempt < READ_RETRY_DELAYS_MS.length; attempt += 1) {
+    await abortableDelay(READ_RETRY_DELAYS_MS[attempt], signal);
+    try {
+      const response = await fetch(`${API_BASE}${route}`, { signal });
+      if (response.ok) return (await response.json()) as T;
+      latestError = new Error(await responseErrorMessage(response));
+      if (!TRANSIENT_READ_STATUSES.has(response.status)) {
+        throw new NonRetryableReadError((latestError as Error).message);
+      }
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+      if (cause instanceof NonRetryableReadError) throw cause;
+      latestError = cause;
+      if (attempt === READ_RETRY_DELAYS_MS.length - 1) throw cause;
+    }
+  }
+  throw latestError;
+}
 
 async function consoleSessionToken(): Promise<string> {
   if (sessionTokenPromise === null) {
@@ -36,7 +72,11 @@ export type ApiResult<T> = {
   refresh: () => void;
 };
 
-export function useApi<T>(route: string): ApiResult<T> {
+export function useApi<T>(
+  route: string,
+  options: { enabled?: boolean } = {},
+): ApiResult<T> {
+  const enabled = options.enabled ?? true;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,12 +84,14 @@ export function useApi<T>(route: string): ApiResult<T> {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
-    fetch(`${API_BASE}${route}`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(await responseErrorMessage(response));
-        return (await response.json()) as T;
-      })
+    setLoading(true);
+    setError(null);
+    readJsonWithRetry<T>(route, controller.signal)
       .then((value) => {
         setData(value);
         setRefreshedAt(new Date());
@@ -60,7 +102,7 @@ export function useApi<T>(route: string): ApiResult<T> {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [route, nonce]);
+  }, [enabled, route, nonce]);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -93,7 +135,10 @@ export async function authenticatedFetch(
   route: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const target = /^https?:\/\//i.test(route) ? route : `${API_BASE}${route}`;
+  if (!route.startsWith("/") || /^\/\//u.test(route)) {
+    throw new Error("Console API routes must be same-origin relative paths");
+  }
+  const target = `${API_BASE}${route}`;
 
   async function send(token: string): Promise<Response> {
     const headers = new Headers(init.headers);

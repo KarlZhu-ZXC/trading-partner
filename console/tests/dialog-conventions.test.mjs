@@ -21,6 +21,9 @@ test("owned Console actions use semantic dialogs instead of native browser promp
   assert.match(ui, /export function ConfirmationDialog/);
   assert.match(ui, /role="dialog"/);
   assert.match(ui, /aria-modal="true"/);
+  assert.match(ui, /querySelectorAll<HTMLElement>/);
+  assert.match(ui, /event\.key === "Tab"/);
+  assert.match(ui, /previous\?\.focus\?\.\(\)/);
   assert.match(ui, /export function TextInputDialog/);
   assert.match(ui, /aria-required=\{required \|\| undefined\}/);
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");

@@ -28,6 +28,9 @@ Copy these two values from that receipt:
 Do not replace the absolute paths with `~`, environment-variable syntax, or a path
 from another machine. Do not paste API keys directly into MCP host JSON. Optional
 Provider keys belong in the generated owner-only `runtime.env`.
+The generated file also pins `RUNTIME_ROOT` to its own directory. Every mutable
+token, lock, attachment, backup, Observation inbox, and account-basis checkpoint
+therefore survives tool upgrades outside the installed Wheel or virtual environment.
 
 Running `trading-partner-init` again preserves the existing file and idempotently
 upgrades its database. It never downloads market data or contacts a broker.

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, PageActionMenu, displayJson } from "../components/ui";
+import { Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, PageActionMenu, displayJson } from "../components/ui";
 import { postApi, useApi } from "../lib/api";
 
 type Capability = {
@@ -21,6 +21,14 @@ type Capability = {
 
 type JsonSchema = Record<string, unknown>;
 type Dict = Record<string, unknown>;
+
+const MARKET_OPTIONS = [
+  { value: "US", label: "US" },
+  { value: "A_SHARE", label: "A-Share" },
+  { value: "KR", label: "KR" },
+  { value: "CME", label: "CME" },
+  { value: "OTC", label: "OTC" },
+];
 
 function dereference(schema: JsonSchema, root: JsonSchema): JsonSchema {
   const reference = schema.$ref;
@@ -122,7 +130,7 @@ function MarketLens() {
     finally { setRunning(null); }
   }
 
-  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><FieldLabel required>Market</FieldLabel><select required value={market} onChange={(event) => setMarket(event.target.value)}>{["US", "A_SHARE", "KR", "CME", "OTC"].map((item) => <option key={item}>{item}</option>)}</select></label><label><FieldLabel required>Symbol / Query</FieldLabel><input required value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><FieldLabel required>Instrument ID</FieldLabel><input required value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div><ErrorNote>{error}</ErrorNote>{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <details className="run-receipt" open><summary>Fact Receipt</summary><pre>{displayJson(result)}</pre></details>}</Card>;
+  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><FieldLabel required>Market</FieldLabel><select required value={market} onChange={(event) => setMarket(event.target.value)}>{MARKET_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label><FieldLabel required>Symbol / Query</FieldLabel><input required value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><FieldLabel required>Instrument ID</FieldLabel><input required value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div><ErrorNote>{error}</ErrorNote>{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <Disclosure className="run-receipt" title="Fact Receipt" variant="code" defaultOpen><pre>{displayJson(result)}</pre></Disclosure>}</Card>;
 }
 
 export default function CapabilitiesPage() {
@@ -135,6 +143,8 @@ export default function CapabilitiesPage() {
   const [runError, setRunError] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<unknown>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [groupDisclosureRevision, setGroupDisclosureRevision] = useState(0);
   const items = useMemo(() => result.data?.items ?? [], [result.data?.items]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -142,6 +152,15 @@ export default function CapabilitiesPage() {
   }, [items, query]);
   const groups = useMemo(() => Map.groupBy(filtered, (item) => item.group), [filtered]);
   const images = useMemo(() => toolImages(runResult), [runResult]);
+
+  function setGroupExpanded(group: string, expanded: boolean) {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (expanded) next.add(group);
+      else next.delete(group);
+      return next;
+    });
+  }
 
   function openWorkbench(capability: Capability, operation?: string) {
     setSelected(capability);
@@ -219,7 +238,7 @@ export default function CapabilitiesPage() {
                   <img alt={`Technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />
                 ))}</div>}
                 <pre className="result-view">{runResult === null ? "Waiting to run…" : displayJson(runResult)}</pre>
-                <details className="schema-details"><summary>View Input Schema</summary><pre>{displayJson(selected.input_schema)}</pre></details>
+                <Disclosure className="schema-details" title="View Input Schema" variant="code"><pre>{displayJson(selected.input_schema)}</pre></Disclosure>
               </div>
             </div>
           </Card>
@@ -230,8 +249,20 @@ export default function CapabilitiesPage() {
         </div>
         <div className="capability-groups">
           {[...groups.entries()].map(([group, capabilities]) => (
-            <section key={group}>
-              <header><h2>{group}</h2><span>{capabilities.length}</span></header>
+            <Disclosure
+              className="capability-group"
+              key={`${group}-${query.trim()}-${groupDisclosureRevision}`}
+              title={group}
+              meta={`${capabilities.length} Tool${capabilities.length === 1 ? "" : "s"}`}
+              defaultOpen={query.trim() !== "" || expandedGroups.has(group)}
+              onToggle={(open) => {
+                if (query.trim()) {
+                  if (!open) setGroupDisclosureRevision((current) => current + 1);
+                } else {
+                  setGroupExpanded(group, open);
+                }
+              }}
+            >
               <div className="capability-grid">
                 {capabilities.map((capability) => (
                   <Card className="capability-card" key={capability.name}>
@@ -240,11 +271,11 @@ export default function CapabilitiesPage() {
                     <div className="operation-pills">
                       {capability.operations.length ? capability.operations.map((operation) => <button type="button" onClick={() => openWorkbench(capability, operation)} key={operation}>{operation}</button>) : <button type="button" onClick={() => openWorkbench(capability)}>Open Tool</button>}
                     </div>
-                    <footer><span>{capability.open_world ? "Provider access" : "Local state"}</span><button type="button" onClick={() => openWorkbench(capability)}>Open →</button></footer>
+                    <footer><span>{capability.open_world ? "Provider Access" : "Local State"}</span></footer>
                   </Card>
                 ))}
               </div>
-            </section>
+            </Disclosure>
           ))}
         </div>
       </DataBoundary>

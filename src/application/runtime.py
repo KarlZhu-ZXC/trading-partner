@@ -22,6 +22,7 @@ from application.services.daily_equity_materialization_service import (
 )
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
+from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_resolve_service import InstrumentResolveService
@@ -90,6 +91,7 @@ class ApplicationServices:
     broker_orders: BrokerOrderService
     review_items: ReviewItemService
     attention: AttentionQueryService
+    external_notes: ExternalNoteSyncService
 
 
 @dataclass(frozen=True, slots=True)

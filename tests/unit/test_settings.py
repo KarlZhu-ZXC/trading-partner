@@ -57,6 +57,12 @@ def test_phase2_watchlist_defaults() -> None:
     assert settings.telegram_agent_lock_path == (
         settings_module.PROJECT_ROOT / "data/locks/telegram_agent.lock"
     ).resolve()
+    assert settings.moomoo_notes_remote_enabled is True
+    assert settings.moomoo_notes_cookie_path == (
+        settings_module.PROJECT_ROOT / "data/secrets/moomoo_notes_cookie.txt"
+    ).resolve()
+    assert settings.moomoo_notes_request_delay_min_seconds == 0.6
+    assert settings.moomoo_notes_request_delay_max_seconds == 1.8
 
 
 def test_phase2_watchlist_settings_normalize_and_resolve_path() -> None:
@@ -80,6 +86,25 @@ def test_phase2_watchlist_settings_normalize_and_resolve_path() -> None:
     )
 
 
+def test_mutable_paths_follow_explicit_runtime_root(tmp_path: Path) -> None:
+    settings = _base_settings(
+        runtime_root=tmp_path,
+        account_basis_checkpoints_path="data/secrets/account_basis_checkpoints.yaml",
+    )
+
+    assert settings.runtime_root == tmp_path.resolve()
+    assert settings.paths.data == tmp_path / "data"
+    assert settings.schwab_token_path == tmp_path / "data/secrets/schwab_tokens.json"
+    assert settings.moomoo_notes_cookie_path == (
+        tmp_path / "data/secrets/moomoo_notes_cookie.txt"
+    )
+    assert settings.account_basis_checkpoints_path == (
+        tmp_path / "data/secrets/account_basis_checkpoints.yaml"
+    )
+    assert settings.observation_inbox_dir == tmp_path / "data/observations/inbox"
+    assert settings.paths.agent_attachments == tmp_path / "data/agent/attachments"
+
+
 def test_phase2_watchlist_source_and_default_group_validation() -> None:
     for source in ("ALL", "SCHWAB", "", "MOOMOO,MANUAL_CSV"):
         with pytest.raises(ValidationError):
@@ -95,6 +120,27 @@ def test_post_market_sync_delay_minutes_validation_and_bounds() -> None:
     for delay in (0, 10, 120):
         settings = _base_settings(post_market_sync_delay_minutes=delay)
         assert settings.post_market_sync_delay_minutes == delay
+
+
+def test_moomoo_note_remote_delay_window_and_secret_path_validation() -> None:
+    settings = _base_settings(
+        moomoo_notes_request_delay_min_seconds=1.25,
+        moomoo_notes_request_delay_max_seconds=3.75,
+        moomoo_notes_cookie_path="data/secrets/custom-moomoo-cookie",
+    )
+    assert settings.moomoo_notes_request_delay_min_seconds == 1.25
+    assert settings.moomoo_notes_request_delay_max_seconds == 3.75
+    assert settings.moomoo_notes_cookie_path == (
+        settings_module.PROJECT_ROOT / "data/secrets/custom-moomoo-cookie"
+    ).resolve()
+
+    with pytest.raises(ValidationError, match="delay_max_seconds"):
+        _base_settings(
+            moomoo_notes_request_delay_min_seconds=4,
+            moomoo_notes_request_delay_max_seconds=1,
+        )
+    with pytest.raises(ValidationError, match="moomoo_notes_cookie_path"):
+        _base_settings(moomoo_notes_cookie_path="/tmp/moomoo-cookie")
 
 
 def test_post_market_sync_lock_path_rejects_outside_data_and_blank() -> None:
@@ -174,6 +220,8 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert defaults.llm_output_language == "zh-CN"
     assert defaults.deepseek_model == "deepseek-v4-flash"
     assert defaults.opencode_go_model == "deepseek-v4-flash"
+    assert defaults.external_note_analysis_model == "qwen3.8-flash"
+    assert defaults.resolved_external_note_analysis_config is None
     assert defaults.opencode_zen_model == "gpt-5.6-luna"
 
     with pytest.raises(ValidationError, match="BAILIAN_API_KEY"):
@@ -208,6 +256,13 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert opencode_go.resolved_llm_provider_id == "opencode_go"
     assert opencode_go.resolved_llm_config is not None
     assert opencode_go.resolved_llm_config.base_url == "https://opencode.ai/zen/go/v1"
+    assert opencode_go.resolved_external_note_analysis_config is not None
+    assert (
+        opencode_go.resolved_external_note_analysis_config.model
+        == "qwen3.8-flash"
+    )
+    assert opencode_go.resolved_external_note_analysis_config.reasoning_effort == "max"
+    assert opencode_go.resolved_external_note_analysis_config.timeout_seconds == 120.0
     assert "test-opencode-go-secret" not in repr(opencode_go)
 
     opencode_zen = _base_settings(
@@ -359,6 +414,7 @@ def test_env_example_contains_required_keys() -> None:
         "PROVIDER_RETRY_MAX_ATTEMPTS=2",
         "PROVIDER_RETRY_BASE_DELAY_SECONDS=0.05",
         "PROVIDER_RETRY_MAX_DELAY_SECONDS=1.0",
+        "EXTERNAL_NOTE_ANALYSIS_MODEL=qwen3.8-flash",
         "AUTH_FAILURE_FALLBACK=false",
         "CIRCUIT_FAILURE_THRESHOLD=5",
         "CIRCUIT_RECOVERY_TIMEOUT_SECONDS=60.0",

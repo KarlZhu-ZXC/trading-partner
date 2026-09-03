@@ -10,10 +10,12 @@ DecisionRecord, and TradeRetro records remain the sources of truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from domain.behavior.enums import BehaviorMetricAvailability
 from domain.common.errors import DataContractError
+from domain.common.time import require_aware_datetime
 from domain.portfolio.enums import TradeCycleClassification
 
 BEHAVIOR_SUMMARY_ALGORITHM_VERSION = "behavior_summary_v1"
@@ -62,6 +64,8 @@ class BehaviorCohort:
     instrument_ids: tuple[str, ...] = ()
     currency: str | None = None
     classifications: tuple[TradeCycleClassification, ...] = ()
+    start: datetime | None = None
+    end: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.strategy_code is not None:
@@ -77,6 +81,12 @@ class BehaviorCohort:
             not isinstance(item, TradeCycleClassification) for item in self.classifications
         ):
             raise DataContractError("classifications must be unique TradeCycle classifications")
+        for field_name in ("start", "end"):
+            value = getattr(self, field_name)
+            if value is not None:
+                require_aware_datetime(value, field_name=field_name)
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise DataContractError("behavior cohort start must be <= end")
 
     @property
     def instrument_id(self) -> str | None:

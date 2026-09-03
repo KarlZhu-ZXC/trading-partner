@@ -60,6 +60,25 @@ def _trade(
     )
 
 
+def _dividend(transaction_id: str, amount: str, occurred_at: datetime) -> AccountTransaction:
+    return AccountTransaction(
+        provider_transaction_id=transaction_id,
+        account_ref="account_1",
+        provider=VendorId.SCHWAB,
+        instrument_id="equity:US:NVDA",
+        kind=AccountTransactionKind.DIVIDEND,
+        side=None,
+        quantity=None,
+        price=None,
+        fees=Decimal(0),
+        currency="USD",
+        occurred_at=occurred_at,
+        cash_amount=Decimal(amount),
+        source_type="DIVIDEND_OR_INTEREST",
+        mapping_version="test_v2",
+    )
+
+
 def test_durable_performance_summary_keeps_fifo_provenance_explicit(
     id_generator: object,
     fixed_clock: object,
@@ -85,6 +104,7 @@ def test_durable_performance_summary_keeps_fifo_provenance_explicit(
                 "120",
                 START + timedelta(days=10),
             ),
+            _dividend("dividend_1", "12.50", START + timedelta(days=15)),
         )
     )
     activities.append_coverage(
@@ -99,8 +119,8 @@ def test_durable_performance_summary_keeps_fifo_provenance_explicit(
                 effective_end=NOW,
                 earliest_event_at=START + timedelta(days=10),
                 latest_event_at=START + timedelta(days=10),
-                event_count=1,
-                inserted_count=1,
+                event_count=2,
+                inserted_count=2,
                 duplicate_count=0,
                 snapshot_count=1,
                 earliest_snapshot_at=NOW,
@@ -170,7 +190,11 @@ def test_durable_performance_summary_keeps_fifo_provenance_explicit(
     account = envelope.data.accounts[0]
     assert account.realized_pnl_before_fees == Decimal("80")
     assert account.unrealized_pnl_before_fees == Decimal("180")
-    assert account.instruments[0].activity_ids == ("sell_1",)
+    instrument = account.instruments[0]
+    assert instrument.activity_ids == ("sell_1", "dividend_1")
+    assert instrument.dividend_income == Decimal("12.50")
+    assert instrument.net_trading_pnl == Decimal("258.60")
+    assert instrument.total_pnl == Decimal("271.10")
     assert "FIFO_OPENING_HISTORY_UNVERIFIED" in account.warning_codes
     engine.dispose()
 

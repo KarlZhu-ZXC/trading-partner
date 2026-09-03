@@ -90,6 +90,8 @@ OpenCode Zen 与 Go 在 Console 中是两个独立 Provider，拥有不同的模
 OPENCODE_API_KEY=
 OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
 OPENCODE_GO_MODEL=deepseek-v4-flash
+EXTERNAL_NOTE_ANALYSIS_MODEL=qwen3.8-flash
+EXTERNAL_NOTE_ANALYSIS_TIMEOUT_SECONDS=120
 OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
 OPENCODE_ZEN_MODEL=gpt-5.6-luna
 ```
@@ -110,6 +112,46 @@ Go 的 `muse-spark-1.2-contributor` 使用 Responses API；该 Contributor 模�
 entitlement、地域限制与上游故障会保留为 typed Provider error，
 不会静默切换成行情事实或安静规则。该适配不会读取 `~/.local/share/opencode/auth.json`，
 不会把任一 API key 发给浏览器，也不发布原生 Web Search。
+
+Journal 的 `Refresh Sources` 只读扫描本机 Moomoo 缓存并快速返回；新 revision 的私有正文会在
+后台发送给单独配置的 OpenCode Go `qwen3.8-flash`，使用 `max` 推理强度与
+120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
+创建 Monitor 或授权订单。未署名段落确定性视为本人观点，明确姓名前缀保留为外部观点。
+
+该入口现已扩展为 provider-neutral `Refresh Sources`。可用
+`uv run trading-partner-observation-sync` 同步全部配置来源，或通过 `--source MOOMOO_NOTE`
+限制单个 adapter。不能直接读取的来源可按
+`docs/contracts/observation-source-v1.schema.json` 将完整正文 JSON 放入
+`data/observations/inbox`；文件保留原 source code，进入同一不可变 revision、作者归属、模型草稿
+与 Decision review 链路。列表摘要不能通过该 bridge 冒充全文。
+
+`data/observations/` 是 owner-only 运行数据并被 Git 整体忽略。安装版的相对路径统一从
+`runtime.env` 所在的 runtime root 解析，而不是从 Wheel/虚拟环境目录解析。账户成本校正同样只
+允许保存在 runtime `data/secrets/account_basis_checkpoints.yaml`；仓库中的
+`config/account_basis_checkpoints.example.yaml` 仅为空结构示例。
+
+Moomoo 笔记还支持一个不控制桌面 UI 的可选只读增补层。它使用用户主动提供的原始 Cookie
+header 请求内部 note-list 与 editor HTML，并从 `window.__INITIAL_STATE__` 读取正文。Cookie
+只保存在 owner-only 的 `data/secrets/moomoo_notes_cookie.txt`，不进入 `.env`、数据库、日志、
+错误信息或 Console payload。不要把 Cookie 作为命令行参数；从标准输入写入，避免 shell history：
+
+```bash
+# Copy a Cookie header from a separately authenticated Moomoo Web session.
+# The desktop app's CEF Cookie database contains only locale/presentation state.
+pbpaste | uv run trading-partner-moomoo-notes-cookie set
+uv run trading-partner-moomoo-notes-cookie status
+uv run trading-partner-observation-sync --source MOOMOO_NOTE
+```
+
+每个 HTTP 请求前都会在
+`MOOMOO_NOTES_REQUEST_DELAY_MIN_SECONDS`–`MOOMOO_NOTES_REQUEST_DELAY_MAX_SECONDS`
+之间重新抽取随机等待，全部串行执行，并受 stock/note 数量上限约束。缺少或过期 Cookie、429、
+网络错误或内部页面结构变化只产生闭合 warning 并回退缓存；摘要仍为 `SUMMARY_ONLY`。该接口
+不是 Moomoo OpenAPI，可能随版本变化，不得用于写回、发帖或任何交易操作。
+Moomoo 桌面原生桥接注入的会话票据不会写入标准 CEF Cookie 数据库。禁止用 Computer Use、
+坐标点击或 UI 自动化读取 Moomoo；经用户明确授权，可只读分析进程元数据、本地 IPC 与网络协议
+形态，但不得修改应用、系统代理/证书、账户或交易状态，也不得显示或持久化恢复出的凭据。
+缓存中的完整 editor HTML 仍可只读恢复。
 
 Agent 模型请求失败会在对话区显示专用通知卡，并随 durable turn 保留。通知只包含
 Provider、模型、内部错误码、安全 HTTP 状态、是否可重试、尝试次数与固定说明。例如
@@ -187,6 +229,7 @@ npm run dev:lan
 云服务器。密码不要写入 URL、`NEXT_PUBLIC_*`、Git 或聊天记录。使用结束后按 `Ctrl-C`
 停止前端并执行 `unset TRADING_PARTNER_CONSOLE_LAN_PASSWORD`。需要跨不可信网络访问时，
 应另行使用带 TLS 和设备身份的私有网络方案。
+密码至少 16 个字符；登录失败按客户端在有界窗口内限流，跨站 Origin 会被拒绝。
 
 若希望 Console supervisor 每次启动时同时开启受保护的 LAN Web，安装持久模式：
 
@@ -323,11 +366,12 @@ JSON 回执不会回显正文或授权说明，也不会产生订单或其他交
 内部确定性生产者使用封闭的 `SYSTEM` source；`MANUAL` 仅用于显式授权的调用者写入。
 
 投递语义：durable Outbox 携带 Monitor 告警和显式授权的手工文本；重复的 Monitor
-观测只留在 Run 历史，不会重复通知。每小时本地 dispatcher 重试 pending 消息，
-不打开 Codex 任务、不消耗模型 token；统一 dispatcher 同时负责 A 股/美股/KR 收盘后
-Monitor 执行，Codex market-review Automations 不得重复 Monitor 评估或告警。只有
-显式启用 composite judgment policy 的 Monitor 或显式运行的 Trade Retro 叙述可以调用
-配置的服务端 LLM：Monitor 跳过未变化的定性特征状态，Trade Retro 只接收已持久化的
+观测只留在 Run 历史，不会重复通知。每小时本地 dispatcher 重试 pending 消息，不打开
+Codex 任务；统一 dispatcher 同时负责 A 股/美股/KR 收盘后 Monitor 执行，Codex
+market-review Automations 不得重复 Monitor 评估或告警。真正产生状态转换的 Monitor 会在
+通知末尾增加一次不超过 160 个中文字符的模型分析；同一 Monitor 同轮多个事件合并一次，
+无变化不调用模型，使用 `max` 推理强度；80 秒超时或格式失败不会阻止确定性通知。显式启用 composite judgment
+policy 的 Monitor 会复用同轮成功判断摘要，避免第二次调用。Trade Retro 叙述只接收已持久化的
 确定性事实；搜索用量与有限来源 URL 会被持久化，价格/账户事实始终由确定性 Provider
 所有。完整契约见 AGENTS.md。
 

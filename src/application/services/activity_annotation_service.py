@@ -13,7 +13,6 @@ from application.dto.activity_annotations import (
     UnlinkedActivityDTO,
     UnlinkedActivityListDTO,
 )
-from application.dto.review_item import ReviewItemDTO
 from application.ports.account_transaction_repository import AccountTransactionRepository
 from application.ports.activity_annotation_repository import ActivityAnnotationRepository
 from application.ports.broker_order_repository import BrokerOrderRepository
@@ -31,8 +30,6 @@ from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
 from domain.portfolio.enums import AccountTransactionKind, ActivityAnnotationStatus
 from domain.portfolio.models import AccountTransaction, ActivityAnnotation
-from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
-from domain.review_item.models import ReviewItemProjection
 
 ResearchUowFactory = Callable[[], ResearchUnitOfWork]
 
@@ -42,7 +39,7 @@ def unlinked_activity_source_key(
     account_ref: str,
     provider_transaction_id: str,
 ) -> str:
-    """Return the stable ReviewItem key for one exact provider activity."""
+    """Return the stable projection key for one exact provider activity."""
 
     provider_value = provider.value if isinstance(provider, VendorId) else str(provider)
     raw = f"UNLINKED_ACTIVITY:{provider_value}:{account_ref}:{provider_transaction_id}"
@@ -90,7 +87,7 @@ class ActivityAnnotationService:
         end: datetime | None = None,
         limit: int = 200,
     ) -> UnlinkedActivityListDTO:
-        """List TRADE activities without an annotation and reconcile ReviewItems.
+        """List TRADE activities without an annotation, without queue materialization.
 
         The extra read row is intentional: reaching the requested limit means
         the source is only partially observed, so the reconciler cannot infer
@@ -115,10 +112,6 @@ class ActivityAnnotationService:
         annotated_keys = {item.transaction_key for item in latest}
         unlinked = tuple(item for item in trades if item.transaction_key not in annotated_keys)
 
-        review_by_key = self._reconcile_unlinked(
-            unlinked,
-            complete=not has_more,
-        )
         activities = tuple(
             UnlinkedActivityDTO(
                 source_key=unlinked_activity_source_key(
@@ -127,13 +120,7 @@ class ActivityAnnotationService:
                     item.provider_transaction_id,
                 ),
                 transaction=AccountTransactionDTO.from_domain(item),
-                review_item=review_by_key.get(
-                    unlinked_activity_source_key(
-                        item.provider,
-                        item.account_ref,
-                        item.provider_transaction_id,
-                    )
-                ),
+                review_item=None,
             )
             for item in unlinked
         )
@@ -227,7 +214,6 @@ class ActivityAnnotationService:
             annotation,
             expected_version=request.expected_version,
         )
-        self._close_annotation_review_item(stored)
         # ``transaction`` is intentionally touched above only to validate the
         # exact natural key; no field from it is copied into the annotation.
         _ = transaction
@@ -350,60 +336,3 @@ class ActivityAnnotationService:
                 details={"subject_id": request.subject_id, "linked_subject_id": subject_id},
             )
         return subject_id
-
-    def _reconcile_unlinked(
-        self,
-        transactions: tuple[AccountTransaction, ...],
-        *,
-        complete: bool,
-    ) -> dict[str, ReviewItemDTO]:
-        if self._review_items is None:
-            return {}
-        projections = tuple(self._projection(item) for item in transactions)
-        touched = self._review_items.reconcile(
-            projections,
-            observed_source_types=frozenset({ReviewItemSourceType.UNLINKED_ACTIVITY}),
-            fully_observed_source_types=(
-                frozenset({ReviewItemSourceType.UNLINKED_ACTIVITY}) if complete else frozenset()
-            ),
-        )
-        return {item.source_key: item for item in touched}
-
-    def _close_annotation_review_item(self, annotation: ActivityAnnotation) -> None:
-        if self._review_items is None:
-            return
-        source_key = unlinked_activity_source_key(
-            annotation.provider,
-            annotation.account_ref,
-            annotation.provider_transaction_id,
-        )
-        self._review_items.reconcile(
-            (),
-            observed_source_types=frozenset({ReviewItemSourceType.UNLINKED_ACTIVITY}),
-            authoritative_source_refs=frozenset(
-                {(ReviewItemSourceType.UNLINKED_ACTIVITY, source_key)}
-            ),
-        )
-
-    @staticmethod
-    def _projection(transaction: AccountTransaction) -> ReviewItemProjection:
-        source_key = unlinked_activity_source_key(
-            transaction.provider,
-            transaction.account_ref,
-            transaction.provider_transaction_id,
-        )
-        instrument = transaction.instrument_id or "unknown instrument"
-        return ReviewItemProjection(
-            source_key=source_key,
-            source_type=ReviewItemSourceType.UNLINKED_ACTIVITY,
-            source_ref=source_key,
-            subject_id=None,
-            title="Unlinked account activity",
-            detail=(
-                f"Trade activity for {instrument} at {transaction.occurred_at.isoformat()} "
-                "has no Decision or Trade Plan link."
-            ),
-            severity=ReviewItemSeverity.ATTENTION,
-            recommended_action="LINK_DECISION_OR_CLASSIFY",
-            href="/portfolio#unlinked-activity",
-        )

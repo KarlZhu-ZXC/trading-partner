@@ -345,6 +345,7 @@ class DecisionRecordRow(Base):
             "trade_plan_version IS NULL OR trade_plan_version >= 1",
             name="trade_plan_version",
         ),
+        Index("ix_decisions_external_note_revision", "external_note_revision_id"),
         Index("ix_decisions_case_recorded_at", "case_id", "recorded_at"),
         Index("ix_decisions_supersedes", "supersedes_decision_id"),
     )
@@ -385,6 +386,11 @@ class DecisionRecordRow(Base):
     trade_plan_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     trade_plan_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_due_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_note_revision_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("external_note_revisions.note_revision_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

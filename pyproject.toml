@@ -36,7 +36,7 @@ path = "src/application/__init__.py"
 accounts-moomoo = ["moomoo-api>=10.9,<11"]
 accounts-schwab = ["schwab-py>=1.5,<2"]
 chart = ["matplotlib>=3.10,<4"]
-company-pdf = ["pypdf>=5.0,<7"]
+company-pdf = ["pypdf>=6.16.1,<7"]
 semantic-search = ["fastembed>=0.7,<1"]
 console = [
     "fastapi>=0.115,<1",
@@ -46,7 +46,7 @@ all = [
     "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
-    "pypdf>=5.0,<7",
+    "pypdf>=6.16.1,<7",
     "fastapi>=0.115,<1",
     "uvicorn>=0.32,<1",
 ]
@@ -56,6 +56,7 @@ trading-partner-mcp = "interfaces.mcp.server:main"
 trading-partner-init = "interfaces.cli.initialize:main"
 trading-partner-watchlist-sync = "interfaces.cli.watchlist_sync:main"
 trading-partner-post-market-sync = "interfaces.cli.post_market_sync:main"
+trading-partner-us-post-market-automation = "interfaces.cli.us_post_market_automation:main"
 trading-partner-sgov-plan = "interfaces.cli.sgov_shadow_plan:main"
 trading-partner-sgov-plan-scheduler = "interfaces.cli.sgov_shadow_scheduler:main"
 trading-partner-schwab-auth = "interfaces.cli.schwab_oauth:main"
@@ -70,6 +71,9 @@ trading-partner-futures-sync = "interfaces.cli.futures_sync:main"
 trading-partner-maintenance = "interfaces.cli.maintenance:main"
 trading-partner-retro = "interfaces.cli.trade_retro:main"
 trading-partner-catalyst-sync = "interfaces.cli.catalyst_sync:main"
+trading-partner-moomoo-notes-sync = "interfaces.cli.moomoo_notes_sync:main"
+trading-partner-observation-sync = "interfaces.cli.observation_sync:main"
+trading-partner-moomoo-notes-cookie = "interfaces.cli.moomoo_notes_cookie:main"
 trading-partner-console = "interfaces.console.server:main"
 trading-partner-agent = "interfaces.cli.agent:main"
 
@@ -115,7 +119,7 @@ dev = [
     "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
-    "pypdf>=5.0,<7",
+    "pypdf>=6.16.1,<7",
     "fastapi>=0.115,<1",
     "uvicorn>=0.32,<1",
     "pip-audit>=2.9,<3",
@@ -140,7 +144,16 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 45
+
+[tool.ruff.lint.per-file-ignores]
+# These two factories/evaluation fixtures are registries of independent closed
+# cases. Keep them explicit while the global gate prevents new runtime hotspots.
+"src/interfaces/mcp/tools/portfolio.py" = ["C901"]
+"src/interfaces/cli/agent_behavior_evaluation.py" = ["C901"]
 
 [tool.mypy]
 python_version = "3.13"

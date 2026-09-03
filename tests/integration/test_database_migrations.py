@@ -127,6 +127,10 @@ _PHASE4_TABLES = {
     "behavior_action_observations",
     "journal_activations",
     "daily_equity_snapshots",
+    "external_note_identities",
+    "external_note_revisions",
+    "external_note_interpretations",
+    "external_note_sync_receipts",
 }
 
 _PHASE3_TABLES = {
@@ -146,7 +150,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0063_agent_image_attachments"})
+_HEAD_REVISIONS = frozenset({"0070_retire_unlinked_review_items"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {
@@ -210,21 +214,319 @@ def test_moomoo_margin_semantics_migration_discards_legacy_value(
 
     command.upgrade(cfg, "0051_moomoo_margin_semantics")
     with engine.connect() as conn:
-        assert conn.execute(
-            text(
-                "SELECT margin_used FROM account_snapshots "
-                "WHERE snapshot_id='snapshot_legacy_moomoo'"
-            )
-        ).scalar_one() is None
+        assert (
+            conn.execute(
+                text(
+                    "SELECT margin_used FROM account_snapshots "
+                    "WHERE snapshot_id='snapshot_legacy_moomoo'"
+                )
+            ).scalar_one()
+            is None
+        )
 
     command.downgrade(cfg, "0050_agent_preferences")
     with engine.connect() as conn:
+        assert (
+            conn.execute(
+                text(
+                    "SELECT margin_used FROM account_snapshots "
+                    "WHERE snapshot_id='snapshot_legacy_moomoo'"
+                )
+            ).scalar_one()
+            is None
+        )
+    engine.dispose()
+
+
+def test_observation_revision_key_migration_backfills_and_allows_content_reversion(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'observation-revision-key.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0064_external_notes")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO external_note_identities(note_id,source,external_id,title,"
+                "primary_instrument_id,created_at,last_seen_at) VALUES "
+                "('external_note_legacy','MOOMOO_NOTE','afrm','AFRM',"
+                "'equity:US:AFRM','2026-08-27T12:00:00+00:00',"
+                "'2026-08-27T12:00:00+00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO external_note_revisions(note_revision_id,note_id,version,"
+                "content_sha256,title,summary,full_body,coverage,source_timestamp,"
+                "observed_at,visibility,related_stock_ids_json,related_codes_json,"
+                "blocks_json) VALUES ('external_note_revision_legacy',"
+                "'external_note_legacy',1,:hash,'AFRM','body','body','FULL',"
+                "'2026-08-27T12:00:00+00:00','2026-08-27T12:00:00+00:00',"
+                "'SELF','[]','[]','[]')"
+            ),
+            {"hash": "a" * 64},
+        )
+
+    command.upgrade(cfg, "0065_observation_revision_keys")
+    with engine.begin() as conn:
+        assert (
+            conn.execute(
+                text(
+                    "SELECT source_revision_key FROM external_note_revisions "
+                    "WHERE note_revision_id='external_note_revision_legacy'"
+                )
+            ).scalar_one()
+            == "legacy:external_note_revision_legacy"
+        )
+        conn.execute(
+            text(
+                "INSERT INTO external_note_revisions(note_revision_id,note_id,version,"
+                "content_sha256,source_revision_key,title,summary,full_body,coverage,"
+                "source_timestamp,observed_at,visibility,related_stock_ids_json,"
+                "related_codes_json,blocks_json) VALUES "
+                "('external_note_revision_reversion','external_note_legacy',2,:hash,"
+                "'source:new-observation','AFRM','body','body','FULL',"
+                "'2026-08-27T12:02:00+00:00','2026-08-27T12:02:00+00:00',"
+                "'SELF','[]','[]','[]')"
+            ),
+            {"hash": "a" * 64},
+        )
+    engine.dispose()
+
+
+def test_post_market_observation_migration_preserves_historical_receipts(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'post-market-observations.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0066_decision_external_note_revision")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO post_market_sync_runs("
+                "run_id,market_session_date,scheduled_for,started_at,completed_at,status,"
+                "portfolio_status,watchlist_status,account_snapshot_ids,"
+                "watchlist_groups_synced,watchlist_membership_relations_synced,"
+                "warning_codes,error_codes,attempt_count) VALUES ("
+                "'run_legacy','2026-08-28','2026-08-28T20:10:00+00:00',"
+                "'2026-08-28T20:10:00+00:00','2026-08-28T20:11:00+00:00',"
+                "'SUCCEEDED','SUCCEEDED','SUCCEEDED','[]',1,2,'[]','[]',1)"
+            )
+        )
+
+    command.upgrade(cfg, "0067_post_market_observation_sync")
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status,observation_status,observation_notes_seen "
+                "FROM post_market_sync_runs WHERE run_id='run_legacy'"
+            )
+        ).one()
+        assert tuple(row) == ("SUCCEEDED", None, None)
+    command.downgrade(cfg, "0066_decision_external_note_revision")
+    with engine.connect() as conn:
+        assert (
+            conn.execute(
+                text("SELECT status FROM post_market_sync_runs WHERE run_id='run_legacy'")
+            ).scalar_one()
+            == "SUCCEEDED"
+        )
+    engine.dispose()
+
+
+def test_moomoo_instrument_identity_migration_unifies_soxl_history(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'moomoo-instrument-identity.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0067_post_market_observation_sync")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id,symbol,name,market,exchange,currency,timezone,asset_type,"
+                "is_active,listing_status,metadata_version,created_at,updated_at) VALUES ("
+                "'etf:US:SOXL','SOXL','Direxion Daily Semiconductor Bull 3X Shares',"
+                "'US','ARCA','USD','America/New_York','etf',1,'active',1,"
+                "'2026-08-30T00:00:00+00:00','2026-08-30T00:00:00+00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id,symbol,name,market,exchange,currency,timezone,asset_type,"
+                "is_active,listing_status,metadata_version,created_at,updated_at) VALUES "
+                "('equity:US:GDXU','GDXU','Bank of Montreal','US','UNKNOWN','USD',"
+                "'America/New_York','equity',1,'active',1,"
+                "'2026-08-30T00:00:00+00:00','2026-08-30T00:00:00+00:00'),"
+                "('etf:US:GDXU','GDXU','MicroSectors Gold Miners 3X Leveraged ETNs',"
+                "'US','ARCA','USD','America/New_York','etf',1,'active',1,"
+                "'2026-08-30T00:00:00+00:00','2026-08-30T00:00:00+00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO account_snapshots("
+                "snapshot_id,fingerprint,account_ref,provider,environment,base_currency,"
+                "account_as_of,fetched_at,open_orders_json,degraded,warning_codes_json) VALUES ("
+                "'snapshot_soxl','fingerprint-soxl','moomoo_hash','moomoo','real','USD',"
+                "'2026-08-27T00:00:00+00:00','2026-08-27T00:00:00+00:00',"
+                "'[{\"instrument_id\":\"equity:US:SOXL\"}]',1,'[]')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO account_transactions("
+                "provider,account_ref,provider_transaction_id,instrument_id,kind,side,"
+                "quantity,price,fees,currency,occurred_at,cash_amount,source_type,"
+                "mapping_version) VALUES "
+                "('moomoo','moomoo_hash','deal_option_equity',"
+                "'equity:US:NIO260702C5000','trade','buy','1','1',NULL,'USD',"
+                "'2026-08-27T00:00:00+00:00',NULL,'HISTORY_DEAL','moomoo_deals_v1'),"
+                "('moomoo','moomoo_hash','deal_option_spaces',"
+                "'option:US:FCX   260821C00065000','trade','buy','1','1',NULL,'USD',"
+                "'2026-08-27T00:00:00+00:00',NULL,'HISTORY_DEAL','moomoo_deals_v1'),"
+                "('moomoo','moomoo_hash','deal_unregistered','equity:US:PBR','trade',"
+                "'buy','1','1',NULL,'USD','2026-08-27T00:00:00+00:00',NULL,"
+                "'HISTORY_DEAL','moomoo_deals_v1')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO account_positions("
+                "snapshot_id,instrument_id,side,quantity,currency) VALUES ("
+                "'snapshot_soxl','equity:US:SOXL','long','10','USD')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO account_transactions("
+                "provider,account_ref,provider_transaction_id,instrument_id,kind,side,"
+                "quantity,price,fees,currency,occurred_at,cash_amount,source_type,"
+                "mapping_version) VALUES ("
+                "'moomoo','moomoo_hash','deal_soxl','equity:US:SOXL','trade','buy',"
+                "'10','100',NULL,'USD','2026-08-27T00:00:00+00:00',NULL,"
+                "'HISTORY_DEAL','moomoo_deals_v1')"
+            )
+        )
+
+    command.upgrade(cfg, "0069_journal_instrument_identity")
+    with engine.connect() as conn:
         assert conn.execute(
             text(
-                "SELECT margin_used FROM account_snapshots "
-                "WHERE snapshot_id='snapshot_legacy_moomoo'"
+                "SELECT instrument_id,mapping_version FROM account_transactions "
+                "WHERE provider_transaction_id='deal_soxl'"
             )
-        ).scalar_one() is None
+        ).one() == ("etf:US:SOXL", "moomoo_deals_v2")
+        assert (
+            conn.execute(
+                text(
+                    "SELECT instrument_id FROM account_positions WHERE snapshot_id='snapshot_soxl'"
+                )
+            ).scalar_one()
+            == "etf:US:SOXL"
+        )
+        assert (
+            "etf:US:SOXL"
+            in conn.execute(
+                text(
+                    "SELECT open_orders_json FROM account_snapshots "
+                    "WHERE snapshot_id='snapshot_soxl'"
+                )
+            ).scalar_one()
+        )
+        assert conn.execute(
+            text(
+                "SELECT provider_transaction_id,instrument_id FROM account_transactions "
+                "WHERE provider_transaction_id IN ('deal_option_equity','deal_option_spaces') "
+                "ORDER BY provider_transaction_id"
+            )
+        ).all() == [
+            ("deal_option_equity", "option:US:NIO260702C5000"),
+            ("deal_option_spaces", "option:US:FCX260821C00065000"),
+        ]
+        assert conn.execute(
+            text(
+                "SELECT count(*) FROM account_transactions AS transaction_row "
+                "LEFT JOIN instruments AS instrument "
+                "ON instrument.instrument_id=transaction_row.instrument_id "
+                "WHERE transaction_row.provider='moomoo' AND instrument.instrument_id IS NULL"
+            )
+        ).scalar_one() == 0
+        assert conn.execute(
+            text("SELECT instrument_id FROM instruments WHERE symbol='GDXU'")
+        ).scalars().all() == ["etf:US:GDXU"]
+
+    command.downgrade(cfg, "0067_post_market_observation_sync")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT instrument_id,mapping_version FROM account_transactions "
+                "WHERE provider_transaction_id='deal_soxl'"
+            )
+        ).one() == ("equity:US:SOXL", "moomoo_deals_v1")
+    engine.dispose()
+
+
+def test_retire_unlinked_review_items_migration_auto_resolves_active_queue_rows(
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'retire-unlinked-review.db'}"
+    _set_test_env(monkeypatch, database_url)
+    cfg = _alembic_config(database_url, project_root)
+    command.upgrade(cfg, "0069_journal_instrument_identity")
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO review_items("
+            "review_item_id,source_key,source_type,source_ref,subject_id,title,detail,"
+            "severity,recommended_action,href,status,active_at_source,first_seen_at,"
+            "last_seen_at,due_at,resolved_at,resolved_by,resolution_note,resolution_ref,"
+            "occurrence_count,version) VALUES ("
+            "'review_unlinked','UNLINKED_ACTIVITY:test','UNLINKED_ACTIVITY',"
+            "'UNLINKED_ACTIVITY:test',NULL,'Unlinked account activity','Legacy queue row',"
+            "'ATTENTION','LINK_DECISION_OR_CLASSIFY','/portfolio#unlinked-activity',"
+            "'OPEN',1,'2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',"
+            "NULL,NULL,NULL,NULL,NULL,1,1)"
+        ))
+        conn.execute(text(
+            "INSERT INTO review_item_occurrences("
+            "review_item_id,occurrence_no,opened_at,last_seen_at,first_acknowledged_at,"
+            "first_acknowledged_by,resolved_at,resolved_by,resolution_mode) VALUES ("
+            "'review_unlinked',1,'2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',"
+            "NULL,NULL,NULL,NULL,NULL)"
+        ))
+
+    command.upgrade(cfg, "0070_retire_unlinked_review_items")
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT status,active_at_source,resolved_by,resolution_ref,version "
+            "FROM review_items WHERE review_item_id='review_unlinked'"
+        )).one() == (
+            "AUTO_RESOLVED",
+            0,
+            "system",
+            "policy:unlinked-activity-not-review-queue",
+            2,
+        )
+        assert conn.execute(text(
+            "SELECT resolved_by,resolution_mode FROM review_item_occurrences "
+            "WHERE review_item_id='review_unlinked' AND occurrence_no=1"
+        )).one() == ("system", "AUTO")
     engine.dispose()
 
 
@@ -292,19 +594,24 @@ def test_migration_round_trip(
         "trade_plan_id",
         "trade_plan_version",
         "review_due_at",
+        "external_note_revision_id",
     }.issubset(decision_columns)
-    broker_order_columns = {
-        item["name"] for item in insp.get_columns("broker_order_intents")
-    }
+    post_market_columns = {item["name"] for item in insp.get_columns("post_market_sync_runs")}
+    assert {
+        "observation_status",
+        "observation_notes_seen",
+        "observation_revisions_created",
+        "observation_full_count",
+        "observation_summary_only_count",
+    }.issubset(post_market_columns)
+    broker_order_columns = {item["name"] for item in insp.get_columns("broker_order_intents")}
     assert {
         "subject_id",
         "decision_id",
         "trade_plan_id",
         "trade_plan_version",
     }.issubset(broker_order_columns)
-    annotation_columns = {
-        item["name"] for item in insp.get_columns("transaction_decision_links")
-    }
+    annotation_columns = {item["name"] for item in insp.get_columns("transaction_decision_links")}
     assert {"classification", "order_intent_id"}.issubset(annotation_columns)
     assert "uq_watchlist_selected_per_case" in {
         item["name"] for item in insp.get_indexes("watchlist_items")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -54,6 +55,9 @@ from infrastructure.providers.moomoo_rate_limiter import (
     MoomooOpenDOperation,
     OpenDRequestLimiter,
 )
+from infrastructure.providers.watchlist.moomoo_security_corrections import (
+    MoomooSecurityCorrections,
+)
 from infrastructure.system.clock import SystemClock
 
 
@@ -63,10 +67,14 @@ class _ReadContext(Protocol):
     def position_list_query(self, **kwargs: object) -> tuple[object, object]: ...
     def order_list_query(self, **kwargs: object) -> tuple[object, object]: ...
     def history_deal_list_query(self, **kwargs: object) -> tuple[object, object]: ...
+    def order_fee_query(self, **kwargs: object) -> tuple[object, object]: ...
     def close(self) -> object: ...
 
 
 ContextFactory = Callable[[str, int], _ReadContext]
+
+_FEE_ORDER_CHUNK_SIZE = 20
+_US_OPTION_SYMBOL = re.compile(r"^[A-Z0-9.]{1,8}\d{6}[CP]\d+$")
 
 
 def _default_factory(host: str, port: int) -> _ReadContext:
@@ -110,6 +118,23 @@ def _nonnegative_decimal(value: object) -> Decimal | None:
     return parsed if parsed is not None and parsed >= 0 else None
 
 
+def _optional_identifier(value: object) -> str | None:
+    """Return a bounded-enough textual provider identifier, or no identifier.
+
+    OpenD normally returns order identifiers as strings, but some SDK versions
+    expose numeric identifiers.  Fee enrichment only needs a stable lookup key;
+    unsupported values are treated as missing and therefore remain explicitly
+    unavailable instead of escaping raw SDK objects.
+    """
+
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float, Decimal)):
+        return None
+    identifier = str(value).strip()
+    return identifier or None
+
+
 def _account_ref(raw: object) -> str:
     digest = hashlib.sha256(f"moomoo:{raw}".encode()).hexdigest()[:24]
     return f"moomoo_{digest}"
@@ -123,17 +148,25 @@ def _provider_transaction_ref(raw: object) -> str:
     return hashlib.sha256(f"moomoo-transaction:{raw}".encode()).hexdigest()[:32]
 
 
-def _instrument_id(code: object) -> str:
+def _instrument_id(code: object, corrections: MoomooSecurityCorrections) -> str:
     if not isinstance(code, str) or "." not in code:
         raise DataContractError("Moomoo instrument code is invalid")
     prefix, symbol = code.split(".", 1)
+    symbol = symbol.replace(" ", "").upper()
     if prefix == "US":
         market, canonical = Market.US, symbol.upper()
     elif prefix in {"SH", "SZ"}:
         market, canonical = Market.A_SHARE, f"{symbol}.{prefix}"
     else:
         raise DataContractError("Moomoo instrument market is unsupported")
-    return build_instrument_id(AssetType.EQUITY, market, canonical)
+    correction = corrections.for_code(code.upper())
+    asset_type = correction.asset_type if correction is not None else AssetType.EQUITY
+    # OpenD account rows do not carry an asset-type discriminator.  US option
+    # deal symbols use the stable OCC-style root/date/C|P/strike shape, though
+    # the SDK may insert padding spaces between the root and expiry.
+    if market is Market.US and _US_OPTION_SYMBOL.fullmatch(canonical):
+        asset_type = AssetType.OPTION
+    return build_instrument_id(asset_type, market, canonical)
 
 
 class MoomooAccountAdapter:
@@ -151,6 +184,7 @@ class MoomooAccountAdapter:
         clock: Clock | None = None,
         context_factory: ContextFactory | None = None,
         opend_rate_limiter: OpenDRequestLimiter | None = None,
+        security_corrections: MoomooSecurityCorrections | None = None,
     ) -> None:
         self._ids = id_generator
         self._enabled = enabled
@@ -163,6 +197,7 @@ class MoomooAccountAdapter:
         self._clock = clock or SystemClock()
         self._factory = context_factory or _default_factory
         self._opend_rate_limiter = opend_rate_limiter
+        self._security_corrections = security_corrections or MoomooSecurityCorrections.empty()
 
     @property
     def vendor_id(self) -> VendorId:
@@ -228,6 +263,7 @@ class MoomooAccountAdapter:
             accounts = self._query(context.get_acc_list())
             items: list[AccountTransaction] = []
             account_refs: list[str] = []
+            account_fee_complete: dict[str, bool] = {}
             for account in accounts:
                 raw_id = account.get("acc_id")
                 if (
@@ -242,16 +278,21 @@ class MoomooAccountAdapter:
                 kwargs["end"] = requested_end.date().isoformat()
                 self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_HISTORY_DEALS, raw_id)
                 rows = self._query(context.history_deal_list_query(**kwargs))
-                items.extend(self._transaction(raw_id, row) for row in rows)
+                account_items = [self._transaction(raw_id, row) for row in rows]
+                enriched_items, fees_complete = self._enrich_transaction_fees(
+                    context, raw_id, rows, account_items
+                )
+                items.extend(enriched_items)
+                account_fee_complete[_account_ref(raw_id)] = fees_complete
         finally:
             context.close()
         items.sort(key=lambda item: (item.occurred_at, item.provider_transaction_id), reverse=True)
         fetched_at = self._clock.now()
         truncated = len(items) > limit
-        gap_codes = [
-            "TRANSACTION_FEES_UNAVAILABLE",
-            "MOOMOO_ACTIVITY_TYPES_UNAVAILABLE",
-        ]
+        fees_complete = bool(items) and all(item.fees is not None for item in items)
+        gap_codes = ["MOOMOO_ACTIVITY_TYPES_UNAVAILABLE"]
+        if not fees_complete:
+            gap_codes.insert(0, "TRANSACTION_FEES_UNAVAILABLE")
         if truncated:
             gap_codes.append("PROVIDER_RESULT_TRUNCATED")
         warnings = list(gap_codes)
@@ -267,10 +308,15 @@ class MoomooAccountAdapter:
                 requested_end=requested_end,
                 effective_start=requested_start,
                 effective_end=requested_end,
-                mapping_version="moomoo_deals_v1",
+                mapping_version="moomoo_deals_v2",
                 supported_kinds=(AccountTransactionKind.TRADE,),
                 unavailable_kinds=unavailable_kinds,
-                gap_codes=tuple(gap_codes),
+                gap_codes=tuple(
+                    code
+                    for code in gap_codes
+                    if code != "TRANSACTION_FEES_UNAVAILABLE"
+                    or not account_fee_complete.get(account_ref, False)
+                ),
                 truncated=truncated,
             )
             for account_ref in account_refs
@@ -357,6 +403,124 @@ class MoomooAccountAdapter:
             raise ProviderUnavailableError("Moomoo OpenD read failed")
         return _records(value)
 
+    def _enrich_transaction_fees(
+        self,
+        context: _ReadContext,
+        raw_account_id: object,
+        rows: Sequence[Mapping[str, object]],
+        transactions: Sequence[AccountTransaction],
+    ) -> tuple[tuple[AccountTransaction, ...], bool]:
+        """Best-effort fee enrichment for one account's history response.
+
+        OpenD reports one fee total per order while history deals can contain
+        several partial fills.  Query chunks are deliberately bounded and each
+        failed or malformed chunk remains unresolved; transaction history itself
+        is still returned to the caller.
+        """
+
+        order_deals: dict[str, list[int]] = {}
+        order_ids: list[str] = []
+        for index, row in enumerate(rows):
+            order_id = _optional_identifier(row.get("order_id"))
+            if order_id is None:
+                continue
+            if order_id not in order_deals:
+                order_deals[order_id] = []
+                order_ids.append(order_id)
+            order_deals[order_id].append(index)
+
+        if not order_ids:
+            return tuple(transactions), False
+
+        fee_by_order: dict[str, Decimal] = {}
+        for offset in range(0, len(order_ids), _FEE_ORDER_CHUNK_SIZE):
+            chunk = order_ids[offset : offset + _FEE_ORDER_CHUNK_SIZE]
+            try:
+                self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_ORDER_FEES, raw_account_id)
+                fee_rows = self._query(
+                    context.order_fee_query(
+                        order_id_list=chunk,
+                        trd_env="REAL",
+                        acc_id=raw_account_id,
+                    )
+                )
+                fee_by_order.update(self._parse_fee_rows(fee_rows, expected=set(chunk)))
+            except Exception:
+                # Fee enrichment is optional.  Do not let an SDK, admission, or
+                # response-shape failure discard otherwise valid trade history.
+                continue
+
+        enriched = list(transactions)
+        for order_id, indices in order_deals.items():
+            total_fee = fee_by_order.get(order_id)
+            if total_fee is None:
+                continue
+            allocations = self._allocate_order_fee(
+                total_fee, tuple(transactions[index] for index in indices)
+            )
+            for index, allocation in zip(indices, allocations, strict=True):
+                enriched[index] = replace(enriched[index], fees=allocation)
+        return tuple(enriched), bool(enriched) and all(item.fees is not None for item in enriched)
+
+    @staticmethod
+    def _parse_fee_rows(
+        rows: Sequence[Mapping[str, object]], *, expected: set[str]
+    ) -> dict[str, Decimal]:
+        parsed: dict[str, Decimal] = {}
+        for row in rows:
+            order_id = _optional_identifier(row.get("order_id"))
+            # Current SDK responses call this field ``fee_amount`` while the
+            # documented order-fee contract and older fixtures call it
+            # ``total_fee``.  Prefer the SDK field when it is present and only
+            # use the compatibility alias when it is absent.
+            fee_value = row["fee_amount"] if "fee_amount" in row else row.get("total_fee")
+            total_fee = _nonnegative_decimal(fee_value)
+            if (
+                order_id is None
+                or order_id not in expected
+                or total_fee is None
+                or order_id in parsed
+            ):
+                raise DataContractError("Moomoo order fee response is invalid")
+            parsed[order_id] = total_fee
+        return parsed
+
+    @staticmethod
+    def _allocate_order_fee(
+        total_fee: Decimal, deals: Sequence[AccountTransaction]
+    ) -> tuple[Decimal, ...]:
+        if not deals:
+            return ()
+        if len(deals) == 1:
+            return (total_fee,)
+
+        notionals = tuple(
+            abs((deal.quantity or Decimal(0)) * (deal.price or Decimal(0))) for deal in deals
+        )
+        weights = (
+            notionals
+            if sum(notionals, Decimal(0)) > 0
+            else tuple(abs(deal.quantity or Decimal(0)) for deal in deals)
+        )
+        total_weight = sum(weights, Decimal(0))
+        if total_weight <= 0:
+            # AccountTransaction validates positive trade quantities, so this is
+            # defensive only; keeping it explicit avoids a division-by-zero path
+            # if the model contract changes.
+            return tuple(Decimal(0) for _ in deals[:-1]) + (total_fee,)
+
+        allocations: list[Decimal] = []
+        remaining_fee = total_fee
+        remaining_weight = total_weight
+        for weight in weights[:-1]:
+            allocation = remaining_fee * weight / remaining_weight if weight > 0 else Decimal(0)
+            allocation = min(max(allocation, Decimal(0)), remaining_fee)
+            allocations.append(allocation)
+            remaining_fee -= allocation
+            remaining_weight -= weight
+        allocations.append(remaining_fee)
+        return tuple(allocations)
+
     def _wait_for_quota(self, operation: MoomooOpenDOperation, raw_id: object) -> None:
         if self._opend_rate_limiter is not None:
             self._opend_rate_limiter.wait(operation, scope=_account_ref(raw_id))
@@ -382,21 +546,43 @@ class MoomooAccountAdapter:
         info_rows = self._query(context.accinfo_query(**currency_kwargs))
         self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_POSITIONS, raw_id)
         position_rows = self._query(context.position_list_query(**currency_kwargs))
-        self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_ORDERS, raw_id)
-        order_rows = self._query(
-            context.order_list_query(
-                **common_kwargs,
-                status_filter_list=(
-                    "WAITING_SUBMIT",
-                    "SUBMITTING",
-                    "SUBMITTED",
-                    "FILLED_PART",
-                ),
+        supplemental_warnings: set[str] = set()
+        open_orders: tuple[AccountOpenOrder, ...]
+        try:
+            self._wait_for_quota(MoomooOpenDOperation.ACCOUNT_ORDERS, raw_id)
+            order_rows = self._query(
+                context.order_list_query(
+                    **common_kwargs,
+                    status_filter_list=(
+                        "WAITING_SUBMIT",
+                        "SUBMITTING",
+                        "SUBMITTED",
+                        "FILLED_PART",
+                    ),
+                )
             )
-        )
+            open_orders = tuple(self._order(row) for row in order_rows)
+        except TradingPartnerError:
+            # Account balances and positions remain useful when OpenD cannot return
+            # or safely normalize its optional open-order view. The warning makes
+            # the empty tuple explicitly unknown rather than "no open orders".
+            open_orders = ()
+            supplemental_warnings.add("MOOMOO_OPEN_ORDERS_UNAVAILABLE")
         info = info_rows[0] if info_rows else {}
         fetched_at = self._clock.now()
-        positions = tuple(self._position(row, market_price_at=fetched_at) for row in position_rows)
+        positions_list: list[AccountPosition] = []
+        for row in position_rows:
+            quantity = _decimal(row.get("qty"))
+            if quantity is None:
+                raise DataContractError("Moomoo position quantity is invalid")
+            if quantity == 0:
+                # OpenD can retain a same-day zero-quantity row after a position is
+                # closed. It is not a current holding and must not invalidate the
+                # rest of the account snapshot.
+                supplemental_warnings.add("MOOMOO_ZERO_QUANTITY_POSITION_OMITTED")
+                continue
+            positions_list.append(self._position(row, market_price_at=fetched_at))
+        positions = tuple(positions_list)
         # OpenD exposes the provider ``debtCash`` field under the misleading SDK
         # name ``interest_charged_amount``. It is the interest-bearing balance
         # suitable for account-level financing usage. ``initial_margin`` is a
@@ -416,11 +602,12 @@ class MoomooAccountAdapter:
             net_assets=_decimal(info.get("total_assets")),
             margin_used=margin_used,
             positions=positions,
-            open_orders=tuple(self._order(row) for row in order_rows),
+            open_orders=open_orders,
             degraded=True,
             warning_codes=self._warning_codes(
                 positions,
                 margin_usage_available=margin_used is not None,
+                supplemental_codes=tuple(supplemental_warnings),
             ),
         )
 
@@ -429,8 +616,9 @@ class MoomooAccountAdapter:
         positions: Sequence[AccountPosition],
         *,
         margin_usage_available: bool,
+        supplemental_codes: Sequence[str] = (),
     ) -> tuple[str, ...]:
-        codes = {"ASSET_TYPE_ASSUMED_EQUITY"}
+        codes = {"ASSET_TYPE_ASSUMED_EQUITY", *supplemental_codes}
         if not margin_usage_available:
             codes.add("MOOMOO_MARGIN_USAGE_UNAVAILABLE")
         if any(position.market_price is not None for position in positions):
@@ -442,10 +630,7 @@ class MoomooAccountAdapter:
             codes.add("PRICE_TIME_UNAVAILABLE")
         return tuple(sorted(codes))
 
-    @staticmethod
-    def _position(
-        row: Mapping[str, object], *, market_price_at: datetime
-    ) -> AccountPosition:
+    def _position(self, row: Mapping[str, object], *, market_price_at: datetime) -> AccountPosition:
         side = (
             AccountPositionSide.SHORT
             if str(row.get("position_side", "")).upper() == "SHORT"
@@ -456,7 +641,7 @@ class MoomooAccountAdapter:
             raise DataContractError("Moomoo position quantity is invalid")
         market_price = _decimal(row.get("nominal_price"))
         return AccountPosition(
-            instrument_id=_instrument_id(row.get("code")),
+            instrument_id=_instrument_id(row.get("code"), self._security_corrections),
             side=side,
             quantity=abs(quantity),
             sellable_quantity=_decimal(row.get("can_sell_qty")),
@@ -470,8 +655,7 @@ class MoomooAccountAdapter:
             currency=str(row.get("currency") or "USD").upper(),
         )
 
-    @staticmethod
-    def _order(row: Mapping[str, object]) -> AccountOpenOrder:
+    def _order(self, row: Mapping[str, object]) -> AccountOpenOrder:
         raw_side = str(row.get("trd_side", "")).upper()
         side = (
             AccountOpenOrderSide.BUY
@@ -499,7 +683,7 @@ class MoomooAccountAdapter:
                 pass
         return AccountOpenOrder(
             provider_order_id=_provider_order_ref(row.get("order_id")),
-            instrument_id=_instrument_id(row.get("code")),
+            instrument_id=_instrument_id(row.get("code"), self._security_corrections),
             side=side,
             status=status,
             quantity=quantity,
@@ -508,8 +692,7 @@ class MoomooAccountAdapter:
             submitted_at=submitted_at,
         )
 
-    @staticmethod
-    def _transaction(raw_account_id: object, row: Mapping[str, object]) -> AccountTransaction:
+    def _transaction(self, raw_account_id: object, row: Mapping[str, object]) -> AccountTransaction:
         raw_side = str(row.get("trd_side", "")).upper()
         if raw_side in {"BUY", "BUY_BACK"}:
             side = AccountTransactionSide.BUY
@@ -517,7 +700,7 @@ class MoomooAccountAdapter:
             side = AccountTransactionSide.SELL
         else:
             raise DataContractError("Moomoo transaction side is unsupported")
-        instrument_id = _instrument_id(row.get("code"))
+        instrument_id = _instrument_id(row.get("code"), self._security_corrections)
         market = instrument_id.split(":", 2)[1]
         timezone = ZoneInfo("America/New_York" if market == Market.US.value else "Asia/Shanghai")
         raw_time = row.get("create_time")
@@ -550,5 +733,5 @@ class MoomooAccountAdapter:
             occurred_at=occurred_at,
             cash_amount=None,
             source_type="HISTORY_DEAL",
-            mapping_version="moomoo_deals_v1",
+            mapping_version="moomoo_deals_v2",
         )

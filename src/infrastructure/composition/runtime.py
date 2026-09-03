@@ -17,7 +17,7 @@ from application.ports.trade_retro_narrative_provider import TradeRetroNarrative
 from application.ports.watchlist_source_provider import WatchlistSourceProvider
 from domain.common.enums import VendorId
 from infrastructure.attachments.agent import FileAgentAttachmentStore
-from infrastructure.config.settings import PROJECT_ROOT, AppSettings
+from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.database import SqlAlchemyDatabase
 from infrastructure.providers.a_share.eastmoney_gate import EastmoneyRequestGate
 from infrastructure.providers.llm import (
@@ -45,7 +45,7 @@ from infrastructure.system.process_file_lock import ProcessFileLock
 def build_agent_attachment_store(settings: AppSettings) -> AgentAttachmentStore | None:
     if not settings.agent_enabled and not settings.telegram_agent_enabled:
         return None
-    return FileAgentAttachmentStore(PROJECT_ROOT / "data" / "agent" / "attachments")
+    return FileAgentAttachmentStore(settings.paths.agent_attachments)
 
 
 def build_monitor_judgment_provider(
@@ -66,9 +66,7 @@ def build_monitor_judgment_provider(
             base_url=config.base_url,
             model=config.model,
             reasoning_effort=(
-                settings.monitor_judgment_reasoning_effort
-                or config.reasoning_effort
-                or "max"
+                settings.monitor_judgment_reasoning_effort or config.reasoning_effort or "max"
             ),
             timeout_seconds=config.timeout_seconds,
             max_output_tokens=min(
@@ -83,9 +81,7 @@ def build_monitor_judgment_provider(
             base_url=config.base_url,
             model=config.model,
             reasoning_effort=(
-                settings.monitor_judgment_reasoning_effort
-                or config.reasoning_effort
-                or "max"
+                settings.monitor_judgment_reasoning_effort or config.reasoning_effort or "max"
             ),
             web_search_enabled=config.web_search_enabled,
             output_language=settings.llm_output_language,
@@ -102,9 +98,7 @@ def build_monitor_judgment_provider(
             base_url=config.base_url,
             model=config.model,
             reasoning_effort=(
-                settings.monitor_judgment_reasoning_effort
-                or config.reasoning_effort
-                or "max"
+                settings.monitor_judgment_reasoning_effort or config.reasoning_effort or "max"
             ),
             timeout_seconds=config.timeout_seconds,
             max_output_tokens=min(
@@ -126,6 +120,46 @@ def build_monitor_judgment_provider(
             settings.monitor_judgment_max_output_tokens,
         ),
         proxy_url=settings.provider_proxy_url,
+    )
+
+
+def build_monitor_event_analysis_provider(
+    settings: AppSettings,
+    *,
+    resilience: LLMResilienceController | None = None,
+) -> AgentModelProvider | None:
+    """Build the short, read-only model used only when an event is emitted."""
+
+    if not settings.monitor_judgment_enabled:
+        return None
+    config = settings.resolved_monitor_judgment_config
+    if config is None:
+        return None
+    provider_id = settings.resolved_llm_provider_id
+    if provider_id == "opencode_go":
+        provider: AgentModelProvider = OpenCodeGoModelProvider(
+            config,
+            proxy_url=settings.provider_proxy_url,
+        )
+    elif provider_id == "opencode_zen":
+        provider = OpenCodeZenModelProvider(
+            config,
+            proxy_url=settings.provider_proxy_url,
+        )
+    else:
+        provider = OpenAICompatibleModelProvider(
+            config,
+            proxy_url=settings.provider_proxy_url,
+        )
+    if resilience is None:
+        return provider
+    route_vendor = VendorId(
+        settings.llm_provider if provider_id in {None, "default"} else provider_id
+    )
+    return RoutedAgentModelProvider(
+        provider,
+        vendor=route_vendor,
+        resilience=resilience,
     )
 
 
@@ -253,18 +287,12 @@ def build_agent_model_providers(
                 config, proxy_url=settings.provider_proxy_url
             )
         elif model_id == "opencode_zen":
-            provider = OpenCodeZenModelProvider(
-                config, proxy_url=settings.provider_proxy_url
-            )
+            provider = OpenCodeZenModelProvider(config, proxy_url=settings.provider_proxy_url)
         else:
-            provider = OpenAICompatibleModelProvider(
-                config, proxy_url=settings.provider_proxy_url
-            )
+            provider = OpenAICompatibleModelProvider(config, proxy_url=settings.provider_proxy_url)
         if resilience is not None:
             route_vendor = (
-                VendorId(settings.llm_provider)
-                if model_id == "default"
-                else VendorId(model_id)
+                VendorId(settings.llm_provider) if model_id == "default" else VendorId(model_id)
             )
             provider = RoutedAgentModelProvider(
                 provider,
@@ -325,6 +353,8 @@ class RuntimeResources:
     notification_sender: NotificationSender | None = None
     monitor_judgment_provider: object | None = None
     monitor_judgment_fallback_provider: object | None = None
+    monitor_event_analysis_provider: AgentModelProvider | None = None
+    external_note_analysis_provider: AgentModelProvider | None = None
     trade_retro_narrative_provider: object | None = None
     agent_model_provider: AgentModelProvider | None = None
     agent_model_providers: dict[str, AgentModelProvider] = field(default_factory=dict)
@@ -350,6 +380,8 @@ class RuntimeResources:
                 self.notification_sender,
                 self.monitor_judgment_provider,
                 self.monitor_judgment_fallback_provider,
+                self.monitor_event_analysis_provider,
+                self.external_note_analysis_provider,
                 self.trade_retro_narrative_provider,
                 self.agent_model_provider,
                 self.agent_web_search_provider,

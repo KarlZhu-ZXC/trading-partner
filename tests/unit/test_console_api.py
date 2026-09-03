@@ -11,9 +11,12 @@ from sqlalchemy import create_engine
 
 import interfaces.console.api as console_api
 from application.dto.activity_annotations import ActivityAnnotationDTO
+from application.ports.external_note_provider import ObservationSourceCapability
 from application.services.review_item_service import ReviewItemService
 from domain.common.enums import VendorId
 from domain.common.errors import ActivityAnnotationVersionConflict
+from domain.external_note.enums import NoteSyncStatus
+from domain.external_note.models import ExternalNoteInterpretation, ExternalNoteSyncReceipt
 from domain.portfolio.enums import ActivityAnnotationStatus
 from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
 from domain.review_item.models import ReviewItemProjection
@@ -47,6 +50,16 @@ def test_console_bff_canonicalizes_legacy_subject_transport_fields() -> None:
             "linked_subject_ids": ["case_002"],
         }
     }
+
+
+def test_observation_history_diff_is_bounded_and_directional() -> None:
+    added, removed = console_api._bounded_observation_diff(
+        "hold\nold risk",
+        "hold\nnew catalyst\nnew risk",
+    )
+
+    assert added == ("new catalyst", "new risk")
+    assert removed == ("old risk",)
 
 
 @pytest.mark.asyncio
@@ -455,6 +468,87 @@ class _AgendaSummaryService:
         return self.receipt
 
 
+class _ExternalNotesService:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+        self.sync_inputs: list[bool] = []
+        self.analysis_limits: list[int] = []
+        self.captures: list[Any] = []
+        self.targeted_analysis: list[str] = []
+        self.interpretations: dict[str, ExternalNoteInterpretation] = {}
+
+    def inbox(self, **_kwargs: Any) -> tuple[Any, ...]:
+        return ()
+
+    def source_capabilities(self) -> tuple[Any, ...]:
+        return (
+            ObservationSourceCapability(
+                source_code="MOOMOO_NOTE",
+                display_name="Moomoo Private Notes",
+                supports_full_text=True,
+                supports_incremental_sync=True,
+                requires_interactive_session=True,
+                content_modes=("EDITOR_FULL_TEXT", "LIST_SUMMARY"),
+            ),
+        )
+
+    async def sync(
+        self, *, analyze: bool = False, source_code: str | None = None
+    ) -> ExternalNoteSyncReceipt:
+        self.sync_inputs.append(analyze)
+        return ExternalNoteSyncReceipt(
+            receipt_id="external_note_sync_test",
+            status=NoteSyncStatus.PARTIAL,
+            cache_files_scanned=12,
+            notes_seen=3,
+            identities_created=1,
+            revisions_created=2,
+            unchanged_count=1,
+            full_count=2,
+            summary_only_count=1,
+            interpretations_created=0,
+            warning_codes=("MOOMOO_NOTE_INTERPRETATION_PENDING",),
+            error_codes=(),
+            started_at=self.now,
+            completed_at=self.now,
+        )
+
+    async def analyze_pending(self, *, limit: int = 20) -> tuple[Any, ...]:
+        self.analysis_limits.append(limit)
+        return ()
+
+    async def capture(self, request: Any, *, analyze: bool = False) -> ExternalNoteSyncReceipt:
+        self.captures.append((request, analyze))
+        return await self.sync(analyze=analyze, source_code="LOCAL_OBSERVATION_BRIDGE")
+
+    async def analyze_revision(
+        self, note_revision_id: str, *, retry_failed: bool = True
+    ) -> ExternalNoteInterpretation:
+        self.targeted_analysis.append(note_revision_id)
+        value = ExternalNoteInterpretation(
+            interpretation_id=f"interpretation-{note_revision_id}",
+            note_revision_id=note_revision_id,
+            status="SUCCEEDED",
+            provider="test",
+            model="test",
+            reasoning_effort="max",
+            schema_version="test-v1",
+            payload_json="{}",
+            error_code=None,
+            created_at=self.now,
+        )
+        self.interpretations[note_revision_id] = value
+        return value
+
+    def interpretation_for_revision(
+        self, note_revision_id: str
+    ) -> ExternalNoteInterpretation | None:
+        return self.interpretations.get(note_revision_id)
+
+    def history(self, _note_id: str, _limit: int = 50) -> tuple[Any, ...]:
+        return ()
+
+
 class _AgendaContainer:
     def __init__(
         self,
@@ -463,6 +557,7 @@ class _AgendaContainer:
         summary_service: _AgendaSummaryService | None = None,
         now: datetime | None = None,
     ) -> None:
+        current = now or datetime.now(UTC)
         self.services = SimpleNamespace(
             decisions=SimpleNamespace(list_review_due=lambda **_kwargs: ()),
             broker_orders=SimpleNamespace(list_recent=lambda **_kwargs: ()),
@@ -478,6 +573,7 @@ class _AgendaContainer:
                     }
                 )
             ),
+            external_notes=_ExternalNotesService(current),
             review_items=SimpleNamespace(
                 reconcile=lambda *_args, **_kwargs: (),
                 list_open=lambda **_kwargs: (),
@@ -496,7 +592,7 @@ class _AgendaContainer:
             catalyst_agenda_notifications=summary_service,
         )
         self.context = SimpleNamespace(
-            clock=_AgendaClock(now or datetime.now(UTC)),
+            clock=_AgendaClock(current),
             secret_redactor=SimpleNamespace(redact_text=lambda value: value),
         )
 
@@ -513,6 +609,194 @@ async def _console_headers(client: httpx.AsyncClient) -> dict[str, str]:
     return {
         "Origin": "http://127.0.0.1:3000",
         "X-Trading-Partner-Console-Token": response.json()["token"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_moomoo_note_refresh_returns_before_background_analysis(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    service = container.services.external_notes
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post("/api/moomoo-notes/sync", json={"analyze": False})
+        headers = await _console_headers(client)
+        response = await client.post(
+            "/api/moomoo-notes/sync",
+            json={"analyze": False},
+            headers=headers,
+        )
+        await asyncio.sleep(0)
+
+    assert denied.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["data"]["revisions_created"] == 2
+    assert response.json()["data"]["analysis_started"] is True
+    assert service.sync_inputs == [False]
+    assert service.analysis_limits == [20]
+
+
+@pytest.mark.asyncio
+async def test_observation_source_hub_lists_capabilities_and_syncs_all_sources(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    service = container.services.external_notes
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        inbox = await client.get("/api/observations?limit=25")
+        sources = await client.get("/api/observations/sources")
+        history = await client.get("/api/observations/external_note_test/history")
+        headers = await _console_headers(client)
+        synced = await client.post(
+            "/api/observations/sync",
+            json={"source_code": None, "analyze": False},
+            headers=headers,
+        )
+        await asyncio.sleep(0)
+
+    assert inbox.status_code == 200
+    assert set(inbox.json()["data"]) == {"external_notes", "observation_sources"}
+    assert sources.status_code == 200
+    assert sources.json()["items"][0]["source_code"] == "MOOMOO_NOTE"
+    assert history.status_code == 200
+    assert history.json()["data"]["items"] == []
+    assert synced.status_code == 200
+    assert synced.json()["data"]["source_code"] is None
+    assert service.sync_inputs == [False]
+
+
+@pytest.mark.asyncio
+async def test_observation_capture_route_is_session_gated_and_source_neutral(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    service = container.services.external_notes
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    payload = {
+        "source_code": "TRADINGVIEW_NOTE",
+        "external_id": "layout-afrm",
+        "title": "AFRM Layout Note",
+        "full_body": "Range observation.",
+        "observed_at": "2026-08-27T12:00:00Z",
+        "primary_instrument_id": "equity:US:AFRM",
+        "related_provider_codes": ["NASDAQ:AFRM"],
+        "analyze": False,
+    }
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post("/api/observations/import", json=payload)
+        headers = await _console_headers(client)
+        accepted = await client.post(
+            "/api/observations/import",
+            json=payload,
+            headers=headers,
+        )
+        await asyncio.sleep(0)
+
+    assert denied.status_code == 403
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["source_code"] == "TRADINGVIEW_NOTE"
+    assert service.captures[0][0].external_id == "layout-afrm"
+
+
+@pytest.mark.asyncio
+async def test_observation_analysis_route_starts_one_target_and_reports_terminal_status(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    service = container.services.external_notes
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    revision_id = "external_note_revision_afrm"
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        started = await client.post(
+            f"/api/observations/{revision_id}/analyze",
+            json={"retry_failed": True},
+            headers=headers,
+        )
+        await asyncio.sleep(0)
+        status = await client.get(f"/api/observations/{revision_id}/analysis")
+
+    assert started.status_code == 200
+    assert started.json()["data"]["analysis_started"] is True
+    assert status.json()["data"]["status"] == "SUCCEEDED"
+    assert service.targeted_analysis == [revision_id]
+
+
+@pytest.mark.asyncio
+async def test_observation_analysis_task_consumes_unexpected_failure_as_closed_code(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    service = container.services.external_notes
+
+    async def fail_analysis(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("private upstream detail must not escape")
+
+    service.analyze_revision = fail_analysis
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    revision_id = "external_note_revision_failure"
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        headers = await _console_headers(client)
+        started = await client.post(
+            f"/api/observations/{revision_id}/analyze",
+            json={"retry_failed": True},
+            headers=headers,
+        )
+        await asyncio.sleep(0)
+        status = await client.get(f"/api/observations/{revision_id}/analysis")
+
+    assert started.status_code == 200
+    assert status.json()["data"] == {
+        "note_revision_id": revision_id,
+        "status": "FAILED",
+        "error_code": "OBSERVATION_ANALYSIS_UNEXPECTED",
     }
 
 
@@ -701,27 +985,12 @@ async def test_phase4_manual_cycle_and_behavior_review_writes_use_console_sessio
 
 
 @pytest.mark.asyncio
-async def test_decision_workbench_preserves_unlinked_activity_read(monkeypatch: Any) -> None:
+async def test_decision_workbench_does_not_read_or_return_unlinked_activity(
+    monkeypatch: Any,
+) -> None:
     container = _AgendaContainer()
-    unlinked = {
-        "activities": [
-            {
-                "source_key": "UNLINKED_ACTIVITY:broker:acct-1:tx-1",
-                "transaction": {
-                    "provider": "broker",
-                    "account_ref": "acct-1",
-                    "provider_transaction_id": "tx-1",
-                    "kind": "trade",
-                    "instrument_id": "equity:US:AAPL",
-                },
-            }
-        ],
-        "has_more": False,
-        "observed_complete": True,
-        "limitation_codes": [],
-    }
-    container.services.activity_annotations.list_unlinked = lambda **_kwargs: SimpleNamespace(
-        model_dump=lambda **_dump_kwargs: unlinked
+    container.services.activity_annotations.list_unlinked = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("Journal must not materialize Unlinked Activity")
     )
 
     async def fake_subject_choices(
@@ -757,7 +1026,7 @@ async def test_decision_workbench_preserves_unlinked_activity_read(monkeypatch: 
 
     result = await console_api.decision_workbench(request, subject_id=None)
 
-    assert result["unlinked_activity"] == unlinked
+    assert "unlinked_activity" not in result
 
 
 @pytest.mark.asyncio
@@ -1419,7 +1688,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         console_api._lifespan(console_api.app),
         httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
     ):
-        response = await client.get("/api/decision-workbench")
+        response = await client.get("/api/decision-workbench?subject_id=case_001")
 
     assert response.status_code == 200
     payload = response.json()
@@ -1472,14 +1741,161 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         "portfolio_analyze",
         {
             "operation": "trade_cycles",
-            "instrument_ids": ["equity:US:TTWO"],
-            "limit": 100,
+            "instrument_ids": [],
+            "limit": 500,
         },
     ) in calls
     assert all(name != "external_state_sync" for name, _request in calls)
     assert reconciled
     assert all(item.subject_id == "case_001" for item in reconciled)
     assert all(item.href.startswith("/retro#retro-retro_001") for item in reconciled)
+
+
+@pytest.mark.asyncio
+async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_subject_choices(
+        _request: Any,
+        *,
+        include_archived: bool,
+        selected_subject_id: str | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        assert include_archived is False
+        assert selected_subject_id is None
+        return [
+            {"subject": {"subject_id": "case_001", "title": "TTWO"}, "state": None},
+            {"subject": {"subject_id": "case_002", "title": "AI"}, "state": None},
+        ], {"total": 2, "page_size": 200, "ok": True}
+
+    async def fake_durable_call(
+        _request: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        compact_request = arguments["request"]
+        calls.append((tool_name, compact_request))
+        operation = compact_request.get("operation")
+        if tool_name == "portfolio_analyze" and operation == "trade_cycles":
+            return {
+                "ok": True,
+                "data": {
+                    "cycles": [
+                        {
+                            "cycle_id": "cycle_global",
+                            "instrument_id": "equity:US:TTWO",
+                        }
+                    ]
+                },
+            }
+        if tool_name == "portfolio_analyze" and operation == "behavior_summary":
+            return {
+                "ok": True,
+                "data": {
+                    "cohort": {"strategy_code": None},
+                    "cohort_cycle_ids": ["cycle_global"],
+                },
+            }
+        if tool_name == "account_get" and operation == "transactions":
+            return {
+                "ok": True,
+                "data": {"transactions": [{"provider_transaction_id": "tx_global"}]},
+            }
+        if tool_name == "research_memory_get" and operation == "agenda":
+            return {"ok": True, "data": {"items": []}}
+        if tool_name == "research_judgment_get":
+            return {"ok": True, "data": {"runs": []}}
+        return {"ok": True, "data": {"items": [], "runs": []}}
+
+    review_item = SimpleNamespace(
+        model_dump=lambda **_kwargs: {
+            "review_item_id": "review_global",
+            "subject_id": "case_002",
+            "status": "OPEN",
+        }
+    )
+    review_metrics = {"total_items": 1, "open_count": 1, "acknowledged_count": 0}
+    review_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def list_open(**kwargs: Any) -> tuple[Any, ...]:
+        review_calls.append(("open", kwargs))
+        return (review_item,)
+
+    def list_recent(**kwargs: Any) -> tuple[Any, ...]:
+        review_calls.append(("recent", kwargs))
+        return (review_item,)
+
+    def metrics(**kwargs: Any) -> Any:
+        review_calls.append(("metrics", kwargs))
+        return SimpleNamespace(model_dump=lambda **_kwargs: review_metrics)
+
+    def reconcile(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("global Journal reads must not reconcile ReviewItems")
+
+    container = _AgendaContainer()
+    container.services.review_items = SimpleNamespace(
+        reconcile=reconcile,
+        list_open=list_open,
+        list_recent=list_recent,
+        metrics=metrics,
+    )
+    monkeypatch.setattr(console_api, "_console_subject_choices", fake_subject_choices)
+    monkeypatch.setattr(console_api, "_durable_console_call", fake_durable_call)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(container=container)),
+    )
+
+    result = await console_api.decision_workbench(
+        request,
+        subject_id=None,
+        classification=None,
+        classifications=["ACTIVE_TRADE", "HEDGE"],
+        behavior_start=datetime(2026, 7, 1, tzinfo=UTC),
+        behavior_end=datetime(2026, 7, 31, 23, 59, tzinfo=UTC),
+    )
+
+    assert result["selected_subject_id"] is None
+    assert all(item["state"] is None for item in result["subjects"])
+    assert (
+        result["transactions"]["data"]["transactions"][0]["provider_transaction_id"]
+        == "tx_global"
+    )
+    assert result["trade_cycles"]["data"]["cycles"][0]["cycle_id"] == "cycle_global"
+    assert result["behavior"]["data"]["cohort"]["strategy_code"] is None
+    assert result["review_items"] == [
+        {"review_item_id": "review_global", "subject_id": "case_002", "status": "OPEN"}
+    ]
+    assert result["review_item_metrics"] == review_metrics
+    assert result["review_item_history"] == [
+        {"review_item_id": "review_global", "subject_id": "case_002", "status": "OPEN"}
+    ]
+    assert review_calls == [
+        ("open", {"subject_id": None, "limit": 500}),
+        ("metrics", {"subject_id": None}),
+        ("recent", {"subject_id": None, "limit": 20}),
+    ]
+    assert (
+        "portfolio_analyze",
+        {
+            "operation": "trade_cycles",
+            "instrument_ids": [],
+            "limit": 500,
+        },
+    ) in calls
+    behavior_requests = [
+        request
+        for tool, request in calls
+        if tool == "portfolio_analyze" and request["operation"] == "behavior_summary"
+    ]
+    assert len(behavior_requests) == 1
+    assert behavior_requests[0]["case_id"] is None
+    assert behavior_requests[0]["instrument_ids"] == []
+    assert behavior_requests[0]["strategy_code"] is None
+    assert behavior_requests[0]["classifications"] == ["ACTIVE_TRADE", "HEDGE"]
+    assert behavior_requests[0]["start"] == datetime(2026, 7, 1, tzinfo=UTC)
+    assert behavior_requests[0]["end"] == datetime(2026, 7, 31, 23, 59, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

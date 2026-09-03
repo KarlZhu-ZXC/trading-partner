@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Literal, cast
+from difflib import SequenceMatcher
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -33,9 +35,13 @@ from application.services.attention_projection import (
     project_unresolved_agent_fields,
     project_unresolved_broker,
 )
+from application.services.external_note_sync_service import (
+    ExternalObservationCaptureRequest,
+)
 from application.services.trade_retro_schedule import trade_retro_weekly_windows
 from bootstrap import ApplicationContainer, build_default_application
 from domain.common.errors import TradingPartnerError
+from domain.external_note.attribution import attributed_blocks
 from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
 from domain.review_item.models import ReviewItemProjection
 from interfaces.console._shared import ConsoleRequestModel, failure_payload
@@ -69,9 +75,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.agent_action_gateway = agent_state.action_gateway
     app.state.agent_handoff_service = agent_state.handoff_service
     app.state.schwab_oauth_task = None
+    app.state.observation_analysis_task = None
+    app.state.observation_analysis_errors = {}
     try:
         yield
     finally:
+        note_task = getattr(app.state, "observation_analysis_task", None)
+        if note_task is not None and not note_task.done():
+            note_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await note_task
         await container.aclose()
 
 
@@ -151,6 +164,42 @@ class ToolInvokeRequest(_RequestModel):
 class MonitorArchiveRequest(_RequestModel):
     expected_version: int = Field(ge=1)
     confirmation: Literal["monitor_archive"]
+
+
+class MoomooNotesSyncRequest(_RequestModel):
+    analyze: bool = False
+
+
+class ObservationSyncRequest(_RequestModel):
+    source_code: str | None = Field(default=None, min_length=1, max_length=64)
+    analyze: bool = False
+
+
+class ObservationCaptureRequest(_RequestModel):
+    source_code: str = Field(min_length=3, max_length=64, pattern=r"^[A-Z][A-Z0-9_]+$")
+    external_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    full_body: str = Field(min_length=1, max_length=100_000)
+    observed_at: datetime
+    summary: str | None = Field(default=None, min_length=1, max_length=50_000)
+    source_timestamp: datetime | None = None
+    primary_instrument_id: str | None = Field(default=None, min_length=1, max_length=200)
+    related_provider_stock_ids: tuple[str, ...] = Field(default=(), max_length=100)
+    related_provider_codes: tuple[str, ...] = Field(default=(), max_length=100)
+    visibility: str = Field(default="SELF", min_length=1, max_length=40)
+    analyze: bool = False
+
+    @model_validator(mode="after")
+    def _aware_timestamps(self) -> ObservationCaptureRequest:
+        for field_name in ("observed_at", "source_timestamp"):
+            value = getattr(self, field_name)
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f"{field_name} must be timezone-aware")
+        return self
+
+
+class ObservationAnalysisRequest(_RequestModel):
+    retry_failed: bool = True
 
 
 class ActivityAnnotationRequest(_RequestModel):
@@ -768,8 +817,7 @@ def _operational_attention_items(
                     order_intent_id=intent_id,
                     status=str(getattr(intent, "status", "UNKNOWN")),
                     symbol=str(
-                        getattr(intent, "symbol", None)
-                        or getattr(intent, "instrument_id", "Order")
+                        getattr(intent, "symbol", None) or getattr(intent, "instrument_id", "Order")
                     ),
                     provider_status=getattr(intent, "provider_status", None),
                 ),
@@ -1122,9 +1170,7 @@ def _research_state_failure(request: Request, error: Exception) -> dict[str, Any
     same secret redactor used by the other console endpoints.
     """
 
-    return failure_payload(
-        "CONSOLE_RESEARCH_STATE_READ_FAILED", _sanitized_error(request, error)
-    )
+    return failure_payload("CONSOLE_RESEARCH_STATE_READ_FAILED", _sanitized_error(request, error))
 
 
 def _canonical_subject_transport(value: Any) -> Any:
@@ -1325,9 +1371,7 @@ def _trade_cycle_override_projection(request: Request) -> Any:
 
 
 @app.post("/api/behavior-reviews")
-async def run_behavior_review(
-    request: Request, payload: BehaviorReviewRequest
-) -> dict[str, Any]:
+async def run_behavior_review(request: Request, payload: BehaviorReviewRequest) -> dict[str, Any]:
     try:
         value = _container(request).services.behavior_reviews.run(
             BehaviorReviewRunInput.model_validate(payload.model_dump())
@@ -1368,11 +1412,7 @@ async def append_trade_cycle_override(
         )
     except TradingPartnerError as error:
         raise HTTPException(
-            status_code=(
-                409
-                if "VERSION" in error.code or "IDEMPOTENCY" in error.code
-                else 422
-            ),
+            status_code=(409 if "VERSION" in error.code or "IDEMPOTENCY" in error.code else 422),
             detail={"code": error.code, "message": _sanitized_error(request, error)},
         ) from None
     return value.model_dump(mode="json")
@@ -1424,6 +1464,11 @@ async def decision_workbench(
     request: Request,
     subject_id: str | None = Query(default=None, min_length=1, max_length=100),
     classification: str | None = Query(default=None, min_length=1, max_length=64),
+    classifications: Annotated[list[str] | None, Query()] = None,
+    account_refs: Annotated[list[str] | None, Query()] = None,
+    instrument_ids: Annotated[list[str] | None, Query()] = None,
+    behavior_start: datetime | None = None,
+    behavior_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Aggregate one durable Research Subject decision loop for the Console.
 
@@ -1441,11 +1486,6 @@ async def decision_workbench(
         selected_subject_id=subject_id,
     )
     selected_subject_id = subject_id
-    if selected_subject_id is None and subjects:
-        candidate = subjects[0].get("subject")
-        if isinstance(candidate, dict):
-            value = candidate.get("subject_id")
-            selected_subject_id = value if isinstance(value, str) and value else None
 
     selected = next(
         (
@@ -1503,7 +1543,7 @@ async def decision_workbench(
         if selected_subject_id is not None
         else asyncio.sleep(0, result={"ok": True, "data": {"items": [], "total": 0}})
     )
-    cycle_instrument_ids: list[str] = []
+    cycle_instrument_ids: list[str] = list(instrument_ids or ())
     performance_now = _container(request).context.clock.now()
     if selected is not None:
         state_envelope = selected.get("state")
@@ -1521,7 +1561,7 @@ async def decision_workbench(
                 if isinstance(subject_value, dict)
                 else None
             )
-        if isinstance(instrument_id, str) and instrument_id:
+        if isinstance(instrument_id, str) and instrument_id and not cycle_instrument_ids:
             cycle_instrument_ids.append(instrument_id)
 
     (
@@ -1564,8 +1604,8 @@ async def decision_workbench(
             {
                 "request": {
                     "operation": "trade_cycles",
-                    "instrument_ids": cycle_instrument_ids,
-                    "limit": 100,
+                    "instrument_ids": [],
+                    "limit": 500,
                 }
             },
         ),
@@ -1599,10 +1639,17 @@ async def decision_workbench(
                 "request": {
                     "operation": "behavior_summary",
                     "case_id": selected_subject_id,
+                    "account_refs": account_refs or [],
                     "instrument_ids": cycle_instrument_ids,
-                    "strategy_code": "strategy_v1",
-                    "classifications": [classification] if classification else [],
+                    "strategy_code": (
+                        "strategy_v1" if selected_subject_id is not None else None
+                    ),
+                    "classifications": classifications or (
+                        [classification] if classification else []
+                    ),
                     "minimum_sample_size": 3,
+                    "start": behavior_start,
+                    "end": behavior_end,
                 }
             },
         ),
@@ -1635,15 +1682,12 @@ async def decision_workbench(
     partial_failures = [name for name, envelope in sections.items() if envelope.get("ok") is False]
     try:
         annotation_service = _container(request).services.activity_annotations
-        unlinked_activity = annotation_service.list_unlinked(limit=100).model_dump(mode="json")
         activity_annotations = [
-            item.model_dump(mode="json")
-            for item in annotation_service.list_annotations(limit=500)
+            item.model_dump(mode="json") for item in annotation_service.list_annotations(limit=500)
         ]
     except Exception:  # noqa: BLE001 - retain other durable Journal sections
-        unlinked_activity = {"activities": [], "observed_complete": False, "has_more": False}
         activity_annotations = []
-        partial_failures.append("unlinked_activity")
+        partial_failures.append("activity_annotations")
     try:
         order_intents = [
             item.model_dump(mode="json")
@@ -1711,9 +1755,17 @@ async def decision_workbench(
             )
             durable_review_items = _container(request).services.review_items.list_open(
                 subject_id=selected_subject_id,
-                limit=100,
+                limit=500,
             )
         except Exception:  # noqa: BLE001 - other durable stages remain readable
+            partial_failures.append("review_items")
+    else:
+        try:
+            durable_review_items = _container(request).services.review_items.list_open(
+                subject_id=None,
+                limit=500,
+            )
+        except Exception:  # noqa: BLE001 - retain other durable stages when the queue fails
             partial_failures.append("review_items")
     return {
         "selected_subject_id": selected_subject_id if selected is not None else None,
@@ -1722,7 +1774,6 @@ async def decision_workbench(
         **{name: value for name, value in sections.items() if name != "research_state"},
         "partial_failures": partial_failures,
         "review_items": [item.model_dump(mode="json") for item in durable_review_items],
-        "unlinked_activity": unlinked_activity,
         "activity_annotations": activity_annotations,
         "order_intents": order_intents,
         "behavior_review_runs": behavior_review_runs,
@@ -1730,7 +1781,7 @@ async def decision_workbench(
             _container(request)
             .services.review_items.metrics(subject_id=selected_subject_id)
             .model_dump(mode="json")
-            if selected_subject_id is not None and "review_items" not in partial_failures
+            if "review_items" not in partial_failures
             else None
         ),
         "review_item_history": [
@@ -1740,11 +1791,302 @@ async def decision_workbench(
                     subject_id=selected_subject_id,
                     limit=20,
                 )
-                if selected_subject_id is not None and "review_items" not in partial_failures
+                if "review_items" not in partial_failures
                 else ()
             )
         ],
     }
+
+
+def _start_observation_analysis(
+    request: Request,
+    operation: Callable[[], Awaitable[object]],
+    *,
+    note_revision_id: str | None = None,
+) -> bool:
+    """Start one supervised analysis task and retain only closed error codes."""
+
+    task = getattr(request.app.state, "observation_analysis_task", None)
+    if task is not None and not task.done():
+        return False
+    errors: dict[str, str] = request.app.state.observation_analysis_errors
+    error_key = note_revision_id or "__batch__"
+    errors.pop(error_key, None)
+
+    async def run() -> None:
+        try:
+            await operation()
+        except TradingPartnerError as error:
+            errors[error_key] = error.code
+        except Exception:  # noqa: BLE001 - never retain private payload or exception text
+            errors[error_key] = "OBSERVATION_ANALYSIS_UNEXPECTED"
+
+    request.app.state.observation_analysis_task = asyncio.create_task(run())
+    return True
+
+
+def _observation_inbox_payload(request: Request, *, limit: int) -> dict[str, Any]:
+    service = _container(request).services.external_notes
+    sources = [asdict(item) for item in service.source_capabilities()]
+    notes = [
+        {
+            "identity": asdict(item.identity),
+            "revision": {
+                **asdict(item.revision),
+                "blocks": [
+                    asdict(block)
+                    for block in (
+                        attributed_blocks(item.revision.full_body)
+                        if item.revision.full_body
+                        else item.revision.blocks
+                    )
+                ],
+            },
+            "interpretation": (
+                {
+                    **asdict(item.interpretation),
+                    "payload": json.loads(item.interpretation.payload_json),
+                }
+                if item.interpretation is not None
+                else None
+            ),
+        }
+        for item in service.inbox(limit=limit)
+    ]
+    return {
+        "external_notes": jsonable_encoder(notes),
+        "observation_sources": jsonable_encoder(sources),
+    }
+
+
+@app.get("/api/observations")
+async def observation_inbox(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> dict[str, Any]:
+    """Load private note bodies only when the Journal Notes tab requests them."""
+
+    try:
+        return {"data": _observation_inbox_payload(request, limit=limit)}
+    except Exception as error:  # noqa: BLE001 - retain a closed, secret-safe failure
+        raise HTTPException(
+            status_code=422,
+            detail=_sanitized_error(request, error),
+        ) from None
+
+
+async def _sync_observations(
+    request: Request,
+    *,
+    source_code: str | None,
+    analyze: bool,
+) -> dict[str, Any]:
+    service = _container(request).services.external_notes
+    receipt = await service.sync(analyze=analyze, source_code=source_code)
+    analysis_started = False
+    if not analyze:
+        analysis_started = _start_observation_analysis(
+            request,
+            lambda: service.analyze_pending(limit=20),
+        )
+    return {
+        "data": {
+            **jsonable_encoder(asdict(receipt)),
+            "analysis_started": analysis_started,
+            "source_code": source_code,
+        }
+    }
+
+
+@app.get("/api/observations/sources")
+async def observation_sources(request: Request) -> dict[str, Any]:
+    return {
+        "items": [
+            asdict(item)
+            for item in _container(request).services.external_notes.source_capabilities()
+        ]
+    }
+
+
+@app.post("/api/observations/sync")
+async def observation_sync(
+    request: Request,
+    payload: ObservationSyncRequest,
+) -> dict[str, Any]:
+    return await _sync_observations(
+        request,
+        source_code=payload.source_code,
+        analyze=payload.analyze,
+    )
+
+
+@app.post("/api/observations/import")
+async def observation_import(
+    request: Request,
+    payload: ObservationCaptureRequest,
+) -> dict[str, Any]:
+    service = _container(request).services.external_notes
+    receipt = await service.capture(
+        ExternalObservationCaptureRequest(
+            source_code=payload.source_code,
+            external_id=payload.external_id,
+            title=payload.title,
+            full_body=payload.full_body,
+            observed_at=payload.observed_at,
+            summary=payload.summary,
+            source_timestamp=payload.source_timestamp,
+            primary_instrument_id=payload.primary_instrument_id,
+            related_provider_stock_ids=payload.related_provider_stock_ids,
+            related_provider_codes=payload.related_provider_codes,
+            visibility=payload.visibility,
+        ),
+        analyze=payload.analyze,
+    )
+    analysis_started = False
+    if not payload.analyze:
+        analysis_started = _start_observation_analysis(
+            request,
+            lambda: service.analyze_pending(limit=20),
+        )
+    return {
+        "data": {
+            **jsonable_encoder(asdict(receipt)),
+            "source_code": payload.source_code,
+            "analysis_started": analysis_started,
+        }
+    }
+
+
+@app.post("/api/observations/{note_revision_id}/analyze")
+async def observation_analyze(
+    request: Request,
+    note_revision_id: str,
+    payload: ObservationAnalysisRequest,
+) -> dict[str, Any]:
+    task = getattr(request.app.state, "observation_analysis_task", None)
+    if task is not None and not task.done():
+        return {"data": {"analysis_started": False, "reason": "ANALYSIS_ALREADY_RUNNING"}}
+    started = _start_observation_analysis(
+        request,
+        lambda: _container(request).services.external_notes.analyze_revision(
+            note_revision_id, retry_failed=payload.retry_failed
+        ),
+        note_revision_id=note_revision_id,
+    )
+    return {"data": {"analysis_started": started, "note_revision_id": note_revision_id}}
+
+
+@app.get("/api/observations/{note_revision_id}/analysis")
+async def observation_analysis_status(
+    request: Request,
+    note_revision_id: str,
+) -> dict[str, Any]:
+    interpretation = _container(request).services.external_notes.interpretation_for_revision(
+        note_revision_id
+    )
+    errors: dict[str, str] = request.app.state.observation_analysis_errors
+    return {
+        "data": {
+            "note_revision_id": note_revision_id,
+            "status": (
+                interpretation.status
+                if interpretation is not None
+                else "FAILED" if note_revision_id in errors else "PENDING"
+            ),
+            "error_code": (
+                interpretation.error_code
+                if interpretation is not None
+                else errors.get(note_revision_id)
+            ),
+        }
+    }
+
+
+@app.get("/api/observations/{note_id}/history")
+async def observation_history(
+    request: Request,
+    note_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    items = _container(request).services.external_notes.history(note_id, limit)
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        older = items[index + 1].revision if index + 1 < len(items) else None
+        current_text = item.revision.full_body or item.revision.summary
+        older_text = (older.full_body or older.summary) if older is not None else ""
+        added_lines, removed_lines = _bounded_observation_diff(older_text, current_text)
+        interpretation_payload: dict[str, Any] = {}
+        if item.interpretation is not None and item.interpretation.status == "SUCCEEDED":
+            try:
+                raw_payload = json.loads(item.interpretation.payload_json)
+                if isinstance(raw_payload, dict):
+                    interpretation_payload = {
+                        "change_relation": raw_payload.get("change_relation"),
+                        "material_change_summary": raw_payload.get(
+                            "material_change_summary"
+                        ),
+                    }
+            except (TypeError, ValueError):
+                interpretation_payload = {}
+        result.append(
+            {
+                "revision": {
+                    "note_revision_id": item.revision.note_revision_id,
+                    "version": item.revision.version,
+                    "coverage": item.revision.coverage.value,
+                    "source_timestamp": item.revision.source_timestamp,
+                    "observed_at": item.revision.observed_at,
+                    "content_sha256": item.revision.content_sha256,
+                    "text_length": len(current_text),
+                    "added_lines": added_lines,
+                    "removed_lines": removed_lines,
+                },
+                "interpretation": (
+                    {
+                        "status": item.interpretation.status,
+                        "error_code": item.interpretation.error_code,
+                        **interpretation_payload,
+                    }
+                    if item.interpretation is not None
+                    else None
+                ),
+            }
+        )
+    return {"data": {"note_id": note_id, "items": jsonable_encoder(result)}}
+
+
+def _bounded_observation_diff(
+    older: str,
+    current: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    older_lines = tuple(line.strip() for line in older.splitlines() if line.strip())
+    current_lines = tuple(line.strip() for line in current.splitlines() if line.strip())
+    matcher = SequenceMatcher(a=older_lines, b=current_lines, autojunk=False)
+    added: list[str] = []
+    removed: list[str] = []
+    for tag, older_start, older_end, current_start, current_end in matcher.get_opcodes():
+        if tag in {"insert", "replace"}:
+            added.extend(current_lines[current_start:current_end])
+        if tag in {"delete", "replace"}:
+            removed.extend(older_lines[older_start:older_end])
+    def bound(values: list[str]) -> tuple[str, ...]:
+        return tuple(value[:500] for value in values[:5])
+
+    return bound(added), bound(removed)
+
+
+@app.post("/api/moomoo-notes/sync")
+async def moomoo_notes_sync(
+    request: Request,
+    payload: MoomooNotesSyncRequest,
+) -> dict[str, Any]:
+    """Compatibility route for pre-source-hub Console builds."""
+
+    return await _sync_observations(
+        request,
+        source_code="MOOMOO_NOTE",
+        analyze=payload.analyze,
+    )
 
 
 @app.get("/api/review-items")

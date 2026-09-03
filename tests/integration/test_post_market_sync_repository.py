@@ -23,9 +23,14 @@ def _run(*, attempt_count: int = 1) -> PostMarketSyncRun:
         status=PostMarketSyncRunStatus.SUCCEEDED,
         portfolio_status=PostMarketSyncStepStatus.SUCCEEDED,
         watchlist_status=PostMarketSyncStepStatus.SUCCEEDED,
+        observation_status=PostMarketSyncStepStatus.SUCCEEDED,
         account_snapshot_ids=("snapshot_1", "snapshot_2"),
         watchlist_groups_synced=24,
         watchlist_membership_relations_synced=143,
+        observation_notes_seen=16,
+        observation_revisions_created=2,
+        observation_full_count=16,
+        observation_summary_only_count=0,
         warning_codes=("SCHWAB_OPEN_ORDERS_NOT_INGESTED",),
         error_codes=(),
         attempt_count=attempt_count,
@@ -47,6 +52,9 @@ def test_repository_inserts_and_updates_one_receipt_per_market_session() -> None
     assert restored.attempt_count == 2
     assert restored.account_snapshot_ids == ("snapshot_1", "snapshot_2")
     assert restored.watchlist_membership_relations_synced == 143
+    assert restored.observation_status is PostMarketSyncStepStatus.SUCCEEDED
+    assert restored.observation_notes_seen == 16
+    assert restored.observation_full_count == 16
     engine.dispose()
 
 

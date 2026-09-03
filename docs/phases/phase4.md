@@ -79,7 +79,7 @@ Instrument 和时间被冒充为已关联事前 Decision。
 `61 passed`，pytest `3.30s`。Console unit/rendered `41 passed`，测试体约 `0.64s`；Console
 typecheck、ESLint 和 production build 通过。全仓 Ruff 与 `mypy src`（688 个源文件）通过。新增
 聚合仍是 durable-only，没有增加 Provider 调用或公开 MCP 工具，compact schema 继续满足
-29.5 KiB 预算；数据库 head 已推进至 `0063_agent_image_attachments`。
+29.5 KiB 预算；数据库 head 后续已推进至 `0070_retire_unlinked_review_items`。
 
 ## 2. 用户要能直接回答的问题
 
@@ -323,8 +323,8 @@ Trade Plan 已具备这些字段时，Quick Capture 自动引用 Plan revision�
 
 1. **事前记录**：Research、Monitor、Portfolio 或 Journal 点击 `Record Decision`；
 2. **订单链自动捕获**：Trading Partner preview/submit/status/cancel receipt 自动进入 Timeline；
-3. **事后补关联**：盘后外部 Broker Fill 进入 `Unlinked Activity` Review Queue，用户关联 existing
-   Decision/Plan，或明确标记 `UNPLANNED`。
+3. **事后事实保留**：盘后外部 Broker Fill 进入 durable Timeline；缺少 exact Decision/Plan
+   link 保持可见，但不再生成 Review Queue 工作项。
 
 产品不要求每次下单前填写长表单。它通过 Plan 自动填充、盘后补关联和明确质量缺口降低摩擦。
 
@@ -419,28 +419,34 @@ Journal 不复制第二套 Portfolio 编辑器或 Retro 写入口。
 Journal 遵循 [Console Layout Standard](../guide/console-layout.md)。全局 durable-only 筛选包括
 Period、Account、Instrument/Research Subject、Strategy、Classification、Data Quality。
 
-五个 Tab：
+Journal 默认以全部账户、全部 Instrument 的 durable 交易事实为范围；Research Subject 是可选筛选和
+Decision 上下文，不再是进入页面的前置条件。全局筛选保持紧凑：Period、Account、Instrument、
+Quality 常驻，Research Subject、Strategy 和 Classification 收入 More Filters。
+Account、Instrument、Research Subject 和 Classification 使用同一个 autosuggest multi-select：
+输入只缩小候选范围，必须选择一个已解析候选才会生成筛选 chip；自由文本永远不改变查询。
+Period 与 Quality 保持闭集单选。每个筛选支持独立删除，多个选项按集合并集、不同筛选维度按交集应用。
+
+六个 Tab：
 
 #### Overview
 
-顺序固定：`Data Confidence` → `Performance` → `P/L Composition` → `Behavior Snapshot` →
-`Needs Attention` → Recent Trade Cycles。收益卡不能位于 Data Confidence 之前；INCOMPLETE
-必须就近显示缺失原因。
-
-#### Timeline
-
-- 按交易日分组 Decision、Order、Fill、Cash Activity、Review；
-- 默认折叠普通现金活动，突出 Decision、订单异常和 Fill；
-- 每项只显示一个主时间、主状态和必要金额；
-- 详情显示 source、Plan、质量警告和 revision；
-- 支持 `Unlinked Only`、`Exceptions Only`；
-- 主列表不重复完整 opaque ID。
+顺序固定：`Data Confidence` → `Results` → `Holding Patterns / Contributors` →
+`Latest Changes / Needs Review`。收益卡不能位于 Data Confidence 之前；INCOMPLETE 必须就近
+显示缺失原因，完整 Cycle 与 Notes 详情分别进入对应 Tab。
 
 #### Trade Cycles
 
 使用 master-detail `EntityBrowser`。列表显示 Instrument、状态、时间、净 P/L、质量；详情展示
 Decision → Orders → Fills → Position Path → Exit → Review，并显示计划与实际差异。人工拆分、
 合并、重新关联需要影响预览和 append-only revision。
+Cycle 页容量只由浏览器 viewport 决定，与右侧详情内容和当前结果数量无关：紧凑窗口显示 4 项，
+中等高度显示 6 项，较高窗口显示 8 项，超高窗口显示 10 项；窄于 700px 时固定 4 项。左侧使用
+固定行高和固定分页区，右侧详情在自己的区域滚动，任何一侧的内容都不能反向改变另一侧高度。
+Cycle 生命周期、质量和分类不得共用无语义的默认灰色：`OPEN` 使用绿色表示仍有持仓数量，
+`CLOSED` 使用中性文本表示已回到零仓位，`UNRESOLVED` 使用红色表示无法重建；`COMPLETE`
+使用绿色、`INCOMPLETE` 使用琥珀色；`UNCLASSIFIED` 也使用琥珀色但必须保留 Classification
+标签。Section Header 必须显示 `Data Quality · Complete/Incomplete` 和具体计数，不能只放一个
+脱离语境的 `INCOMPLETE` Badge。
 
 #### Behavior
 
@@ -452,6 +458,15 @@ Decision → Orders → Fills → Position Path → Exit → Review，并显示�
 - 样本不足只显示样本数，不生成趋势结论；
 - 展示上一期行动项和本期是否复发。
 
+#### Notes
+
+- 以 provider-neutral External Observation Revision 为唯一来源，Moomoo 只是来源标识；
+- 使用 Source Notes → selected Note master-detail，显示 What Changed、四情景 Current View、
+  Position & Cycles、Attribution 和 Revision History；
+- `SUMMARY_ONLY` 不进入模型，也不显示为可采纳正文；
+- `Review as Decision` 只预填现有 Decision 对话框，并保存 exact Observation Revision 引用；
+- Note、模型解释或时间接近都不能自动改写 Thesis、Trade Plan、Activity annotation 或订单。
+
 #### Reviews
 
 - 聚合 weekly、monthly、quarterly Review；
@@ -459,7 +474,22 @@ Decision → Orders → Fills → Position Path → Exit → Review，并显示�
 - 支持 Cycle 与 period cohort；
 - action item 自动进入 Review Queue；
 - 区分 `NEW`、`PERSISTENT`、`RESOLVED`、`RECURRED`；
-- 专业编辑 deep-link Trade Retro，避免双写。
+- immutable findings 与人工 Review Revision 在 Journal 内完成，不再跳转另一套编辑页。
+- `Create Weekly Review` 使用 canonical weekly windows：生成上一完整周期的 deterministic
+  findings、记录 Behavior Review，并预备下一周期的 point-in-time snapshot；用户不再手动执行
+  Prepare → Run 两步。
+
+#### Timeline
+
+- 按交易日分组 Decision、Order、Fill、Cash Activity、Review；
+- 默认折叠普通现金活动，突出 Decision、订单异常和 Fill；
+- 每项只显示一个主时间、主状态和必要金额；
+- 详情显示 source、Plan、质量警告和 revision；
+- 支持 `Unlinked Only`、`Exceptions Only`；
+- 主列表不重复完整 opaque ID。
+
+旧 `/retro` 只保留为兼容入口并重定向到 `Journal#reviews`；Trade Retro 的 immutable Run、Finding、
+Review Revision、CLI 和 Obsidian export 继续作为底层审计能力存在。
 
 ### 8.3 Quick Capture
 
@@ -476,9 +506,9 @@ idempotency 仍保留。
 为七天后并允许调整。`INITIATE_INTENT` / `ADD_INTENT` 没有 exact current Plan 时 fail closed；
 `INVALIDATION` 不允许 INITIATE、ADD 或 HOLD。
 
-### 8.4 Unlinked Activity Inbox
+### 8.4 Unlinked Activity durable read
 
-无法自动关联的 Fill 生成稳定 ReviewItem，可执行：
+`portfolio_analyze/unlinked_activity` 仍可按需读取未关联 Fill，显式调用方可执行：
 
 - `Link Existing Decision / Plan`
 - `Mark As Unplanned`
@@ -486,7 +516,8 @@ idempotency 仍保留。
 - `Classify As Transfer / Corporate Action`
 - `Resolve Duplicate / Provider Correction`
 
-用户看到标题和时间，不复制 ID。读取失败或分页遗漏不能自动关闭事项。
+该读取不再出现在 Journal Timeline，也不生成或关闭 ReviewItem。已有 Annotation 保留，
+Broker 交易事实不因是否关联而改变。
 
 ### 8.5 日常使用流程
 
@@ -494,7 +525,7 @@ idempotency 仍保留。
 
 - 默认进入 Journal Overview；
 - 先看 Data Confidence 和 Needs Attention；
-- 展示到期 NO_ACTION/REVIEW、OPEN Cycle、UNKNOWN order 和未关联活动；
+- 展示到期 NO_ACTION/REVIEW、OPEN Cycle 和 UNKNOWN order；
 - 不自动刷新 Broker，不用陈旧数据伪装当日状态。
 
 #### 形成操作判断时
@@ -566,6 +597,9 @@ infrastructure/persistence/trade_cycle_repository.py
 - Journal projection 只引用 durable source，不联网；
 - Cycle 使用确定性、版本化算法；
 - Performance 只消费持久化 Activity、Cash Flow、Equity Snapshot；
+- 经过 owner 验证的 Broker Statement / position-import basis checkpoint 只能在精确时间
+  重建未平仓 lot；它不创建成交或现金流，并保留 source reference、账单 SHA-256 和被替代的
+  zero-cash import activity。之后的交易、DRIP 与分红继续按原事实计算；
 - Behavior 只消费 exact Cycle/Decision/Plan；
 - Console BFF 调用相同 application service，但不套 MCP 15 KiB projection；
 - Console/Agent 不直接写数据库；
@@ -606,7 +640,8 @@ Agent 必须区分 source fact、derived metric 和 human review。Agent 可以�
 3. 更新 OPEN Cycle；
 4. 为无法关联的 Fill 创建/更新 ReviewItem；
 5. 计算当日 coverage；
-6. 不自动生成行为结论或修改 Trade Plan。
+6. 同步一次 Moomoo Observation（`analyze=false`），记录 notes/revision/FULL/summary 覆盖；
+7. 不自动生成行为结论、笔记模型草稿或修改 Trade Plan。
 
 同步失败时保留 `SOURCE_SYNC_UNAVAILABLE`，不能把无新增记录描述为“今天没有操作”。
 
@@ -715,6 +750,15 @@ persistent/recurring action、Agent read/exact append。
 验收：无综合纪律分；每个比例有分子/分母/排除项；盈利不覆盖纪律缺口；亏损不自动判违规；
 新/持续/解决/复发可区分；行动项可追踪到后续 cohort。
 
+### 4E — Capture living observations without re-entry
+
+首个切片复用 Journal，通过 provider-neutral Observation Source adapter 读取 Moomoo 本机
+私有 living note，并允许未来 TradingView 或本机 Capture Bridge 输出同一 canonical full-text
+snapshot。所有来源保存不可变 revision；无署名内容确定性归属本人，明确署名内容保持外部观点；OpenCode Go
+`qwen3.8-flash`（`max`）只生成四情景与版本变化草稿。`Review as Decision`
+预填现有 Decision 对话框，仍需用户编辑并显式保存，不自动创建 Thesis、Plan、Monitor 或订单。
+完整边界见 [External Observation Sources Workflow](../plans/moomoo-living-notes-workflow.md)。
+
 ### 集成验收（2026-08-21）
 
 - 后端全量：`2522 passed`，pytest `70.08s`；Ruff 全仓通过；`mypy src` 通过
@@ -724,7 +768,7 @@ persistent/recurring action、Agent read/exact append。
   Phase 4D behavior + annotation `14 passed`，wall `0.84s`；盘后闭环 `17 passed`，`1.15s`。
 - 公共 MCP 仍为 `27` 个工具；compact input schema `27,631 bytes`，wire inventory
   `37,876 bytes`，低于既定预算。
-- 数据库 head 为 `0063_agent_image_attachments`；空库 upgrade、downgrade 和 round-trip
+- 数据库 head 后续为 `0070_retire_unlinked_review_items`；空库 forward upgrade、幂等重放和 round-trip
   已通过。盘后 job 现在按账户快照 → Transactions → Unlinked ReviewItem → Daily Equity →
   Watchlist 顺序执行。
 - sdist、wheel 构建及隔离安装/初始化/migration smoke 通过，输出

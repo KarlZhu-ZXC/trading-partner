@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { EllipsisVertical } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpRight, ChevronDown, ChevronsUpDown, EllipsisVertical } from "lucide-react";
+import Link from "next/link";
 
 export type PageActionItem = {
   id: string;
@@ -9,6 +10,68 @@ export type PageActionItem = {
   disabled?: boolean;
   onSelect: () => void;
 };
+
+export function QuickLink({
+  href,
+  children,
+  className = "",
+}: {
+  href: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return <Link className={`quick-link ${className}`.trim()} href={href}><span>{children}</span><ArrowUpRight aria-hidden="true" /></Link>;
+}
+
+export function SortableTableHeader<Key extends string>({
+  label,
+  column,
+  activeColumn,
+  direction,
+  onSort,
+}: {
+  label: string;
+  column: Key;
+  activeColumn: Key | null;
+  direction: "asc" | "desc";
+  onSort: (column: Key) => void;
+}) {
+  const active = activeColumn === column;
+  return <th aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}>
+    <button className="sort-header" type="button" onClick={() => onSort(column)}>
+      <span className="sort-label">{label}</span>
+      <span className={`sort-indicator${active ? " active" : ""}`} aria-hidden="true">
+        {active ? (direction === "asc" ? <ArrowUp /> : <ArrowDown />) : <ChevronsUpDown />}
+      </span>
+    </button>
+  </th>;
+}
+
+export function Disclosure({
+  title,
+  description,
+  meta,
+  children,
+  defaultOpen = false,
+  variant = "panel",
+  className = "",
+  onToggle,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  meta?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  variant?: "panel" | "compact" | "code";
+  className?: string;
+  onToggle?: (open: boolean) => void;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return <details className={`disclosure disclosure-${variant} ${className}`.trim()} open={open} onToggle={(event) => { const next = event.currentTarget.open; setOpen(next); onToggle?.(next); }}>
+    <summary><span className="disclosure-heading"><strong>{title}</strong>{description != null ? <small>{description}</small> : null}</span><span className="disclosure-meta">{meta}<ChevronDown aria-hidden="true" /></span></summary>
+    <div className="disclosure-body">{children}</div>
+  </details>;
+}
 
 /** Compact page-level action collector. View controls stay in the page body;
  * infrequent create/sync/refresh actions live in this shared Header menu. */
@@ -152,6 +215,25 @@ export function ConfirmationDialog({
     dialogRef.current?.focus();
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape" && !busy) onCancelRef.current();
+      if (event.key === "Tab" && dialogRef.current) {
+        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary[tabindex]'
+        )).filter((element) => element.getClientRects().length > 0);
+        if (focusable.length === 0) {
+          event.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
@@ -379,9 +461,15 @@ export function DescriptionList({
   return <dl className={`description-list columns-${columns} ${className}`}>{items.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd>{item.detail != null && <small>{item.detail}</small>}</div>)}</dl>;
 }
 
-export function Badge({ value }: { value: string | null | undefined }) {
+export function Badge({
+  value,
+  tone: toneOverride,
+}: {
+  value: string | null | undefined;
+  tone?: "good" | "warn" | "bad" | "neutral";
+}) {
   const label = value ?? "UNKNOWN";
-  const tone = ["OK", "HEALTHY", "SUCCEEDED", "ACTIVE", "AVAILABLE", "DURABLE", "QUIET", "FRESH", "RECOVERED", "RESOLVE", "SUPPORTED"].includes(
+  const inferredTone = ["OK", "HEALTHY", "SUCCEEDED", "ACTIVE", "AVAILABLE", "DURABLE", "QUIET", "FRESH", "RECOVERED", "RESOLVE", "SUPPORTED"].includes(
     label.toUpperCase(),
   )
     ? "good"
@@ -390,6 +478,7 @@ export function Badge({ value }: { value: string | null | undefined }) {
       : ["FAILED", "ERROR", "DEAD_LETTER", "HIGH"].includes(label.toUpperCase())
         ? "bad"
         : "neutral";
+  const tone = toneOverride ?? inferredTone;
   return <span className={`badge ${tone}`}>{label}</span>;
 }
 
@@ -416,7 +505,7 @@ export function ActionButton({
   tone = "default",
 }: {
   children: ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   busy?: boolean;
   disabled?: boolean;
   busyLabel?: string;

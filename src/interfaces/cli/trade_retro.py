@@ -53,6 +53,19 @@ def _week_key(prefix: str, start: datetime) -> str:
     return f"{prefix}-{iso.year}-w{iso.week:02d}"
 
 
+def _week_window_payload(start: datetime, end: datetime) -> dict[str, int | str]:
+    """Expose one UTC window with an unambiguous ISO week identity."""
+
+    iso = start.isocalendar()
+    return {
+        "iso_year": iso.year,
+        "iso_week": iso.week,
+        "week_label": f"{iso.year}-W{iso.week:02d}",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+
+
 def _markdown_section(path: Path, heading: str = "## 2. Retro") -> str:
     if path.suffix.lower() != ".md":
         raise ValueError("Trade Retro import requires a Markdown file")
@@ -221,6 +234,13 @@ async def run(argv: list[str] | None = None) -> int:
                     json.dumps(
                         {
                             "ok": ok,
+                            "schedule": {
+                                "review": _week_window_payload(review_start, review_end),
+                                "next_snapshot": _week_window_payload(
+                                    prepare_start,
+                                    prepare_end,
+                                ),
+                            },
                             "run": run_envelope.model_dump(mode="json"),
                             "export": (
                                 export_envelope.model_dump(mode="json")

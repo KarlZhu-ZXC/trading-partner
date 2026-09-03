@@ -20,12 +20,14 @@ from application.ports.market_session_calendar import MarketSessionCalendar
 from application.ports.monitor_repository import MonitorRepository
 from application.services.a_share_tool_coordinator import AShareToolCoordinator
 from application.services.market_tool_coordinator import MarketToolCoordinator
+from application.services.monitor_event_analysis_service import MonitorEventAnalysisService
 from application.services.monitor_fact_resolver import MonitorFactResolver
 from application.services.monitor_judgment_service import MonitorJudgmentService
 from application.services.monitor_notification_rendering import (
     _POST_MARKET_CADENCES,
     _RISK_RANK,
     _append_judgment_notification,
+    _append_model_analysis,
     _data_recovery_message,
     _latest_completed_session,
     _notification_messages,
@@ -115,8 +117,6 @@ def _diagnostics_from_envelope(envelope: Any) -> tuple[ProviderFailureDiagnostic
     return tuple(dict.fromkeys(values))
 
 
-
-
 class MonitorEvaluationService:
     def __init__(
         self,
@@ -131,6 +131,7 @@ class MonitorEvaluationService:
         session_calendars: Mapping[Market, MarketSessionCalendar] | None = None,
         provider_retry_attempts: int = 1,
         provider_retry_delay_seconds: float = 0.5,
+        event_analysis_service: MonitorEventAnalysisService | None = None,
     ) -> None:
         self._repository = repository
         self._a_share = a_share
@@ -143,6 +144,7 @@ class MonitorEvaluationService:
         self._session_calendars = dict(session_calendars or {})
         self._provider_retry_attempts = max(1, min(provider_retry_attempts, 3))
         self._provider_retry_delay_seconds = max(0.0, provider_retry_delay_seconds)
+        self._event_analysis_service = event_analysis_service
 
     async def evaluate(self, request: MonitorEvaluateInput) -> MonitorRun:
         started_at = self._clock.now()
@@ -165,10 +167,12 @@ class MonitorEvaluationService:
         previous_states_by_monitor: dict[str, dict[str, MonitorRuleState]] = {}
         monitor_sources_by_monitor: dict[str, tuple[str, ...]] = {}
         judgment_degradation_by_monitor: dict[str, NotificationMessage] = {}
+        event_analyses_by_monitor: dict[str, str] = {}
 
         for monitor in monitors:
             monitor_events: list[MonitorEvent] = []
             judgment_notification: NotificationMessage | None = None
+            judgment_result = None
             monitor_observations: list[MonitorRunObservation] = []
             monitor_sources: list[str] = []
             previous = {
@@ -291,6 +295,24 @@ class MonitorEvaluationService:
             deterministic_events = tuple(
                 item for item in monitor_events if item.rule_code != "COMPOSITE_JUDGMENT"
             )
+            event_analysis: str | None = None
+            if deterministic_events:
+                if judgment_result is not None and judgment_result.judgment.status == "SUCCEEDED":
+                    event_analysis = judgment_result.judgment.summary
+                elif self._event_analysis_service is not None:
+                    analysis_result = await self._event_analysis_service.analyze(
+                        monitor,
+                        deterministic_events,
+                        tuple(monitor_observations),
+                    )
+                    event_analysis = analysis_result.analysis
+                    warnings.extend(analysis_result.warning_codes)
+                else:
+                    event_analysis = "模型分析暂不可用；确定性规则结果仍然有效。"
+            elif judgment_result is not None and judgment_result.event is not None:
+                event_analysis = judgment_result.judgment.summary
+            if event_analysis is not None:
+                event_analyses_by_monitor[monitor.monitor_id] = event_analysis
             data_recovered = tuple(
                 item
                 for item in monitor_observations
@@ -299,6 +321,7 @@ class MonitorEvaluationService:
                 and prior.state is MonitorRuleStateValue.NOT_EVALUATED
             )
             if deterministic_events and request.cadence not in _POST_MARKET_CADENCES:
+                assert event_analysis is not None
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
                 )
@@ -311,13 +334,15 @@ class MonitorEvaluationService:
                     self._ids,
                 )
                 if judgment_notification is not None:
-                    notifications.append(
-                        _append_judgment_notification(
-                            deterministic_notifications[0], judgment_notification
-                        )
+                    notification = _append_judgment_notification(
+                        deterministic_notifications[0], judgment_notification
                     )
+                    notifications.append(_append_model_analysis(notification, event_analysis))
                 else:
-                    notifications.extend(deterministic_notifications)
+                    notifications.extend(
+                        _append_model_analysis(item, event_analysis)
+                        for item in deterministic_notifications
+                    )
             else:
                 monitor_sources_by_monitor[monitor.monitor_id] = tuple(
                     dict.fromkeys(monitor_sources)
@@ -344,11 +369,20 @@ class MonitorEvaluationService:
                             event_label_override="复合判断不可用",
                             emoji_override="⚠️",
                         )[0]
+                        notification = _append_judgment_notification(
+                            snapshot, judgment_notification
+                        )
                         notifications.append(
-                            _append_judgment_notification(snapshot, judgment_notification)
+                            _append_model_analysis(notification, event_analysis)
+                            if event_analysis is not None
+                            else notification
                         )
                     else:
-                        notifications.append(judgment_notification)
+                        notifications.append(
+                            _append_model_analysis(judgment_notification, event_analysis)
+                            if event_analysis is not None
+                            else judgment_notification
+                        )
                 if data_recovered and request.cadence not in _POST_MARKET_CADENCES:
                     notifications.append(
                         _data_recovery_message(
@@ -409,6 +443,7 @@ class MonitorEvaluationService:
                     previous_states_by_monitor=previous_states_by_monitor,
                     monitor_sources_by_monitor=monitor_sources_by_monitor,
                     judgment_notifications_by_monitor=judgment_degradation_by_monitor,
+                    event_analyses_by_monitor=event_analyses_by_monitor,
                 )
             )
         return self._repository.record_evaluation(

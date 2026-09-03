@@ -71,10 +71,13 @@ must retain their token/perpetual/CFD identity and basis warnings.
 ## Research and writes
 
 - Say Research Subject / 标的 / 研究档案, not user-facing “InvestmentCase”.
-- For any Thesis, Trade Plan, entry/exit, add/reduce, hold, or strategy discussion,
-  also apply the installed `bossmo-trading-discipline` skill. Require explicit
-  `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION` outcomes; another user-selected
-  Strategy may be primary, but BossMo remains a risk/process check.
+- Also apply `bossmo-trading-discipline` only when the user is making or reviewing
+  an actionable investment judgment for a specific stock or ETF—such as equity
+  Thesis conviction, entry, add, hold, reduce, exit, or a concrete setup. Do not
+  trigger it from software development, UI/schema/test/docs work, generic fact
+  requests, domain field names, or non-equity assets. When activated, require
+  `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION`; another user-selected
+  Strategy may remain primary.
 - Research Subject metadata defines durable scope; Thesis holds judgment; Trade Plan
   holds conditional execution intent. Do not merge these concepts.
 - Candidate decisions use Propose → explicit Confirm/Reject/Withdraw. Never choose
@@ -95,6 +98,35 @@ must retain their token/perpetual/CFD identity and basis warnings.
   order authorization. An elapsed due time uses the existing durable ReviewItem
   path; a later Decision closes it automatically only when it explicitly
   supersedes that exact Decision. Failed/bounded reads never prove closure.
+- Moomoo living notes are Console-only observation revisions. Attribution is a
+  deterministic dated-section state machine: each date starts as USER. A line-leading
+  `@speaker` marker may introduce any bounded new speaker. Legacy bare prefixes recognize
+  only boss墨、宝总、姜汁汽水; other bare `heading:` prefixes inherit the current speaker
+  and never create a person. Mid-line @ mentions do not switch attribution. Date order is detected per revision as newest-first,
+  oldest-first, mixed, or unknown; the model must not assume one global order.
+  Summary fallback may recover only a proven prefix/suffix around the prior FULL
+  editor body, never a middle rewrite.
+  All note interpretation uses OpenCode Go
+  `qwen3.8-flash` at `max` with a 120-second per-attempt timeout; do not route note
+  interpretation to DeepSeek. The interpretation is a draft only, and `Review as Decision` still requires the
+  user to review and save through the existing Decision contract. A saved Decision
+  may carry the exact optional `external_note_revision_id`; never substitute a
+  display string such as `note_id@vN`, and never treat the link as Thesis, Plan, or
+  order confirmation.
+- External observation sources share one adapter contract and immutable revision
+  store. Summary-only source text cannot reach the model or Decision adoption.
+  Moomoo, future TradingView capture, and the local full-text JSON bridge must reuse
+  this path instead of creating source-specific research workflows.
+- Never control the Moomoo desktop UI to retrieve notes. Optional authenticated
+  note enrichment reads an owner-only Cookie file and uses serial, bounded internal
+  web reads with a freshly randomized delay per request. Authentication/rate-limit/
+  page-shape failure falls back to cache and must not expose credentials or promote
+  a list summary to full text. The desktop CEF Cookie store is not an authentication
+  source; never claim its locale Cookie is a reusable login session. Do not use
+  Computer Use or UI automation against Moomoo. When the user explicitly authorizes
+  it, read-only process/IPC/network analysis is allowed if it does not modify app,
+  certificate/proxy, account, or trading state and never exposes recovered secrets.
+  A Web-session Cookie may be accepted over stdin and must never be printed.
 
 ## Accounts, monitoring, and orders
 
@@ -107,6 +139,9 @@ must retain their token/perpetual/CFD identity and basis warnings.
   SGOV is `CASH_MANAGEMENT`; do not include it in active-trade win-rate claims.
 - `portfolio_analyze/performance_series` returns native-currency TWR, MWR/XIRR,
   and drawdown only when durable equity/cash-flow boundaries support them.
+- Instrument attribution separates Net Trading P/L, exact Dividend Income, and Total
+  P/L. Never allocate a cash-only dividend by amount or holding proximity; ambiguous
+  identity, unsupported corporate-action lots, or missing transferred basis fails closed.
 - `portfolio_analyze/behavior_summary` exposes numerator, denominator, exclusions,
   and exact refs without an aggregate score. Do not infer exact Decision coverage
   from Instrument and time alone.
@@ -121,9 +156,17 @@ must retain their token/perpetual/CFD identity and basis warnings.
   and Plan version. These links improve the Journal chain but never authorize submit.
 - Preserve native currencies and stale/missing coverage; never infer FX, NAV, cash,
   or transaction completeness.
+- Moomoo historical deals use best-effort exact `order_fee_query` enrichment. When
+  any fee remains unavailable, keep Net P/L null and `TRANSACTION_FEES_UNAVAILABLE`;
+  a UI may show Gross P/L only when it labels it as gross and keeps the missing-fee
+  warning adjacent.
 - Deterministic Monitor rules remain valid when optional LLM judgment fails.
   Treat unavailable facts as `NOT_EVALUATED`; never turn them into a pass.
 - Monitor judgment is read-only. It cannot mutate research, holdings, or orders.
+- Monitor transition notifications may end with a model-analysis section capped at
+  160 Chinese characters using `max` effort and an 80-second timeout. Treat it as
+  optional interpretation only; if unavailable, the deterministic event remains
+  valid and must still be delivered.
 - A Trade Plan or research confirmation never authorizes an order.
 - Live Schwab submit/cancel requires an exact unexpired preview and explicit
   current-chat authorization for that action. Unknown submit outcomes are not retried.
