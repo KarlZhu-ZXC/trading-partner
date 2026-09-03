@@ -1,5 +1,9 @@
 # Unreleased
 
+- Fixed the Console CI contract gate to install and synchronize the Python schema
+  exporter before `npm run check:contracts`; fresh Linux runners no longer depend on
+  an ambient `uv` executable or environment.
+
 - Began the Moomoo-first judgment-intake transformation. Added an append-only
   Observation review ledger with `PENDING`, `DEFERRED`, `ADOPTED`, and `NO_ACTION`
   outcomes, exact Note Revision and Decision provenance, optimistic versioning,

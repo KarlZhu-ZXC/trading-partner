@@ -100,6 +100,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install uv for contract export
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync Python contract dependencies
+        run: uv sync --group dev
+
       - name: Set up Node.js for local console
         uses: actions/setup-node@v7
         with:
