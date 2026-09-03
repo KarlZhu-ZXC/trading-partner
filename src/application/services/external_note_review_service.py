@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from application.dto.external_note_review import (
     ExternalNoteReviewDTO,
+    ExternalNoteReviewMetricsDTO,
     ExternalNoteReviewTransitionInput,
 )
 from application.ports.clock import Clock
@@ -261,3 +262,45 @@ class ExternalNoteReviewService:
                 )
             )
         return tuple(result)
+
+    def metrics(self) -> ExternalNoteReviewMetricsDTO:
+        values = self._reviews.list_latest(limit=501)
+        visible = values[:500]
+        now = self._clock.now()
+        unresolved = tuple(
+            item
+            for item in visible
+            if item.status
+            in {ExternalNoteReviewStatus.PENDING, ExternalNoteReviewStatus.DEFERRED}
+        )
+        oldest = min((item.created_at for item in unresolved), default=None)
+        terminal = tuple(
+            item
+            for item in visible
+            if item.status
+            in {ExternalNoteReviewStatus.ADOPTED, ExternalNoteReviewStatus.NO_ACTION}
+        )
+        return ExternalNoteReviewMetricsDTO(
+            measured_at=now,
+            total=len(visible),
+            pending=sum(
+                item.status is ExternalNoteReviewStatus.PENDING for item in visible
+            ),
+            deferred=sum(
+                item.status is ExternalNoteReviewStatus.DEFERRED for item in visible
+            ),
+            adopted=sum(
+                item.status is ExternalNoteReviewStatus.ADOPTED for item in visible
+            ),
+            no_action=sum(
+                item.status is ExternalNoteReviewStatus.NO_ACTION for item in visible
+            ),
+            oldest_unresolved_age_seconds=(
+                max(0, int((now - oldest).total_seconds())) if oldest is not None else None
+            ),
+            terminal_with_exact_decision=sum(
+                item.decision_id is not None and item.subject_id is not None
+                for item in terminal
+            ),
+            truncated=len(values) > 500,
+        )

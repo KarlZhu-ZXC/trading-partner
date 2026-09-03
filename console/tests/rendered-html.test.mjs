@@ -843,6 +843,8 @@ test("operations provides a guarded foreground Schwab OAuth flow", async () => {
   assert.match(operationsSource, /schwab_oauth_renew_confirmed/);
   assert.match(operationsSource, /waiting for the Schwab callback/i);
   assert.match(operationsSource, /Use only the newly opened tab/);
+  assert.match(operationsSource, /Observation Review Health/);
+  assert.match(operationsSource, /terminal_with_exact_decision/);
 });
 
 test("keeps the default console UI copy English-only", async () => {
