@@ -259,7 +259,7 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(observationSource, /create: "observation"/);
   assert.match(source, /compactNextSteps/);
   assert.match(source, /\/api\/observations\/sync/);
-  assert.match(observationSource, /Review as Decision/);
+  assert.match(observationSource, /Review View Change/);
   assert.match(observationSource, /Revision History/);
   assert.match(observationSource, /attributionSections/);
   assert.match(observationSource, /notes-attribution-sections/);
@@ -268,6 +268,7 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(observationSource, /removed_lines/);
   assert.match(observationSource, /aria-live="polite"/);
   assert.match(source, /Source Note Revision/);
+  assert.match(source, /Exact Durable Provenance/);
   assert.match(source, /external_note_revision_id: decisionSourceRevisionId/);
   assert.match(observationSource, /unprefixed\s+text\s+is\s+your\s+view/i);
   assert.match(source, /research_memory_append/);
@@ -283,6 +284,7 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(source, /Initiate or Add requires an exact current Trade Plan/);
   assert.match(source, /query\.get\("capture"\) === "decision"/);
   assert.match(source, /query\.get\("supersedes_decision_id"\)/);
+  assert.match(source, /The requested Research Subject is unavailable or archived/);
   assert.match(source, /supersedes_decision_id: supersedesDecisionId/);
   assert.match(source, /workbenchApi\.data\?\.timeline/);
   assert.match(source, /workbenchApi\.data\?\.trade_cycles/);
@@ -525,6 +527,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(source, /including archived/i);
   assert.match(source, /const SUBJECT_STATUSES = \["draft", "active", "archived"\]/);
   assert.match(source, /const \[status, setStatus\] = useState\("ACTIVE"\)/);
+  assert.match(source, /setStatus\("DRAFT"\)/);
   assert.match(source, /const THESIS_STATUSES = \["draft", "active", "strengthened", "weakened", "invalidated", "archived"\]/);
   assert.match(source, /Research Library/);
   assert.doesNotMatch(source, /Browse and manage durable Research Subjects/);
@@ -565,6 +568,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(source, /pending_candidates/);
   assert.match(source, /continuity-checklist-action/);
   assert.match(source, /title="Health Check"/);
+  assert.match(source, /Research is not tracking yet/);
   assert.doesNotMatch(source, /Next evidence and review obligations from durable research state/);
   assert.doesNotMatch(source, /continuitySignals\.length \? `\$\{continuitySignals\.length\} OPEN` : "READY"/);
   assert.match(source, /goToSection\("research-section-review"\)/);
@@ -701,6 +705,8 @@ test("card headings separate domain, object, and supporting context", async () =
   assert.match(styles, /\.badge \{[^}]*border:1px solid currentColor;[^}]*padding:3px 7px;[^}]*background:var\(--panel-solid\)/);
   assert.match(styles, /\.badge::before/);
   assert.match(overviewSource, /kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps"/);
+  assert.match(overviewSource, /kicker="JUDGMENT INTAKE" title="View Inbox"/);
+  assert.match(overviewSource, /OBSERVATION_REVIEW_DUE/);
   assert.match(overviewSource, /kicker="DECISION WORKFLOW" title="Action & Review Inbox" subtitle="Grouped manual actions and durable closure metrics"/);
   assert.match(overviewSource, /Review Queue/);
   assert.match(overviewSource, /monitor-state-summary/);
@@ -719,7 +725,7 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   assert.match(overviewSource, /href=\{`\/monitors#\$\{monitorAnchorId\(monitor\.monitor_id\)\}`\}/);
   assert.match(overviewSource, /buildConsoleNotices/);
   assert.match(overviewSource, /Waiting for Next Evaluation/);
-  assert.match(overviewSource, /No Manual Action Required/);
+  assert.match(overviewSource, /No Other Manual Action Required/);
   assert.match(attentionSource, /\/research#subject-/);
   assert.match(attentionSource, /OIL_WEEKEND_REFERENCE_UNAVAILABLE/);
   assert.match(attentionSource, /does not mean data is currently unavailable/);
@@ -802,6 +808,7 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /Closed Cycle Returns/);
   assert.match(portfolioSource, /Risk/);
   assert.match(portfolioSource, /external_state_sync/);
+  assert.match(portfolioSource, /No durable account snapshots\. Explicitly sync accounts from Activity\./);
   assert.doesNotMatch(portfolioSource, /watchlist_manage/);
   assert.doesNotMatch(portfolioSource, /Sync Watchlist/);
   assert.match(portfolioSource, /risk_policy_update/);

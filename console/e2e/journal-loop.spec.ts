@@ -239,11 +239,27 @@ async function mockApi(page: Page) {
         observation_sources: value.observation_sources,
       } });
     }
+    if (path === "/api/observations/external_note_revision_aapl_2/review") return json({ data: {
+      material_change_summary: "Range-top evidence remains inconclusive.",
+      thesis: { statement: "Wait for a confirmed breakout." },
+      latest_decision: { title: "No action while range-bound" },
+      deterministic_flags: ["REVIEW_THESIS_IMPACT"],
+    } });
+    if (path === "/api/current-view") return json({ data: {
+      subject_title: "Phase 4 Console E2E",
+      source_note_revision_id: "external_note_revision_aapl_1",
+      review: { status: "NO_ACTION" },
+      decision: { title: "Wait for confirmation", rationale: "Range evidence is incomplete." },
+      thesis: { title: "AAPL primary", statement: "Wait for a confirmed breakout." },
+      trade_plan: { plan_id: "trade_plan_1", version: 2, status: "ACTIVE", instrument_id: "equity:US:AAPL" },
+    } });
     if (path === "/api/retro") return json({ console_windows: { previous: { start: "2026-08-17T00:00:00Z", end: "2026-08-22T00:00:00Z" }, next: { start: "2026-08-31T00:00:00Z", end: "2026-09-05T00:00:00Z" } } });
     if (path === "/api/agent/status") return json({ enabled: false, configured: false, available: false, state: "DISABLED", diagnostics: [], providers: [], models: [], components: {} });
     if (request.method() === "POST") {
       writes.push({ path, body: request.postDataJSON() });
-      if (path === "/api/tools/invoke") return json({ result: { ok: true, data: {} } });
+      if (path === "/api/tools/invoke") return json({ result: { ok: true, data: { decision_id: "decision_note_review" } } });
+      if (path.endsWith("/review/ensure")) return json({ data: { review_id: "external_note_review_aapl_2", version: 1, status: "PENDING" } });
+      if (path === "/api/observation-reviews/external_note_review_aapl_2") return json({ data: { review_id: "external_note_review_aapl_2", version: 2, status: "NO_ACTION", decision_id: "decision_note_review" } });
       if (path === "/api/trade-cycle-overrides/preview") return json({ impacts: [{ operation: "SPLIT" }] });
       if (path === "/api/trade-cycle-overrides") return json({ version: 1 });
       if (path === "/api/behavior-reviews") return json({ status: "COMPLETE" });
@@ -259,6 +275,7 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   await expect(page.getByRole("heading", { name: "Phase 4 Console E2E" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Data Confidence" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Current Confirmed View" })).toBeVisible();
   const tradedInstruments = page.locator(".journal-instrument-card");
   await expect(tradedInstruments.getByRole("heading", { name: "Traded Instruments" })).toBeVisible();
   await expect(tradedInstruments.locator("tbody tr")).toHaveCount(2);
@@ -276,6 +293,7 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   const instrumentFilter = page.getByRole("combobox", { name: "Instrument", exact: true });
   await instrumentFilter.fill("AAPL");
   await page.getByRole("option", { name: /^AAPL/ }).click();
+  await expect(page.getByRole("button", { name: "Remove AAPL" })).toBeVisible();
   await instrumentFilter.fill("MSFT");
   await page.getByRole("option", { name: /^MSFT/ }).click();
   await expect(page.getByRole("button", { name: "Remove AAPL" })).toBeVisible();
@@ -295,7 +313,7 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   await expect(winRateCard.getByText("2 ÷ 3 = 66.7%", { exact: true })).toBeVisible();
   await expect(page.getByText("$100.00 avg win ÷ $50.00 avg loss = 2.00", { exact: true })).toBeVisible();
 
-  await page.getByRole("tab", { name: /Notes/ }).click();
+  await page.getByRole("tab", { name: /View Inbox/ }).click();
   await expect(page.getByRole("heading", { name: "Latest Thinking" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "AAPL Living Note" })).toBeVisible();
   await expect(page.getByText("2 SOURCES")).toBeVisible();
@@ -304,15 +322,19 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   await expect(attribution.getByText("USER", { exact: true })).toHaveCount(1);
   await expect(attribution.getByText(/Range-top observation/)).toContainText("Wait for confirmation.");
 
-  await page.getByRole("button", { name: "Review as Decision" }).click();
+  await page.getByRole("button", { name: "Review View Change" }).click();
   const noteDecisionDialog = page.getByRole("dialog");
   await expect(noteDecisionDialog.getByLabel("Current Scenario")).toHaveValue("SIDEWAYS");
   await expect(noteDecisionDialog.getByRole("combobox").first()).toHaveValue("no_action");
   await expect(noteDecisionDialog.getByLabel("Reason")).toHaveValue(/Range-top evidence remains inconclusive\./);
-  await noteDecisionDialog.getByRole("button", { name: "Save Decision" }).click();
+  await expect(noteDecisionDialog.getByText("Wait for a confirmed breakout.")).toBeVisible();
+  await noteDecisionDialog.getByRole("button", { name: "Confirm & Record Decision" }).click();
   await expect.poll(() => writes.some((item) => item.path === "/api/tools/invoke")).toBe(true);
   const decisionWrite = writes.find((item) => item.path === "/api/tools/invoke" && (item.body as { tool_name?: string }).tool_name === "research_memory_append")?.body as { arguments?: { request?: { external_note_revision_id?: string } } };
   expect(decisionWrite.arguments?.request?.external_note_revision_id).toBe("external_note_revision_aapl_2");
+  await expect.poll(() => writes.some(
+    (item) => item.path === "/api/observation-reviews/external_note_review_aapl_2",
+  )).toBe(true);
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();

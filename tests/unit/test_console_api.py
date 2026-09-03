@@ -549,6 +549,67 @@ class _ExternalNotesService:
         return ()
 
 
+class _ExternalNoteReviewsService:
+    def __init__(self) -> None:
+        self.ensured: list[str] = []
+        self.transitions: list[Any] = []
+
+    def get_for_revision(self, _revision_id: str) -> None:
+        return None
+
+    def ensure_pending(self, *, note_revision_id: str, subject_id: str | None = None) -> Any:
+        self.ensured.append(note_revision_id)
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "review_id": f"external_note_review_{note_revision_id}",
+                "note_revision_id": note_revision_id,
+                "status": "PENDING",
+                "subject_id": subject_id,
+                "version": 1,
+            }
+        )
+
+    def pending_projections(self, *, limit: int = 100) -> tuple[Any, ...]:
+        assert limit == 100
+        return ()
+
+    def transition(self, request: Any) -> Any:
+        self.transitions.append(request)
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "review_id": request.review_id,
+                "version": request.expected_version + 1,
+                "status": request.status,
+                "decision_id": request.decision_id,
+            }
+        )
+
+
+class _ViewReviewsService:
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    def get(self, note_revision_id: str) -> Any:
+        self.reads.append(note_revision_id)
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "note_revision_id": note_revision_id,
+                "material_change_summary": "Changed view",
+                "allowed_actions": ["DEFER", "RECORD_DECISION"],
+            }
+        )
+
+    def current(self, subject_id: str) -> Any:
+        self.reads.append(f"current:{subject_id}")
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "subject_id": subject_id,
+                "source_note_revision_id": "external_note_revision_current",
+                "decision": {"decision_id": "decision_current"},
+            }
+        )
+
+
 class _AgendaContainer:
     def __init__(
         self,
@@ -574,6 +635,8 @@ class _AgendaContainer:
                 )
             ),
             external_notes=_ExternalNotesService(current),
+            external_note_reviews=_ExternalNoteReviewsService(),
+            view_reviews=_ViewReviewsService(),
             review_items=SimpleNamespace(
                 reconcile=lambda *_args, **_kwargs: (),
                 list_open=lambda **_kwargs: (),
@@ -758,6 +821,103 @@ async def test_observation_analysis_route_starts_one_target_and_reports_terminal
     assert started.json()["data"]["analysis_started"] is True
     assert status.json()["data"]["status"] == "SUCCEEDED"
     assert service.targeted_analysis == [revision_id]
+
+
+@pytest.mark.asyncio
+async def test_observation_review_routes_are_session_gated_and_preserve_exact_links(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    reviews = container.services.external_note_reviews
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    revision_id = "external_note_revision_afrm"
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        denied = await client.post(
+            f"/api/observations/{revision_id}/review/ensure",
+            json={"subject_id": "case_afrm"},
+        )
+        headers = await _console_headers(client)
+        ensured = await client.post(
+            f"/api/observations/{revision_id}/review/ensure",
+            json={"subject_id": "case_afrm"},
+            headers=headers,
+        )
+        transitioned = await client.post(
+            f"/api/observation-reviews/external_note_review_{revision_id}",
+            json={
+                "status": "ADOPTED",
+                "expected_version": 1,
+                "subject_id": "case_afrm",
+                "decision_id": "decision_afrm",
+                "authorization_note": "Adopt exact reviewed revision.",
+                "idempotency_key": "console-review-afrm",
+                "confirmation": "observation_review_update",
+            },
+            headers=headers,
+        )
+
+    assert denied.status_code == 403
+    assert ensured.status_code == 200
+    assert reviews.ensured == [revision_id]
+    assert transitioned.status_code == 200
+    assert reviews.transitions[0].decision_id == "decision_afrm"
+    assert reviews.transitions[0].actor == "user"
+
+
+@pytest.mark.asyncio
+async def test_observation_review_package_uses_the_shared_deterministic_service(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    revision_id = "external_note_revision_afrm"
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get(f"/api/observations/{revision_id}/review")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["allowed_actions"] == ["DEFER", "RECORD_DECISION"]
+    assert container.services.view_reviews.reads == [revision_id]
+
+
+@pytest.mark.asyncio
+async def test_current_view_route_is_derived_from_confirmed_review(
+    monkeypatch: Any,
+) -> None:
+    container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
+    monkeypatch.setattr(console_api, "build_default_application", lambda: container)
+    monkeypatch.setattr(
+        console_api,
+        "create_capability_registry",
+        lambda _container: CompactCapabilityRegistry(),
+    )
+    transport = httpx.ASGITransport(app=console_api.app)
+    async with (
+        console_api._lifespan(console_api.app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client,
+    ):
+        response = await client.get("/api/current-view?subject_id=case_afrm")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["decision"]["decision_id"] == "decision_current"
+    assert container.services.view_reviews.reads == ["current:case_afrm"]
 
 
 @pytest.mark.asyncio

@@ -38,7 +38,7 @@ def test_initialize_creates_owner_only_config_and_upgrades_idempotently(
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
     finally:
         engine.dispose()
-    assert revision == "0070_retire_unlinked_review_items"
+    assert revision == "0071_external_note_reviews"
     assert first["mcp_args"] == ["--env-file", str(env_file)]
 
 

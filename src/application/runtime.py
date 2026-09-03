@@ -22,6 +22,7 @@ from application.services.daily_equity_materialization_service import (
 )
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
+from application.services.external_note_review_service import ExternalNoteReviewService
 from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.health_service import HealthService
 from application.services.historical_validation_service import HistoricalValidationService
@@ -47,6 +48,7 @@ from application.services.trade_retro_service import TradeRetroService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
 from application.services.us_tool_coordinator import USToolCoordinator
+from application.services.view_review_service import ViewReviewService
 from application.services.watchlist_hub_service import WatchlistHubService
 
 
@@ -92,6 +94,8 @@ class ApplicationServices:
     review_items: ReviewItemService
     attention: AttentionQueryService
     external_notes: ExternalNoteSyncService
+    external_note_reviews: ExternalNoteReviewService
+    view_reviews: ViewReviewService
 
 
 @dataclass(frozen=True, slots=True)

@@ -252,7 +252,7 @@ class PostMarketSyncService:
         if self._external_notes is not None:
             try:
                 observation_receipt = await self._external_notes.sync(
-                    analyze=False,
+                    analyze=True,
                     source_code="MOOMOO_NOTE",
                 )
             except Exception:  # noqa: BLE001 - other post-market steps remain usable

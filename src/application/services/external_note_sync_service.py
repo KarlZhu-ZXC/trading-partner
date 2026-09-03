@@ -19,6 +19,9 @@ from application.ports.external_note_provider import (
     ObservationSourceCapability,
 )
 from application.ports.external_note_repository import ExternalNoteRepository
+from application.ports.external_note_review_materializer import (
+    ExternalNoteReviewMaterializer,
+)
 from application.ports.external_observation_capture_store import (
     ExternalObservationCaptureStore,
 )
@@ -30,7 +33,7 @@ from application.services.external_note_interpretation_service import (
 from domain.common.errors import DataContractError
 from domain.common.ids import EntityIdPrefix
 from domain.external_note.attribution import attributed_blocks, prefer_proven_complete_text
-from domain.external_note.enums import NoteCoverage, NoteSyncStatus
+from domain.external_note.enums import NoteCoverage, NoteSpeakerKind, NoteSyncStatus
 from domain.external_note.models import (
     ExternalNoteIdentity,
     ExternalNoteInterpretation,
@@ -82,6 +85,7 @@ class ExternalNoteSyncService:
         process_lock: ProcessLock | None = None,
         process_lock_wait_seconds: float = 5.0,
         credential_stores: tuple[ExternalNoteCredentialStore, ...] = (),
+        review_materializer: ExternalNoteReviewMaterializer | None = None,
     ) -> None:
         providers = provider if isinstance(provider, tuple) else (provider,)
         self._providers = {item.capability.source_code: item for item in providers}
@@ -97,6 +101,7 @@ class ExternalNoteSyncService:
         self._process_lock = process_lock
         self._process_lock_wait_seconds = max(0.0, min(process_lock_wait_seconds, 30.0))
         self._credential_stores = {item.source_code: item for item in credential_stores}
+        self._review_materializer = review_materializer
         if len(self._credential_stores) != len(credential_stores):
             raise DataContractError("observation credential source codes must be unique")
 
@@ -335,6 +340,17 @@ class ExternalNoteSyncService:
                 interpretations_created += 1
                 if interpretation_value.status == "FAILED":
                     warning_codes.append("MOOMOO_NOTE_INTERPRETATION_UNAVAILABLE")
+                else:
+                    revision_value = next(
+                        item[0]
+                        for item in pending
+                        if item[0].note_revision_id
+                        == interpretation_value.note_revision_id
+                    )
+                    self._materialize_review_if_eligible(
+                        revision_value,
+                        interpretation_value,
+                    )
         elif pending:
             warning_codes.append("MOOMOO_NOTE_INTERPRETATION_PENDING")
         full_count = sum(item.coverage is NoteCoverage.FULL for item in scan.snapshots)
@@ -473,6 +489,10 @@ class ExternalNoteSyncService:
             if value.status == "FAILED" and value.note_revision_id in preserve_success_for:
                 continue
             self._repository.append_interpretation(value)
+            revision = next(
+                item for item in candidates if item.note_revision_id == value.note_revision_id
+            )
+            self._materialize_review_if_eligible(revision, value)
         return results
 
     async def analyze_revision(
@@ -491,6 +511,7 @@ class ExternalNoteSyncService:
             raise DataContractError("full observation text is required for interpretation")
         existing = self._repository.interpretation_for_revision(effective.note_revision_id)
         if existing is not None and (existing.status == "SUCCEEDED" or not retry_failed):
+            self._materialize_review_if_eligible(effective, existing)
             return existing
         previous_revision = self._repository.previous_revision(
             effective.note_id, effective.version
@@ -512,7 +533,37 @@ class ExternalNoteSyncService:
             ),
         )
         self._repository.append_interpretation(result)
+        self._materialize_review_if_eligible(effective, result)
         return result
+
+    def _materialize_review_if_eligible(
+        self,
+        revision: ExternalNoteRevision,
+        interpretation: ExternalNoteInterpretation,
+    ) -> None:
+        if self._review_materializer is None or interpretation.status != "SUCCEEDED":
+            return
+        previous = self._repository.previous_revision(revision.note_id, revision.version)
+        previous_effective = self._effective_revision(previous) if previous is not None else None
+
+        def user_blocks(value: ExternalNoteRevision | None) -> tuple[tuple[str | None, str], ...]:
+            if value is None:
+                return ()
+            return tuple(
+                (item.section_date, " ".join(item.body.split()))
+                for item in value.blocks
+                if item.speaker_kind is NoteSpeakerKind.USER
+            )
+
+        current_user = user_blocks(revision)
+        previous_user = user_blocks(previous_effective)
+        if previous is not None and current_user == previous_user:
+            return
+        if not current_user and not previous_user:
+            return
+        self._review_materializer.ensure_pending(
+            note_revision_id=revision.note_revision_id
+        )
 
     def interpretation_for_revision(
         self, note_revision_id: str

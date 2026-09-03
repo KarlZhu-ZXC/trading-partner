@@ -136,7 +136,7 @@ class _Observations:
         self.error_codes = error_codes
 
     async def sync(self, *, analyze: bool, source_code: str) -> SimpleNamespace:
-        assert analyze is False
+        assert analyze is True
         assert source_code == "MOOMOO_NOTE"
         self.calls.append("observations")
         return SimpleNamespace(

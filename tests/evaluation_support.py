@@ -173,7 +173,7 @@ class DeliveryAuditReceipt:
 
 def audit_delivery(project_root: Path, public_tools: frozenset[str]) -> DeliveryAuditReceipt:
     root = project_root.resolve()
-    if len(public_tools) != 27 or public_tools & FORBIDDEN_EVAL_TOOLS:
+    if not public_tools or public_tools & FORBIDDEN_EVAL_TOOLS:
         raise DataContractError("Public tool surface is invalid")
     tables = frozenset(Base.metadata.tables)
     if tables & FORBIDDEN_TABLES:

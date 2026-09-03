@@ -113,6 +113,13 @@ def _registry() -> CompactCapabilityRegistry:
     return registry
 
 
+def _view_registry() -> CompactCapabilityRegistry:
+    registry = CompactCapabilityRegistry()
+    for name in ("view_inbox", "view_review_get", "current_view_get"):
+        registry.add_capability(_health, name=name, policy=READ_DURABLE)
+    return registry
+
+
 def _proposal_registry() -> CompactCapabilityRegistry:
     registry = _registry()
     _register_dispatch_tool(
@@ -247,6 +254,13 @@ def test_attention_aliases_route_to_cross_domain_inbox(query: str) -> None:
     assert [(item.capability, item.operation) for item in descriptors] == [
         ("investment_case_read", "attention")
     ]
+
+
+@pytest.mark.parametrize("query", ("复核最新笔记", "有哪些观点待确认"))
+def test_view_aliases_prioritize_the_judgment_intake_reads(query: str) -> None:
+    gateway = AgentCapabilityGateway(_view_registry())
+    capabilities = {item.capability for item in gateway.search(query, limit=8)}
+    assert capabilities == {"view_inbox", "view_review_get", "current_view_get"}
 
 
 @pytest.mark.asyncio
@@ -446,3 +460,5 @@ def test_agent_prompt_binds_previous_close_semantics() -> None:
     assert "previous_completed_daily_bar_close" in AGENT_SYSTEM_PROMPT
     assert "前一完整日线收盘" in AGENT_SYSTEM_PROMPT
     assert "不得称常规盘前收或“结算价”" in AGENT_SYSTEM_PROMPT
+    assert "view_inbox" in AGENT_SYSTEM_PROMPT
+    assert "不要把行情查询作为观点复核的默认起点" in AGENT_SYSTEM_PROMPT

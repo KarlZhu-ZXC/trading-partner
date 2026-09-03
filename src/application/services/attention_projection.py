@@ -45,6 +45,9 @@ _REVIEW_ITEM_SOURCE: dict[str, AttentionSourceType] = {
     ReviewItemSourceType.AGENT_PENDING_ACTION.value: AttentionSourceType.AGENT_PENDING_ACTION,
     ReviewItemSourceType.BROKER_ORDER_INTENT.value: AttentionSourceType.BROKER_ORDER_INTENT,
     ReviewItemSourceType.DECISION_REVIEW_DUE.value: AttentionSourceType.DECISION_REVIEW_DUE,
+    ReviewItemSourceType.OBSERVATION_REVIEW_DUE.value: (
+        AttentionSourceType.OBSERVATION_REVIEW_DUE
+    ),
     ReviewItemSourceType.UNLINKED_ACTIVITY.value: AttentionSourceType.UNLINKED_ACTIVITY,
 }
 
@@ -84,6 +87,10 @@ _CLOSURE: dict[AttentionSourceType, tuple[AttentionClosureCode, str]] = {
     AttentionSourceType.DECISION_REVIEW_DUE: (
         AttentionClosureCode.DECISION_REVIEW_SUPERSEDED,
         "A later exact superseding Decision replaces the Decision under review.",
+    ),
+    AttentionSourceType.OBSERVATION_REVIEW_DUE: (
+        AttentionClosureCode.OBSERVATION_REVIEW_CONFIRMED,
+        "The exact Observation review is adopted or closed by a confirmed NO_ACTION Decision.",
     ),
     AttentionSourceType.UNLINKED_ACTIVITY: (
         AttentionClosureCode.UNLINKED_ACTIVITY_ANNOTATED,
@@ -158,6 +165,11 @@ def next_read_for(
         if subject_id:
             timeline_request["case_id"] = subject_id
         return AttentionNextReadDTO(tool="research_memory_get", request=timeline_request)
+    if source_type is AttentionSourceType.OBSERVATION_REVIEW_DUE:
+        return AttentionNextReadDTO(
+            tool="view_review_get",
+            request={"note_revision_id": source_ref},
+        )
     if source_type is AttentionSourceType.UNLINKED_ACTIVITY:
         return AttentionNextReadDTO(
             tool="portfolio_analyze",

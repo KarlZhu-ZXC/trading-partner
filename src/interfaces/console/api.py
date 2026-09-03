@@ -25,6 +25,7 @@ from application.dto.behavior_review import BehaviorReviewRunInput
 from application.dto.catalyst_agenda_sync import (
     CatalystAgendaSyncInput,
 )
+from application.dto.external_note_review import ExternalNoteReviewTransitionInput
 from application.dto.monitoring import MonitorArchiveInput
 from application.dto.review_item import ReviewItemTransitionInput
 from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
@@ -200,6 +201,21 @@ class ObservationCaptureRequest(_RequestModel):
 
 class ObservationAnalysisRequest(_RequestModel):
     retry_failed: bool = True
+
+
+class ObservationReviewEnsureRequest(_RequestModel):
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ObservationReviewTransitionRequest(_RequestModel):
+    status: Literal["DEFERRED", "ADOPTED", "NO_ACTION"]
+    expected_version: int = Field(ge=1)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
+    decision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    due_at: datetime | None = None
+    authorization_note: str = Field(min_length=1, max_length=4_000)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    confirmation: Literal["observation_review_update"]
 
 
 class ActivityAnnotationRequest(_RequestModel):
@@ -1052,6 +1068,32 @@ async def _reconcile_review_items(
         # source observed for upserts, but never mark it fully observed.
         if len(due_decisions) < decision_limit:
             fully_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
+    observation_limit = 100
+    try:
+        observation_reviews = container.services.external_note_reviews.pending_projections(
+            limit=observation_limit
+        )
+    except Exception:  # noqa: BLE001 - absence must not resolve prior items
+        observation_reviews = ()
+    else:
+        observed.add(ReviewItemSourceType.OBSERVATION_REVIEW_DUE)
+        raw_items.extend(
+            {
+                "key": item.source_key,
+                "source_type": item.source_type.value,
+                "source_ref": item.source_ref,
+                "subject_id": item.subject_id,
+                "title": item.title,
+                "detail": item.detail,
+                "severity": item.severity.value,
+                "recommended_action": item.recommended_action,
+                "href": item.href,
+                "due_at": item.due_at.isoformat() if item.due_at else None,
+            }
+            for item in observation_reviews
+        )
+        if len(observation_reviews) < observation_limit:
+            fully_observed.add(ReviewItemSourceType.OBSERVATION_REVIEW_DUE)
     try:
         agent_actions = container.operations.agent_pending_actions.list_unresolved(
             now=container.context.clock.now(), limit=100
@@ -1825,8 +1867,26 @@ def _start_observation_analysis(
     return True
 
 
+async def _analyze_pending_observations(request: Request) -> None:
+    await _container(request).services.external_notes.analyze_pending(limit=20)
+
+
+async def _analyze_one_observation(
+    request: Request,
+    note_revision_id: str,
+    *,
+    retry_failed: bool,
+) -> None:
+    services = _container(request).services
+    await services.external_notes.analyze_revision(
+        note_revision_id,
+        retry_failed=retry_failed,
+    )
+
+
 def _observation_inbox_payload(request: Request, *, limit: int) -> dict[str, Any]:
-    service = _container(request).services.external_notes
+    services = _container(request).services
+    service = services.external_notes
     sources = [asdict(item) for item in service.source_capabilities()]
     notes = [
         {
@@ -1848,6 +1908,16 @@ def _observation_inbox_payload(request: Request, *, limit: int) -> dict[str, Any
                     "payload": json.loads(item.interpretation.payload_json),
                 }
                 if item.interpretation is not None
+                else None
+            ),
+            "review": (
+                review.model_dump(mode="json")
+                if (
+                    review := services.external_note_reviews.get_for_revision(
+                        item.revision.note_revision_id
+                    )
+                )
+                is not None
                 else None
             ),
         }
@@ -1887,7 +1957,7 @@ async def _sync_observations(
     if not analyze:
         analysis_started = _start_observation_analysis(
             request,
-            lambda: service.analyze_pending(limit=20),
+            lambda: _analyze_pending_observations(request),
         )
     return {
         "data": {
@@ -1946,7 +2016,7 @@ async def observation_import(
     if not payload.analyze:
         analysis_started = _start_observation_analysis(
             request,
-            lambda: service.analyze_pending(limit=20),
+            lambda: _analyze_pending_observations(request),
         )
     return {
         "data": {
@@ -1968,8 +2038,10 @@ async def observation_analyze(
         return {"data": {"analysis_started": False, "reason": "ANALYSIS_ALREADY_RUNNING"}}
     started = _start_observation_analysis(
         request,
-        lambda: _container(request).services.external_notes.analyze_revision(
-            note_revision_id, retry_failed=payload.retry_failed
+        lambda: _analyze_one_observation(
+            request,
+            note_revision_id,
+            retry_failed=payload.retry_failed,
         ),
         note_revision_id=note_revision_id,
     )
@@ -2000,6 +2072,83 @@ async def observation_analysis_status(
             ),
         }
     }
+
+
+@app.post("/api/observations/{note_revision_id}/review/ensure")
+async def observation_review_ensure(
+    request: Request,
+    note_revision_id: str,
+    payload: ObservationReviewEnsureRequest,
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.external_note_reviews.ensure_pending(
+            note_revision_id=note_revision_id,
+            subject_id=payload.subject_id,
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return {"data": value.model_dump(mode="json")}
+
+
+@app.get("/api/observations/{note_revision_id}/review")
+async def observation_view_review(
+    request: Request,
+    note_revision_id: str,
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.view_reviews.get(note_revision_id)
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return {"data": value.model_dump(mode="json")}
+
+
+@app.get("/api/current-view")
+async def current_view(
+    request: Request,
+    subject_id: str = Query(min_length=1, max_length=128),
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.view_reviews.current(subject_id)
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return {"data": value.model_dump(mode="json") if value is not None else None}
+
+
+@app.post("/api/observation-reviews/{review_id}")
+async def observation_review_transition(
+    request: Request,
+    review_id: str,
+    payload: ObservationReviewTransitionRequest,
+) -> dict[str, Any]:
+    try:
+        value = _container(request).services.external_note_reviews.transition(
+            ExternalNoteReviewTransitionInput(
+                review_id=review_id,
+                status=payload.status,
+                expected_version=payload.expected_version,
+                subject_id=payload.subject_id,
+                decision_id=payload.decision_id,
+                due_at=payload.due_at,
+                actor="user",
+                authorization_note=payload.authorization_note,
+                idempotency_key=payload.idempotency_key,
+            )
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": error.code, "message": _sanitized_error(request, error)},
+        ) from None
+    return {"data": value.model_dump(mode="json")}
 
 
 @app.get("/api/observations/{note_id}/history")

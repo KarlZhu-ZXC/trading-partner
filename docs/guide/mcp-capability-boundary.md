@@ -1,6 +1,6 @@
 # Trading Partner MCP 能力与使用边界
 
-> 适用版本：Phase 1–4D + MCP vNext Shadow（27 个 public MCP tools）
+> 适用版本：Phase 1–4D + MCP vNext Shadow（30 个 public MCP tools）
 > 状态：可供 Codex 以本地 stdio MCP 方式使用
 
 ## 1. 它是什么
@@ -23,7 +23,7 @@ Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex
 
 | 层级 | 含义 | 当前状态 |
 |---|---|---|
-| 服务可用 | MCP 能启动、27 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
+| 服务可用 | MCP 能启动、30 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
 | 数据可用 | 对应网络 Provider 已启用、凭据和网络正常 | 按 Provider 分别检查 |
 | 账户可用 | Schwab OAuth、Moomoo OpenD 或严格格式的手工持仓 CSV | 实时券商默认未启用 |
 
@@ -60,7 +60,7 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 
 ## 3. 公开能力总览
 
-公开工具面为 27 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
+公开工具面为 30 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
 所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内。
 为降低 Host 上下文，较大的 group 发布扁平 operation schema；服务端在 dispatch 前仍使用
 精确 closed variant 再验证 required/owned fields，因此跨 operation 字段不会进入应用服务。
@@ -74,7 +74,7 @@ FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成�
 union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
 
 Shared Agent Runtime 的 `tp_capability_search`、`tp_read`、`tp_propose`、`tp_prepare_action` 和
-`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具，公开数量仍严格为 27。
+`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 30。
 Agent-A 只允许 durable/provider reads、
 instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
 schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
@@ -94,7 +94,15 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 |---|---|
 | `system_health` | 检查应用、数据库和全文检索，并嵌入 durable-only Data Quality Center：汇总最新账户快照的估值/价格时间覆盖、账户活动 coverage receipt、研究档案/Thesis/Trade Plan 生命周期冲突、Active Monitor 最近运行与 `NOT_EVALUATED` 盲区，以及最近 24 小时 Provider route/fallback/失败聚合；不请求券商或行情上游。运行健康与证据质量保留独立 status。Provider 检查保留 `live_probe`/`configuration` 标签，配置不等于实时连通。路由账本只保存安全枚举、error/warning code 和耗时，固定保留 30 天且最多 5,000 条，不保存请求指纹、响应 payload 或异常文本。基础诊断本身可能以 degraded envelope 返回 |
 
-### 3.2 标的研究档案与投资判断（Research Subject / Thesis，9）
+### 3.2 观点收口与复核（3）
+
+| 工具 | 能力与边界 |
+|---|---|
+| `view_inbox` | 列出等待用户复核的 FULL Observation 修订、变化摘要和映射状态；不返回私人完整笔记正文，不访问 Provider，不确认判断 |
+| `view_review_get` | 对照一个精确 Note Revision、模型草稿、当前 Thesis、Trade Plan、既有 Decision、持久化仓位和关联 Monitor；模型文本与确定性事实分开标记，只给出允许的下一步 |
+| `current_view_get` | 从最新已采纳 Observation Review 与其精确 Decision 派生当前正式观点；不建立第二套可变观点真相，不刷新行情或账户 |
+
+### 3.3 标的研究档案与投资判断（Research Subject / Thesis，9）
 
 面向用户，Research Subject 应称为“标的”“研究标的”或“研究档案”；在最常见的
 公司/催化剂研究中，就是“某个标的的研究档案”。Thesis 是档案中的当前投资判断。
@@ -163,7 +171,7 @@ live SUB 必须依附 live PRIMARY；必须先退休 live SUB 才能退休其 PR
 Assumption、Invalidation、Open Question 等子对象同样不仅要“存在”，还必须属于 candidate
 声明的同一研究档案/Thesis/revision。
 
-### 3.3 Instrument 与研究记忆
+### 3.4 Instrument 与研究记忆
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -206,7 +214,7 @@ Yahoo Finance → Alpha Vantage 回退，A 股代码由腾讯行情验证，韩�
 新闻、情绪或 Workflow，不会因为 Master 尚无记录而提前失败。目录不可用时保留原始 Provider
 错误，不转换成 `INVALID_INSTRUMENT`。
 
-### 3.4 A 股事实
+### 3.5 A 股事实
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -258,7 +266,7 @@ CLI 会报告实际覆盖与缺失月份。当前官方在线档案不能证明�
 部分热度、筹码或情绪字段属于派生值或低/未知可靠性值；回答时必须保留来源与 warning，
 不能将当前榜单伪装成历史截面。
 
-### 3.5 美股、韩股行情与技术事实
+### 3.6 美股、韩股行情与技术事实
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -302,7 +310,7 @@ Moomoo Hot List 返回交易、搜索、新闻及综合热度排名，只代表�
 它复用账户与 Watchlist 的 OpenD 跨进程限流器，并按 15 分钟缓存。该接口要求 OpenD 10.9
 或更高版本；旧版会以 `MOOMOO_OPEND_VERSION_UNSUPPORTED` 降级，不会伪造空榜单。
 
-### 3.6 美股基本面、SEC 与公司事件
+### 3.7 美股基本面、SEC 与公司事件
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -317,7 +325,7 @@ SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历
 查看重述与披露版本。yfinance 和 Alpha Vantage 只作为 current-only fallback，不能提供 SEC
 历史版本。跨市场质量指标只在所需字段齐全时计算；美国 `vintages` 不计算跨 filing 混合比率。
 
-### 3.7 美股新闻、宏观、情绪与预测市场
+### 3.8 美股新闻、宏观、情绪与预测市场
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -333,7 +341,7 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 交互层负责解释和观点综合。新闻、社交文本和其他 Provider 内容均被视为不可信外部数据，
 不能作为给 Codex 的指令。
 
-### 3.8 只读账户与组合
+### 3.9 只读账户与组合
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -436,7 +444,7 @@ TRAILING_STOP、TRAILING_STOP_LIMIT 卖单。无界 BUY MARKET/STOP/TRAILING 被
 `foreign_key` 与 `unknown_integrity`。只有可通过新快照 ID 或等待并发提交解决的冲突标记为
 retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或账户值。
 
-### 3.9 跨 Thread 恢复
+### 3.10 跨 Thread 恢复
 
 `investment_case_read` (`context`) 按 `case_id` 或无歧义的 `instrument_id` 恢复一个研究档案：当前研究
 状态、反方优先的 Evidence、压缩历史、最新持久化仓位、缺失事实和 token budget 元数据。
@@ -444,7 +452,7 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 这个结果是长期上下文，不是实时行情。调用方应根据 `live_fact_tools_required` 再拉取当前
 市场事实，且不得隐藏失效条件或反方证据。
 
-### 3.10 Challenge Review
+### 3.11 Challenge Review
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -456,7 +464,7 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 payload 不同返回 `IDEMPOTENCY_CONFLICT`。质询 resolution 只记录用户态度，不会直接修改
 Thesis、候选或仓位，也不会执行交易。
 
-### 3.11 历史交易、六类研究工作流与历史验证桥接
+### 3.12 历史交易、六类研究工作流与历史验证桥接
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -517,7 +525,7 @@ Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保
 现有周六 Automation 应只调用 `trading-partner-retro weekly --export-obsidian`；固定周一至
 周六 UTC 窗口、幂等键、审计、导出与下一周快照均由项目 CLI 负责。
 
-### 3.12 Watchlist Hub
+### 3.13 Watchlist Hub
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -530,7 +538,7 @@ Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保
 不是默认分组的分页读取。也可使用
 `uv run trading-partner-watchlist-sync` 单独刷新 Watchlist；盘后账户和 Watchlist 的
 组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户和标准化
-Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，随后以 `analyze=false`
+Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，随后以 `analyze=true`
 同步一次 Moomoo Observation；同一 durable receipt 保留 Notes 状态、发现数、新 revision 数和
 FULL/摘要覆盖。Notes 失败不回滚已完成步骤。作业依据 XNYS 日历在真实收盘十分钟后运行，
 支持提前收盘、休市跳过、成功幂等和部分失败重试。
@@ -544,7 +552,7 @@ FX 等暂不支持研究的 Moomoo 成员仍会显示，但 `instrument_id=null`
 Moomoo durable items 读取省略 `group_name` 时优先选择系统 `All`，不会静默退回
 `Favorites`；响应同时返回 `group_was_defaulted`、`total_count` 和 `has_more`。
 
-### 3.13 Portfolio Risk Engine v2
+### 3.14 Portfolio Risk Engine v2
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -558,7 +566,7 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 缺少 NAV、价格时间或 FX 事实不会被当作通过；系统默认阈值在用户确认前始终产生 warning。
 假设新增仅参与计算，`execution_effect=false`，不存在任何下单副作用。
 
-### 3.14 Monitoring Hub
+### 3.15 Monitoring Hub
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -646,7 +654,7 @@ Provider 尝试链会以脱敏结构写入 immutable Monitor observation。Conso
 但永不保存或显示 URL、代理地址、请求/响应正文、header 或底层异常文本。旧 Run 没有该
 sidecar 时继续按空诊断读取，不伪造历史细节。
 
-### 3.15 Technical Engine v2
+### 3.16 Technical Engine v2
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -860,7 +868,7 @@ token wrapper 的稳定 `creation_timestamp` 计算；access token 自动刷新�
 研究状态、研究记忆、账户快照、Challenge Review、workflow receipt、Trade Plan 和 Monitor
 使用本地 SQLite 持久化；Watchlist Hub 另行保存完整分组、成员历史和幂等 mutation receipt。
 数据库结构通过 Alembic 管理，当前 migration head 是
-`0070_retire_unlinked_review_items`。当前链覆盖 append-only Trade Plan、Risk v2、Monitoring、
+`0071_external_note_reviews`。当前链覆盖 append-only Trade Plan、Risk v2、Monitoring、
 通知 Outbox、Provider 路由回执、Shared Agent Runtime、ReviewItem、Trade Retro、Catalyst
 Agenda、Judgment Scorecard、Journal/Decision、Trade Cycle override、Daily Equity、外部
 Observation revision 与账户 Instrument identity 修复。`0069`/`0070` 属于显式不可逆的数据

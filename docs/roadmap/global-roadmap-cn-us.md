@@ -3,9 +3,10 @@
 ## Product direction
 
 Trading Partner is a local-first, long-horizon investment judgment companion.
-Codex or another MCP host owns conversation and synthesis. Trading Partner owns
-durable research state, provider-backed facts, portfolio context, deterministic
-risk/monitoring controls, provenance, and typed degradation.
+Moomoo is the owner's primary analysis and note-authoring surface. Trading Partner
+owns the durable review and confirmation loop, research state, provider-backed facts,
+portfolio context, deterministic risk/monitoring controls, provenance, and typed
+degradation. Console, Codex, or another MCP host may conduct the review.
 
 The product is designed to challenge an investment judgment over time—not to act
 as a generic market chatbot, broker terminal, or autonomous trading agent.
@@ -24,8 +25,10 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 4. **Durable state requires explicit authority.** Research Subject, Thesis, Trade
    Plan, risk-policy, Watchlist, journal, decision, and Monitor writes retain actor,
    confirmation, version, and idempotency gates.
-5. **The MCP surface stays compact.** The sole public profile is `mcp_vnext_shadow` with
-   27 grouped tools and closed operation unions.
+5. **The MCP surface follows user intent.** The current public profile is
+   `mcp_vnext_shadow` with 30 tools, but tool count may change through an explicit
+   compatibility migration. Closed schemas, authority gates, and discoverability are
+   invariants; an arbitrary count is not.
 6. **LLMs do interpretation, not data ownership.** Ordinary facts, rule evaluation,
    and Trade Retro findings are deterministic. Optional Monitor judgment and Trade
    Retro narration use a sandboxed server-side model only after deterministic
@@ -79,7 +82,7 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
 - Loopback-only Console for Research, Portfolio, Monitoring, Operations, Data
   Quality, and the compact capability workbench. Its disabled-by-default shared
   Agent Runtime uses five private capability tools and does not change the public
-  MCP count; an explicit Monitor run may separately call the configured server-side
+  MCP snapshot count; an explicit Monitor run may separately call the configured server-side
   model only for an enabled composite judgment policy.
 - Manual QuantConnect Free bridge: prepare hashed LEAN code, user runs it on the
   web, then import the downloaded result JSON.
@@ -91,8 +94,10 @@ The authoritative detail is the
 
 ### R1 — Reliability and evidence quality
 
-New capability breadth is frozen while the implemented Phase 1–4D product is
-consolidated around stability, usability, data quality, and cross-feature closure.
+Unrelated capability breadth is frozen while the implemented Phase 1–4D product is
+re-centered on the Moomoo-first judgment intake and review loop, stability, usability,
+data quality, and cross-feature closure. The active sequence and live progress are in
+[Moomoo-first judgment intake transformation](judgment-intake-transformation.md).
 Completed implementation plans are not retained as parallel specifications.
 
 Continuous requirements remain:
@@ -101,7 +106,8 @@ Continuous requirements remain:
 - improve data coverage receipts before adding more derived conclusions;
 - keep schedulers, notifications, migrations, backup, and Console state observable;
 - reduce schema and test duplication when coverage is already represented elsewhere;
-- keep public documentation synchronized with the 27-tool runtime contract.
+- keep public documentation synchronized with the actual runtime contract and publish
+  explicit migrations when tools are added, split, deprecated, or removed.
 
 ### R2 — Preserve Catalyst and judgment calibration
 
@@ -144,7 +150,7 @@ annotation、确定性 Trade Cycle、日频账户估值、可信收益率和行�
 `NO_ACTION` 也是正式记录。
 
 4A Capture、4B Trade Cycle、4C Performance、4D Behavior Review 均已实现。后续工作只改善
-覆盖、性能、可观测性和使用闭环；公共 MCP 保持 27 个 grouped tools，订单确认和 SGOV
+覆盖、性能、可观测性和使用闭环；MCP 工具数量服从用户意图与可发现性，订单确认和 SGOV
 唯一 unattended exception 不变。完整合同见 [Phase 4 specification](../phases/phase4.md)。
 
 ## Deferred integrations

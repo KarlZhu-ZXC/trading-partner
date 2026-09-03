@@ -94,6 +94,14 @@ def test_next_read_rejects_write_operations() -> None:
         tool="broker_order_manage",
         request={"operation": "status", "order_intent_id": "order_1"},
     )
+    assert next_read_for(
+        AttentionSourceType.OBSERVATION_REVIEW_DUE,
+        source_ref="external_note_revision_1",
+        subject_id="case_1",
+    ) == AttentionNextReadDTO(
+        tool="view_review_get",
+        request={"note_revision_id": "external_note_revision_1"},
+    )
 
 
 def test_subject_scope_excludes_global_items() -> None:

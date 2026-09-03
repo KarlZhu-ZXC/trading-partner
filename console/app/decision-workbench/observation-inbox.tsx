@@ -30,7 +30,11 @@ const DATE_SECTION_LINE = /^(?:(?:20\d{2})[-/.])?\d{1,2}[-/.]\d{1,2}(?=$|\s|[:锛
 export type NoteReviewDecisionHandler = (
   item: Dict,
   matchingSubjectId: string | null,
-) => void;
+) => void | Promise<void>;
+export type NoteDeferReviewHandler = (
+  item: Dict,
+  matchingSubjectId: string | null,
+) => void | Promise<void>;
 
 export type ObservationInboxProps = {
   items: Dict[];
@@ -43,6 +47,7 @@ export type ObservationInboxProps = {
   onRefresh: () => void;
   onSelectSubject: (subjectId: string) => void;
   onReviewDecision: NoteReviewDecisionHandler;
+  onDeferReview: NoteDeferReviewHandler;
   analysisBusyId: string | null;
   onAnalyzeRevision: (revisionId: string) => void;
   /** Optional host-provided portfolio context for the selected note. */
@@ -269,6 +274,7 @@ export function ObservationInbox({
   onRefresh,
   onSelectSubject,
   onReviewDecision,
+  onDeferReview,
   analysisBusyId,
   onAnalyzeRevision,
   positionContext,
@@ -352,6 +358,7 @@ export function ObservationInbox({
   const selectedIdentity = asDict(selected?.identity);
   const selectedRevision = asDict(selected?.revision);
   const selectedInterpretation = asDict(selected?.interpretation);
+  const selectedReview = asDict(selected?.review);
   const selectedCoverage = upper(selectedRevision.coverage, "UNKNOWN");
   const selectedInterpretationStatus = upper(
     selectedInterpretation.status,
@@ -467,6 +474,7 @@ export function ObservationInbox({
                 const identity = asDict(item.identity);
                 const revision = asDict(item.revision);
                 const interpretation = asDict(item.interpretation);
+                const review = asDict(item.review);
                 const key = noteKey(item, index);
                 const isSelected = key === selectedNoteKey;
                 const coverage = upper(revision.coverage, "UNKNOWN");
@@ -497,6 +505,7 @@ export function ObservationInbox({
                     <span className="notes-cell-badges">
                       <Badge value={`TEXT 路 ${coverage}`} />
                       <Badge value={`ANALYSIS 路 ${status}`} tone={status === "FAILED" ? "bad" : status === "SUCCEEDED" ? "good" : "neutral"} />
+                      {review.status ? <Badge value={`REVIEW 路 ${upper(review.status)}`} tone={["ADOPTED", "NO_ACTION"].includes(upper(review.status)) ? "good" : "warn"} /> : null}
                     </span>
                   </button>
                 );
@@ -531,6 +540,7 @@ export function ObservationInbox({
                   <div className="page-actions">
                     <Badge value={`TEXT 路 ${selectedCoverage}`} />
                     <Badge value={`ANALYSIS 路 ${selectedInterpretationStatus}`} tone={selectedInterpretationStatus === "FAILED" ? "bad" : selectedInterpretationStatus === "SUCCEEDED" ? "good" : "neutral"} />
+                    {selectedReview.status ? <Badge value={`REVIEW 路 ${upper(selectedReview.status)}`} tone={["ADOPTED", "NO_ACTION"].includes(upper(selectedReview.status)) ? "good" : "warn"} /> : null}
                   </div>
                 </header>
 
@@ -700,12 +710,15 @@ export function ObservationInbox({
                   </Link>
                   {selectedReady && selectedMatchingSubjectId ? (
                     <ActionButton
-                      onClick={() =>
-                        onReviewDecision(selected, selectedMatchingSubjectId)
-                      }
+                      onClick={() => { void onReviewDecision(selected, selectedMatchingSubjectId); }}
                     >
-                      Review as Decision
+                      Review View Change
                     </ActionButton>
+                  ) : null}
+                  {selectedReady && !["ADOPTED", "NO_ACTION"].includes(upper(selectedReview.status, "PENDING")) ? (
+                    <button type="button" onClick={() => { void onDeferReview(selected, selectedMatchingSubjectId); }}>
+                      Defer Review
+                    </button>
                   ) : null}
                   {selectedHasFullText &&
                   !selectedReady &&

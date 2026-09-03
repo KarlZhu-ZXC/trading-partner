@@ -1,5 +1,24 @@
 # Unreleased
 
+- Began the Moomoo-first judgment-intake transformation. Added an append-only
+  Observation review ledger with `PENDING`, `DEFERRED`, `ADOPTED`, and `NO_ACTION`
+  outcomes, exact Note Revision and Decision provenance, optimistic versioning,
+  idempotency, and same-Subject/revision validation. Eligible successful FULL
+  interpretations now materialize durable `OBSERVATION_REVIEW_DUE` items; Console
+  exposes review state and closes the review only after the exact Decision succeeds.
+  Migration head is now `0071_external_note_reviews`.
+  A shared deterministic `ViewReviewService` compares the draft with the latest
+  confirmed Thesis, Trade Plan, Decision, durable Positions, and linked Monitors,
+  publishes explicit coverage and allowed actions, and derives Current View from the
+  exact adopted review plus Decision rather than another mutable truth table. Home
+  now starts with View Inbox; Journal exposes Current Confirmed View, renames Notes
+  to View Inbox, supports durable deferral, and shows the baseline comparison before
+  confirmation. The explicit read-only `view_inbox`, `view_review_get`, and
+  `current_view_get` tools move the public snapshot from 27 to 30 capabilities under
+  `mcp-vnext-shadow-v3`; no prior capability was removed or renamed, and tool count is
+  no longer a product invariant. Private full note bodies remain Console-only and
+  model output cannot confirm a review outcome.
+
 - Consolidated project documentation around one current source-of-truth hierarchy.
   `AGENTS.md`, the Trading Partner Skill, roadmap, capability guide, Phase 4 spec,
   operations guide, known issues, and documentation index now describe the implemented

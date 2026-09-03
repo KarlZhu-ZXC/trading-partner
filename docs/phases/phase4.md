@@ -2,11 +2,11 @@
 
 状态：**Phase 4A–4D v1 已实现并通过全量、Console、migration 与隔离 wheel 验收**
 
-当前 migration head：`0070_retire_unlinked_review_items`
+当前 migration head：`0071_external_note_reviews`
 
 产品入口：Console `Journal`
 
-公共 MCP 表面：继续保持 `mcp_vnext_shadow` **27 个工具**
+公共 MCP 表面：`mcp_vnext_shadow` **30 个工具**
 
 ## 1. 产品决定
 
@@ -56,8 +56,8 @@ Phase 4 不为流程中的每个名词创建新模块。实现优先级固定为
   TWR/MWR/XIRR/drawdown、behavior cohort、immutable review 和 external Observation 均已实现。
 - 页面读取 durable state，不因打开页面隐式刷新 Broker；Notes 正文仅在 Notes 页签按需读取。
 - exact durable link 缺失时保持未关联/不可用；Instrument 和时间接近不能证明事前 Decision。
-- 公共 MCP 仍为 27 个工具，当前 migration head 为
-  `0070_retire_unlinked_review_items`。
+- 公共 MCP 当前为 30 个工具，当前 migration head 为
+  `0071_external_note_reviews`。
 
 ## 2. 用户要能直接回答的问题
 
@@ -618,7 +618,8 @@ Agent 必须区分 source fact、derived metric 和 human review。Agent 可以�
 3. 更新 OPEN Cycle；
 4. 为无法关联的 Fill 创建/更新 ReviewItem；
 5. 计算当日 coverage；
-6. 同步一次 Moomoo Observation（`analyze=false`），记录 notes/revision/FULL/summary 覆盖；
+6. 同步一次 Moomoo Observation（`analyze=true`），分析新出现的 FULL 修订，并仅在归一化
+   USER 文本发生变化时建立待复核项；记录 notes/revision/FULL/summary 覆盖；
 7. 不自动生成行为结论、笔记模型草稿或修改 Trade Plan。
 
 同步失败时保留 `SOURCE_SYNC_UNAVAILABLE`，不能把无新增记录描述为“今天没有操作”。
@@ -782,7 +783,7 @@ durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 - Journal、Portfolio、Research、Retro 不存在冲突写入口；
 - Console 主要流程无需复制 ID 或翻找多个页面；
 - Agent 与 Console 使用同一 application contract；
-- 公共 MCP 仍为 27 个工具；
+- 公共 MCP 当前为 30 个工具；
 - 订单权限、确认门和 SGOV 唯一 unattended exception 不变；
 - README、capability guide、Console layout、roadmap、release note 和 Skill 同步更新。
 

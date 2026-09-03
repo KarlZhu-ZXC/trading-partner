@@ -1,7 +1,7 @@
 """Transport-neutral bounded Agent tool gateway port.
 
 The Agent runtime only knows this small contract. It does not receive the
-27-tool MCP inventory and never gets a database/provider handle. Concrete
+public MCP inventory and never gets a database/provider handle. Concrete
 gateways expose reads and explicitly non-effective proposals while reusing the
 compact registry's exact Pydantic operation validation.
 """

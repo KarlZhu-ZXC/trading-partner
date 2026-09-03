@@ -68,6 +68,7 @@ def _cache(
     *,
     include_editor: bool = True,
     user_text: str = "目前在70-80区间震荡",
+    external_text: str = "突破82还是看100",
     include_date: bool = True,
 ) -> None:
     listed = {
@@ -78,7 +79,7 @@ def _cache(
                 {
                     "feedId": "117156244357125",
                     "feedTitle": "AFRM",
-                    "summaryDesc": f"{user_text}。宝总：突破82还是看100",
+                    "summaryDesc": f"{user_text}。宝总：{external_text}",
                     "timestamp": 1787662506,
                     "viewPermission": {"permissionType": 2, "userIds": []},
                     "allRelatedStockInfos": [{"stockId": "79894981859506"}],
@@ -109,7 +110,7 @@ def _cache(
                                 )
                             }
                         },
-                        {"rich_text": {"content": "<p>宝总：突破82还是看100</p>"}},
+                        {"rich_text": {"content": f"<p>宝总：{external_text}</p>"}},
                     ],
                 },
             }
@@ -1058,6 +1059,70 @@ async def test_note_sync_is_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_successful_analysis_enqueues_only_deterministic_user_text_changes(
+    migrated_sqlite_url, fixed_clock, id_generator, tmp_path: Path
+) -> None:
+    engine = create_engine(migrated_sqlite_url)
+    repository = SqlAlchemyExternalNoteRepository(engine)
+    cache = tmp_path / "note-cache"
+    cache.mkdir()
+    stock_db = tmp_path / "stock.db"
+    _stock_database(stock_db)
+    materialized: list[str] = []
+
+    class Interpretation:
+        async def analyze(
+            self, revision: ExternalNoteRevision, _previous: str | None
+        ) -> ExternalNoteInterpretation:
+            return ExternalNoteInterpretation(
+                interpretation_id=f"interpretation-{revision.version}",
+                note_revision_id=revision.note_revision_id,
+                status="SUCCEEDED",
+                provider="test",
+                model="replaceable-test-model",
+                reasoning_effort="max",
+                schema_version="test-v1",
+                payload_json="{}",
+                error_code=None,
+                created_at=NOW,
+            )
+
+    class Reviews:
+        def ensure_pending(
+            self, *, note_revision_id: str, subject_id: str | None = None
+        ) -> object:
+            assert subject_id is None
+            materialized.append(note_revision_id)
+            return object()
+
+    provider = MoomooNotesCacheProvider(
+        cache_data_dir=cache,
+        stock_database_path=stock_db,
+        clock=fixed_clock,
+    )
+    service = ExternalNoteSyncService(
+        provider,
+        repository,
+        fixed_clock,
+        id_generator,
+        Interpretation(),  # type: ignore[arg-type]
+        review_materializer=Reviews(),  # type: ignore[arg-type]
+    )
+    fixed_clock.set(NOW)
+    _cache(cache, user_text="继续观察", external_text="突破后看多")
+    await service.sync(analyze=True)
+    _cache(cache, user_text="继续观察", external_text="改为等待确认")
+    await service.sync(analyze=True)
+    _cache(cache, user_text="跌破69则退出", external_text="改为等待确认")
+    await service.sync(analyze=True)
+
+    assert len(materialized) == 2
+    revisions = repository.list_revisions(repository.list_latest()[0][0].note_id)
+    assert materialized == [revisions[2].note_revision_id, revisions[0].note_revision_id]
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_observation_sync_aggregates_provider_neutral_sources(
     migrated_sqlite_url, fixed_clock, id_generator, tmp_path: Path
 ) -> None:
@@ -1360,6 +1425,14 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
     _stock_database(stock_db)
     _cache(cache)
     captured: list[str | None] = []
+    review_revision_ids: list[str] = []
+
+    class ReviewMaterializer:
+        def ensure_pending(
+            self, *, note_revision_id: str, subject_id: str | None = None
+        ) -> None:
+            assert subject_id is None
+            review_revision_ids.append(note_revision_id)
 
     class Interpretation:
         async def analyze(
@@ -1374,7 +1447,9 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
                 model="test",
                 reasoning_effort="max",
                 schema_version="test-v1",
-                payload_json=json.dumps({"revision": revision.version}),
+                payload_json=json.dumps(
+                    {"revision": revision.version, "change_relation": "REVISION"}
+                ),
                 error_code=None,
                 created_at=NOW,
             )
@@ -1389,6 +1464,7 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
         fixed_clock,
         id_generator,
         Interpretation(),  # type: ignore[arg-type]
+        review_materializer=ReviewMaterializer(),  # type: ignore[arg-type]
     )
     fixed_clock.set(NOW)
     await service.sync(analyze=False)
@@ -1398,7 +1474,9 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
 
     await service.analyze_pending()
 
-    assert captured == [None, '{"revision": 1}']
+    assert captured == [None, '{"revision": 1, "change_relation": "REVISION"}']
+    assert len(review_revision_ids) == 2
+    assert review_revision_ids[0] != review_revision_ids[1]
     revisions = repository.list_latest()
     assert revisions[0][1].version == 2
     engine.dispose()

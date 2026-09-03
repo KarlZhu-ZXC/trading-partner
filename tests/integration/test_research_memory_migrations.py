@@ -18,7 +18,7 @@ from sqlalchemy import create_engine, inspect, text
 
 _PHASE1C_REVISION = "0004_phase1c_research_memory"
 _PHASE1D_REVISION = "0003_phase1d_instrument_provider"
-_HEAD_REVISIONS = frozenset({"0070_retire_unlinked_review_items"})
+_HEAD_REVISIONS = frozenset({"0071_external_note_reviews"})
 
 _PHASE1C_BUSINESS_TABLES = {
     "research_evidence",

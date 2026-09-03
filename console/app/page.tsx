@@ -68,9 +68,14 @@ export default function OverviewPage() {
   ).size;
   const researchAttention = listOf<Dict>(result.data, "research_attention");
   const workflowAttention = listOf<Dict>(result.data, "workflow_attention");
+  const reviewItems = listOf<Dict>(result.data, "review_items");
+  const observationReviewItems = reviewItems.filter(
+    (item) => String(item.source_type ?? "").toUpperCase() === "OBSERVATION_REVIEW_DUE",
+  );
   const reviewMetrics = (result.data?.review_item_metrics ?? {}) as Dict;
   const unresolvedReviewCount = Number(reviewMetrics.open_count ?? 0)
     + Number(reviewMetrics.acknowledged_count ?? 0);
+  const otherReviewCount = Math.max(0, unresolvedReviewCount - observationReviewItems.length);
   const notices = buildConsoleNotices({
     monitorItems,
     runs,
@@ -82,12 +87,16 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
-  const groupedInboxCount = notices.actionItems.length + (unresolvedReviewCount > 0 ? 1 : 0);
+  const groupedInboxCount = notices.actionItems.length + (otherReviewCount > 0 ? 1 : 0);
   const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   return (
     <ConsoleShell active="overview">
       <DataBoundary loading={result.loading} error={result.error}>
+        <Card className="span-12" kicker="JUDGMENT INTAKE" title="View Inbox" subtitle="Moomoo and external-note changes waiting for your review" action={<div className="page-actions"><Badge value={`${observationReviewItems.length} PENDING`} /><QuickLink href="/decision-workbench#notes">Review View Changes</QuickLink></div>}>
+          {observationReviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No View Change Waiting</strong><small>Your confirmed Decisions remain the durable current view. New FULL note revisions appear here after interpretation.</small></div></div> : <div className="attention-queue">{observationReviewItems.slice(0, 8).map((item) => <Link href={String(item.href ?? "/decision-workbench#notes")} key={String(item.review_item_id ?? item.source_key)}><Badge value="VIEW" /><div><strong>{String(item.title ?? "View review due")}</strong><span>{String(item.detail ?? "Review this exact note revision against the confirmed judgment.")}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+        </Card>
+
         <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
           <div className="agenda-summary-grid">
             <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
@@ -119,7 +128,7 @@ export default function OverviewPage() {
 
         <div className="dashboard-grid">
           <Card id="review-queue" className="span-12" kicker="DECISION WORKFLOW" title="Action & Review Inbox" subtitle="Grouped manual actions and durable closure metrics" action={<div className="page-actions"><Badge value={`${groupedInboxCount} GROUPS`} /><QuickLink href="/decision-workbench#reviews">Open Reviews</QuickLink></div>}>
-            {groupedInboxCount === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Manual Action Required</strong><small>Operational constraints and automatic retries appear separately below and do not count as Attention.</small></div></div> : <div className="attention-queue">{unresolvedReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Review Queue</strong><span>{unresolvedReviewCount} open or acknowledged items · grouped here to avoid flooding the Home page.</span></div><span aria-hidden="true">→</span></Link> : null}{notices.actionItems.slice(0, 15).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+            {groupedInboxCount === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Other Manual Action Required</strong><small>View changes are handled in the View Inbox above. Operational constraints and automatic retries appear separately.</small></div></div> : <div className="attention-queue">{otherReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Other Review Items</strong><span>{otherReviewCount} open or acknowledged non-Observation item(s).</span></div><span aria-hidden="true">→</span></Link> : null}{notices.actionItems.slice(0, 15).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">
                 <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the Current Source Status</small></div>
