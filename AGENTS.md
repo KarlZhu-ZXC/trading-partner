@@ -111,7 +111,9 @@ with their short window; this is not a strict FIFO job queue.
 - Launchd-triggered Monitor due, Post-market, and SGOV auto-run paths retain their
   business idempotency and file locks and additionally use durable Operational Job
   claim/lease/heartbeat/attempt/terminal receipts. Lease expiry becomes
-  `INTERRUPTED`; it never implies that an unknown order is safe to retry.
+  `INTERRUPTED`; it never implies that an unknown order is safe to retry. A launched
+  Python orchestrator dispatches project child modules through its current
+  `sys.executable`; it must not rediscover `uv` through launchd's minimal `PATH`.
 - Optional OpenTelemetry is disabled by default and accepts only allowlisted `tp.*`
   attributes. Prompts, payloads, URLs, credentials, headers, exception text, and stack
   traces must never enter spans.

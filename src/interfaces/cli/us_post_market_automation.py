@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -126,9 +126,9 @@ def run(
         return 0
 
     root = _project_root()
-    uv = shutil.which("uv")
-    if uv is None:
-        _emit(ok=False, disposition="UV_UNAVAILABLE")
+    python = sys.executable
+    if not python:
+        _emit(ok=False, disposition="PYTHON_RUNTIME_UNAVAILABLE")
         return 2
     state_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock_file = state_file.with_suffix(".lock")
@@ -140,11 +140,9 @@ def run(
             return 0
         sync = command_runner(
             (
-                uv,
-                "run",
-                "--directory",
-                str(root),
-                "trading-partner-post-market-sync",
+                python,
+                "-m",
+                "interfaces.cli.post_market_sync",
                 "catch-up",
             ),
             root,
@@ -164,11 +162,9 @@ def run(
 
         monitor = command_runner(
             (
-                uv,
-                "run",
-                "--directory",
-                str(root),
-                "trading-partner-monitor-run",
+                python,
+                "-m",
+                "interfaces.cli.monitor_run",
                 "--cadence",
                 "US_POST_MARKET",
             ),

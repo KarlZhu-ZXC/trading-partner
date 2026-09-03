@@ -1,5 +1,12 @@
 # Unreleased
 
+- Fixed the installed US post-market orchestration path under launchd. The outer job
+  already used an absolute `uv` path, but its Python child attempted to rediscover
+  `uv` through launchd's minimal `PATH` and could exit with `UV_UNAVAILABLE` at the
+  actual post-market wake. Child sync and Monitor commands now run as modules through
+  the orchestrator's current virtual-environment Python interpreter. A PATH-empty
+  regression test freezes the installed-runtime behavior.
+
 - Reduced the public MCP surface from 31 to 28 tools under
   `mcp-vnext-shadow-v5`. The three durable Moomoo-first reads are now closed
   `view_get/inbox|review|current` operations, while escalated model review is

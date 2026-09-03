@@ -42,7 +42,8 @@ def test_runs_sync_before_monitor_and_writes_session_state(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(automation.shutil, "which", lambda _name: "/opt/homebrew/bin/uv")
+    monkeypatch.setattr(automation.sys, "executable", "/runtime/.venv/bin/python")
+    monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(automation, "_project_root", lambda: tmp_path)
 
     def runner(args, _cwd):  # type: ignore[no-untyped-def]
@@ -50,7 +51,7 @@ def test_runs_sync_before_monitor_and_writes_session_state(
         calls.append(command)
         return _completed(
             tuple(args),
-            stdout=_sync_payload() if "post-market-sync" in command else "{}",
+            stdout=_sync_payload() if "post_market_sync" in command else "{}",
         )
 
     state = tmp_path / "state" / "session.txt"
@@ -62,8 +63,12 @@ def test_runs_sync_before_monitor_and_writes_session_state(
     )
 
     assert code == 0
-    assert "post-market-sync catch-up" in calls[0]
-    assert "monitor-run --cadence US_POST_MARKET" in calls[1]
+    assert calls[0] == (
+        "/runtime/.venv/bin/python -m interfaces.cli.post_market_sync catch-up"
+    )
+    assert calls[1] == (
+        "/runtime/.venv/bin/python -m interfaces.cli.monitor_run --cadence US_POST_MARKET"
+    )
     assert state.read_text(encoding="utf-8") == "2026-08-28\n"
     assert state.stat().st_mode & 0o777 == 0o600
     payload = json.loads(capsys.readouterr().out)
@@ -76,7 +81,8 @@ def test_completed_monitor_still_retries_post_market_sync_first(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(automation.shutil, "which", lambda _name: "/opt/homebrew/bin/uv")
+    monkeypatch.setattr(automation.sys, "executable", "/runtime/.venv/bin/python")
+    monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(automation, "_project_root", lambda: tmp_path)
     state = tmp_path / "session.txt"
     state.write_text("2026-08-28\n", encoding="utf-8")
@@ -93,7 +99,7 @@ def test_completed_monitor_still_retries_post_market_sync_first(
     )
 
     assert code == 0
-    assert len(calls) == 1 and "post-market-sync catch-up" in calls[0]
+    assert len(calls) == 1 and "interfaces.cli.post_market_sync catch-up" in calls[0]
     assert json.loads(capsys.readouterr().out)["disposition"] == (
         "SKIPPED_MONITOR_ALREADY_COMPLETED"
     )
@@ -105,13 +111,14 @@ def test_degraded_sync_does_not_block_monitor_but_returns_failure_for_retry(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(automation.shutil, "which", lambda _name: "/opt/homebrew/bin/uv")
+    monkeypatch.setattr(automation.sys, "executable", "/runtime/.venv/bin/python")
+    monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(automation, "_project_root", lambda: tmp_path)
 
     def runner(args, _cwd):  # type: ignore[no-untyped-def]
         command = " ".join(args)
         calls.append(command)
-        if "post-market-sync" in command:
+        if "post_market_sync" in command:
             return _completed(tuple(args), code=1, stdout=_sync_payload(ok=False))
         return _completed(tuple(args))
 
