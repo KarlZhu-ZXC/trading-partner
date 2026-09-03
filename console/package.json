@@ -33,7 +33,7 @@
     "@types/react-dom": "19.2.3",
     "eslint": "10.8.0",
     "globals": "17.4.0",
-    "json-schema-to-typescript": "^15.0.4",
+    "json-schema-to-typescript": "^16.0.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.65.0"
   },
