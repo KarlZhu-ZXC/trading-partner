@@ -61,6 +61,7 @@ _GO_RESPONSES_MODELS = frozenset(
     }
 )
 _GO_XHIGH_REASONING_MODELS = frozenset({"muse-spark-1.3-contributor"})
+_GO_CHAT_MODELS = frozenset({"omen-alpha"})
 _ZEN_RESPONSES_MODELS = frozenset(
     {
         "gpt-5.6-sol",
@@ -197,6 +198,8 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             )
         if model in self.responses_models:
             return await self._responses.complete(request)
+        if model in _GO_CHAT_MODELS:
+            return await self._chat.complete(request)
         if model in _ZEN_PLAIN_FREE_CHAT_MODELS:
             return await self._plain_chat.complete(request)
         if model in _ZEN_REASONING_FREE_CHAT_MODELS:

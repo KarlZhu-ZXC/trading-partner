@@ -142,6 +142,38 @@ async def test_opencode_go_catalog_exposes_directory_models_and_assigns_efforts(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "path", "effort"),
+    [
+        ("omen-alpha", "/chat/completions", "max"),
+        ("muse-spark-1.3-contributor", "/responses", "high"),
+    ],
+)
+async def test_go_new_models_preserve_effort_on_correct_protocol(
+    model: str, path: str, effort: str
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/zen/go/v1" + path
+        payload = json.loads(request.content)
+        assert payload["model"] == model
+        if path == "/responses":
+            assert payload["reasoning"]["effort"] == effort
+            return httpx.Response(200, json={"status": "completed", "output_text": "ok"})
+        assert payload["reasoning_effort"] == effort
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config(model), client=client)
+        result = await provider.complete(
+            ModelRequest(
+                messages=(ModelMessage(role="user", content="synthetic"),),
+                reasoning_effort=effort,
+            )
+        )
+        assert result.text == "ok"
+
+
+@pytest.mark.asyncio
 async def test_opencode_go_routes_unknown_catalog_models_to_chat_completions() -> None:
     paths: list[str] = []
 
