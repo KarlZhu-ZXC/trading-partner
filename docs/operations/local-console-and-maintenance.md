@@ -130,7 +130,12 @@ EXTERNAL_NOTE_REVIEW_REASONING_EFFORT=high
 EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true
 ```
 
-`high` 是当前生产档位；脱敏比较中 `xhigh` 更慢且把一般 PULLBACK 过度传播为 EXIT。
+`high` 是当前生产档位。Muse 1.3 的模型菜单也提供 `xhigh`，选定档位原样发送到
+Responses API。当前 Go 路由拒绝 `reasoning.effort=max`（HTTP 400），因此菜单不发布
+该档位，也不把它静默映射成 `xhigh`；待上游支持后再更新能力目录。
+早期单例比较中 `xhigh` 更慢且出现 PULLBACK/EXIT 分类差异，该结果不代表完整质量排名。
+OpenCode Go 的 `omen-alpha` 从实时模型目录发现，显式使用 Chat Completions 路由，
+可在 Agent 模型菜单选择，也可作为独立配置的 review model；接入本身不会切换生产模型。
 关闭 opt-in 或将其遗漏会在配置阶段 fail closed，不会静默把私人正文发送给 Contributor。
 
 该入口现已扩展为 provider-neutral `Refresh Sources`。可用

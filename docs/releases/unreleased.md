@@ -1,5 +1,10 @@
 # Unreleased
 
+- Added explicit OpenCode Go `omen-alpha` Chat Completions routing. Muse Spark 1.3
+  Contributor preserves the selected effort on Responses requests, but `max` remains
+  unadvertised because the current Go endpoint rejects it with HTTP 400. The configured
+  private review default remains `high`. Protocol regression tests cover both models.
+
 - Fixed the installed US post-market orchestration path under launchd. The outer job
   already used an absolute `uv` path, but its Python child attempted to rediscover
   `uv` through launchd's minimal `PATH` and could exit with `UV_UNAVAILABLE` at the
