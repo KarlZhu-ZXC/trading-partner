@@ -1,5 +1,11 @@
 # Unreleased
 
+- Fixed OpenCode Go request correlation before the upstream header enforcement date.
+  Chat Completions, Responses, Messages, streaming calls, and model-directory reads now
+  send `x-opencode-session`. Agent conversations and bounded note, Monitor, and Trade
+  Retro workflows reuse one stable value across tool rounds and repairs; internal IDs
+  are irreversibly hashed before transport. OpenCode Zen remains unchanged.
+
 - Added explicit OpenCode Go `omen-alpha` Chat Completions routing. Muse Spark 1.3
   Contributor preserves the selected effort on Responses requests, but `max` remains
   unadvertised because the current Go endpoint rejects it with HTTP 400. The configured

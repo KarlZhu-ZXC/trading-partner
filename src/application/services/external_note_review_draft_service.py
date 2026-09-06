@@ -241,6 +241,7 @@ class ExternalNoteReviewDraftService:
                     "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 },
             ),
+            session_id=revision.note_id,
             tools=(
                 {
                     "type": "function",

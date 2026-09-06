@@ -49,7 +49,10 @@ from infrastructure.providers.llm.deepseek_monitor_judgment import (
     _SYSTEM_PROMPT,
     _StructuredResponse,
 )
-from infrastructure.providers.llm.openai_compatible import OpenAICompatibleModelProvider
+from infrastructure.providers.llm.openai_compatible import (
+    OpenAICompatibleModelProvider,
+    opaque_model_session_id,
+)
 
 _GO_RESPONSES_MODELS = frozenset(
     {
@@ -133,9 +136,15 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             proxy=proxy_url,
             follow_redirects=False,
         )
+        self._session_header_name = (
+            "x-opencode-session" if self.provider_name == "opencode_go" else None
+        )
+        self._default_session_id = "opencode-go:model-directory"
         self._chat = OpenAICompatibleModelProvider(
             replace(config, api_style="chat_completions"),
             client=self._client,
+            session_header_name=self._session_header_name,
+            default_session_id=self._default_session_id,
         )
         self._plain_chat = OpenAICompatibleModelProvider(
             replace(
@@ -145,6 +154,8 @@ class OpenCodeGoModelProvider(AgentModelProvider):
                 reasoning_effort=None,
             ),
             client=self._client,
+            session_header_name=self._session_header_name,
+            default_session_id=self._default_session_id,
         )
         self._responses = OpenAICompatibleModelProvider(
             replace(
@@ -155,6 +166,8 @@ class OpenCodeGoModelProvider(AgentModelProvider):
                 native_web_extractor="disabled",
             ),
             client=self._client,
+            session_header_name=self._session_header_name,
+            default_session_id=self._default_session_id,
         )
 
     @staticmethod
@@ -211,7 +224,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
                 model=model,
                 max_output_tokens=self.config.max_output_tokens,
             )
-            raw = await self._request_messages(payload)
+            raw = await self._request_messages(payload, session_id=request.session_id)
             result = AnthropicMessagesCodec.decode(raw)
             return replace(
                 result,
@@ -271,17 +284,29 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             raise DataContractError(f"{self.display_name} model directory has no usable model IDs")
         return replace(raw, models=items)
 
-    async def _request_messages(self, payload: dict[str, object]) -> dict[str, Any]:
+    async def _request_messages(
+        self,
+        payload: dict[str, object],
+        *,
+        session_id: str | None,
+    ) -> dict[str, Any]:
         url = f"{self.config.base_url.rstrip('/')}/messages"
         for attempt in range(2):
             try:
+                headers = {
+                    "x-api-key": self.config.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+                if self._session_header_name is not None:
+                    if session_id is None:
+                        raise DataContractError(
+                            "Model request is missing a session identifier"
+                        )
+                    headers[self._session_header_name] = opaque_model_session_id(session_id)
                 response = await self._client.post(
                     url,
-                    headers={
-                        "x-api-key": self.config.api_key,
-                        "anthropic-version": "2023-06-01",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json=payload,
                 )
             except httpx.TimeoutException as error:
@@ -427,6 +452,7 @@ class OpenCodeGoMonitorJudgmentProvider:
                 json_output=json_output,
                 response_schema_name="monitor_judgment",
                 response_schema=schema if use_response_schema else None,
+                session_id=request.session_id,
             )
             try:
                 response = await self._provider.complete(model_request)
@@ -525,6 +551,7 @@ class OpenCodeGoTradeRetroNarrativeProvider:
                 response = await self._provider.complete(
                     ModelRequest(
                         messages=messages,
+                        session_id=request.session_id,
                         model=self.model,
                         reasoning_mode="thinking",
                         reasoning_effort=self._reasoning_effort,

@@ -231,6 +231,7 @@ class TradeRetroService:
                 try:
                     response = await self._narrative.narrate(
                         TradeRetroNarrativeRequest(
+                            session_id=f"trade-retro:{idempotency_key}",
                             deterministic_facts_json=json.dumps(
                                 {
                                     "period_start": start.isoformat(),

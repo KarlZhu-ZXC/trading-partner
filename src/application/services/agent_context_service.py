@@ -181,6 +181,7 @@ class AgentContextService:
             ModelRequest(
                 messages=tuple(summary_messages),
                 tools=(),
+                session_id=conversation.conversation_id,
             ),
             through_sequence,
         )

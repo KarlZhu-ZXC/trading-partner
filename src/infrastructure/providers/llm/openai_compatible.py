@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from collections.abc import AsyncIterator
@@ -33,6 +34,15 @@ from domain.common.errors import (
 from infrastructure.config.llm import LLMEndpointConfig
 from infrastructure.providers.llm.chat_completions_codec import ChatCompletionsCodec
 from infrastructure.providers.llm.responses_codec import ResponsesCodec
+
+
+def opaque_model_session_id(value: str) -> str:
+    """Return a stable, header-safe correlation ID without exposing domain IDs."""
+
+    normalized = value.strip()
+    if not normalized:
+        raise DataContractError("Model session identifier is empty")
+    return f"tp-{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}"
 
 
 class OpenAICompatibleModelProvider(AgentModelProvider):
@@ -76,6 +86,8 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
         max_output_tokens: int = 8000,
         proxy_url: str | None = None,
         client: httpx.AsyncClient | None = None,
+        session_header_name: str | None = None,
+        default_session_id: str | None = None,
     ) -> None:
         if config is None:
             config = LLMEndpointConfig(
@@ -103,6 +115,8 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
         self._model_catalog: ModelCatalog | None = None
         self._model_catalog_expires_at = 0.0
         self._model_catalog_lock = asyncio.Lock()
+        self._session_header_name = session_header_name
+        self._default_session_id = default_session_id
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         effective = replace(
@@ -139,7 +153,7 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
             )
             path = "/chat/completions"
         started = perf_counter()
-        raw = await self._post(path, payload)
+        raw = await self._post(path, payload, request=effective)
         if self.config.api_style == "responses":
             result = ResponsesCodec.decode(raw)
         else:
@@ -198,10 +212,7 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
                 async with self._client.stream(
                     "POST",
                     url,
-                    headers={
-                        "Authorization": f"Bearer {self.config.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=self._request_headers(effective),
                     json=payload,
                 ) as response:
                     status = response.status_code
@@ -446,22 +457,39 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
             self._model_catalog_expires_at = monotonic() + self._MODEL_CATALOG_TTL_SECONDS
             return catalog
 
-    async def _post(self, path: str, payload: dict[str, object]) -> dict[str, Any]:
-        return await self._request_json("POST", path, payload)
+    async def _post(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        request: ModelRequest | None = None,
+    ) -> dict[str, Any]:
+        return await self._request_json("POST", path, payload, request=request)
+
+    def _request_headers(self, request: ModelRequest | None = None) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        if self._session_header_name is not None:
+            session_id = request.session_id if request is not None else self._default_session_id
+            if session_id is None:
+                raise DataContractError("Model request is missing a session identifier")
+            headers[self._session_header_name] = opaque_model_session_id(session_id)
+        return headers
 
     async def _request_json(
         self,
         method: str,
         path: str,
         payload: dict[str, object] | None = None,
+        *,
+        request: ModelRequest | None = None,
     ) -> dict[str, Any]:
         url = f"{self.config.base_url.rstrip('/')}{path}"
         for attempt in range(2):
             try:
-                headers = {
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                }
+                headers = self._request_headers(request)
                 if payload is None:
                     response = await self._client.request(method, url, headers=headers)
                 else:

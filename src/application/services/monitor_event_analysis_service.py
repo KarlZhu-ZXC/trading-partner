@@ -117,6 +117,7 @@ class MonitorEventAnalysisService:
                     ),
                 },
             ),
+            session_id=monitor.monitor_id,
             tools=(
                 {
                     "type": "function",

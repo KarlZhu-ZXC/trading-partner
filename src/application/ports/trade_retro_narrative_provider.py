@@ -7,6 +7,7 @@ from typing import Protocol
 @dataclass(frozen=True, slots=True)
 class TradeRetroNarrativeRequest:
     deterministic_facts_json: str
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

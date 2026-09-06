@@ -12,6 +12,7 @@ class MonitorJudgmentRequest:
     confirmed_state_json: str
     feature_snapshot_json: str
     allowed_feature_ids: tuple[str, ...]
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

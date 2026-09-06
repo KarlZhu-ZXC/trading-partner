@@ -8,6 +8,7 @@ import pytest
 from application.ports.agent_model_provider import ModelMessage, ModelRequest
 from application.ports.monitor_judgment_provider import MonitorJudgmentRequest
 from application.ports.trade_retro_narrative_provider import TradeRetroNarrativeRequest
+from domain.common.errors import DataContractError
 from infrastructure.config.llm import LLMEndpointConfig
 from infrastructure.providers.llm.opencode_go import (
     OpenCodeGoModelProvider,
@@ -31,9 +32,11 @@ def _config(model: str = "deepseek-v4-flash") -> LLMEndpointConfig:
 @pytest.mark.asyncio
 async def test_opencode_go_routes_models_to_each_documented_protocol() -> None:
     paths: list[str] = []
+    session_headers: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
+        session_headers.append(request.headers["x-opencode-session"])
         payload = json.loads(request.content)
         if request.url.path.endswith("/responses"):
             return httpx.Response(
@@ -72,20 +75,43 @@ async def test_opencode_go_routes_models_to_each_documented_protocol() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     provider = OpenCodeGoModelProvider(_config(), client=client)
     base = (ModelMessage(role="user", content="hello"),)
+    session_id = "agent_conversation_private_123"
 
-    assert (await provider.complete(ModelRequest(messages=base))).text == "deepseek"
     assert (
-        await provider.complete(ModelRequest(messages=base, model="gpt-5.6-luna"))
+        await provider.complete(ModelRequest(messages=base, session_id=session_id))
+    ).text == "deepseek"
+    assert (
+        await provider.complete(
+            ModelRequest(messages=base, model="gpt-5.6-luna", session_id=session_id)
+        )
     ).text == "luna"
     assert (
-        await provider.complete(ModelRequest(messages=base, model="muse-spark-1.2-contributor"))
+        await provider.complete(
+            ModelRequest(
+                messages=base,
+                model="muse-spark-1.2-contributor",
+                session_id=session_id,
+            )
+        )
     ).text == "luna"
     assert (
-        await provider.complete(ModelRequest(messages=base, model="muse-spark-1.3-contributor"))
+        await provider.complete(
+            ModelRequest(
+                messages=base,
+                model="muse-spark-1.3-contributor",
+                session_id=session_id,
+            )
+        )
     ).text == "luna"
-    assert (await provider.complete(ModelRequest(messages=base, model="grok-4.6"))).text == "luna"
     assert (
-        await provider.complete(ModelRequest(messages=base, model="qwen3.8-max"))
+        await provider.complete(
+            ModelRequest(messages=base, model="grok-4.6", session_id=session_id)
+        )
+    ).text == "luna"
+    assert (
+        await provider.complete(
+            ModelRequest(messages=base, model="qwen3.8-max", session_id=session_id)
+        )
     ).text == "qwen"
     assert paths == [
         "/zen/go/v1/chat/completions",
@@ -95,13 +121,62 @@ async def test_opencode_go_routes_models_to_each_documented_protocol() -> None:
         "/zen/go/v1/responses",
         "/zen/go/v1/messages",
     ]
+    assert len(set(session_headers)) == 1
+    assert session_headers[0].startswith("tp-")
+    assert session_headers[0] != session_id
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_requires_a_session_for_model_calls() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("A request without a session must fail before transport")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config(), client=client)
+        with pytest.raises(DataContractError, match="missing a session"):
+            await provider.complete(
+                ModelRequest(messages=(ModelMessage(role="user", content="hello"),))
+            )
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_stream_sends_the_stable_opaque_session_header() -> None:
+    raw_session_id = "agent_conversation_stream_private"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-opencode-session"].startswith("tp-")
+        assert request.headers["x-opencode-session"] != raw_session_id
+        return httpx.Response(
+            200,
+            content=(
+                'data: {"id":"stream_1","model":"deepseek-v4-flash",'
+                '"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config(), client=client)
+        chunks = [
+            item
+            async for item in provider.stream(
+                ModelRequest(
+                    messages=(ModelMessage(role="user", content="hello"),),
+                    session_id=raw_session_id,
+                )
+            )
+        ]
+
+    assert chunks[0].text_delta == "ok"
 
 
 @pytest.mark.asyncio
 async def test_opencode_go_catalog_exposes_directory_models_and_assigns_efforts() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/models")
+        assert request.headers["x-opencode-session"].startswith("tp-")
         return httpx.Response(
             200,
             json={
@@ -168,6 +243,7 @@ async def test_go_new_models_preserve_effort_on_correct_protocol(
             ModelRequest(
                 messages=(ModelMessage(role="user", content="synthetic"),),
                 reasoning_effort=effort,
+                session_id="conversation_protocol_test",
             )
         )
         assert result.text == "ok"
@@ -204,7 +280,10 @@ async def test_opencode_go_routes_unknown_catalog_models_to_chat_completions() -
     )
 
     response = await provider.complete(
-        ModelRequest(messages=(ModelMessage(role="user", content="hello"),))
+        ModelRequest(
+            messages=(ModelMessage(role="user", content="hello"),),
+            session_id="conversation_unknown_model",
+        )
     )
 
     assert response.text == "vision-ready"
@@ -243,7 +322,10 @@ async def test_opencode_go_trade_retro_uses_chat_completions_and_max_reasoning()
     )
 
     response = await provider.narrate(
-        TradeRetroNarrativeRequest(deterministic_facts_json='{"findings":[]}')
+        TradeRetroNarrativeRequest(
+            deterministic_facts_json='{"findings":[]}',
+            session_id="trade-retro:unit-1",
+        )
     )
 
     assert response.provider_name == "opencode_go"
@@ -285,7 +367,10 @@ async def test_opencode_go_trade_retro_repairs_one_invalid_structure() -> None:
     )
 
     response = await provider.narrate(
-        TradeRetroNarrativeRequest(deterministic_facts_json='{"findings":[]}')
+        TradeRetroNarrativeRequest(
+            deterministic_facts_json='{"findings":[]}',
+            session_id="trade-retro:unit-2",
+        )
     )
 
     assert response.summary_markdown == "结构修复成功。"
@@ -328,7 +413,10 @@ async def test_opencode_go_trade_retro_retries_one_transient_unavailable() -> No
     )
 
     response = await provider.narrate(
-        TradeRetroNarrativeRequest(deterministic_facts_json='{"findings":[]}')
+        TradeRetroNarrativeRequest(
+            deterministic_facts_json='{"findings":[]}',
+            session_id="trade-retro:unit-3",
+        )
     )
 
     assert response.summary_markdown == "瞬时故障后恢复。"
@@ -363,7 +451,10 @@ async def test_opencode_go_retries_one_empty_provider_contract_response() -> Non
     provider = OpenCodeGoModelProvider(_config(), client=client)
 
     response = await provider.complete(
-        ModelRequest(messages=(ModelMessage(role="user", content="hello"),))
+        ModelRequest(
+            messages=(ModelMessage(role="user", content="hello"),),
+            session_id="conversation_empty_retry",
+        )
     )
 
     assert response.text == "recovered"
@@ -375,6 +466,7 @@ async def test_opencode_go_retries_one_empty_provider_contract_response() -> Non
 async def test_opencode_zen_uses_its_own_provider_identity_and_base_path() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/zen/v1/responses"
+        assert "x-opencode-session" not in request.headers
         return httpx.Response(
             200,
             json={
@@ -587,6 +679,7 @@ async def test_opencode_go_monitor_returns_bounded_structured_judgment_without_w
             confirmed_state_json="{}",
             feature_snapshot_json='{"sessions_aligned":true}',
             allowed_feature_ids=("sessions_aligned",),
+            session_id="monitor_unit_1",
         )
     )
 
@@ -657,6 +750,7 @@ async def test_opencode_go_monitor_falls_back_to_json_object_when_schema_is_reje
             confirmed_state_json="{}",
             feature_snapshot_json='{"sessions_aligned":true}',
             allowed_feature_ids=("sessions_aligned",),
+            session_id="monitor_unit_2",
         )
     )
 
@@ -717,6 +811,7 @@ async def test_opencode_go_monitor_repairs_invalid_structured_output_once() -> N
             confirmed_state_json="{}",
             feature_snapshot_json='{"sessions_aligned":true}',
             allowed_feature_ids=("sessions_aligned",),
+            session_id="monitor_unit_3",
         )
     )
 
@@ -775,6 +870,7 @@ async def test_opencode_go_monitor_supports_messages_models() -> None:
             confirmed_state_json="{}",
             feature_snapshot_json='{"sessions_aligned":true}',
             allowed_feature_ids=("sessions_aligned",),
+            session_id="monitor_unit_4",
         )
     )
 
