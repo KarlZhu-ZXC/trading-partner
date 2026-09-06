@@ -193,7 +193,11 @@ accepted Contributor prompt/completion training through
 `EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true`; `xhigh` is not the production
 default because the sanitized comparison was slower and over-propagated an EXIT
 action. The configured protocol router must send Muse Spark 1.3 and Grok 4.6 through
-Responses rather than Chat Completions. The model draft compares the prior successful revision and covers USER
+Responses rather than Chat Completions. Every OpenCode Go HTTP request carries an
+`x-opencode-session` derived as an opaque hash of one stable conversation or workflow
+identity. Tool rounds, retries, and schema repair must reuse it; raw Conversation,
+Note, Monitor, and idempotency IDs must never leave the process in that header. The
+model draft compares the prior successful revision and covers USER
 `UPSIDE`, `SIDEWAYS`, `PULLBACK`, and `INVALIDATION`. It cannot confirm a Thesis,
 Decision, Plan, Monitor, position, or order. Console `Review as Decision` only
 prefills the existing Decision confirmation dialog with the exact note revision.
@@ -869,7 +873,10 @@ Studio `deepseek-v4-flash-0731` through Chat Completions with JSON Object output
 DeepSeek and OpenCode Go subscription endpoints can also be selected through
 `LLM_PROVIDER=deepseek|opencode_go`. OpenCode Go routes models through the documented
 Responses, Chat Completions, or Messages protocol and never reads OpenCode's local
-`auth.json`; its API key stays in the Trading Partner secret configuration.
+`auth.json`; its API key stays in the Trading Partner secret configuration. The Go
+adapter sends the required opaque stable `x-opencode-session` on model calls, streams,
+and directory requests; the independent Zen adapter does not inherit that Go-specific
+header.
 Only the Bailian adapter may use bounded web search for current macro-event context; search usage and
 up to ten source URLs are persisted, while prices, positions, levels, returns, and
 quantity facts remain deterministic-only. Explanations are validated as Chinese.

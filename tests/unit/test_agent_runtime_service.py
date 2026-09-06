@@ -380,6 +380,7 @@ def test_context_uses_latest_tail_and_merges_existing_summary() -> None:
     assert work is not None
     request, _through = work
     assert any("early-goal" in (item.content or "") for item in request.messages)
+    assert request.session_id == conversation.conversation_id
 
 
 @pytest.mark.asyncio
@@ -419,6 +420,7 @@ async def test_agent_runtime_persists_plain_read_only_turn() -> None:
         "tp_propose",
         "tp_prepare_action",
     }
+    assert model.requests[0].session_id == conversation.conversation_id
     assert len(repository.turns) == 1
     turn = next(iter(repository.turns.values()))
     assert result.turn_id == turn.turn_id

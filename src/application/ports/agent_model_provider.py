@@ -111,6 +111,10 @@ class ModelRequest:
 
     messages: Sequence[ModelMessage | Mapping[str, Any]] = ()
     tools: Sequence[ModelTool | Mapping[str, Any]] = ()
+    # Provider-neutral correlation key for one durable conversation/workflow.
+    # Adapters may transform it before transport; it must never be persisted as
+    # an upstream credential or exposed in user-facing diagnostics.
+    session_id: str | None = None
     model: str | None = None
     reasoning_mode: Literal["none", "effort", "thinking"] = "none"
     reasoning_effort: str | None = None

@@ -158,6 +158,7 @@ class ExternalNoteInterpretationService:
         )
         request = ModelRequest(
             messages=base_messages,
+            session_id=effective_revision.note_id,
             tools=(
                 {
                     "type": "function",

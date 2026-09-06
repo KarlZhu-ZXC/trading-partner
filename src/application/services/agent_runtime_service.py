@@ -1158,6 +1158,7 @@ class AgentRuntimeService:
             model_request = ModelRequest(
                 messages=tuple(messages),
                 tools=model_tools,
+                session_id=conversation.conversation_id,
                 model=selected_model,
                 reasoning_effort=request.reasoning_effort,
                 native_web_search=self._native_web_search_enabled(model_provider),
@@ -1482,6 +1483,7 @@ class AgentRuntimeService:
                     ModelRequest(
                         messages=(*messages, repair_message),
                         tools=(),
+                        session_id=conversation.conversation_id,
                         model=selected_model,
                         reasoning_effort=request.reasoning_effort,
                     )

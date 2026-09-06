@@ -611,7 +611,8 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 首次结构不合约时只做一次不改变事实的格式修复。百炼 `qwen3.8-max` Responses API
 作为 fallback，且不改变 Console Agent 的默认模型。DeepSeek 与 OpenCode Go subscription Provider 也可通过
 `LLM_PROVIDER=deepseek|opencode_go` 切换。OpenCode Go 根据模型使用 Responses、
-Chat Completions 或 Messages 协议，不提供原生 Web Search。Monitor 默认使用
+Chat Completions 或 Messages 协议，并在每次请求中发送由稳定工作流身份不可逆散列得到的
+`x-opencode-session`；重试与结构修复复用该值，不提供原生 Web Search。Monitor 默认使用
 `high` reasoning effort。启用 `BAILIAN_WEB_SEARCH_ENABLED` 后，百炼 Responses fallback 可按需调用
 百炼内置 `web_search` 补充近期宏观事件；是否调用及最多十个来源 URL 会持久化，但搜索
 不得覆盖确定性行情、仓位、点位、收益率或数量事实。结果只能来自封闭的

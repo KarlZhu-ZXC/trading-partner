@@ -161,6 +161,7 @@ class MonitorJudgmentService:
                     features, separators=(",", ":"), sort_keys=True
                 ),
                 allowed_feature_ids=allowed_ids,
+                session_id=monitor.monitor_id,
             )
             try:
                 raw = await self._provider.judge(judgment_request)

@@ -117,6 +117,12 @@ entitlement、地域限制与上游故障会保留为 typed Provider error，
 不会静默切换成行情事实或安静规则。该适配不会读取 `~/.local/share/opencode/auth.json`，
 不会把任一 API key 发给浏览器，也不发布原生 Web Search。
 
+所有 OpenCode Go HTTP 请求（Chat Completions、Responses、Messages、流式响应与模型
+目录）都会携带 `x-opencode-session`。Agent 对话使用 Conversation ID，笔记解释/升级复核
+使用 Note ID，Monitor 判断使用 Monitor ID，Trade Retro 使用幂等键作为稳定工作流身份；
+适配器发送前统一做不可逆散列，所以这些内部 ID 不会原样离开进程。同一工具循环、重试或
+结构修复复用同一值，不同工作流不会有意共用会话。该要求仅适用于 Go，Zen 请求不附加此头。
+
 Journal 的 `Refresh Sources` 只读扫描本机 Moomoo 缓存并快速返回；新 revision 的私有正文会在
 后台发送给单独配置的 OpenCode Go `qwen3.8-flash`，使用 `max` 推理强度与
 120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
