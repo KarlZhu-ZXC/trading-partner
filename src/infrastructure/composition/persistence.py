@@ -11,7 +11,6 @@ from application.ports.account_snapshot_repository import AccountSnapshotReposit
 from application.ports.account_transaction_repository import AccountTransactionRepository
 from application.ports.activity_annotation_repository import ActivityAnnotationRepository
 from application.ports.agent_conversation_repository import AgentConversationRepository
-from application.ports.agent_handoff_repository import AgentHandoffRepository
 from application.ports.agent_pending_action_repository import AgentPendingActionRepository
 from application.ports.agent_preferences_repository import AgentPreferencesRepository
 from application.ports.behavior_review_repository import BehaviorReviewRepository
@@ -26,9 +25,6 @@ from application.ports.daily_equity_repository import (
 )
 from application.ports.external_note_repository import ExternalNoteRepository
 from application.ports.external_note_review_repository import ExternalNoteReviewRepository
-from application.ports.historical_validation_artifact_repository import (
-    HistoricalValidationArtifactRepository,
-)
 from application.ports.id_generator import IdGenerator
 from application.ports.industry_metric_repository import IndustryMetricRepository
 from application.ports.judgment_scorecard_repository import JudgmentScorecardRepository
@@ -40,9 +36,6 @@ from application.ports.secret_redactor import SecretRedactor
 from application.ports.trade_cycle_override_repository import TradeCycleOverrideRepository
 from application.ports.trade_retro_repository import TradeRetroRepository
 from application.ports.workflow_run_repository import WorkflowRunRepository
-from infrastructure.artifacts.historical_validation import (
-    FileHistoricalValidationArtifactRepository,
-)
 from infrastructure.config.settings import AppSettings
 from infrastructure.persistence.account_snapshot_repository import (
     SqlAlchemyAccountSnapshotRepository,
@@ -56,7 +49,6 @@ from infrastructure.persistence.activity_annotation_repository import (
 from infrastructure.persistence.agent_conversation_repository import (
     SqlAlchemyAgentConversationRepository,
 )
-from infrastructure.persistence.agent_handoff_repository import SqlAlchemyAgentHandoffRepository
 from infrastructure.persistence.agent_pending_action_repository import (
     SqlAlchemyAgentPendingActionRepository,
 )
@@ -133,13 +125,11 @@ class PersistenceInfrastructure:
     daily_equity: DailyEquityRepository
     journal_activation: JournalActivationRepository
     agent_conversations: AgentConversationRepository
-    agent_handoffs: AgentHandoffRepository
     agent_pending_actions: AgentPendingActionRepository
     agent_preferences: AgentPreferencesRepository
     operational_jobs: OperationalJobRepository
     broker_orders: BrokerOrderRepository
     workflow_runs: WorkflowRunRepository
-    historical_validation_artifacts: HistoricalValidationArtifactRepository
     industry_metrics: IndustryMetricRepository
     post_market_sync_runs: PostMarketSyncRunRepository
     trade_retro: TradeRetroRepository
@@ -170,6 +160,18 @@ def build_persistence_infrastructure(
     """Create one engine and every persistence adapter owned by the process."""
 
     engine = create_engine_from_url(settings.database_url)
+    database = SqlAlchemyDatabase(engine)
+    # The test suite intentionally builds lightweight empty SQLite databases
+    # for constructor-only wiring checks. Real development/production startup
+    # must verify the immutable schema identity before any Provider-state or
+    # business repository can read from it; migrations remain an explicit
+    # initialize/maintenance operation.
+    if settings.app_env.value != "test":
+        try:
+            database.check_connection()
+        except Exception:
+            database.close()
+            raise
     embedding_provider = build_local_embedding_provider(settings)
 
     def research_uow_factory() -> ResearchUnitOfWork:
@@ -193,7 +195,7 @@ def build_persistence_infrastructure(
     daily_equity = SqlAlchemyDailyEquityRepository(engine)
     return PersistenceInfrastructure(
         engine=engine,
-        database=SqlAlchemyDatabase(engine),
+        database=database,
         account_snapshots=SqlAlchemyAccountSnapshotRepository(engine),
         account_transactions=SqlAlchemyAccountTransactionRepository(engine),
         activity_annotations=SqlAlchemyActivityAnnotationRepository(engine),
@@ -202,15 +204,11 @@ def build_persistence_infrastructure(
         daily_equity=daily_equity,
         journal_activation=daily_equity,
         agent_conversations=SqlAlchemyAgentConversationRepository(engine),
-        agent_handoffs=SqlAlchemyAgentHandoffRepository(engine),
         agent_pending_actions=SqlAlchemyAgentPendingActionRepository(engine),
         agent_preferences=SqlAlchemyAgentPreferencesRepository(engine),
         operational_jobs=SqlAlchemyOperationalJobRepository(engine),
         broker_orders=SqlAlchemyBrokerOrderRepository(engine),
         workflow_runs=SqlAlchemyWorkflowRunRepository(engine),
-        historical_validation_artifacts=FileHistoricalValidationArtifactRepository(
-            settings.paths.historical_validation
-        ),
         industry_metrics=SqlAlchemyIndustryMetricRepository(engine),
         post_market_sync_runs=SqlAlchemyPostMarketSyncRunRepository(engine),
         trade_retro=SqlAlchemyTradeRetroRepository(engine),

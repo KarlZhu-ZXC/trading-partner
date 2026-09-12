@@ -21,8 +21,8 @@ Provider 调用失败时，Run 详情会展示结构化诊断，包括 Provider�
 Research、Monitor、Portfolio 与 Journal 会额外注册 navigation-only 页面上下文，
 用于让右侧栏理解当前所选对象；回复以安全的标题、列表、代码、表格和实体链接排版。浏览器刷新后，
 右侧栏会恢复 durable Agent Turn 状态并轮询仍在运行的回合；已展示但丢失一次性 token 的 Pending
-Action 必须由用户点击 `Resume confirmation` 重新换发，系统不会自动确认。Telegram handoff 与
-会话归档也可直接在右侧栏显式触发。默认 Bailian 端点启用原生 Web Search 与正文抽取，
+Action 必须由用户点击 `Resume confirmation` 重新换发，系统不会自动确认。会话归档也可直接在
+右侧栏显式触发。默认 Bailian 端点启用原生 Web Search 与正文抽取，
 输入栏可依次选择 Provider、该 Provider 实时目录中的文本模型及对应思考强度；目录由后端
 凭据代拉并缓存，浏览器不会收到 API key 或完整 endpoint，拉取失败时回退配置默认模型。
 每次使用都会保留搜索回执和来源 URL；网页背景不能覆盖 Trading Partner 返回的价格、持仓、

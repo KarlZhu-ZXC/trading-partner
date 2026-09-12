@@ -58,7 +58,7 @@ def test_agent_prompt_keeps_the_catalogs_core_safety_contract() -> None:
     assert "mode=prepare_action" in AGENT_SYSTEM_PROMPT
     assert "mode=propose" in AGENT_SYSTEM_PROMPT
     assert "Web Search" in AGENT_SYSTEM_PROMPT
-    assert "investment_case_read/attention" in AGENT_SYSTEM_PROMPT
+    assert "research_get/attention" in AGENT_SYSTEM_PROMPT
     assert "不能替代完整 Inbox" in AGENT_SYSTEM_PROMPT
     assert "view_get/inbox" in AGENT_SYSTEM_PROMPT
     assert "view_get/review" in AGENT_SYSTEM_PROMPT

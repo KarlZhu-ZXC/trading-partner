@@ -23,7 +23,6 @@ from domain.agent.enums import (
 )
 from domain.agent.models import (
     AgentChannelBinding,
-    AgentChannelCursor,
     AgentConversation,
     AgentMessage,
     AgentPendingAction,
@@ -31,13 +30,11 @@ from domain.agent.models import (
     AgentTurn,
 )
 from domain.common.errors import DataContractError, IdempotencyConflict, PersistenceError
-from domain.common.ids import EntityIdPrefix
 from infrastructure.persistence.agent_pending_action_repository import (
     SqlAlchemyAgentPendingActionRepository,
 )
 from infrastructure.persistence.orm import (
     AgentChannelBindingRow,
-    AgentChannelCursorRow,
     AgentConversationRow,
     AgentMessageRow,
     AgentToolReceiptRow,
@@ -153,17 +150,6 @@ def _receipt(row: AgentToolReceiptRow) -> AgentToolReceipt:
         warning_codes=tuple(row.warning_codes),
         error_codes=tuple(row.error_codes),
         created_at=datetime.fromisoformat(row.created_at),
-    )
-
-
-def _cursor(row: AgentChannelCursorRow) -> AgentChannelCursor:
-    return AgentChannelCursor(
-        cursor_id=row.cursor_id,
-        channel=AgentChannel(row.channel),
-        cursor_key=row.cursor_key,
-        last_update_id=row.last_update_id,
-        version=row.version,
-        updated_at=datetime.fromisoformat(row.updated_at),
     )
 
 
@@ -815,107 +801,6 @@ class SqlAlchemyAgentConversationRepository(AgentConversationRepository):
         if value is None:
             raise PersistenceError("Agent conversation was not found", retryable=False)
         return value
-
-    def get_cursor(
-        self,
-        channel: AgentChannel,
-        cursor_key: str = "default",
-    ) -> AgentChannelCursor | None:
-        if not isinstance(channel, AgentChannel):
-            raise DataContractError("channel is invalid")
-        with Session(self._engine) as session:
-            row = session.scalar(
-                select(AgentChannelCursorRow).where(
-                    AgentChannelCursorRow.channel == channel.value,
-                    AgentChannelCursorRow.cursor_key == cursor_key,
-                )
-            )
-            return None if row is None else _cursor(row)
-
-    def advance_cursor(
-        self,
-        channel: AgentChannel,
-        cursor_key: str = "default",
-        update_id: int | None = None,
-        expected_update_id: int | None = None,
-        *,
-        next_update_id: int | None = None,
-        now: datetime | None = None,
-    ) -> AgentChannelCursor:
-        if not isinstance(channel, AgentChannel):
-            raise DataContractError("channel is invalid")
-        if update_id is None:
-            update_id = next_update_id
-        if type(update_id) is not int or update_id < -1:
-            raise DataContractError("update_id must be an integer >= -1")
-        if expected_update_id is not None and (
-            type(expected_update_id) is not int or expected_update_id < -1
-        ):
-            raise DataContractError("expected_update_id must be an integer >= -1")
-        timestamp = _now(now)
-        current = self.get_cursor(channel, cursor_key)
-        if current is None:
-            if expected_update_id not in (None, -1):
-                raise PersistenceError(
-                    "Agent channel cursor version conflict",
-                    retryable=False,
-                )
-            cursor_id = self._ids.new(EntityIdPrefix.AGENT_CURSOR)
-            value = AgentChannelCursor(
-                cursor_id=cursor_id,
-                channel=channel,
-                cursor_key=cursor_key,
-                last_update_id=update_id,
-                updated_at=timestamp,
-            )
-            try:
-                with Session(self._engine, expire_on_commit=False) as session, session.begin():
-                    session.add(
-                        AgentChannelCursorRow(
-                            cursor_id=value.cursor_id,
-                            channel=value.channel.value,
-                            cursor_key=value.cursor_key,
-                            last_update_id=value.last_update_id,
-                            version=value.version,
-                            updated_at=value.updated_at.isoformat(),
-                        )
-                    )
-                return value
-            except IntegrityError as exc:
-                raise PersistenceError(
-                    "Agent channel cursor was created concurrently",
-                    retryable=True,
-                ) from exc
-        if expected_update_id is not None and expected_update_id != current.last_update_id:
-            raise PersistenceError("Agent channel cursor version conflict", retryable=False)
-        if update_id < current.last_update_id:
-            raise PersistenceError(
-                "Agent channel cursor cannot move backwards",
-                retryable=False,
-            )
-        if update_id == current.last_update_id:
-            return current
-        with Session(self._engine) as session:
-            result = session.execute(
-                update(AgentChannelCursorRow)
-                .where(
-                    AgentChannelCursorRow.cursor_id == current.cursor_id,
-                    AgentChannelCursorRow.version == current.version,
-                    AgentChannelCursorRow.last_update_id == current.last_update_id,
-                )
-                .values(
-                    last_update_id=update_id,
-                    version=current.version + 1,
-                    updated_at=timestamp.isoformat(),
-                )
-            )
-            if result.rowcount != 1:  # type: ignore[attr-defined]
-                session.rollback()
-                raise PersistenceError("Agent channel cursor version conflict", retryable=False)
-            session.commit()
-        updated = self.get_cursor(channel, cursor_key)
-        assert updated is not None
-        return updated
 
     # Pending actions share the same engine but remain a separate protocol so
     # Agent-A cannot accidentally acquire an execution port.

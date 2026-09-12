@@ -245,7 +245,6 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
         horizon: str | None = None,
         currency: str | None = None,
         classifications: tuple[str, ...] = (),
-        minimum_sample_size: int = 3,
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> dict[str, Any]:
@@ -263,7 +262,6 @@ def build_portfolio_adapters(container: ApplicationContainer) -> SimpleNamespace
                     "horizon": horizon,
                     "currency": currency,
                     "classifications": classifications,
-                    "minimum_sample_size": minimum_sample_size,
                     "start": start,
                     "end": end,
                 }

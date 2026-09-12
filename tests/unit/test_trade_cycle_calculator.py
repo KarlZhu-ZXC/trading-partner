@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from application.services.trade_cycle_calculator import TradeCycleCalculator
 from domain.attribution.models import PositionBasisCheckpoint
+from domain.behavior.calculator import BehaviorSummaryCalculator
 from domain.common.enums import VendorId
 from domain.portfolio.enums import (
     AccountActivityCoverageStatus,
@@ -74,6 +75,7 @@ def test_groups_scale_in_reduce_close_and_reentry_with_fifo_pnl() -> None:
     assert first.opening_count == 1
     assert first.add_count == 1
     assert first.reduce_count == 2
+    assert first.current_average_cost is None
     assert first.ending_quantity == 0
     assert first.gross_realized_pnl == Decimal("320")
     assert first.net_realized_pnl == Decimal("317.0")
@@ -82,6 +84,29 @@ def test_groups_scale_in_reduce_close_and_reentry_with_fifo_pnl() -> None:
     assert newest.gross_realized_pnl == Decimal("20")
     assert newest.net_realized_pnl == Decimal("19.6")
     assert result.status is TradeCycleQuality.COMPLETE
+
+
+def test_behavior_return_payoff_uses_peak_held_cost_after_partial_sale_and_rebuy() -> None:
+    projection = _calculate(
+        _trade("win-open", AccountTransactionSide.BUY, "10", "100", "1", day=1),
+        _trade("win-reduce", AccountTransactionSide.SELL, "5", "120", "1", day=2),
+        _trade("win-rebuy", AccountTransactionSide.BUY, "5", "100", "1", day=3),
+        _trade("win-close", AccountTransactionSide.SELL, "10", "120", "1", day=4),
+        _trade("loss-open", AccountTransactionSide.BUY, "10", "200", "1", day=5),
+        _trade("loss-close", AccountTransactionSide.SELL, "10", "190", "1", day=6),
+    )
+    loss, win = projection.cycles
+    assert win.maximum_deployed_capital == Decimal("1000")  # Total purchases were 1500.
+    assert win.net_realized_pnl == Decimal("296")  # Includes all four trade fees.
+    assert loss.maximum_deployed_capital == Decimal("2000")
+    assert loss.net_realized_pnl == Decimal("-102")
+
+    summary = BehaviorSummaryCalculator().calculate(projection.cycles, ())
+
+    assert summary.avg_win_return.value == Decimal("0.296")
+    assert summary.avg_loss_return.value == Decimal("-0.051")
+    assert summary.return_payoff_ratio.value == Decimal("0.296") / Decimal("0.051")
+    assert summary.payoff_ratio.value == Decimal("296") / Decimal("102")
 
 
 def test_keeps_open_cycles_separate_by_account_and_currency() -> None:
@@ -263,3 +288,35 @@ def test_basis_checkpoint_rebases_open_cycle_without_counting_import_as_trade() 
     assert cycle.gross_realized_pnl == Decimal("120")
     assert cycle.net_realized_pnl == Decimal("116")
     assert cycle.maximum_deployed_capital == Decimal("900")
+    assert cycle.current_average_cost == Decimal("90")
+
+
+def test_current_average_cost_tracks_remaining_fifo_lots_without_fees() -> None:
+    from application.dto.account_transactions import TradeCycleDTO
+
+    buys = (
+        _trade("open", AccountTransactionSide.BUY, "10", "100", None, day=1),
+        _trade("add", AccountTransactionSide.BUY, "10", "120", "20", day=2),
+    )
+    assert _calculate(*buys).cycles[0].current_average_cost == Decimal("110")
+    reduced = _calculate(
+        *buys,
+        _trade("reduce", AccountTransactionSide.SELL, "15", "130", "10", day=3),
+    ).cycles[0]
+    assert reduced.current_average_cost == Decimal("120")
+    assert reduced.ending_quantity == Decimal("5")
+    payload = TradeCycleDTO.from_domain(reduced).model_dump(mode="json")
+    assert payload["current_average_cost"] == "120"
+    readded = _calculate(
+        *buys,
+        _trade("reduce", AccountTransactionSide.SELL, "15", "130", "10", day=3),
+        _trade("readd", AccountTransactionSide.BUY, "5", "140", "10", day=4),
+    ).cycles[0]
+    assert readded.current_average_cost == Decimal("130")
+
+
+def test_current_average_cost_is_unavailable_for_unresolved_cost() -> None:
+    cycle = _calculate(
+        _trade("unknown", AccountTransactionSide.BUY, "10", None, "0", day=1),
+    ).cycles[0]
+    assert cycle.current_average_cost is None

@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+runtime.env
+runtime.env.*
 
 # Python
 __pycache__/
@@ -33,6 +35,7 @@ data/*.db
 data/*.db-*
 data/secrets/
 data/locks/
+data/state/
 data/artifacts/
 data/automation/
 data/audits/
@@ -66,3 +69,4 @@ temp/
 docs/archive
 docs/progress
 docs/design
+/data/console/

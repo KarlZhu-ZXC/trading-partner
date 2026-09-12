@@ -172,7 +172,7 @@ async def test_agent_runtime_reads_durable_positions_and_confirms_research_write
                             "read_positions",
                             "tp_read",
                             {
-                                "capability": "account_get",
+                                "capability": "portfolio_get",
                                 "operation": "positions",
                                 "arguments": {"snapshot_id": snapshot.snapshot_id},
                             },
@@ -315,7 +315,7 @@ async def test_agent_runtime_reads_durable_positions_and_confirms_research_write
             limit=20,
         )
         assert len(receipts) == 1
-        assert receipts[0].capability == "account_get"
+        assert receipts[0].capability == "portfolio_get"
         assert receipts[0].operation == "positions"
     finally:
         await container.aclose()

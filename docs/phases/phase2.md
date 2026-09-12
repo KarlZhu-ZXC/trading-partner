@@ -2,7 +2,7 @@
 
 > Status: Watchlist completed 2026-07-18; Risk, Monitoring, and Technical Engine v2 completed 2026-07-20  
 > Design version: Phase 2 v4  
-> Public MCP surface: 28 compact tools; the former 52-tool rollback profile is removed.
+> Public MCP surface: 24 compact tools; the former 52-tool rollback profile is removed.
 > Phase 2 terminal migration: `0013_phase2c_monitoring`; repository head is
 > `0028_provider_route_history`.
 > Upstream source: exactly one of `MOOMOO` or `MANUAL_CSV`
@@ -403,7 +403,7 @@ the user explicitly requests a real add/remove.
 Phase 2 remains accepted only while all of the following are proven:
 
 - Watchlist, Risk, Monitoring, and Technical operations remain inside the current
-  28-tool public surface;
+  24-tool public surface;
 - Moomoo and Manual CSV satisfy the same source contract;
 - database survives restart and preserves inactive membership history;
 - refresh is atomic and stale fallback is explicit;
@@ -725,7 +725,7 @@ signals, strategy scoring, parameter optimization, backtests, and orders remain
 outside Phase 2D.
 
 Current acceptance covers standard indicators, disclosed structure output, PNG
-rendering, MCP registration, bootstrap wiring, and the current 28-tool inventory.
+rendering, MCP registration, bootstrap wiring, and the current 24-tool inventory.
 
 ## 16. Outside the Phase 2 boundary
 
@@ -740,3 +740,9 @@ crypto, Forex/metals, and futures research coverage
 Trade Plans and position sizing
 order writes
 ```
+
+
+Telegram Monitor 数据中断/恢复卡按实际受影响的规则标的命名，不默认使用监控主标的。
+局部不可用须说明其他规则仍正常计算，并列出有界规则说明；时效失败显示数据年龄、规则
+时效上限和事实时间。健康主标的报价不作为失效辅助标的的旧报价展示。恢复卡仅声明本次
+恢复的规则，仍有其他不可用规则时须明确披露；这些展示调整不改变状态转换或通知频率。

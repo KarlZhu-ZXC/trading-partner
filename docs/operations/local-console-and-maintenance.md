@@ -5,7 +5,7 @@
 控制台完全在本机运行，API 只允许绑定 `127.0.0.1` 或 `localhost`。普通页面读取不调用
 Provider 或 LLM；只有用户显式运行 Agent、启用复合判断的 Monitor、Observation 分析等入口
 才调用配置好的服务端模型。它不是只读看板：用户可以主动运行到期 Monitor、账户/交易同步、收盘后任务、通知、
-备份和缓存清理，也可以从 MCP 工作台调用全部 28 个公开工具。它不会在页面加载时隐式
+备份和缓存清理，也可以从 MCP 工作台调用全部 24 个公开工具。它不会在页面加载时隐式
 访问 Provider，也不提供订单能力。
 
 终端一：
@@ -43,13 +43,10 @@ uv run trading-partner-agent console status
 uv run trading-partner-agent console restart
 uv run trading-partner-agent console uninstall
 
-# 同时管理 Console 与已配置的 Telegram Agent
-uv run trading-partner-agent all install
-uv run trading-partner-agent all status
 ```
 
 `status` 只报告 `installed`、`loaded`、`running`、`pid`、`start_time` 和
-`last_exit`。`restart` 明确使用 `launchctl kickstart -k`。Telegram 的持久偏好通过
+`last_exit`。`restart` 明确使用 `launchctl kickstart -k`。Agent 的持久偏好通过
 `/preferences` 读取；写入必须显式携带 `version`、`idempotency_key` 和
 `authorization_note`，且仅允许语言、回答密度、来源代码、风险风格和默认图表等
 presentation 字段。Web Search 默认开启，不提供偏好开关：所有 Agent 模型通过私有
@@ -90,8 +87,8 @@ OpenCode Zen 与 Go 在 Console 中是两个独立 Provider，拥有不同的模
 ```dotenv
 OPENCODE_API_KEY=
 OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
-OPENCODE_GO_MODEL=deepseek-v4-flash
-EXTERNAL_NOTE_ANALYSIS_MODEL=qwen3.8-flash
+OPENCODE_GO_MODEL=deepseek-flash
+EXTERNAL_NOTE_ANALYSIS_MODEL=deepseek-flash
 EXTERNAL_NOTE_ANALYSIS_TIMEOUT_SECONDS=120
 OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
 OPENCODE_ZEN_MODEL=gpt-5.6-luna
@@ -124,11 +121,27 @@ entitlement、地域限制与上游故障会保留为 typed Provider error，
 结构修复复用同一值，不同工作流不会有意共用会话。该要求仅适用于 Go，Zen 请求不附加此头。
 
 Journal 的 `Refresh Sources` 只读扫描本机 Moomoo 缓存并快速返回；新 revision 的私有正文会在
-后台发送给单独配置的 OpenCode Go `qwen3.8-flash`，使用 `max` 推理强度与
+后台发送给单独配置的 OpenCode Go `deepseek-flash`（DeepSeek V4.1 Flash），使用 `max` 推理强度与
 120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
 创建 Monitor 或授权订单。未署名段落确定性视为本人观点，明确姓名前缀保留为外部观点。
 
-升级复核模型独立配置。当前所有者已接受 Contributor 训练条款时，可使用：
+当前主调用统一使用 `deepseek-flash / max`：两层笔记处理、Monitor 综合判断和事件解释、
+Trade Retro，以及 Console Agent 默认模型。设置 `LLM_PROVIDER=opencode_go` 后，Monitor、
+事件解释、复盘与 Agent 复用 `OPENCODE_GO_MODEL`；笔记的两个模型字段独立配置。
+Go 的 Chat Completions 与 Responses 请求不发送客户端输出 token 上限，包括服务内原有的
+384/5000/8000 预算；普通调用、流式和重试策略一致。平台自身限制、超时与输出结构校验保留。
+Messages 协议仍保留其必需的 `max_tokens`；Zen 和其他 Provider 的预算不变。
+Console 会保留浏览器中主动选择的 Provider/模型；默认值更新不覆盖已有选择，需在模型菜单
+选择 `opencode_go` → `deepseek-flash` 才会改变该浏览器的既有选择。
+
+升级复核默认配置：
+
+```dotenv
+EXTERNAL_NOTE_REVIEW_MODEL=deepseek-flash
+EXTERNAL_NOTE_REVIEW_REASONING_EFFORT=max
+```
+
+Contributor 是可选替代模型。所有者明确接受训练条款时，才可使用：
 
 ```dotenv
 EXTERNAL_NOTE_REVIEW_MODEL=muse-spark-1.3-contributor
@@ -136,13 +149,15 @@ EXTERNAL_NOTE_REVIEW_REASONING_EFFORT=high
 EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true
 ```
 
-`high` 是当前生产档位。Muse 1.3 的模型菜单也提供 `xhigh`，选定档位原样发送到
+`high` 是 Muse 1.3 的推荐档位。Muse 1.3 的模型菜单也提供 `xhigh`，选定档位原样发送到
 Responses API。当前 Go 路由拒绝 `reasoning.effort=max`（HTTP 400），因此菜单不发布
 该档位，也不把它静默映射成 `xhigh`；待上游支持后再更新能力目录。
 早期单例比较中 `xhigh` 更慢且出现 PULLBACK/EXIT 分类差异，该结果不代表完整质量排名。
 OpenCode Go 的 `omen-alpha` 从实时模型目录发现，显式使用 Chat Completions 路由，
 可在 Agent 模型菜单选择，也可作为独立配置的 review model；接入本身不会切换生产模型。
 关闭 opt-in 或将其遗漏会在配置阶段 fail closed，不会静默把私人正文发送给 Contributor。
+升级复核的结构错误最多修复一次；忠实度守卫拒绝的时间、数字或行动条件立即失败，
+保留精确错误码，不进入结构修复重发。失败草稿不被采纳；复核任务数不等于模型请求数。
 
 该入口现已扩展为 provider-neutral `Refresh Sources`。可用
 `uv run trading-partner-observation-sync` 同步全部配置来源，或通过 `--source MOOMOO_NOTE`
@@ -211,27 +226,6 @@ function call 及其参数 JSON Schema，Responses 路由优先发送 strict JSO
 闭合枚举、必填字段、长度、数量与证据校验；不合约输出只允许一次 structure-only 修复，
 不能从自由文本猜测或补造判断。
 
-### Telegram Agent 长轮询（可选）
-
-Telegram Agent 对入站聊天是独立 opt-in：在通用 `LLM_*` 端点就绪后设置
-`TELEGRAM_AGENT_ENABLED=true`，并复用同一 Bot 的数字 `TELEGRAM_CHAT_ID` allowlist。
-负数群组 chat 还必须设置数字 `TELEGRAM_AGENT_USER_ID`；正数私聊默认只接受该 chat 对应
-的用户。陌生 chat 或陌生用户不会调用模型、工具或确认 gateway。
-
-```bash
-uv run trading-partner-agent telegram run
-uv run trading-partner-agent telegram status
-uv run trading-partner-agent telegram install
-uv run trading-partner-agent telegram uninstall
-```
-
-陌生 chat 静默忽略；Agent cursor 与消息回执持久化，Monitor/Agenda/SGOV Outbox
-仍由原有通知 sender 独立处理。Telegram Agent 的 assistant marker 在发消息前写入，
-重启时不重复调用模型或重发已标记回答，但发送前崩溃窗口可能漏发（at-most-once）。
-Pending Action 卡片只携带 `c:<opaque-token>` / `r:<opaque-token>`（不含动作参数）；回调
-再次点击只返回已处理，不会重复执行。若 assistant marker 已落盘而回答或动作卡发送前
-进程崩溃，重放可能缺少该回复/卡片，但不会再次调用模型或重放确认动作。
-
 ### 受保护的局域网访问（可选）
 
 需要从同一可信局域网中的手机或另一台电脑访问时，后端仍保持在
@@ -269,7 +263,7 @@ uv run trading-partner-agent console install --lan
 绑定 LAN 地址。可用 `--lan-port 3001` 选择其他端口。
 
 页面包括：总览、全部
-研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、28 个 MCP 能力、持久化账户、
+研究档案/Thesis、Journal、Judgment Scorecard、Catalyst Agenda、Trade Retro、Monitor 定义/Run/事件、24 个 MCP 能力、持久化账户、
 同步/OAuth/通知/数据库/保留策略。
 
 总览 Review Queue 是内部持久化决策闭环，不增加公开 MCP 工具。Acknowledge 可选填期限；
@@ -279,7 +273,7 @@ version、idempotency key 和用户授权说明。只有成功完成的 durable 
 
 Research 页面使用研究标的索引和单个研究档案工作区：默认包含已归档研究档案，并展示所选研究标的的
 Thesis、当前版本、假设、失效条件、开放问题、Trade Plan 与待审候选。读取只通过现有
-`investment_case_read/query` 与 `research_judgment_get/state` 聚合，不会请求行情 Provider。
+`research_get/query` 与 `research_get/state` 聚合，不会请求行情 Provider。
 用户可以创建、编辑或归档研究档案；研究档案编辑只修改标题、摘要、标签和关联研究档案。Thesis
 修改始终先产生候选，再由用户显式确认或拒绝，不能覆盖已确认 revision。单个研究档案的研究
 状态读取失败时，该研究档案仍保留并显示局部错误，不会让其他研究档案从页面消失。
@@ -378,7 +372,7 @@ Trade Plan 或研究记录的确认。缓存删除另有二次确认；Console �
 确认门禁的 Schwab 下单只存在于 `broker_order_manage` MCP。
 
 Console 的 MCP 工作台与 Codex MCP 不是两套业务实现：两种 transport 都由同一份
-28-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
+24-tool Capability Registry 提供 handler、请求 schema 和 effect policy。健康、账户、
 自选、Research 及 Monitor 等一一对应的前端查询也通过 Registry 调用；`overview`、
 `research`、`monitors` 等路由
 只负责把多项读取合并成适合页面的 BFF 响应。收盘任务、通知、备份和缓存维护仍是
@@ -451,8 +445,8 @@ uv run trading-partner-maintenance prune-cache --retention-days 30
 uv run trading-partner-maintenance prune-cache --retention-days 30 --apply
 ```
 
-Monitor Run/observation/event、研究记录、交易和账户快照、QuantConnect 验证产物都不自动
-删除。数据库备份也由使用者显式管理，避免静默丢失审计历史。
+Monitor Run/observation/event、研究记录、交易和账户快照都不自动删除。数据库备份也由
+使用者显式管理，避免静默丢失审计历史。
 
 ### 券商对账草稿（owner-only）
 
@@ -479,3 +473,99 @@ uv run python scripts/generate_cninfo_org_map.py --refresh --write
 ```
 
 两者默认拒绝覆盖已跟踪文件，需显式 `--force` / `--write`；刷新后按 diff 审阅再提交。
+
+### Console account aliases
+
+Console reads optional owner-managed labels from `RUNTIME_ROOT/data/console/account-aliases.json`
+through the read-only `/api/account-aliases` endpoint. The JSON object maps exact durable
+`account_ref` values to display labels (at most 80 characters). Keep the file owner-only
+and outside Git. Portfolio, Journal account filters, Cycles, activity paths, Cycle
+adjustments, and Overview account notices share these labels. Unmapped accounts retain
+the Provider and a short reference suffix. Aliases never change identifiers, broker
+account types, filters, or transaction attribution; bind them once rather than recalculating
+them from changing balances. Reload Console after changing the file.
+
+### Journal result and filter scope
+
+Journal keeps aggregate result metrics in Behavior; Overview does not recalculate a
+second Results panel. Period and Account filters remain available while durable reads
+refresh. Custom ranges require both dates and reject reversed ranges before querying;
+Clear Filters restores all-history/all-account scope. Date changes reset browser
+pagination. Behavior receives exact account references and aware start/end timestamps;
+account aliases affect labels only. The Cycle browser uses close time (open time for
+open Cycles), while transaction lists use activity occurrence time. Existing bounded
+history and coverage warnings still apply; filtering is not a broker refresh.
+
+### Observation → Research draft carryover
+
+**Open Research** from a selected Observation keeps its exact revision as the source.
+Research displays the stored model draft, source version/model, USER judgment, level
+references, other speakers, and the complete parsed review. It reuses a successful
+escalated draft when available and otherwise the first-pass interpretation; navigation
+never invokes a model or adopts a Decision.
+
+After **Create Research Subject**, the DRAFT Thesis editor opens with the parsed
+USER statement and supporting text. **Use Review in Thesis** and **Use Review in
+Plan Draft** prepare editable drafts for a matching existing Subject. The Plan draft
+keeps point text in notes and USER scenarios as manual review conditions; reference
+price, stop, sizing, and monitor thresholds are not guessed from untyped level text.
+Existing plan settings and conditions are retained, and an open editor is not replaced.
+Source content is kept in page memory, not URL parameters or browser storage; the
+opaque revision ID in the URL allows the source to be read again after refresh.
+
+### Observation refresh progress and recovery
+
+Journal's **Refresh Sources** submits a durable `observation.refresh` run and returns
+its request identity before source/model work finishes. Journal and Operations show
+capture/save, interpretation, and escalated-review receipts. The browser remembers
+only the opaque request identity; reloading reads progress and does not replay a
+write. Use **Resume Failed Stages** after FAILED/INTERRUPTED to reuse the same run:
+completed stages and successful interpretations are retained. A new refresh is a
+new explicit request; it may retry failed drafts. Existing CLI/source-specific sync
+contracts remain available.
+
+Model stages have a ten-minute deadline each and at most 100 candidate calls per
+stage. The current intake view is bounded to 200 notes; exceeding that boundary is
+reported as degraded, not complete coverage. Provider capture uses its existing
+bounded request policy. A cancelled threaded capture keeps its process lock until
+the worker stops. API shutdown waits for that cleanup before closing resources.
+No cancellation UI is offered for requests that cannot be stopped reliably.
+
+Execution and quality are separate: a terminal SUCCEEDED execution can carry
+`OBSERVATION_REFRESH_DEGRADED` when coverage or a draft is incomplete. Disabled
+analysis is explicit, and rejected drafts do not become Decisions. A successful
+process exit or a not-due scheduler skip does not certify a complete business run.
+Operational diagnostics persist closed codes rather than provider payloads.
+
+**Load Review Context** reads the exact Observation revision alongside current
+confirmed Thesis/Plan/Decision references and coverage. It is explicitly current
+context, not a point-in-time reconstruction of the portfolio on the note date.
+Revision history remains the source for old note text and differences. None of
+these reads confirms a judgment or invokes a model.
+
+Operations also shows `runtime_identity`: on-disk Git revision/dirty state, Next
+build ID, and actual/expected database revisions. On-disk identity does not prove
+which edits an already-running Python process has loaded; restart after verified
+changes. Non-test startup performs a read-only migration-head preflight before
+repository construction. Normal reads never run migrations. The expected head is
+centralized in `application.ports.database`.
+
+Post-market completion markers derive from the same runtime configuration as child
+commands. An installed runtime without an explicit root fails closed rather than
+writing under site-packages. Only the attributable default owner runtime may reuse
+an owner-only legacy macOS marker for the exact same session; custom runtimes never
+inherit another installation's completion marker.
+
+### Explicit capture versus analysis
+
+The compatibility Console sync routes (`/api/observations/sync` and
+`/api/moomoo-notes/sync`) and `/api/observations/import` honor `analyze=false`:
+only capture runs, with `analysis_started=false` and no implicit background batch.
+`analyze=true` retains the service's explicit analysis behavior. For the complete
+capture/interpret/review flow, use Journal Refresh Sources and its durable progress;
+for an exact revision, use its Analyze/Retry action.
+
+`trading-partner-moomoo-notes-sync` is a compatibility entry to the same implementation
+as `trading-partner-observation-sync --source MOOMOO_NOTE`. Existing analysis flags
+and receipt fields remain; the shared receipt additionally identifies source and
+source capabilities. The Moomoo command cannot override its source.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime
@@ -46,9 +46,16 @@ from domain.external_note.attribution import attributed_blocks
 from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
 from domain.review_item.models import ReviewItemProjection
 from interfaces.console._shared import ConsoleRequestModel, failure_payload
+from interfaces.console.account_aliases import read_account_aliases
 from interfaces.console.agent_api import build_agent_runtime_state
 from interfaces.console.agent_api import router as agent_router
 from interfaces.console.catalog import capability_catalog
+from interfaces.console.journal_history import journal_history
+from interfaces.console.observation_refresh_api import router as observation_refresh_router
+from interfaces.console.observation_research_draft import (
+    project_observation_research_draft,
+)
+from interfaces.console.runtime_identity import build_runtime_identity
 from interfaces.mcp.server import create_capability_registry
 from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
 from interfaces.mcp.tools.compact import (
@@ -74,7 +81,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.agent_gateway = agent_state.capability_gateway
     app.state.agent_context = agent_state.context_service
     app.state.agent_action_gateway = agent_state.action_gateway
-    app.state.agent_handoff_service = agent_state.handoff_service
     app.state.schwab_oauth_task = None
     app.state.observation_analysis_task = None
     app.state.observation_analysis_errors = {}
@@ -86,6 +92,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             note_task.cancel()
             with suppress(asyncio.CancelledError):
                 await note_task
+        refresh_tasks = list(getattr(app.state, "observation_refresh_tasks", {}).values())
+        for refresh_task in refresh_tasks:
+            refresh_task.cancel()
+        await asyncio.gather(*refresh_tasks, return_exceptions=True)
         await container.aclose()
 
 
@@ -95,6 +105,8 @@ app = FastAPI(
     version=__version__,
     lifespan=_lifespan,
 )
+
+app.include_router(observation_refresh_router)
 
 _CONSOLE_HOSTS = frozenset({"127.0.0.1", "localhost"})
 _CONSOLE_ORIGINS = frozenset(
@@ -145,6 +157,27 @@ app.include_router(agent_router)
 
 def _container(request: Request) -> ApplicationContainer:
     return cast(ApplicationContainer, request.app.state.container)
+
+
+def _runtime_identity(request: Request) -> dict[str, object]:
+    """Return safe on-disk source/build identity for Operations diagnostics."""
+
+    database = getattr(getattr(_container(request), "resources", None), "database", None)
+    reader = getattr(database, "migration_heads", None)
+    try:
+        actual_heads = tuple(reader()) if callable(reader) else ()
+    except Exception:  # noqa: BLE001 — diagnostics must stay available on schema failure
+        actual_heads = ()
+    return build_runtime_identity(schema_actual_heads=actual_heads).as_dict()
+
+
+@app.get("/api/account-aliases")
+async def account_aliases(request: Request) -> JSONResponse:
+    try:
+        aliases = read_account_aliases(_container(request).settings.runtime_root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=503, detail="Account aliases unavailable") from None
+    return JSONResponse({"aliases": aliases}, headers={"Cache-Control": "no-store"})
 
 
 def _registry(request: Request) -> CompactCapabilityRegistry:
@@ -566,7 +599,7 @@ async def accounts(request: Request) -> dict[str, Any]:
         dict[str, Any],
         await _invoke_capability(
             request,
-            "account_get",
+            "portfolio_get",
             {"request": {"operation": "positions"}},
             preserve_full_result=True,
         ),
@@ -583,23 +616,23 @@ async def portfolio(
 
     accounts_result = await _durable_console_call(
         request,
-        "account_get",
+        "portfolio_get",
         {"request": {"operation": "positions"}},
     )
     transactions_result = await _durable_console_call(
         request,
-        "account_get",
+        "portfolio_get",
         {"request": {"operation": "transactions", "limit": transaction_limit}},
     )
     trade_cycles_result = await _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {"request": {"operation": "trade_cycles", "limit": 200}},
     )
     performance_now = _container(request).context.clock.now()
     performance_series_result = await _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {
             "request": {
                 "operation": "performance_series",
@@ -617,17 +650,17 @@ async def portfolio(
     )
     daily_equity_result = await _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {"request": {"operation": "daily_equity", "limit": 500}},
     )
     exposure_result = await _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {"request": {"operation": "exposure"}},
     )
     coverage_result = await _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {"request": {"operation": "coverage", "limit": coverage_limit}},
     )
     risk_policy_result = await _durable_console_call(
@@ -661,7 +694,7 @@ async def trade_retro(request: Request) -> dict[str, Any]:
         dict[str, Any],
         await _invoke_capability(
             request,
-            "portfolio_analyze",
+            "portfolio_get",
             {"request": {"operation": "retro_history", "limit": 50}},
             preserve_full_result=True,
         ),
@@ -1013,7 +1046,7 @@ async def _reconcile_review_items(
         fetched_agenda, fetched_retro, fetched_scorecards = await asyncio.gather(
             _durable_console_call(
                 request,
-                "research_memory_get",
+                "research_get",
                 {
                     "request": {
                         "operation": "agenda",
@@ -1026,12 +1059,12 @@ async def _reconcile_review_items(
             ),
             _durable_console_call(
                 request,
-                "portfolio_analyze",
+                "portfolio_get",
                 {"request": {"operation": "retro_history", "limit": 50}},
             ),
             _durable_console_call(
                 request,
-                "research_judgment_get",
+                "research_get",
                 {"request": {"operation": "scorecard_history", "limit": 50, "offset": 0}},
             ),
         )
@@ -1256,7 +1289,7 @@ async def research(request: Request) -> dict[str, Any]:
     while True:
         page = await _invoke_capability(
             request,
-            "investment_case_read",
+            "research_get",
             {
                 "request": {
                     "operation": "query",
@@ -1275,7 +1308,7 @@ async def research(request: Request) -> dict[str, Any]:
                 "errors": [
                     {
                         "code": "CONSOLE_RESEARCH_SUBJECT_LIST_INVALID",
-                        "message": "investment_case_read returned a non-object result",
+                        "message": "research_get returned a non-object result",
                     }
                 ],
                 "degraded": True,
@@ -1304,7 +1337,7 @@ async def research(request: Request) -> dict[str, Any]:
             try:
                 state = await _invoke_capability(
                     request,
-                    "research_judgment_get",
+                    "research_get",
                     {
                         "request": {
                             "operation": "state",
@@ -1357,7 +1390,7 @@ async def _console_subject_choices(
     while True:
         page = await _durable_console_call(
             request,
-            "investment_case_read",
+            "research_get",
             {
                 "request": {
                     "operation": "query",
@@ -1384,7 +1417,7 @@ async def _console_subject_choices(
                 aggregate["state"] = _canonical_subject_transport(
                     await _durable_console_call(
                         request,
-                        "research_judgment_get",
+                        "research_get",
                         {
                             "request": {
                                 "operation": "state",
@@ -1509,6 +1542,7 @@ async def append_activity_annotation(
 async def decision_workbench(
     request: Request,
     subject_id: str | None = Query(default=None, min_length=1, max_length=100),
+    subject_ids: Annotated[list[str] | None, Query()] = None,
     classification: str | None = Query(default=None, min_length=1, max_length=64),
     classifications: Annotated[list[str] | None, Query()] = None,
     account_refs: Annotated[list[str] | None, Query()] = None,
@@ -1525,6 +1559,16 @@ async def decision_workbench(
     concurrently. Each section retains its own envelope so one failed read
     cannot blank the workflow.
     """
+
+    if behavior_start is not None and behavior_end is not None:
+        try:
+            invalid_window = behavior_start > behavior_end
+        except TypeError:
+            raise HTTPException(
+                status_code=422, detail="Dates must use matching timezones"
+            ) from None
+        if invalid_window:
+            raise HTTPException(status_code=422, detail="Start Date must not be after End Date")
 
     subjects, subject_list = await _console_subject_choices(
         request,
@@ -1546,7 +1590,7 @@ async def decision_workbench(
         selected["state"] = _canonical_subject_transport(
             await _durable_console_call(
                 request,
-                "research_judgment_get",
+                "research_get",
                 {
                     "request": {
                         "operation": "state",
@@ -1576,7 +1620,7 @@ async def decision_workbench(
     timeline_read = (
         _durable_console_call(
             request,
-            "research_memory_get",
+            "research_get",
             {
                 "request": {
                     "operation": "timeline",
@@ -1590,6 +1634,14 @@ async def decision_workbench(
         else asyncio.sleep(0, result={"ok": True, "data": {"items": [], "total": 0}})
     )
     cycle_instrument_ids: list[str] = list(instrument_ids or ())
+    if subject_ids and not cycle_instrument_ids:
+        cycle_instrument_ids = sorted({
+            item["subject"]["primary_instrument_id"]
+            for item in subjects
+            if isinstance(item.get("subject"), dict)
+            and item["subject"].get("subject_id") in subject_ids
+            and item["subject"].get("primary_instrument_id")
+        })
     performance_now = _container(request).context.clock.now()
     if selected is not None:
         state_envelope = selected.get("state")
@@ -1609,6 +1661,17 @@ async def decision_workbench(
             )
         if isinstance(instrument_id, str) and instrument_id and not cycle_instrument_ids:
             cycle_instrument_ids.append(instrument_id)
+
+    try:
+        history = await journal_history(
+            _container(request).services.account_transactions,
+            account_refs=list(account_refs or ()),
+            instrument_ids=cycle_instrument_ids,
+            start=behavior_start,
+            end=behavior_end,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Invalid Journal filters") from exc
 
     (
         monitors_result,
@@ -1630,39 +1693,25 @@ async def decision_workbench(
         ),
         _durable_console_call(
             request,
-            "research_memory_get",
+            "research_get",
             {"request": agenda_request},
         ),
         timeline_read,
         _durable_console_call(
             request,
-            "account_get",
+            "portfolio_get",
             {"request": {"operation": "positions"}},
         ),
+        asyncio.sleep(0, result=history["transactions"]),
+        asyncio.sleep(0, result=history["trade_cycles"]),
         _durable_console_call(
             request,
-            "account_get",
-            {"request": {"operation": "transactions", "limit": 500}},
-        ),
-        _durable_console_call(
-            request,
-            "portfolio_analyze",
-            {
-                "request": {
-                    "operation": "trade_cycles",
-                    "instrument_ids": [],
-                    "limit": 500,
-                }
-            },
-        ),
-        _durable_console_call(
-            request,
-            "portfolio_analyze",
+            "portfolio_get",
             {"request": {"operation": "daily_equity", "limit": 500}},
         ),
         _durable_console_call(
             request,
-            "portfolio_analyze",
+            "portfolio_get",
             {
                 "request": {
                     "operation": "performance_series",
@@ -1680,7 +1729,7 @@ async def decision_workbench(
         ),
         _durable_console_call(
             request,
-            "portfolio_analyze",
+            "portfolio_get",
             {
                 "request": {
                     "operation": "behavior_summary",
@@ -1693,7 +1742,6 @@ async def decision_workbench(
                     "classifications": classifications or (
                         [classification] if classification else []
                     ),
-                    "minimum_sample_size": 3,
                     "start": behavior_start,
                     "end": behavior_end,
                 }
@@ -1701,12 +1749,12 @@ async def decision_workbench(
         ),
         _durable_console_call(
             request,
-            "portfolio_analyze",
+            "portfolio_get",
             {"request": {"operation": "retro_history", "limit": 50}},
         ),
         _durable_console_call(
             request,
-            "research_judgment_get",
+            "research_get",
             {"request": scorecard_request},
         ),
     )
@@ -1717,6 +1765,7 @@ async def decision_workbench(
         "accounts": _canonical_subject_transport(accounts_result),
         "transactions": _canonical_subject_transport(transactions_result),
         "trade_cycles": _canonical_subject_transport(trade_cycles_result),
+        "history_filter_options": history["filter_options"],
         "behavior": _canonical_subject_transport(behavior_result),
         "performance_series": _canonical_subject_transport(performance_series_result),
         "daily_equity": _canonical_subject_transport(daily_equity_result),
@@ -1846,9 +1895,9 @@ async def decision_workbench(
 
 def _start_observation_analysis(
     request: Request,
-    operation: Callable[[], Awaitable[object]],
+    note_revision_id: str,
     *,
-    note_revision_id: str | None = None,
+    retry_failed: bool,
 ) -> bool:
     """Start one supervised analysis task and retain only closed error codes."""
 
@@ -1856,36 +1905,20 @@ def _start_observation_analysis(
     if task is not None and not task.done():
         return False
     errors: dict[str, str] = request.app.state.observation_analysis_errors
-    error_key = note_revision_id or "__batch__"
-    errors.pop(error_key, None)
+    errors.pop(note_revision_id, None)
 
     async def run() -> None:
         try:
-            await operation()
+            await _container(request).services.external_notes.analyze_revision(
+                note_revision_id, retry_failed=retry_failed
+            )
         except TradingPartnerError as error:
-            errors[error_key] = error.code
+            errors[note_revision_id] = error.code
         except Exception:  # noqa: BLE001 - never retain private payload or exception text
-            errors[error_key] = "OBSERVATION_ANALYSIS_UNEXPECTED"
+            errors[note_revision_id] = "OBSERVATION_ANALYSIS_UNEXPECTED"
 
     request.app.state.observation_analysis_task = asyncio.create_task(run())
     return True
-
-
-async def _analyze_pending_observations(request: Request) -> None:
-    await _container(request).services.external_notes.analyze_pending(limit=20)
-
-
-async def _analyze_one_observation(
-    request: Request,
-    note_revision_id: str,
-    *,
-    retry_failed: bool,
-) -> None:
-    services = _container(request).services
-    await services.external_notes.analyze_revision(
-        note_revision_id,
-        retry_failed=retry_failed,
-    )
 
 
 def _observation_inbox_payload(request: Request, *, limit: int) -> dict[str, Any]:
@@ -1959,17 +1992,17 @@ async def _sync_observations(
     analyze: bool,
 ) -> dict[str, Any]:
     service = _container(request).services.external_notes
-    receipt = await service.sync(analyze=analyze, source_code=source_code)
-    analysis_started = False
-    if not analyze:
-        analysis_started = _start_observation_analysis(
-            request,
-            lambda: _analyze_pending_observations(request),
-        )
+    try:
+        receipt = await service.sync(analyze=analyze, source_code=source_code)
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=503 if error.retryable else 422,
+            detail={"code": error.code, "retryable": error.retryable},
+        ) from None
     return {
         "data": {
             **jsonable_encoder(asdict(receipt)),
-            "analysis_started": analysis_started,
+            "analysis_started": False,
             "source_code": source_code,
         }
     }
@@ -2003,33 +2036,33 @@ async def observation_import(
     payload: ObservationCaptureRequest,
 ) -> dict[str, Any]:
     service = _container(request).services.external_notes
-    receipt = await service.capture(
-        ExternalObservationCaptureRequest(
-            source_code=payload.source_code,
-            external_id=payload.external_id,
-            title=payload.title,
-            full_body=payload.full_body,
-            observed_at=payload.observed_at,
-            summary=payload.summary,
-            source_timestamp=payload.source_timestamp,
-            primary_instrument_id=payload.primary_instrument_id,
-            related_provider_stock_ids=payload.related_provider_stock_ids,
-            related_provider_codes=payload.related_provider_codes,
-            visibility=payload.visibility,
-        ),
-        analyze=payload.analyze,
-    )
-    analysis_started = False
-    if not payload.analyze:
-        analysis_started = _start_observation_analysis(
-            request,
-            lambda: _analyze_pending_observations(request),
+    try:
+        receipt = await service.capture(
+            ExternalObservationCaptureRequest(
+                source_code=payload.source_code,
+                external_id=payload.external_id,
+                title=payload.title,
+                full_body=payload.full_body,
+                observed_at=payload.observed_at,
+                summary=payload.summary,
+                source_timestamp=payload.source_timestamp,
+                primary_instrument_id=payload.primary_instrument_id,
+                related_provider_stock_ids=payload.related_provider_stock_ids,
+                related_provider_codes=payload.related_provider_codes,
+                visibility=payload.visibility,
+            ),
+            analyze=payload.analyze,
         )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=503 if error.retryable else 422,
+            detail={"code": error.code, "retryable": error.retryable},
+        ) from None
     return {
         "data": {
             **jsonable_encoder(asdict(receipt)),
             "source_code": payload.source_code,
-            "analysis_started": analysis_started,
+            "analysis_started": False,
         }
     }
 
@@ -2045,12 +2078,8 @@ async def observation_analyze(
         return {"data": {"analysis_started": False, "reason": "ANALYSIS_ALREADY_RUNNING"}}
     started = _start_observation_analysis(
         request,
-        lambda: _analyze_one_observation(
-            request,
-            note_revision_id,
-            retry_failed=payload.retry_failed,
-        ),
-        note_revision_id=note_revision_id,
+        note_revision_id,
+        retry_failed=payload.retry_failed,
     )
     return {"data": {"analysis_started": started, "note_revision_id": note_revision_id}}
 
@@ -2079,6 +2108,26 @@ async def observation_analysis_status(
             ),
         }
     }
+
+
+@app.get("/api/observations/{note_revision_id}/research-draft")
+async def observation_research_draft(
+    request: Request,
+    note_revision_id: str,
+) -> JSONResponse:
+    """Read one exact Observation research draft without any model/provider work."""
+
+    service = _container(request).services.external_notes
+    item = service.read_revision(note_revision_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Observation revision was not found")
+    draft = _container(request).services.external_note_review_drafts.latest(
+        item.revision.note_revision_id
+    )
+    return JSONResponse(
+        content={"data": project_observation_research_draft(item, escalated_review=draft)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/observations/{note_revision_id}/review/ensure")
@@ -2140,11 +2189,12 @@ async def observation_deep_review(
     payload: ObservationDeepReviewRequest,
 ) -> dict[str, Any]:
     try:
-        value = await _container(request).services.external_note_review_drafts.review(
-            note_revision_id,
-            explicit_review=True,
-            force=payload.force,
-        )
+        async with _container(request).services.external_notes.exclusive_session():
+            value = await _container(request).services.external_note_review_drafts.review(
+                note_revision_id,
+                explicit_review=True,
+                force=payload.force,
+            )
     except TradingPartnerError as error:
         raise HTTPException(
             status_code=409,
@@ -2371,7 +2421,7 @@ async def scorecards(
         history_request["thesis_id"] = thesis_id
     history = await _durable_console_call(
         request,
-        "research_judgment_get",
+        "research_get",
         {"request": history_request},
     )
     return {
@@ -2425,7 +2475,7 @@ async def catalyst_agenda(
 
     agenda = await _durable_console_call(
         request,
-        "research_memory_get",
+        "research_get",
         {"request": agenda_request},
     )
     subject_aggregates, subject_list = await _console_subject_choices(
@@ -2494,7 +2544,7 @@ async def catalyst_agenda_outcome_candidates(
         candidate_request["as_of"] = as_of
     candidates = await _durable_console_call(
         request,
-        "research_memory_get",
+        "research_get",
         {"request": candidate_request},
     )
     return {"candidates": _canonical_subject_transport(candidates)}
@@ -2538,6 +2588,7 @@ async def operations(request: Request) -> dict[str, Any]:
         preserve_full_result=True,
     )
     return {
+        "runtime_identity": _runtime_identity(request),
         "post_market_sync": services.post_market_sync.status().model_dump(mode="json"),
         "notifications": services.notifications.status().model_dump(mode="json"),
         "maintenance": services.maintenance.status().model_dump(mode="json"),
@@ -2601,7 +2652,7 @@ async def overview(request: Request) -> dict[str, Any]:
     research_attention: list[dict[str, Any]] = []
     subject_page = await _invoke_capability(
         request,
-        "investment_case_read",
+        "research_get",
         {
             "request": {
                 "operation": "query",
@@ -2625,7 +2676,7 @@ async def overview(request: Request) -> dict[str, Any]:
         async with subject_read_slots:
             state = await _durable_console_call(
                 request,
-                "research_judgment_get",
+                "research_get",
                 {
                     "request": {
                         "operation": "state",
@@ -2642,7 +2693,7 @@ async def overview(request: Request) -> dict[str, Any]:
     )
     agenda_task = _durable_console_call(
         request,
-        "research_memory_get",
+        "research_get",
         {
             "request": {
                 "operation": "agenda",
@@ -2655,12 +2706,12 @@ async def overview(request: Request) -> dict[str, Any]:
     )
     retro_task = _durable_console_call(
         request,
-        "portfolio_analyze",
+        "portfolio_get",
         {"request": {"operation": "retro_history", "limit": 50}},
     )
     scorecard_task = _durable_console_call(
         request,
-        "research_judgment_get",
+        "research_get",
         {"request": {"operation": "scorecard_history", "limit": 50, "offset": 0}},
     )
     subject_states, agenda_summary, retro_history, scorecard_history = await asyncio.gather(

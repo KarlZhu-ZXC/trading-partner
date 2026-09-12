@@ -140,11 +140,16 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             "x-opencode-session" if self.provider_name == "opencode_go" else None
         )
         self._default_session_id = "opencode-go:model-directory"
+        # Go owns the output budget. A short service-level cap can exhaust
+        # DeepSeek's reasoning before any text or tool arguments are emitted.
+        # Zen retains its independent, explicitly bounded request policy.
+        send_output_token_limit = self.provider_name != "opencode_go"
         self._chat = OpenAICompatibleModelProvider(
             replace(config, api_style="chat_completions"),
             client=self._client,
             session_header_name=self._session_header_name,
             default_session_id=self._default_session_id,
+            send_output_token_limit=send_output_token_limit,
         )
         self._plain_chat = OpenAICompatibleModelProvider(
             replace(
@@ -156,6 +161,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             client=self._client,
             session_header_name=self._session_header_name,
             default_session_id=self._default_session_id,
+            send_output_token_limit=send_output_token_limit,
         )
         self._responses = OpenAICompatibleModelProvider(
             replace(
@@ -168,6 +174,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             client=self._client,
             session_header_name=self._session_header_name,
             default_session_id=self._default_session_id,
+            send_output_token_limit=send_output_token_limit,
         )
 
     @staticmethod

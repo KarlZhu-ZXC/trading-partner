@@ -357,7 +357,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "macro_rates_volatility",
-                "us_context_get/macro",
+                "us_get_facts/macro",
                 False,
                 lambda: self._us_context.get_macro_context(
                     USGetMacroContextInput(as_of=as_of, lookback_days=365)
@@ -365,7 +365,7 @@ class ResearchWorkflowOrchestrator:
             ),
             _Step(
                 "market_news",
-                "us_company_get/live_news",
+                "us_get_facts/live_news",
                 False,
                 lambda: self._us_context.get_live_news(
                     MarketGetLiveNewsInput(query="US market", as_of=as_of, limit=30)
@@ -377,7 +377,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "prediction_context",
-                    "us_context_get/prediction_market",
+                    "us_get_facts/prediction_market",
                     False,
                     lambda: self._us_context.get_prediction_market_context(
                         USGetPredictionMarketContextInput(
@@ -416,7 +416,7 @@ class ResearchWorkflowOrchestrator:
             (
                 _Step(
                     "current_positions",
-                    "account_get/positions",
+                    "portfolio_get/positions",
                     True,
                     lambda: self._async_envelope(
                         self._portfolio.get_account_positions(AccountGetPositionsInput())
@@ -425,7 +425,7 @@ class ResearchWorkflowOrchestrator:
                 self._portfolio_step(request.account_snapshot_ids, True),
                 _Step(
                     "historical_transactions",
-                    "account_get/transactions",
+                    "portfolio_get/transactions",
                     False,
                     lambda: self._async_envelope(
                         self._transactions.list_durable_transactions(
@@ -622,7 +622,7 @@ class ResearchWorkflowOrchestrator:
                 (
                     _Step(
                         "instrument_news",
-                        "us_company_get/live_news",
+                        "us_get_facts/live_news",
                         False,
                         lambda: self._us_context.get_live_news(
                             MarketGetLiveNewsInput(
@@ -642,7 +642,7 @@ class ResearchWorkflowOrchestrator:
                     ),
                     _Step(
                         "macro_context",
-                        "us_context_get/macro",
+                        "us_get_facts/macro",
                         False,
                         lambda: self._us_context.get_macro_context(
                             USGetMacroContextInput(
@@ -658,7 +658,7 @@ class ResearchWorkflowOrchestrator:
                     2,
                     _Step(
                         "social_sentiment",
-                        "us_context_get/sentiment",
+                        "us_get_facts/sentiment",
                         False,
                         lambda: self._us_context.get_sentiment_snapshot(
                             USGetSentimentSnapshotInput(
@@ -676,7 +676,7 @@ class ResearchWorkflowOrchestrator:
                 steps.append(
                     _Step(
                         "prediction_context",
-                        "us_context_get/prediction_market",
+                        "us_get_facts/prediction_market",
                         False,
                         lambda: self._us_context.get_prediction_market_context(
                             USGetPredictionMarketContextInput(
@@ -692,7 +692,7 @@ class ResearchWorkflowOrchestrator:
             (
                 _Step(
                     "fundamentals",
-                    "us_company_get/fundamentals_snapshot",
+                    "us_get_facts/fundamentals_snapshot",
                     workflow_type is WorkflowType.DEEP_DIVE,
                     lambda: self._us_research.get_fundamental_snapshot(
                         FundamentalGetSnapshotInput(instrument_id=instrument_id, as_of=as_of)
@@ -700,7 +700,7 @@ class ResearchWorkflowOrchestrator:
                 ),
                 _Step(
                     "company_events",
-                    "us_company_get/company_updates",
+                    "us_get_facts/company_updates",
                     True,
                     lambda: self._us_research.get_company_updates(
                         ResearchGetCompanyUpdatesInput(
@@ -710,7 +710,7 @@ class ResearchWorkflowOrchestrator:
                 ),
                 _Step(
                     "company_news",
-                    "us_company_get/live_news",
+                    "us_get_facts/live_news",
                     False,
                     lambda: self._us_context.get_live_news(
                         MarketGetLiveNewsInput(
@@ -723,7 +723,7 @@ class ResearchWorkflowOrchestrator:
                 ),
                 _Step(
                     "social_sentiment",
-                    "us_context_get/sentiment",
+                    "us_get_facts/sentiment",
                     False,
                     lambda: self._us_context.get_sentiment_snapshot(
                         USGetSentimentSnapshotInput(
@@ -736,7 +736,7 @@ class ResearchWorkflowOrchestrator:
                 ),
                 _Step(
                     "macro_context",
-                    "us_context_get/macro",
+                    "us_get_facts/macro",
                     False,
                     lambda: self._us_context.get_macro_context(
                         USGetMacroContextInput(
@@ -751,7 +751,7 @@ class ResearchWorkflowOrchestrator:
                 2,
                 _Step(
                     "financial_statements",
-                    "us_company_get/fundamental_statements",
+                    "us_get_facts/fundamental_statements",
                     False,
                     lambda: self._us_research.get_fundamental_statements(
                         FundamentalGetStatementsInput(instrument_id=instrument_id, as_of=as_of)
@@ -763,7 +763,7 @@ class ResearchWorkflowOrchestrator:
             steps.append(
                 _Step(
                     "prediction_context",
-                    "us_context_get/prediction_market",
+                    "us_get_facts/prediction_market",
                     False,
                     lambda: self._us_context.get_prediction_market_context(
                         USGetPredictionMarketContextInput(topic=topic, as_of=as_of)
@@ -909,7 +909,7 @@ class ResearchWorkflowOrchestrator:
     def _portfolio_step(self, account_snapshot_ids: tuple[str, ...], required: bool) -> _Step:
         return _Step(
             "portfolio_context",
-            "portfolio_analyze/exposure",
+            "portfolio_get/exposure",
             required,
             lambda: self._async_envelope(
                 self._portfolio.analyze_portfolio(

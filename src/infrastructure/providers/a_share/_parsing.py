@@ -16,11 +16,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from domain.common.enums import AssetType, Market, TradingSession
-from domain.common.errors import DataContractError, NoMarketData
+from domain.common.enums import AssetType, Market
+from domain.common.errors import DataContractError
 from domain.common.values import build_instrument_id, parse_instrument_id
 from domain.instruments.models import Instrument
-from domain.market.session import infer_session_basic
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -493,25 +492,6 @@ def require_exact_date(value: object, *, field: str) -> date:
             details={"field": field, "rule": "exact_date_type"},
         )
     return value
-
-
-def session_for(as_of: datetime) -> TradingSession:
-    return infer_session_basic(Market.A_SHARE, as_of, timezone="Asia/Shanghai")
-
-
-def raise_no_data(*, vendor: str, operation: str) -> None:
-    raise NoMarketData(
-        "provider returned no market data",
-        details={"vendor": vendor, "operation": operation},
-    )
-
-
-def status_is_rate_limit(status_code: int) -> bool:
-    return status_code == 429
-
-
-def status_is_blocked(status_code: int) -> bool:
-    return status_code in {401, 403}
 
 
 def content_type_matches(headers: object, *, allowed_substrings: tuple[str, ...]) -> bool:

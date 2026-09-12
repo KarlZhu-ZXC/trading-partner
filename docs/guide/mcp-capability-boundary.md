@@ -1,6 +1,6 @@
 # Trading Partner MCP 能力与使用边界
 
-> 适用版本：Phase 1–4D + MCP vNext Shadow（28 个 public MCP tools）
+> 适用版本：Phase 1–4D + MCP vNext Shadow（9 个首层接口、24 个业务能力）
 > 状态：可供 Codex 以本地 stdio MCP 方式使用
 
 ## 1. 它是什么
@@ -23,7 +23,7 @@ Trading Partner MCP 是 Codex 背后的投资研究状态与事实服务。Codex
 
 | 层级 | 含义 | 当前状态 |
 |---|---|---|
-| 服务可用 | MCP 能启动、28 个 vNext 工具已注册、SQLite 可迁移 | 已验收 |
+| 服务可用 | MCP 能启动、9 个 vNext 入口已注册、SQLite 可迁移 | 已验收 |
 | 数据可用 | 对应网络 Provider 已启用、凭据和网络正常 | 按 Provider 分别检查 |
 | 账户可用 | Schwab OAuth、Moomoo OpenD 或严格格式的手工持仓 CSV | 实时券商默认未启用 |
 
@@ -60,7 +60,7 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 
 ## 3. 公开能力总览
 
-公开工具面为 28 个 `mcp_vnext_shadow` capability；旧 52 工具兼容 profile 已删除。
+公开工具面为 9 个 `mcp_vnext_shadow` 入口，内部保留 24 个业务 capability；旧 52 工具兼容 profile 已删除。
 所有合并工具都接收一个必填 `request` 对象，`operation` 及其字段必须放在该对象内。
 为降低 Host 上下文，较大的 group 发布扁平 operation schema；服务端在 dispatch 前仍使用
 精确 closed variant 再验证 required/owned fields，因此跨 operation 字段不会进入应用服务。
@@ -69,22 +69,60 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 模块提供普通 operation adapters，Registry 同时持有 callable、由同一 callable 生成的
 Pydantic/FastMCP 参数模型、tool annotations，以及独立的 effect/confirmation policy。
 FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成或调用，因此不存在
-两套 handler、两套请求模型或通过工具名查找的旧兼容注册表。MCP `tools/list` 会删除不参与
-验证的 schema 标题/默认值和冗余 discriminator mapping、共享重复属性定义，并保证 closed
-union 及全部本地 `$ref` 指向同一 schema 中存在的 `$defs`。服务端默认值与验证行为不变。
+两套 handler、两套请求模型或通过工具名查找的旧兼容注册表。MCP `tools/list` 仅发布短说明和轻量参数入口；完整 schema 由
+`capability_discover` 按操作返回。轻量 schema 不承诺接受任意字段：实际调用仍由
+原有模型逐操作闭合验证，默认值、空值、省略参数和错误语义保持不变。
 
-`mcp-vnext-shadow-v5` 是一次显式接口收敛：原 `view_inbox`、`view_review_get`、
-`current_view_get` 三个读取入口合并为 `view_get/inbox|review|current`；原
-`view_review_run` 迁入 `research_workflow_run/evaluate_view`。旧名称不再注册，持久化数据、
-application service 与确认语义均未改变。Host 更新后应重新载入 MCP tool schema。
+### 按需发现
+
+首层只发布 `capability_discover`、`capability_read`、`capability_write`，以及独立的
+`instrument_resolve`、`research_judgment_propose`、`research_judgment_confirm`、
+`external_state_sync`、`broker_order_manage`、`technical_render_chart`。低频业务名称
+和参数仅在发现结果中出现，不持续放入工具列表。
+
+```text
+capability_discover()
+  → 24 个业务能力的简短目录（已知能力时跳过）
+capability_discover(tool="portfolio_get", operation="positions")
+  → 原调用 inputSchema 和 call_tool="capability_read"
+capability_read(tool="portfolio_get", arguments={"request":{"operation":"positions"}})
+  → 原有结果
+```
+
+不知道操作名时，仅传 `tool` 获取操作列表。同一会话复用已有 schema，不重复发现。
+`capability_write` 另外要求 `confirmation` 等于原业务 capability 名称和用户明确授权；
+底层继续检查 actor、版本、幂等键与业务授权。两个路由均拒绝上述六个独立工具，
+查询入口拒绝任何写入，发现不触发任何业务操作。标的解析参数较短，直接完整发布。
+
+当前 schema 为 `mcp-vnext-shadow-v11`：9 个入口、24 个业务能力、106 个业务操作。
+原业务名称不再全部是公开 MCP 工具；历史记录及 next-read 提示保留原能力名，调用前
+根据发现返回的 `call_tool` 路由。Console 和内置 Agent 仍使用完整 Registry。
+完整 schema 的 `$ref` 在同一结果内可解析，绝不为了压缩而截断 schema。
+重新连接 MCP 客户端获取 v11；不需要迁移数据库或改写历史记录。
+
+业务能力保留此前合并结果：
+
+- `investment_case_read`、`research_judgment_get`、`research_memory_get` 合并为
+  `research_get`，保留原 11 个操作。
+- `account_get`、`portfolio_analyze` 合并为 `portfolio_get`，保留原 15 个操作。
+- `us_company_get`、`us_context_get` 合并为 `us_get_facts`，保留原 10 个操作。
+
+上述七个旧名称不再注册，不提供兼容别名。所有操作名称、默认值、结果结构、权限和 Provider 路由保持不变；
+周期调整预览 `portfolio_get/trade_cycle_override_preview` 和写入
+`research_memory_append/trade_cycle_override` 都使用 `override_operation` 传入
+SPLIT/MERGE/RELINK 业务动作，避免覆盖必填的 MCP `operation` 分发字段。
+v8 修复写入映射；确认、幂等、版本检查和 Agent 写入允许列表保持不变。Host 更新后应重新载入 MCP schema。
+v9 删除 Behavior 的 `minimum_sample_size` 输入参数；新结果不再输出
+`sample_sufficient` 和 `minimum_sample_size`，已有样本数和数据可用性信息保留。
+历史回执中的旧名称保留，不会改写。v6 移除的 QuantConnect/LEAN 回测操作仍不可调用。
 
 Shared Agent Runtime 的 `tp_capability_search`、`tp_read`、`tp_propose`、`tp_prepare_action` 和
-`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 28。
+`tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 9。
 Agent-A 只允许 durable/provider reads、
 instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
 schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
 Agent-D 仅对单独维护的 research-write operation allowlist 创建 Pending Action；用户在原
-Console/Telegram channel 以 exact hash、principal、version、expiry 和 single-use token
+Console channel 以 exact hash、principal、version、expiry 和 single-use token
 确认后，才通过同一 Registry 再校验并 dispatch。该路径不改变 MCP inventory 或授权语义，
 也不开放 sync/evaluate、账户、风险策略或订单写入。
 
@@ -92,6 +130,8 @@ MCP annotation 只用于向 Host 描述 read-only、destructive、idempotent 和
 不作为 HTTP 授权规则。Console 需要的显式确认由 Registry 的 confirmation policy 单独决定；
 例如 `instrument_resolve` 可能把唯一候选写入本地 Instrument Master 缓存，因此 MCP 标注并非
 纯只读，但解析本身不要求一次伪造的“写操作确认”。
+
+以下表格和参数示例描述内部业务能力；除六个独立工具外，MCP 调用按 `call_tool` 包裹进 `arguments`。
 
 ### 3.1 健康与 Mock 验证
 
@@ -153,14 +193,14 @@ Trade Plan，再以 STRICT_REVIEW 确认 Thesis 归档，最后归档研究档�
 |---|---|
 | `investment_case_manage` (`create`) | 创建经用户确认的研究档案；company/catalyst 必须绑定标的，且不自动形成投资判断 |
 | `investment_case_manage` (`update`) | 经用户或外部 agent 确认、带幂等键地更新研究档案标题、摘要、标签或关联研究档案；不改写 Thesis、Trade Plan 或历史记录 |
-| `investment_case_read` (`query`) | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
-| `investment_case_read` (`attention`) | durable-only 跨域决策 inbox：Candidate、Agenda、Retro、Scorecard、Monitor 盲区、未决 Broker/Agent 与 Data Quality。只读，不 reconcile ReviewItem，不访问上游。空列表必须保留 `CATALYST_AGENDA_SYNC_RECEIPT_MISSING` 等 limitation |
+| `research_get` (`query`) | 传 `case_id` 读取一个研究档案，否则筛选、分页列出档案 |
+| `research_get` (`attention`) | durable-only 跨域决策 inbox：Candidate、Agenda、Retro、Scorecard、Monitor 盲区、未决 Broker/Agent 与 Data Quality。只读，不 reconcile ReviewItem，不访问上游。空列表必须保留 `CATALYST_AGENDA_SYNC_RECEIPT_MISSING` 等 limitation |
 | `investment_case_manage` (`archive`) | 经明确复核后归档研究档案；不删除 Instrument，也不是物理删除 |
-| `research_judgment_get` (`state`) | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
+| `research_get` (`state`) | 恢复当前投资判断、假设、失效条件、问题等完整研究状态 |
 | `research_judgment_propose` (`research_state`) | 提出结构化研究状态候选变更 |
 | `research_judgment_propose` (`thesis_revision`) | 提出 append-only 投资判断（Thesis）新版本 |
 | `research_judgment_confirm` | 由有权限的确认者确认、拒绝或撤回候选 |
-| `research_judgment_get` (`thesis_history`) | 读取不可改写的投资判断版本历史 |
+| `research_get` (`thesis_history`) | 读取不可改写的投资判断版本历史 |
 
 状态变更采用 Candidate Propose → Confirm / Reject / Withdraw。跨实体冲突返回
 `RESEARCH_STATE_CONFLICT`，不可重试；应先完成父研究档案或子状态的显式转换。
@@ -182,14 +222,14 @@ Assumption、Invalidation、Open Question 等子对象同样不仅要“存在�
 | 工具 | 能力与边界 |
 |---|---|
 | `instrument_resolve` | 本地优先解析代码、名称或 ID；未命中时通过外部目录发现并验证，唯一候选原子写入 Instrument Master；不查询实时价格 |
-| `research_memory_get` (`search`) | 对 Evidence、Report、Event、Decision、Journal 做全文与结构化检索 |
-| `research_memory_get` (`report`) | 按 ID 读取一份不可变研究报告 |
-| `research_memory_get` (`timeline`) | 读取一个研究档案的统一时间线 |
+| `research_get` (`search`) | 对 Evidence、Report、Event、Decision、Journal 做全文与结构化检索 |
+| `research_get` (`report`) | 按 ID 读取一份不可变研究报告 |
+| `research_get` (`timeline`) | 读取一个研究档案的统一时间线 |
 | `research_memory_append` (`journal`) | 在用户明确要求记录后追加日志 |
 | `research_memory_append` (`decision`) | 记录研究或仓位意图；可选绑定 Strategy、四情景之一、同一 Research Subject 的 exact Trade Plan version 和 aware review due time；不会产生订单、成交或持仓。到期 Decision 复用现有 ReviewItem/Attention；只有 later Decision 明确 supersede exact prior Decision 或用户人工 Resolve 才关闭，失败/有界读取不自动关闭 |
-| `research_memory_get` (`agenda`) | durable-only 查询 Catalyst Agenda、scope、coverage、历史版本和过期未闭环提示；不访问 Provider |
+| `research_get` (`agenda`) | durable-only 查询 Catalyst Agenda、scope、coverage、历史版本和过期未闭环提示；不访问 Provider |
 | `research_memory_append` (`agenda_item`) | 经明确确认创建、修订、取消事项，或把已发生事项链接到同研究范围的 Event/Report/Evidence |
-| `research_judgment_get` (`scorecard_history`) | 读取不可变 Judgment Scorecard S0/S1 历史；不重算旧运行 |
+| `research_get` (`scorecard_history`) | 读取不可变 Judgment Scorecard S0/S1 历史；不重算旧运行 |
 | `research_workflow_run` (`judgment_scorecard`) | 对一个明确 Thesis 的最新 revision 生成确定性维度卡；不产生总分、判断写入或订单 |
 
 搜索必须至少有一个有效过滤条件。日志和 Decision append 需要唯一幂等键，并且确认者只能
@@ -320,8 +360,8 @@ Moomoo Hot List 返回交易、搜索、新闻及综合热度排名，只代表�
 
 | 工具 | 能力与边界 |
 |---|---|
-| `us_company_get` (`fundamentals_snapshot`/`fundamental_statements`) | 通过 `operation` 获取当前估值/SEC facts 或标准化财务报表；报表支持 `view=latest|vintages` |
-| `us_company_get` (company research operations) | 通过 `operation` 获取 filing、内部人交易、公司更新或 typed events |
+| `us_get_facts` (`fundamentals_snapshot`/`fundamental_statements`) | 通过 `operation` 获取当前估值/SEC facts 或标准化财务报表；报表支持 `view=latest|vintages` |
+| `us_get_facts` (company research operations) | 通过 `operation` 获取 filing、内部人交易、公司更新或 typed events |
 
 SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历史估值，修订文件不能被
 错误地提前到其公开时间之前。
@@ -335,10 +375,10 @@ SEC 数据遵守 filed/accepted/publication cutoff；当前估值不能冒充历
 
 | 工具 | 能力与边界 |
 |---|---|
-| `us_company_get` (`live_news`) | 带发布时间 cutoff 的公司或全局新闻 |
-| `us_context_get` (`macro`) | FRED 数据及请求时点对应的 ALFRED vintage |
-| `us_context_get` (`sentiment`) | Reddit 推断与 Moomoo 确定性挖掘分来源呈现 |
-| `us_context_get` (`prediction_market`) | Polymarket 当前开放市场概率 |
+| `us_get_facts` (`live_news`) | 带发布时间 cutoff 的公司或全局新闻 |
+| `us_get_facts` (`macro`) | FRED 数据及请求时点对应的 ALFRED vintage |
+| `us_get_facts` (`sentiment`) | Reddit 推断与 Moomoo 确定性挖掘分来源呈现 |
+| `us_get_facts` (`prediction_market`) | Polymarket 当前开放市场概率 |
 
 Polymarket 只能表达当前概率，不能作为历史赔率；Reddit 推断与 Moomoo 确定性推断不能
 混为同一种信号。StockTwits 运行时适配器已移除，仅保留历史枚举/数据库值的读取兼容。
@@ -351,24 +391,24 @@ Moomoo 路径只执行精确 ticker 相关性过滤、HTML
 
 | 工具 | 能力与边界 |
 |---|---|
-| `account_get` (`positions`/`transactions`) | 只读取持久化账户快照与持仓，或标准化历史成交，不接触券商；快照保留原币种现金、净资产、购买力、融资、未成交订单、时点与数据质量警告 |
+| `portfolio_get` (`positions`/`transactions`) | 只读取持久化账户快照与持仓，或标准化历史成交，不接触券商；快照保留原币种现金、净资产、购买力、融资、未成交订单、时点与数据质量警告 |
 | `external_state_sync` | 仅在明确要求时刷新 `accounts`、读取 `transactions` 或刷新 active `watchlist` upstream |
-| `portfolio_analyze` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
-| `portfolio_analyze` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
-| `portfolio_analyze` (`performance_summary`) | 按账户与原币种重建 FIFO 或展示券商成本口径，分列已实现/未实现损益、股息、利息、费用和外部现金流，并可下钻到活动 ID 与期末快照 |
-| `portfolio_analyze` (`trade_cycles`) | 只读持久化 Transactions，按账户、Instrument、原币种确定性重建 long-only 建仓、加仓、减仓、清仓与 re-entry Cycle；不访问 Broker，不把 Fill 当完整交易，不推断 short；缺价格/费用、oversell、覆盖与截断显式降级 |
-| `portfolio_analyze` (`performance_series`) | 只用持久化 Broker net-assets 与 external flow 计算原币种 TWR、MWR/XIRR 和最大回撤；缺现金流边界、多解或跨币种时不补估值、不隐式汇总 |
-| `portfolio_analyze` (`daily_equity`) | 读取 source-referenced Daily Equity 与 Journal Activation；equity 只来自 Broker net-assets，gross position value 不冒充 NAV |
-| `portfolio_analyze` (`journal_timeline`) | 合并 durable Decision、可选 exact-linked Order Intent/Result 与 Broker Activity；缺链路时保留 INTENT_ONLY/EXECUTION_ONLY，不按时间猜测 |
-| `portfolio_analyze` (`trade_cycle_override_preview`) | 对 split/merge/relink 做无写入影响预览，保留 algorithm projection |
-| `portfolio_analyze` (`behavior_summary`) | 以完整 CLOSED active Cycle 为分母，返回分子、分母、排除项和 exact refs；无综合纪律分，不按 Fill 计算胜率 |
-| `portfolio_analyze` (`behavior_review_history`) | 读取 weekly/monthly/quarterly action recurrence Run；NEW/PERSISTENT/RESOLVED/RECURRED 均保留 exact cohort refs |
-| `portfolio_analyze` (`unlinked_activity`) | 按需读取未关联 Broker trade；不联网、不生成 ReviewItem、不推断历史意图 |
+| `portfolio_get` (`exposure`) | 按原生币种计算市场、币种和标的 gross exposure |
+| `portfolio_get` (`coverage`) | 只读持久化的交易活动覆盖回执：窗口、去重、快照密度、缺失事件类型与 `COMPLETE/INCOMPLETE` |
+| `portfolio_get` (`performance_summary`) | 按账户与原币种重建 FIFO 或展示券商成本口径，分列已实现/未实现损益、股息、利息、费用和外部现金流，并可下钻到活动 ID 与期末快照 |
+| `portfolio_get` (`trade_cycles`) | 只读持久化 Transactions，按账户、Instrument、原币种确定性重建 long-only 建仓、加仓、减仓、清仓与 re-entry Cycle；不访问 Broker，不把 Fill 当完整交易，不推断 short；缺价格/费用、oversell、覆盖与截断显式降级 |
+| `portfolio_get` (`performance_series`) | 只用持久化 Broker net-assets 与 external flow 计算原币种 TWR、MWR/XIRR 和最大回撤；缺现金流边界、多解或跨币种时不补估值、不隐式汇总 |
+| `portfolio_get` (`daily_equity`) | 读取 source-referenced Daily Equity 与 Journal Activation；equity 只来自 Broker net-assets，gross position value 不冒充 NAV |
+| `portfolio_get` (`journal_timeline`) | 合并 durable Decision、可选 exact-linked Order Intent/Result 与 Broker Activity；缺链路时保留 INTENT_ONLY/EXECUTION_ONLY，不按时间猜测 |
+| `portfolio_get` (`trade_cycle_override_preview`) | 对 split/merge/relink 做无写入影响预览，保留 algorithm projection |
+| `portfolio_get` (`behavior_summary`) | 以完整 CLOSED active Cycle 为分母，返回分子、分母、排除项和 exact refs；无综合纪律分，不按 Fill 计算胜率 |
+| `portfolio_get` (`behavior_review_history`) | 读取 weekly/monthly/quarterly action recurrence Run；NEW/PERSISTENT/RESOLVED/RECURRED 均保留 exact cohort refs |
+| `portfolio_get` (`unlinked_activity`) | 按需读取未关联 Broker trade；不联网、不生成 ReviewItem、不推断历史意图 |
 | `research_memory_append` (`activity_annotation`) | 经明确确认追加 exact activity 的 Decision/Plan 关联或 UNPLANNED/CASH_MANAGEMENT/修正分类；不改写成交事实，不产生订单 |
 | `research_memory_append` (`trade_cycle_override`) | 预览后明确确认 append-only split/merge/relink revision；不删除算法 Cycle |
 | `research_memory_append` (`behavior_review`) | 写入确定性 period cohort/action recurrence Run；失败或分页不完整的 source read 不自动产生 RESOLVED |
-| `portfolio_analyze` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
-| `portfolio_analyze` (`retro_history`) | 只读不可变 Trade Retro Run 与追加式人工复核版本；不访问券商、Provider 或 LLM |
+| `portfolio_get` (`simulate_addition`) | 纯计算的加入前后情景；绝不下单 |
+| `portfolio_get` (`retro_history`) | 只读不可变 Trade Retro Run 与追加式人工复核版本；不访问券商、Provider 或 LLM |
 | `broker_order_manage` | `cash_sweep_preview` 计算 SGOV Shadow；`preview` 创建 30–300 秒单次实盘意图并可带 same-Subject exact Decision/Plan link（该 link 不授权下单）；`submit` 在当前对话逐笔确认后提交；`status` 读取/刷新状态；`cancel` 明确确认后撤单。无通用券商请求或改单操作 |
 
 历史补齐也可走确定性 CLI；单日用 `--date`，长区间用 inclusive
@@ -452,7 +492,7 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 
 ### 3.10 跨 Thread 恢复
 
-`investment_case_read` (`context`) 按 `case_id` 或无歧义的 `instrument_id` 恢复一个研究档案：当前研究
+`research_get` (`context`) 按 `case_id` 或无歧义的 `instrument_id` 恢复一个研究档案：当前研究
 状态、反方优先的 Evidence、压缩历史、最新持久化仓位、缺失事实和 token budget 元数据。
 
 这个结果是长期上下文，不是实时行情。调用方应根据 `live_fact_tools_required` 再拉取当前
@@ -463,14 +503,14 @@ retryable；结构性完整性错误不可重试，响应不包含原始 SQL 或
 | 工具 | 能力与边界 |
 |---|---|
 | `research_judgment_propose` (`challenge_review`) | 普通讨论可 bypass；重大判断可持久化严格十维质询 |
-| `research_judgment_get` (`challenge_review`) | 恢复问题、finding 和状态 |
+| `research_get` (`challenge_review`) | 恢复问题、finding 和状态 |
 | `research_judgment_confirm` (`challenge_review`) | 记录 accept/revise/reject/defer 及理由 |
 
 重大质询 start 和 resolution 都要求幂等键；相同键和相同 payload 精确重放，键相同而
 payload 不同返回 `IDEMPOTENCY_CONFLICT`。质询 resolution 只记录用户态度，不会直接修改
 Thesis、候选或仓位，也不会执行交易。
 
-### 3.12 历史交易、六类研究工作流与历史验证桥接
+### 3.12 历史交易与研究工作流
 
 | 工具 | 能力与边界 |
 |---|---|
@@ -480,8 +520,6 @@ Thesis、候选或仓位，也不会执行交易。
 | `research_workflow_run` (`us_market_review`) | 收集指数、宏观、新闻及组合影响事实 |
 | `research_workflow_run` (`portfolio_review`) | 收集持仓、交易、暴露、行业/主题、相关性和 beta |
 | `research_workflow_run` (`peer_comparison`) | 对调用方指定的 1–5 家同市场同行收集并对齐财报、估值及可选 A 股经营事实 |
-| `research_workflow_run` (`historical_validation_prepare`) | 验证但不执行 LEAN Python，生成 QuantConnect Free 手工回测包、manifest 和 SHA-256 |
-| `research_workflow_run` (`historical_validation_import`) | 导入网页下载的 QuantConnect Results JSON，提取有来源的指标并保留可复现性缺口 |
 | `research_workflow_run` (`trade_retro`) | `prepare` 事前快照、`run` 成交纪律审计、`review` 追加人工复核版本、`export` 安全写入 Obsidian owned block；无订单效果 |
 
 六个工作流都要求请求级 `idempotency_key`。系统在访问 Provider 前持久化 `STARTED`，运行时
@@ -493,23 +531,12 @@ SHA-256 校验后与 receipt 一起保存。相同终态请求直接重放而不
 
 美股股票配方包含公司基本面、财报和公司事件。美股 ETF 配方改用 composite 行情/技术面、
 精确 ticker 新闻、ETF 社区情绪和宏观上下文，不调用股票专属的财报、SEC 或公司事件接口。
-Workflow receipt 与 Context 的 live-fact 提示只返回当前 27 工具的公共名称及 operation，
+Workflow receipt 与 Context 的 live-fact 提示返回 24 个业务能力名称及 operation；MCP 调用使用发现返回的入口，
 不会再暴露已退役的内部 handler 名称。
 
 同行比较默认使用最近三个可见年报期间；不会自动发现同行、跨市场换汇、构造 TTM、评分、
 排名或生成目标价。历史 `as_of` 没有 cutoff-safe 估值时保持缺失；金额币种或期间口径不同
 时标记 `NOT_COMPARABLE`/`PARTIAL`，不得把缺失值解释为公司劣势。
-
-两个 historical-validation operation 不属于前述六类 Provider fact workflow，
-也不写 `research_runs` 表。它们使用 gitignored 的
-`data/artifacts/historical_validation/` 保存 owner-only 文件；prepare 和 import
-分别要求幂等键。Trading Partner 不登录 QuantConnect、不点击 Backtest，也不调用付费
-API。导入后 `REMOTE_RUN_ATTESTATION_UNAVAILABLE` 与
-`REMOTE_DATASET_VERSION_UNAVAILABLE` 必须保留，不能把用户下载文件描述为完全可复现的
-point-in-time 数据集。导入器以正式 `statistics` 为绩效口径、保留冲突的 runtime 展示值，
-并检查实际运行日期是否与 manifest 一致；可用的 QuantConnect Benchmark 曲线只作为明确
-标注的导出曲线对比，不冒充官方总回报指数。完整操作见
-[QuantConnect Free manual validation guide](quantconnect-free-bridge.md)。
 
 Trade Retro 同样不属于 Provider fact workflow。`prepare` 必须在复盘周期开始前执行，
 把当时 ACTIVE 研究标的的当前 Trade Plan 与已确认 Decision Record 固化为不可变快照；
@@ -544,10 +571,14 @@ Research Subject/Thesis/Trade Plan/持仓或执行订单；模型失败时仍保
 不是默认分组的分页读取。也可使用
 `uv run trading-partner-watchlist-sync` 单独刷新 Watchlist；盘后账户和 Watchlist 的
 组合刷新使用 `uv run trading-partner-post-market-sync`。后者先刷新所有已配置账户和标准化
-Transactions，生成未关联成交 ReviewItem，再执行精确组内全量刷新，随后以 `analyze=true`
+Transactions，再执行精确组内全量刷新，随后以 `analyze=true`
 同步一次 Moomoo Observation；同一 durable receipt 保留 Notes 状态、发现数、新 revision 数和
 FULL/摘要覆盖。Notes 失败不回滚已完成步骤。作业依据 XNYS 日历在真实收盘十分钟后运行，
 支持提前收盘、休市跳过、成功幂等和部分失败重试。
+执行状态与健康诊断分开：成功回执保留交易覆盖、Observation 和账户警告；
+`status` 在回执含警告/错误或当前 OAuth 有警告时返回 `RECEIPT_IMPERFECT`。
+这些警告不会让已成功的交易日重新同步。launchd 退出码 0 也可能只表示跳过，
+应结合交易日、disposition 和 durable receipt 判断是否完成。
 
 Watchlist 上游严格二选一：Moomoo OpenD 或严格 Manual CSV。它们不会合并、对账、镜像或
 互相覆盖。Moomoo 使用 Quote Context，不需要交易账号、交易密码或解锁；Manual CSV 使用
@@ -784,7 +815,7 @@ Evidence、Report、Event 的写服务仅供内部应用流程。任何 public t
   移除，仅保留历史数据兼容。CME、DCE、Dukascopy 与 Polymarket 可共用
   `PROVIDER_PROXY_URL` HTTP(S) 代理，不设置则直连。任一外部源网络不可达时不得阻塞
   普通个股研究主链。
-- Moomoo 评论流已作为固定 Provider 内化进 `us_context_get` (`sentiment`)，不依赖宿主侧
+- Moomoo 评论流已作为固定 Provider 内化进 `us_get_facts` (`sentiment`)，不依赖宿主侧
   Skill。它调用当前公开 `stock_feed`，按精确 ticker 清洗、去重、过滤低质量内容，并通过
   `moomoo_rules_v1` 中英规则给出可审计标签。上游是语义检索且可能混入其他标的，因此精确
   相关性过滤是强制步骤。该 feed 只保证当前快照，不是历史帖子档案；当前响应没有可靠互动
@@ -933,7 +964,7 @@ explicitly authorized and has no order effect.
   `payload.kind="trade_plan"` 只创建候选；仍需用户或获授权
   `external_agent` 通过 `research_judgment_confirm` 确认。用户在当前 Codex 聊天中的明确
   决定可由 Codex 原样转交并记录来源；Codex 仍不得自主决定结果。
-- `research_judgment_get` (`state`) 返回当前计划和完整版本历史。计划的 ACTIVE/PAUSED/ARCHIVED 变化均为
+- `research_get` (`state`) 返回当前计划和完整版本历史。计划的 ACTIVE/PAUSED/ARCHIVED 变化均为
   新版本，不覆盖历史，也不修改 Thesis。
 - `portfolio_risk_get(request={"operation":"check","trade_plan_id":...})` 使用 durable
   account snapshot 计算确定性仓位区间。A 股按
@@ -958,8 +989,7 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 
 当前实现不包含：
 
-- 历史数据平台、本地/自动回测和策略执行引擎；仅提供 QuantConnect Free 的手工
-  LEAN package prepare 与用户下载结果 import，远程代码和数据版本保持未验证；
+- 历史数据平台、本地/自动回测和策略执行引擎；
 - 自动/无人值守下单、改单、期权或复杂订单、卖空、Schwab API 夜盘、交易解锁；
   仅提供上述逐笔确认的单腿美股/ETF preview-submit-status-cancel 边界；
 - 自动仓位调整和自动 Thesis 确认；
@@ -988,7 +1018,7 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 1. `system_health`；
 2. `system_health`，确认 MCP 通路；
 3. 一次 A 股和一次美股真实事实查询；
-4. 创建一个小型研究档案，再用 `investment_case_read` (`context`) 恢复；
+4. 创建一个小型研究档案，再用 `research_get` (`context`) 恢复；
 5. 配置账户后再测试 account/portfolio 工具；
 6. 最后运行 Deep Dive 或 Portfolio Review。
 

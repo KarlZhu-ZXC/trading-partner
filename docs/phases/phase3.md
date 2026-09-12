@@ -1,29 +1,26 @@
-# Phase 3 — Cross-Asset Facts, Manual Validation, and Plan Controls
+# Phase 3 — Cross-Asset Facts and Plan Controls
 
 Phase 3 grows Trading Partner beyond A-share/US equity research while preserving
 the same provenance, read-only, and no-fabrication rules. The current product scope
-is implemented. Phase 3C prepares a QuantConnect Free package and imports a
-user-downloaded result, but Trading Partner does not own historical datasets, run a
-backtest engine, automate QuantConnect, or execute an order. The manual prepare →
-web backtest → import path has been exercised with a user-exported result.
+is implemented. These fact and plan services do not own a backtest platform or
+submit broker orders.
 
-To keep ownership and dependencies clear, Phase 3 is consolidated into four tracks:
+To keep ownership and dependencies clear, Phase 3 is consolidated into three tracks:
 
 | Track | Capability domain | Status |
 |---|---|---|
 | Phase 3A | Formal futures and cross-asset market facts | Free CME/DCE/Dukascopy integration implemented; LME discovery deferred |
 | Phase 3B | Company financial/operating facts and optional industry datasets | Implemented, including caller-specified peer comparison |
-| Phase 3C | Manual historical-validation bridge | QuantConnect Free prepare/import implemented; heavy historical platform deferred outside the current phase scope |
 | Phase 3D | Judgment-to-plan controls | Implemented: versioned Trade Plans, Position Sizing, Risk v2, and Monitoring v2 |
 
-An adjacent Korea Exchange market slice is also implemented without adding a fifth
+An adjacent Korea Exchange market slice is also implemented without adding another
 Phase 3 track or another public tool. It formalizes `Market.KR` identities and Yahoo
 quote/bars, shared technical analysis, Manual CSV Watchlist membership, price
 Monitoring, and XKRX post-market dispatch. It does not add DART/company research,
 KR sentiment/breadth, broker accounts, Moomoo Watchlist writes, or Position Sizing.
 
 Two post-3D judgment-continuity slices are also implemented without expanding the
-28-tool MCP vNext Shadow surface: Catalyst Agenda C0–C3 separates future known events from
+24-tool MCP vNext Shadow surface: Catalyst Agenda C0–C3 separates future known events from
 observed facts and syncs free current Yahoo/FRED dates explicitly; Judgment Scorecard
 S1 persists nine deterministic calibration cards for one exact Thesis revision,
 including Agenda outcome calibration. Neither produces a total score, order, or
@@ -37,7 +34,7 @@ automatic Thesis/Trade Plan mutation.
 
 The existing public tools support six continuous metal-futures proxies without
 adding another public tool. The current compact
-inventory is 28. Yahoo remains primary. Timestamped
+inventory is 24. Yahoo remains primary. Timestamped
 Sina quotes and Eastmoney daily-derived bars provide narrowly scoped fallbacks.
 
 | Instrument ID | Yahoo symbol | Basis |
@@ -142,7 +139,7 @@ are optional extensions for sectors where a cycle model is genuinely useful.
 
 No new public tool was added. A-share equities use
 `a_share_get_facts(operation="financials")`; US equities use
-`us_company_get(request={"operation":"fundamental_statements",...})`.
+`us_get_facts(request={"operation":"fundamental_statements",...})`.
 
 | Market | Primary | Fallbacks | Point-in-time boundary |
 |---|---|---|---|
@@ -227,7 +224,7 @@ integration in Phase 3A.
 - A 股中文全名可通过腾讯名称目录发现候选，并须再经腾讯报价接口校验后才写入
   Instrument Master；本地 Master 仍是缓存/注册表，不是允许名单。
 - `create_case=false` 的 ad-hoc Deep Dive 不再调用仅适用于研究档案的
-  `investment_case_read` 的 `context` operation，因此不会制造预期内的
+  `research_get` 的 `context` operation，因此不会制造预期内的
   `INPUT_VALIDATION_ERROR` 或把
   成功研究错误标成 Partial。
 - A 股研究标的工作流按步骤串行进入 Provider Router，避免同一研究流程把多个
@@ -270,37 +267,6 @@ integration in Phase 3A.
 | `HOG-P0-003` | Deep Dive 未显式组合行业周期事实 | **已解决** | 2026-07-25：仅当 `research_workflow_run` 的 `deep_dive` operation 显式选择 `industry_cycle="hog"` 时，才组合公司经营披露与全国猪周期 compact 包；不按公司名称推断行业 |
 | `HOG-P0-004` | 长周期 `industry_cycle` 事实包过大 | **已解决** | 2026-07-25：支持 `view=compact|series`（默认 compact）、`metric_codes` 过滤及 `offset`/`limit<=200` 有界分页，并返回 coverage / `has_more` |
 | `HOG-P0-005` | 官方月度核心序列的长期覆盖有限 | **持续改进（不阻塞）** | 不再要求固定 20 年或连续覆盖；尽可能同步最长的可验证官方历史，持续显式披露真实覆盖与缺口，不插值、不伪造连续序列 |
-
-## Phase 3C — QuantConnect Free manual validation bridge
-
-> Status: the current Phase 3C scope was implemented on 2026-07-30. The MCP
-> prepares hashed LEAN packages and imports user-exported QuantConnect result JSON.
-> The user-operated end-to-end path has been exercised. See the
-> [QuantConnect Free guide](../guide/quantconnect-free-bridge.md).
-
-The existing `research_workflow_run` tool now has
-`historical_validation_prepare` and `historical_validation_import` operations.
-They write owner-only, gitignored artifacts and do not add public tools.
-QuantConnect login, web compilation and the Backtest click remain user-operated.
-Imported metrics are degraded because the free export cannot attest the exact
-remote code hash or immutable dataset version.
-
-The current boundary is intentionally narrow:
-
-- Codex authors complete LEAN Python;
-- Trading Partner validates without executing, hashes, and writes the package;
-- the user copies the code to QuantConnect Free and runs it manually;
-- Trading Partner imports the downloaded result and reports available metrics plus
-  explicit reproducibility gaps.
-
-Historical storage, DuckDB/Parquet, dataset/version registries, a local runner,
-paid QuantConnect automation, Strategy Registry, experiment orchestration,
-walk-forward/OOS/event studies, automated bias checks, and Trading Partner-owned
-A-share/US market-rule simulation are deferred future options. QuantConnect/LEAN
-and the submitted strategy code own market, fee, slippage, liquidity, and corporate
-action simulation. Trading Partner records declared settings but does not attest
-that the remote run used them. No imported result confirms a Thesis or authorizes
-live execution.
 
 ## Phase 3D — Judgment-to-plan controls
 
@@ -370,7 +336,7 @@ or pretend that later plans describe earlier intent:
    Findings and record correction notes/action items without rewriting the Run;
 5. `export` atomically replaces only Trading Partner's marker block in the configured
    Obsidian weekly note, preserving handwritten content and including the latest review;
-6. `portfolio_analyze/retro_history` and the Console Trade Retro page read immutable
+6. `portfolio_get/retro_history` and the Console Trade Retro page read immutable
    Run and review history without contacting a Provider.
 
 The first algorithm reports incomplete activity coverage, missing, ambiguous, or

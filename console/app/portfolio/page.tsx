@@ -1,10 +1,15 @@
 "use client";
 
+import { Tag } from "../components/ui/controls";
+
+import { useAccountLabel } from "../components/account-aliases";
+
 import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown, DatabaseZap, ReceiptText, RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
 import {
   ErrorNote,
+  Button,
   FormField,
   ActionButton,
   Badge,
@@ -16,14 +21,18 @@ import {
   HorizontalTabs,
   PageActionMenu,
   Paginator,
+  Input,
+  Select,
   SortableTableHeader,
   displayJson,
   formatDate,
   formatDecimal,
   shortId,
+  Table,
 } from "../components/ui";
 import { listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
+import { CYCLE_ACTIVITY_COUNTS_HELP, cycleActivityCounts } from "../lib/trade-cycle-counts";
 import { textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
@@ -114,12 +123,6 @@ function cycleStatusTone(value: unknown): "good" | "bad" | "neutral" {
   return "neutral";
 }
 
-function cycleClassificationTone(value: unknown): "good" | "warn" | "neutral" {
-  const classification = text(value, "UNCLASSIFIED").toUpperCase();
-  if (["ACTIVE_TRADE", "LONG_TERM_INVESTMENT"].includes(classification)) return "good";
-  if (classification === "UNCLASSIFIED") return "warn";
-  return "neutral";
-}
 
 /** Invocation POSTs are {tool_name,result}; direct aggregate fields are envelopes. */
 function invocationResult(value: unknown): Dict {
@@ -301,13 +304,6 @@ function sortedPositions(positions: Dict[], sort: PositionSort): Dict[] {
     .map(({ position }) => position);
 }
 
-function accountSource(account: Dict): string {
-  const provider = text(account.provider, "ACCOUNT").toUpperCase();
-  const reference = text(account.account_ref, "");
-  const suffix = reference.slice(-6).toUpperCase();
-  return `${provider}${suffix ? ` · ${suffix}` : ""}`;
-}
-
 function accountNumber(account: Dict, fallbackIndex: number, accountOrder?: Map<string, number>): number {
   const reference = text(account.account_ref, "");
   return accountOrder?.get(reference) ?? fallbackIndex + 1;
@@ -324,10 +320,11 @@ function AccountIdentity({
   accountOrder?: Map<string, number>;
   compact?: boolean;
 }) {
+  const accountLabel = useAccountLabel();
   return <div className={`portfolio-account-identity${compact ? " compact" : ""}`}>
     {compact
-      ? <><strong>Account #{accountNumber(account, index, accountOrder)}</strong><span>{accountSource(account)}</span></>
-      : <strong className="portfolio-account-title" role="heading" aria-level={3}>{accountSource(account)}</strong>}
+      ? <><strong>Account #{accountNumber(account, index, accountOrder)}</strong><span>{accountLabel(account)}</span></>
+      : <strong className="portfolio-account-title" role="heading" aria-level={3}>{accountLabel(account)}</strong>}
   </div>;
 }
 
@@ -362,13 +359,13 @@ function PortfolioSection({
   const contentId = `portfolio-section-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return <section className="card portfolio-collapsible-section">
     <header className="card-head portfolio-section-head">
-      <button type="button" className="portfolio-section-trigger" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((current) => !current)}>
+      <Button type="button" className="portfolio-section-trigger" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((current) => !current)}>
         <span>
           <span className="card-kicker">{kicker}</span>
           <span className="portfolio-section-title" role="heading" aria-level={2}>{title}</span>
         </span>
         <span className="portfolio-disclosure-meta">{summary}<ChevronDown aria-hidden="true" className={open ? "open" : ""} size={17} /></span>
-      </button>
+      </Button>
     </header>
     <div id={contentId} className="portfolio-section-body" hidden={!open}>{children}</div>
   </section>;
@@ -393,14 +390,14 @@ function AccountPanel({
   const contentId = `${panelId}-content`;
   const qualityCodes = accountQualityCodes(account);
   return <article className={`portfolio-account-card${open ? " open" : " collapsed"}`}>
-    <button type="button" className="portfolio-account-header" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((current) => !current)}>
+    <Button type="button" className="portfolio-account-header" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((current) => !current)}>
       <AccountIdentity account={account} index={index} />
       <span className="portfolio-account-header-actions">
         <span className="portfolio-account-count">{positionCount} position{positionCount === 1 ? "" : "s"}</span>
         <Badge value={qualityCodes.length > 0 ? "LIMITED" : "AVAILABLE"} />
         <ChevronDown aria-hidden="true" className={open ? "open" : ""} size={18} />
       </span>
-    </button>
+    </Button>
     <div id={contentId} className="portfolio-account-body" hidden={!open}>{children}</div>
   </article>;
 }
@@ -475,7 +472,7 @@ function HoldingsTab({
             ]} />
             <AccountDataQuality account={account} />
             {positions.length === 0 ? <Empty>This account has no positions.</Empty> : <>
-              <div className="table-wrap portfolio-desktop-table"><table><thead><tr>
+              <div className="table-wrap portfolio-desktop-table"><Table><thead><tr>
                 <SortableTableHeader label="Instrument" column="instrument_id" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
                 <SortableTableHeader label="Snapshot Price" column="snapshot_price" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
                 <SortableTableHeader label="Side" column="side" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
@@ -484,7 +481,7 @@ function HoldingsTab({
                 <SortableTableHeader label="Market Value (Not NAV)" column="market_value" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
                 <SortableTableHeader label="Unrealized P/L" column="unrealized_pnl" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
                 <SortableTableHeader label="Currency" column="currency" activeColumn={sort.key} direction={sort.direction} onSort={(column) => onSort(tableId, column)} />
-              </tr></thead><tbody>{visible.map((position) => <tr key={`${tableId}-${text(position.instrument_id)}`}><td><strong>{shortId(position.instrument_id)}</strong><small className="table-sub mono">{text(position.instrument_id)}</small></td><td>{snapshotPrice(position) == null ? <span>—</span> : <><strong>{formatDecimal(snapshotPrice(position), 4)}</strong><small className="table-sub">{snapshotPriceBasis(position) === "BROKER_VALUATION_ONLY" ? "Broker valuation only" : formatDate(position.market_price_at)}</small></>}</td><td>{text(position.side).toUpperCase()}</td><td>{formatDecimal(position.quantity, 4)}</td><td>{formatDecimal(position.average_cost, 4)}</td><td>{formatDecimal(position.market_value)}</td><td className={Number(position.unrealized_pnl ?? 0) > 0 ? "text-green" : Number(position.unrealized_pnl ?? 0) < 0 ? "text-red" : ""}>{formatDecimal(position.unrealized_pnl)}</td><td>{text(position.currency)}</td></tr>)}</tbody></table></div>
+              </tr></thead><tbody>{visible.map((position) => <tr key={`${tableId}-${text(position.instrument_id)}`}><td><strong>{shortId(position.instrument_id)}</strong><small className="table-sub mono">{text(position.instrument_id)}</small></td><td>{snapshotPrice(position) == null ? <span>—</span> : <><strong>{formatDecimal(snapshotPrice(position), 4)}</strong><small className="table-sub">{snapshotPriceBasis(position) === "BROKER_VALUATION_ONLY" ? "Broker valuation only" : formatDate(position.market_price_at)}</small></>}</td><td>{text(position.side).toUpperCase()}</td><td>{formatDecimal(position.quantity, 4)}</td><td>{formatDecimal(position.average_cost, 4)}</td><td>{formatDecimal(position.market_value)}</td><td className={Number(position.unrealized_pnl ?? 0) > 0 ? "text-green" : Number(position.unrealized_pnl ?? 0) < 0 ? "text-red" : ""}>{formatDecimal(position.unrealized_pnl)}</td><td>{text(position.currency)}</td></tr>)}</tbody></Table></div>
               <div className="portfolio-mobile-cards">{visible.map((position) => <PositionCard key={`${tableId}-${text(position.instrument_id)}`} position={position} />)}</div>
             </>}
           </AccountPanel>;
@@ -530,13 +527,13 @@ function ActivityTab({
   return <div className="portfolio-tab-stack">
     <PortfolioSection kicker="CYCLES · DETERMINISTIC" title="Trade Cycles" defaultOpen summary={<><Badge value={text(cycleData?.status, "UNKNOWN")} /><span>{cycles.length} cycles</span></>}>
       <p className="card-note">Long-only cycles are rebuilt from durable transactions by account, Instrument, and native currency. Missing fees, prices, opening history, oversells, and result limits remain explicit; no Broker refresh occurs here.</p>
-      {cycles.length === 0 ? <Empty>No resolvable Trade Cycles in the durable activity ledger.</Empty> : <><div className="trade-cycle-list">{visibleCycles.map((cycle, index) => <article key={text(cycle.cycle_id)}><header><div><strong>{shortId(cycle.instrument_id)}</strong><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small><AccountIdentity account={cycle} index={cycleOffset + index} accountOrder={accountOrder} compact /></div><div className="page-actions"><Badge value={text(cycle.classification, "UNCLASSIFIED")} tone={cycleClassificationTone(cycle.classification)} /><Badge value={text(cycle.status, "UNKNOWN")} tone={cycleStatusTone(cycle.status)} /></div></header><dl><div><dt>{cyclePnlDisplay(cycle).label}</dt><dd>{cyclePnlDisplay(cycle).value}</dd>{cyclePnlDisplay(cycle).detail ? <small>{cyclePnlDisplay(cycle).detail}</small> : null}</div><div><dt>Ending Quantity</dt><dd>{formatDecimal(cycle.ending_quantity, 4)}</dd></div><div><dt>Adds / Reductions</dt><dd>{text(cycle.add_count, "0")} / {text(cycle.reduce_count, "0")}</dd></div><div><dt>Maximum Deployed</dt><dd>{formatDecimal(cycle.maximum_deployed_capital)} {text(cycle.currency, "")}</dd></div></dl><Disclosure variant="code" title={<>{listOf<string>(cycle, "activity_ids").length} Activity References · {text(cycle.quality, "UNKNOWN")}</>}><div className="retro-code-list">{listOf<string>(cycle, "activity_ids").map((item) => <code key={item}>{item}</code>)}</div>{listOf<string>(cycle, "warning_codes").length > 0 ? <small className="table-sub">{listOf<string>(cycle, "warning_codes").join(" · ")}</small> : null}</Disclosure></article>)}</div><Paginator step={cyclePageSize} offset={cycleOffset} hasMore={cycleOffset + cyclePageSize < cycles.length} onOffsetChange={setCycleOffset} summary={<small>{cycleOffset + 1}–{Math.min(cycleOffset + cyclePageSize, cycles.length)} of {cycles.length}</small>} /></>}
+      {cycles.length === 0 ? <Empty>No resolvable Trade Cycles in the durable activity ledger.</Empty> : <><div className="trade-cycle-list">{visibleCycles.map((cycle, index) => <article key={text(cycle.cycle_id)}><header><div><strong>{shortId(cycle.instrument_id)}</strong><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small><AccountIdentity account={cycle} index={cycleOffset + index} accountOrder={accountOrder} compact /></div><div className="page-actions"><Tag>{text(cycle.classification, "UNCLASSIFIED")}</Tag><Badge value={text(cycle.status, "UNKNOWN")} tone={cycleStatusTone(cycle.status)} /></div></header><dl><div><dt>{cyclePnlDisplay(cycle).label}</dt><dd>{cyclePnlDisplay(cycle).value}</dd>{cyclePnlDisplay(cycle).detail ? <small>{cyclePnlDisplay(cycle).detail}</small> : null}</div><div><dt>Current Average Cost</dt><dd>{cycle.current_average_cost == null ? "Unavailable" : `${formatDecimal(cycle.current_average_cost, 4)} ${text(cycle.currency, "")}`}</dd><small>Remaining FIFO lots · excludes trade fees</small></div><div><dt>Ending Quantity</dt><dd>{formatDecimal(cycle.ending_quantity, 4)}</dd></div><div title={CYCLE_ACTIVITY_COUNTS_HELP}><dt>Adds / Reductions</dt><dd>{cycleActivityCounts(cycle)}</dd><small>Trade Records</small></div><div><dt>Maximum Deployed</dt><dd>{formatDecimal(cycle.maximum_deployed_capital)} {text(cycle.currency, "")}</dd></div></dl><Disclosure variant="code" title={<>{listOf<string>(cycle, "activity_ids").length} Activity References · {text(cycle.quality, "UNKNOWN")}</>}><div className="retro-code-list">{listOf<string>(cycle, "activity_ids").map((item) => <code key={item}>{item}</code>)}</div>{listOf<string>(cycle, "warning_codes").length > 0 ? <small className="table-sub">{listOf<string>(cycle, "warning_codes").join(" · ")}</small> : null}</Disclosure></article>)}</div><Paginator step={cyclePageSize} offset={cycleOffset} hasMore={cycleOffset + cyclePageSize < cycles.length} onOffsetChange={setCycleOffset} summary={<small>{cycleOffset + 1}–{Math.min(cycleOffset + cyclePageSize, cycles.length)} of {cycles.length}</small>} /></>}
       <WarningList value={tradeCycles} />
     </PortfolioSection>
     <PortfolioSection kicker="ACTIVITY · DURABLE LEDGER" title="Transaction History" defaultOpen={false} summary={<span>{transactionRows.length} records</span>}>
       <p className="card-note">These records come only from the database. Transaction sync is explicit; loading the page never refreshes the broker or treats missing fees as zero.</p>
       {transactionRows.length === 0 ? <Empty>No durable transaction records. Click “Sync Transactions” above to fetch the latest activity.</Empty> : <>
-        <div className="table-wrap portfolio-desktop-table"><table><thead><tr><th>Time</th><th>Account</th><th>Instrument</th><th>Type</th><th>Side</th><th>Quantity</th><th>Price</th><th>Cash</th><th>Fees</th><th>Currency</th></tr></thead><tbody>{transactionRows.map((row, index) => <tr key={`${text(row.provider_transaction_id, "tx")}-${index}`}><td>{formatDate(row.occurred_at)}</td><td><AccountIdentity account={row} index={index} accountOrder={accountOrder} compact /></td><td>{row.instrument_id ? <><strong>{shortId(row.instrument_id)}</strong><small className="table-sub mono">{text(row.instrument_id)}</small></> : "Cash activity"}</td><td>{text(row.kind).toUpperCase()}</td><td>{text(row.side).toUpperCase()}</td><td>{formatDecimal(row.quantity, 4)}</td><td>{formatDecimal(row.price, 4)}</td><td>{formatDecimal(row.cash_amount)}</td><td>{formatDecimal(row.fees)}</td><td>{text(row.currency)}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap portfolio-desktop-table"><Table><thead><tr><th>Time</th><th>Account</th><th>Instrument</th><th>Type</th><th>Side</th><th>Quantity</th><th>Price</th><th>Cash</th><th>Fees</th><th>Currency</th></tr></thead><tbody>{transactionRows.map((row, index) => <tr key={`${text(row.provider_transaction_id, "tx")}-${index}`}><td>{formatDate(row.occurred_at)}</td><td><AccountIdentity account={row} index={index} accountOrder={accountOrder} compact /></td><td>{row.instrument_id ? <><strong>{shortId(row.instrument_id)}</strong><small className="table-sub mono">{text(row.instrument_id)}</small></> : "Cash activity"}</td><td>{text(row.kind).toUpperCase()}</td><td>{text(row.side).toUpperCase()}</td><td>{formatDecimal(row.quantity, 4)}</td><td>{formatDecimal(row.price, 4)}</td><td>{formatDecimal(row.cash_amount)}</td><td>{formatDecimal(row.fees)}</td><td>{text(row.currency)}</td></tr>)}</tbody></Table></div>
         <div className="portfolio-mobile-cards">{transactionRows.map((row, index) => <article className="portfolio-activity-card" key={`mobile-${text(row.provider_transaction_id, "tx")}-${index}`}><header><strong>{row.instrument_id ? shortId(row.instrument_id) : "Cash activity"}</strong><Badge value={text(row.kind)} /></header><AccountIdentity account={row} index={index} accountOrder={accountOrder} compact /><small>{formatDate(row.occurred_at)}</small><dl className="portfolio-position-metrics"><div><dt>Side / Quantity</dt><dd>{text(row.side).toUpperCase()} · {formatDecimal(row.quantity, 4)}</dd></div><div><dt>Price</dt><dd>{formatDecimal(row.price, 4)}</dd></div><div><dt>Cash / Fees</dt><dd>{formatDecimal(row.cash_amount)} / {formatDecimal(row.fees)}</dd></div><div><dt>Currency</dt><dd>{text(row.currency)}</dd></div></dl></article>)}</div>
       </>}
       <WarningList value={transactions} />
@@ -558,7 +555,7 @@ function PerformanceTab({ accountOrder, seriesEnvelope, dailyEquityEnvelope }: {
   async function calculate() {
     setLoading(true); setError(null);
     try {
-      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "portfolio_analyze", arguments: { request: { operation: "performance_summary", start: `${start}T00:00:00Z`, end: `${end}T23:59:59.999999Z`, cost_basis_method: method } }, preserve_full_result: true });
+      const response = await postApi<Dict>("/api/tools/invoke", { tool_name: "portfolio_get", arguments: { request: { operation: "performance_summary", start: `${start}T00:00:00Z`, end: `${end}T23:59:59.999999Z`, cost_basis_method: method } }, preserve_full_result: true });
       const resultEnvelope = envelope(invocationResult(response));
       if (resultEnvelope.ok === false) throw new Error(errorMessage(resultEnvelope, "Performance attribution failed"));
       setResult(resultEnvelope);
@@ -574,16 +571,16 @@ function PerformanceTab({ accountOrder, seriesEnvelope, dailyEquityEnvelope }: {
     <Card kicker="RETURNS · NATIVE CURRENCY" title="Return Series" action={<span>{series.length} accounts</span>}>
       <p className="card-note">Year-to-date TWR, money-weighted return (XIRR), and drawdown use timestamped account equity only. Each native currency remains separate; missing snapshots or external cash-flow coverage are never estimated.</p>
       <p className="card-note">Journal Activation: {dailyEquity?.journal_activation_at ? formatDate(dailyEquity.journal_activation_at) : "Unavailable"} · {listOf<Dict>(dailyEquity, "items").length} durable Daily Equity points.</p>
-      {series.length === 0 ? <Empty>No complete account-equity series is available for this period.</Empty> : <div className="performance-results">{series.map((item, index) => <article className="performance-account" key={`${text(item.account_ref)}-${text(item.currency)}-${index}`}><header><div><AccountIdentity account={item} index={index} accountOrder={accountOrder} compact /><span>{text(item.currency)} · {formatDate(item.period_start)} → {formatDate(item.period_end)}</span></div><Badge value={text(item.status, "UNKNOWN")} /></header><div className="account-summary"><article><span>Time-Weighted Return</span><strong>{item.twr == null ? "—" : `${formatRatioPercent(item.twr)}%`}</strong><small>{text(item.twr_status, "UNAVAILABLE")}</small></article><article><span>Money-Weighted Return</span><strong>{item.xirr == null ? "—" : `${formatRatioPercent(item.xirr)}%`}</strong><small>{text(item.xirr_status, "UNAVAILABLE")} · XIRR</small></article><article><span>Maximum Drawdown</span><strong>{item.maximum_drawdown == null ? "—" : `${formatRatioPercent(item.maximum_drawdown)}%`}</strong><small>{text(item.drawdown_status, "UNAVAILABLE")}</small></article><article><span>Income Return</span><strong>{item.income_return == null ? "—" : `${formatRatioPercent(item.income_return)}%`}</strong><small>{text(item.income_return_status, "UNAVAILABLE")}</small></article><article><span>Fee Drag</span><strong>{item.fee_drag == null ? "—" : `${formatRatioPercent(item.fee_drag)}%`}</strong><small>{text(item.fee_drag_status, "UNAVAILABLE")}</small></article><article><span>Equity Points</span><strong>{listOf<Dict>(item, "points").length}</strong><small>{listOf<string>(item, "input_activity_ids").length} account activities</small></article></div>{listOf<Dict>(item, "cycle_performance").length > 0 ? <Disclosure variant="compact" title={<>{listOf<Dict>(item, "cycle_performance").length} Closed Cycle Returns</>}><div className="table-wrap"><table><thead><tr><th>Cycle</th><th>P/L</th><th>Return on Maximum Deployed</th><th>R-Multiple</th><th>Status</th></tr></thead><tbody>{listOf<Dict>(item, "cycle_performance").map((cycle) => <tr key={text(cycle.cycle_id)}><td>{shortId(cycle.instrument_id)}</td><td>{cyclePnlDisplay(cycle).label} {cyclePnlDisplay(cycle).value}{cyclePnlDisplay(cycle).detail ? <small className="table-sub"> · {cyclePnlDisplay(cycle).detail}</small> : null}</td><td>{cycle.cycle_return == null ? "—" : `${formatRatioPercent(cycle.cycle_return)}%`}</td><td>{text(cycle.r_multiple)}</td><td><Badge value={text(cycle.status, "UNAVAILABLE")} /></td></tr>)}</tbody></table></div></Disclosure> : null}{stringList(item.warning_codes).length > 0 ? <small className="table-sub">Data Notes: {stringList(item.warning_codes).join(" · ")}</small> : null}</article>)}</div>}
+      {series.length === 0 ? <Empty>No complete account-equity series is available for this period.</Empty> : <div className="performance-results">{series.map((item, index) => <article className="performance-account" key={`${text(item.account_ref)}-${text(item.currency)}-${index}`}><header><div><AccountIdentity account={item} index={index} accountOrder={accountOrder} compact /><span>{text(item.currency)} · {formatDate(item.period_start)} → {formatDate(item.period_end)}</span></div><Badge value={text(item.status, "UNKNOWN")} /></header><div className="account-summary"><article><span>Time-Weighted Return</span><strong>{item.twr == null ? "—" : `${formatRatioPercent(item.twr)}%`}</strong><small>{text(item.twr_status, "UNAVAILABLE")}</small></article><article><span>Money-Weighted Return</span><strong>{item.xirr == null ? "—" : `${formatRatioPercent(item.xirr)}%`}</strong><small>{text(item.xirr_status, "UNAVAILABLE")} · XIRR</small></article><article><span>Maximum Drawdown</span><strong>{item.maximum_drawdown == null ? "—" : `${formatRatioPercent(item.maximum_drawdown)}%`}</strong><small>{text(item.drawdown_status, "UNAVAILABLE")}</small></article><article><span>Income Return</span><strong>{item.income_return == null ? "—" : `${formatRatioPercent(item.income_return)}%`}</strong><small>{text(item.income_return_status, "UNAVAILABLE")}</small></article><article><span>Fee Drag</span><strong>{item.fee_drag == null ? "—" : `${formatRatioPercent(item.fee_drag)}%`}</strong><small>{text(item.fee_drag_status, "UNAVAILABLE")}</small></article><article><span>Equity Points</span><strong>{listOf<Dict>(item, "points").length}</strong><small>{listOf<string>(item, "input_activity_ids").length} account activities</small></article></div>{listOf<Dict>(item, "cycle_performance").length > 0 ? <Disclosure variant="compact" title={<>{listOf<Dict>(item, "cycle_performance").length} Closed Cycle Returns</>}><div className="table-wrap"><Table><thead><tr><th>Cycle</th><th>P/L</th><th>Return on Maximum Deployed</th><th>R-Multiple</th><th>Status</th></tr></thead><tbody>{listOf<Dict>(item, "cycle_performance").map((cycle) => <tr key={text(cycle.cycle_id)}><td>{shortId(cycle.instrument_id)}</td><td>{cyclePnlDisplay(cycle).label} {cyclePnlDisplay(cycle).value}{cyclePnlDisplay(cycle).detail ? <small className="table-sub"> · {cyclePnlDisplay(cycle).detail}</small> : null}</td><td>{cycle.cycle_return == null ? "—" : `${formatRatioPercent(cycle.cycle_return)}%`}</td><td>{text(cycle.r_multiple)}</td><td><Badge value={text(cycle.status, "UNAVAILABLE")} /></td></tr>)}</tbody></Table></div></Disclosure> : null}{stringList(item.warning_codes).length > 0 ? <small className="table-sub">Data Notes: {stringList(item.warning_codes).join(" · ")}</small> : null}</article>)}</div>}
       <WarningList value={seriesEnvelope} />
       <WarningList value={dailyEquityEnvelope} />
     </Card>
     <Card kicker="PERFORMANCE · DURABLE ATTRIBUTION" title="Performance Ledger" action={result ? <Badge value={text(performance?.status, "LOADED")} /> : undefined}>
     <p className="card-note">Rebuilds FIFO in native currency or uses broker-reported figures; no implicit FX conversion, and cumulative P/L is not presented as period returns.</p>
-    <div className="performance-controls"><Field label="Start Date (UTC)" required><input required type="date" value={start} onChange={(event) => setStart(event.target.value)} /></Field><Field label="End Date (UTC)" required><input required type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></Field><Field label="Cost Basis" required><select required value={method} onChange={(event) => setMethod(event.target.value as "FIFO" | "BROKER_REPORTED")}><option value="FIFO">FIFO Event Reconstruction</option><option value="BROKER_REPORTED">Broker-reported</option></select></Field><ActionButton onClick={() => { void calculate(); }} busy={loading}>Calculate Attribution</ActionButton></div>
+    <div className="performance-controls"><Field label="Start Date (UTC)" required><Input required type="date" value={start} onChange={(event) => setStart(event.target.value)} /></Field><Field label="End Date (UTC)" required><Input required type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></Field><Field label="Cost Basis" required><Select required value={method} onChange={(event) => setMethod(event.target.value as "FIFO" | "BROKER_REPORTED")}><option value="FIFO">FIFO Event Reconstruction</option><option value="BROKER_REPORTED">Broker-reported</option></Select></Field><ActionButton onClick={() => { void calculate(); }} busy={loading}>Calculate Attribution</ActionButton></div>
     <ErrorNote role="alert">{error}</ErrorNote>
     <WarningList value={result} />
-    {performance && accounts.length === 0 ? <Empty>No durable account facts can be attributed in the selected period.</Empty> : <div className="performance-results">{accounts.map((account, index) => { const instruments = listOf<Dict>(account, "instruments"); return <article className="performance-account" key={`${text(account.account_ref)}-${index}`}><header><div><AccountIdentity account={account} index={index} accountOrder={accountOrder} compact /><span>{text(account.currency)} · {text(account.cost_basis_method)}</span></div><Badge value={text(account.status, "UNKNOWN")} /></header><div className="account-summary"><article><span>Realized P/L (After Fees)</span><strong>{formatDecimal(account.realized_pnl_after_fees)}</strong><small>Before Fees {formatDecimal(account.realized_pnl_before_fees)}</small></article><article><span>Unrealized P/L</span><strong>{formatDecimal(account.unrealized_pnl_before_fees)}</strong><small>Valuation Snapshot {formatDate(account.snapshot_as_of)}</small></article><article><span>Dividends / Interest</span><strong>{formatDecimal(account.dividends)} / {formatDecimal(account.interest)}</strong><small>Known Fees {formatDecimal(account.known_fees)}</small></article><article><span>Net External Cash Flow</span><strong>{formatDecimal(account.net_external_cash_flow)}</strong><small>{instruments.length} instrument facts</small></article></div><Disclosure variant="compact" title="Drill into Instruments & Events"><div className="table-wrap"><table><thead><tr><th>Instrument</th><th>Net Trading P/L</th><th>Dividend Income</th><th>Total P/L</th><th>Realized After Fees</th><th>Unrealized</th><th>Ending Quantity</th><th>Basis Source</th><th>Warning</th></tr></thead><tbody>{instruments.map((instrument, instrumentIndex) => <tr key={`${text(instrument.instrument_id)}-${instrumentIndex}`}><td><strong>{shortId(instrument.instrument_id)}</strong><small className="table-sub mono">{text(instrument.instrument_id)}</small></td><td>{formatDecimal(instrument.net_trading_pnl)}</td><td>{formatDecimal(instrument.dividend_income)}</td><td><strong>{formatDecimal(instrument.total_pnl)}</strong></td><td>{formatDecimal(instrument.realized_pnl_after_fees)}</td><td>{formatDecimal(instrument.unrealized_pnl_before_fees)}</td><td>{formatDecimal(instrument.ending_quantity, 4)}</td><td>{stringList(instrument.basis_checkpoint_ids).join(" · ") || "—"}</td><td>{stringList(instrument.warning_codes).join(" · ") || "—"}</td></tr>)}</tbody></table></div></Disclosure></article>; })}</div>}
+    {performance && accounts.length === 0 ? <Empty>No durable account facts can be attributed in the selected period.</Empty> : <div className="performance-results">{accounts.map((account, index) => { const instruments = listOf<Dict>(account, "instruments"); return <article className="performance-account" key={`${text(account.account_ref)}-${index}`}><header><div><AccountIdentity account={account} index={index} accountOrder={accountOrder} compact /><span>{text(account.currency)} · {text(account.cost_basis_method)}</span></div><Badge value={text(account.status, "UNKNOWN")} /></header><div className="account-summary"><article><span>Realized P/L (After Fees)</span><strong>{formatDecimal(account.realized_pnl_after_fees)}</strong><small>Before Fees {formatDecimal(account.realized_pnl_before_fees)}</small></article><article><span>Unrealized P/L</span><strong>{formatDecimal(account.unrealized_pnl_before_fees)}</strong><small>Valuation Snapshot {formatDate(account.snapshot_as_of)}</small></article><article><span>Dividends / Interest</span><strong>{formatDecimal(account.dividends)} / {formatDecimal(account.interest)}</strong><small>Known Fees {formatDecimal(account.known_fees)}</small></article><article><span>Net External Cash Flow</span><strong>{formatDecimal(account.net_external_cash_flow)}</strong><small>{instruments.length} instrument facts</small></article></div><Disclosure variant="compact" title="Drill into Instruments & Events"><div className="table-wrap"><Table><thead><tr><th>Instrument</th><th>Net Trading P/L</th><th>Dividend Income</th><th>Total P/L</th><th>Realized After Fees</th><th>Unrealized</th><th>Ending Quantity</th><th>Basis Source</th><th>Warning</th></tr></thead><tbody>{instruments.map((instrument, instrumentIndex) => <tr key={`${text(instrument.instrument_id)}-${instrumentIndex}`}><td><strong>{shortId(instrument.instrument_id)}</strong><small className="table-sub mono">{text(instrument.instrument_id)}</small></td><td>{formatDecimal(instrument.net_trading_pnl)}</td><td>{formatDecimal(instrument.dividend_income)}</td><td><strong>{formatDecimal(instrument.total_pnl)}</strong></td><td>{formatDecimal(instrument.realized_pnl_after_fees)}</td><td>{formatDecimal(instrument.unrealized_pnl_before_fees)}</td><td>{formatDecimal(instrument.ending_quantity, 4)}</td><td>{stringList(instrument.basis_checkpoint_ids).join(" · ") || "—"}</td><td>{stringList(instrument.warning_codes).join(" · ") || "—"}</td></tr>)}</tbody></Table></div></Disclosure></article>; })}</div>}
     </Card>
   </div>;
 }
@@ -618,14 +615,14 @@ function PolicyForm({ policy, onSaved }: { policy: Dict; onSaved: () => void }) 
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Risk Policy update failed"); }
     finally { setBusy(false); }
   }
-  return <Disclosure className="portfolio-policy-editor" variant="panel" title={<>Create Policy Version (expected_version={text(policy.version)})</>}><div className="portfolio-policy-form">{POLICY_FIELDS.map(({ key, label, step }) => <Field label={label} key={key} required><input required type="number" step={step ?? "0.01"} value={values[key]} onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))} /></Field>)}</div><ErrorNote>{error}</ErrorNote><div className="portfolio-form-actions"><ActionButton onClick={() => { void save(); }} busy={busy}>Confirm Append</ActionButton><small className="muted">User confirmation, idempotency key, and expected_version are recorded in the audit trail.</small></div></Disclosure>;
+  return <Disclosure className="portfolio-policy-editor" variant="panel" title={<>Create Policy Version (expected_version={text(policy.version)})</>}><div className="portfolio-policy-form">{POLICY_FIELDS.map(({ key, label, step }) => <Field label={label} key={key} required><Input required type="number" step={step ?? "0.01"} value={values[key]} onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))} /></Field>)}</div><ErrorNote>{error}</ErrorNote><div className="portfolio-form-actions"><ActionButton onClick={() => { void save(); }} busy={busy}>Confirm Append</ActionButton><small className="muted">User confirmation, idempotency key, and expected_version are recorded in the audit trail.</small></div></Disclosure>;
 }
 
 function RiskChecks({ result }: { result: Dict | null }) {
   const payload = data<Dict>(result);
   const checks = listOf<Dict>(payload, "checks");
   if (!result) return <Empty>Risk check has not run yet.</Empty>;
-  return <div className="risk-result"><header><strong>Risk Check · {text(payload?.overall_status, "UNKNOWN")}</strong><Badge value={payload?.execution_effect === true ? "EXECUTION_EFFECT" : "READ_ONLY"} /></header><div className="table-wrap"><table><thead><tr><th>Rule</th><th>Status</th><th>Actual</th><th>Limit</th><th>Scope</th><th>Explanation</th></tr></thead><tbody>{checks.map((check, index) => <tr key={`${text(check.rule_code)}-${index}`}><td>{text(check.rule_code)}</td><td><Badge value={text(check.status)} /></td><td>{formatDecimal(check.actual)}</td><td>{formatDecimal(check.limit)}</td><td>{text(check.scope)}</td><td>{text(check.message)}</td></tr>)}</tbody></table></div>{payload?.hypothetical ? <div className="portfolio-hypothetical"><span>Hypothetical Addition</span><strong>{shortId(asDict(payload.hypothetical).instrument_id)} · {formatDecimal(asDict(payload.hypothetical).quantity, 4)} · {formatDecimal(asDict(payload.hypothetical).assumed_price)} {text(asDict(payload.hypothetical).currency)}</strong></div> : null}{payload?.position_sizing ? <Disclosure variant="code" title="Position Sizing / Constraints"><pre className="portfolio-json">{displayJson(payload.position_sizing)}</pre></Disclosure> : null}<WarningList value={result} /></div>;
+  return <div className="risk-result"><header><strong>Risk Check · {text(payload?.overall_status, "UNKNOWN")}</strong><Badge value={payload?.execution_effect === true ? "EXECUTION_EFFECT" : "READ_ONLY"} /></header><div className="table-wrap"><Table><thead><tr><th>Rule</th><th>Status</th><th>Actual</th><th>Limit</th><th>Scope</th><th>Explanation</th></tr></thead><tbody>{checks.map((check, index) => <tr key={`${text(check.rule_code)}-${index}`}><td>{text(check.rule_code)}</td><td><Badge value={text(check.status)} /></td><td>{formatDecimal(check.actual)}</td><td>{formatDecimal(check.limit)}</td><td>{text(check.scope)}</td><td>{text(check.message)}</td></tr>)}</tbody></Table></div>{payload?.hypothetical ? <div className="portfolio-hypothetical"><span>Hypothetical Addition</span><strong>{shortId(asDict(payload.hypothetical).instrument_id)} · {formatDecimal(asDict(payload.hypothetical).quantity, 4)} · {formatDecimal(asDict(payload.hypothetical).assumed_price)} {text(asDict(payload.hypothetical).currency)}</strong></div> : null}{payload?.position_sizing ? <Disclosure variant="code" title="Position Sizing / Constraints"><pre className="portfolio-json">{displayJson(payload.position_sizing)}</pre></Disclosure> : null}<WarningList value={result} /></div>;
 }
 
 function RiskTab({ policyEnvelope, riskEnvelope, onRefresh }: { policyEnvelope: Dict | null; riskEnvelope: Dict | null; onRefresh: () => void }) {
@@ -662,7 +659,7 @@ function RiskTab({ policyEnvelope, riskEnvelope, onRefresh }: { policyEnvelope: 
     <Card kicker="RISK CHECK · READ ONLY" title="Current Risk Check">
       <p className="card-note">Read-only durable risk_check by default. Hypothetical Additions are calculation-only; they do not change accounts, Policy, Trade Plan, or create orders.</p>
       <RiskChecks result={localRiskEnvelope} />
-      <Disclosure className="portfolio-what-if" variant="panel" title="Run What-If"><div className="portfolio-segmented" role="tablist"><button type="button" className={whatIfMode === "manual" ? "selected" : ""} onClick={() => setWhatIfMode("manual")}>Manual Hypothetical</button><button type="button" className={whatIfMode === "trade_plan" ? "selected" : ""} onClick={() => setWhatIfMode("trade_plan")}>Trade Plan</button></div>{whatIfMode === "manual" ? <div className="portfolio-form-grid"><Field label="Instrument ID" required><input required value={instrument} onChange={(event) => setInstrument(event.target.value)} placeholder="equity:US:NVDA" /></Field><Field label="Quantity" required><input required type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Field><Field label="Assumed Price" required><input required type="number" min="0" step="any" value={price} onChange={(event) => setPrice(event.target.value)} /></Field><Field label="Native Currency" required><input required value={currency} onChange={(event) => setCurrency(event.target.value)} /></Field></div> : <Field label="Trade Plan ID" required><input required value={tradePlan} onChange={(event) => setTradePlan(event.target.value)} placeholder="trade_plan_<uuid7>" /></Field>}<div className="portfolio-form-actions"><ActionButton onClick={() => { void check(); }} busy={busy}>Run Read-Only Check</ActionButton></div><ErrorNote>{error}</ErrorNote></Disclosure>
+      <Disclosure className="portfolio-what-if" variant="panel" title="Run What-If"><div className="portfolio-segmented" role="group" aria-label="What-If Source"><Button variant={whatIfMode === "manual" ? "primary" : "secondary"} aria-pressed={whatIfMode === "manual"} type="button" className={whatIfMode === "manual" ? "selected" : ""} onClick={() => setWhatIfMode("manual")}>Manual Hypothetical</Button><Button variant={whatIfMode === "trade_plan" ? "primary" : "secondary"} aria-pressed={whatIfMode === "trade_plan"} type="button" className={whatIfMode === "trade_plan" ? "selected" : ""} onClick={() => setWhatIfMode("trade_plan")}>Trade Plan</Button></div>{whatIfMode === "manual" ? <div className="portfolio-form-grid"><Field label="Instrument ID" required><Input required value={instrument} onChange={(event) => setInstrument(event.target.value)} placeholder="equity:US:NVDA" /></Field><Field label="Quantity" required><Input required type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Field><Field label="Assumed Price" required><Input required type="number" min="0" step="any" value={price} onChange={(event) => setPrice(event.target.value)} /></Field><Field label="Native Currency" required><Input required value={currency} onChange={(event) => setCurrency(event.target.value)} /></Field></div> : <Field label="Trade Plan ID" required><Input required value={tradePlan} onChange={(event) => setTradePlan(event.target.value)} placeholder="trade_plan_<uuid7>" /></Field>}<div className="portfolio-form-actions"><ActionButton onClick={() => { void check(); }} busy={busy}>Run Read-Only Check</ActionButton></div><ErrorNote>{error}</ErrorNote></Disclosure>
     </Card>
   </div>;
 }

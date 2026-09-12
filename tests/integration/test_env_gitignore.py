@@ -39,7 +39,10 @@ def test_runtime_secrets_databases_artifacts_and_backups_are_gitignored(
     project_root: Path,
 ) -> None:
     paths = (
+        "runtime.env",
+        "runtime.env.backup",
         "data/trading_partner.db",
+        "data/state/us_post_market_monitor_session.txt",
         "data/secrets/schwab_tokens.json",
         "data/artifacts/technical/chart.png",
         "data/backups/trading-partner-test.db",

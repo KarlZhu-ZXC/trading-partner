@@ -460,16 +460,6 @@ export namespace AgentSendMessageRequestTypes {
 
 export type AgentSendMessageRequest = AgentSendMessageRequestTypes.AgentSendMessageRequest;
 
-export namespace AgentTelegramHandoffRequestTypes {
-  export type TtlSeconds = number | null;
-
-  export interface AgentTelegramHandoffRequest {
-    ttl_seconds?: TtlSeconds;
-  }
-}
-
-export type AgentTelegramHandoffRequest = AgentTelegramHandoffRequestTypes.AgentTelegramHandoffRequest;
-
 export namespace AgentUpdatePreferencesRequestTypes {
   export type AuthorizationNote = string;
   export type DefaultChart = boolean | null;

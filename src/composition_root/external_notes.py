@@ -126,7 +126,7 @@ def build_external_note_services(
     review_draft_service = ExternalNoteReviewDraftService(
         review_provider,
         provider_name="opencode_go",
-        model=(review_config.model if review_config is not None else "qwen3.8-max"),
+        model=(review_config.model if review_config is not None else "deepseek-flash"),
         reviews=review_repository,
         notes=repository,
         view_reviews=view_review_service,

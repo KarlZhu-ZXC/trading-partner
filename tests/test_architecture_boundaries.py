@@ -636,7 +636,8 @@ def test_public_tool_surface_respects_architecture_boundary() -> None:
         RETIRED_PUBLIC_TOOL_NAMES,
     )
 
-    assert "view_get" in PUBLIC_TOOL_NAMES
+    assert "view_get" not in PUBLIC_TOOL_NAMES
+    assert {"capability_discover", "capability_read", "capability_write"} <= PUBLIC_TOOL_NAMES
     assert PUBLIC_TOOL_NAMES.isdisjoint(FORBIDDEN_PUBLIC_TOOL_NAMES)
     assert PUBLIC_TOOL_NAMES.isdisjoint(RETIRED_PUBLIC_TOOL_NAMES)
     tool_root = LAYER_ROOTS["interfaces"] / "mcp" / "tools"

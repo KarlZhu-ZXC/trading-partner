@@ -61,11 +61,12 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
     ) -> dict[str, Any]:
         """Run the configured escalated review model; never confirm a judgment."""
         try:
-            value = await container.services.external_note_review_drafts.review(
-                note_revision_id,
-                explicit_review=True,
-                force=force,
-            )
+            async with container.services.external_notes.exclusive_session():
+                value = await container.services.external_note_review_drafts.review(
+                    note_revision_id,
+                    explicit_review=True,
+                    force=force,
+                )
             return success(
                 value
                 if value is not None

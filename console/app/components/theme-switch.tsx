@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "./ui/controls";
+import themeStyles from "./ui/theme-switch.module.css";
 import { Moon, Sun } from "lucide-react";
 
 type Theme = "light" | "dark";
@@ -27,27 +29,27 @@ export function ThemeSwitch() {
   }
 
   return (
-    <div className="theme-switch" role="group" aria-label="Theme">
-      <button
+    <div className={themeStyles.root} role="group" aria-label="Theme">
+      <Button size="sm"
         aria-label="Light Theme"
         aria-pressed={theme === "light"}
-        className={theme === "light" ? "active" : ""}
+        variant={theme === "light" ? "primary" : "secondary"}
         onClick={() => selectTheme("light")}
         type="button"
       >
-        <Sun aria-hidden="true" className="theme-icon" strokeWidth={1.7} />
-        <span className="theme-switch-label">Light</span>
-      </button>
-      <button
+        <Sun aria-hidden="true" className={themeStyles.icon} strokeWidth={1.7} />
+        <span className={themeStyles.label}>Light</span>
+      </Button>
+      <Button size="sm"
         aria-label="Dark Theme"
         aria-pressed={theme === "dark"}
-        className={theme === "dark" ? "active" : ""}
+        variant={theme === "dark" ? "primary" : "secondary"}
         onClick={() => selectTheme("dark")}
         type="button"
       >
-        <Moon aria-hidden="true" className="theme-icon" strokeWidth={1.7} />
-        <span className="theme-switch-label">Dark</span>
-      </button>
+        <Moon aria-hidden="true" className={themeStyles.icon} strokeWidth={1.7} />
+        <span className={themeStyles.label}>Dark</span>
+      </Button>
     </div>
   );
 }

@@ -45,3 +45,7 @@ tsconfig.tsbuildinfo
 # local builds and tool caches
 /dist/
 /.mypy_cache/
+
+/.next-design-preview/
+
+/.next-integration/

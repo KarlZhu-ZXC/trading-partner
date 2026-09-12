@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from domain.behavior.enums import BehaviorMetricAvailability
 from domain.behavior.models import (
+    BEHAVIOR_RETURN_BASIS,
     BEHAVIOR_SUMMARY_ALGORITHM_VERSION,
     BehaviorCohort,
     BehaviorMetric,
@@ -60,8 +61,8 @@ def _plan_key(decision: DecisionRecord) -> str | None:
     return f"{decision.trade_plan_id}:{decision.trade_plan_version}"
 
 
-def _safe_ratio(numerator: int | Decimal, denominator: int, *, minimum: int) -> Decimal | None:
-    if denominator < minimum or denominator == 0:
+def _safe_ratio(numerator: int | Decimal, denominator: int) -> Decimal | None:
+    if denominator == 0:
         return None
     value = Decimal(numerator) / Decimal(denominator)
     return value if value.is_finite() else None
@@ -80,17 +81,12 @@ def _median(values: list[int]) -> Decimal | None:
 class BehaviorSummaryCalculator:
     """Calculate explainable behavior metrics without persistence or Providers.
 
-    No metric combines native currencies.  Counts and distributions may span
-    currencies, but monetary averages/payoff ratios return ``None`` with an
-    explicit ``MULTIPLE_NATIVE_CURRENCIES`` note when the sample is mixed.
+    Monetary averages/payoff ratios keep native currencies separate. Counts and
+    per-cycle returns may span currencies; returns are normalized within each
+    Cycle before equal-weight aggregation.
     """
 
     algorithm_version = BEHAVIOR_SUMMARY_ALGORITHM_VERSION
-
-    def __init__(self, *, minimum_sample_size: int = 1) -> None:
-        if type(minimum_sample_size) is not int or minimum_sample_size < 0:
-            raise ValueError("minimum_sample_size must be a nonnegative int")
-        self.minimum_sample_size = minimum_sample_size
 
     def calculate(
         self,
@@ -106,7 +102,6 @@ class BehaviorSummaryCalculator:
         instrument_id: str | None = None,
         currency: str | None = None,
         classifications: tuple[TradeCycleClassification, ...] = (),
-        minimum_sample_size: int | None = None,
         cycle_decision_links: Mapping[str, tuple[str, ...]] | None = None,
         cycle_plan_links: Mapping[str, tuple[tuple[str, int], ...]] | None = None,
         activity_annotations: tuple[ActivityAnnotation, ...] | None = None,
@@ -125,11 +120,6 @@ class BehaviorSummaryCalculator:
         the affected metrics are explicitly ``NOT_SUPPORTED``.
         """
 
-        min_sample = (
-            self.minimum_sample_size
-            if minimum_sample_size is None
-            else self._validate_minimum_sample_size(minimum_sample_size)
-        )
         selected_cohort = self._cohort(
             cohort,
             strategy_code=strategy_code,
@@ -210,7 +200,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=closed_ids,
             excluded_cycle_ids=base_excluded,
             exclusion_reasons=base_reasons,
-            minimum_sample_size=min_sample,
         )
 
         pnl_cycles = tuple(item for item in closed_active if item.net_realized_pnl is not None)
@@ -248,7 +237,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=pnl_ids,
             excluded_cycle_ids=pnl_excluded,
             exclusion_reasons=pnl_reasons,
-            minimum_sample_size=min_sample,
         )
         losses_metric = self._count_metric(
             "losses",
@@ -258,7 +246,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=pnl_ids,
             excluded_cycle_ids=pnl_excluded,
             exclusion_reasons=pnl_reasons,
-            minimum_sample_size=min_sample,
         )
         flat_metric = self._count_metric(
             "flat",
@@ -268,7 +255,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=pnl_ids,
             excluded_cycle_ids=pnl_excluded,
             exclusion_reasons=pnl_reasons,
-            minimum_sample_size=min_sample,
         )
         win_rate_metric = self._rate_metric(
             "win_rate",
@@ -278,7 +264,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=pnl_ids,
             excluded_cycle_ids=pnl_excluded,
             exclusion_reasons=pnl_reasons,
-            minimum_sample_size=min_sample,
         )
 
         avg_win = self._money_average_metric(
@@ -286,7 +271,6 @@ class BehaviorSummaryCalculator:
             wins,
             excluded_cycle_ids=tuple(sorted({*pnl_excluded, *loss_ids, *flat_ids})),
             exclusion_reasons=self._reason_union(pnl_reasons, ("NOT_WIN",)),
-            minimum_sample_size=min_sample,
             positive=True,
         )
         avg_loss = self._money_average_metric(
@@ -294,7 +278,6 @@ class BehaviorSummaryCalculator:
             losses,
             excluded_cycle_ids=tuple(sorted({*pnl_excluded, *win_ids, *flat_ids})),
             exclusion_reasons=self._reason_union(pnl_reasons, ("NOT_LOSS",)),
-            minimum_sample_size=min_sample,
             positive=False,
         )
         payoff = self._payoff_metric(
@@ -302,7 +285,62 @@ class BehaviorSummaryCalculator:
             losses,
             pnl_excluded=pnl_excluded,
             pnl_reasons=pnl_reasons,
-            minimum_sample_size=min_sample,
+        )
+        return_cycles, return_excluded, return_reasons = self._return_eligible_cycles(
+            closed_active,
+            base_excluded=base_excluded,
+            base_reasons=base_reasons,
+        )
+        return_wins = tuple(
+            item
+            for item in return_cycles
+            if item.net_realized_pnl is not None and item.net_realized_pnl > 0
+        )
+        return_losses = tuple(
+            item
+            for item in return_cycles
+            if item.net_realized_pnl is not None and item.net_realized_pnl < 0
+        )
+        return_flat = tuple(
+            item for item in return_cycles if item.net_realized_pnl == 0
+        )
+        return_flat_ids = tuple(item.cycle_id for item in return_flat)
+        return_excluded_with_flat = tuple(sorted({*return_excluded, *return_flat_ids}))
+        return_reasons_with_flat = self._reason_union(
+            return_reasons,
+            ("FLAT_OR_NON_RETURN",) if return_flat else (),
+        )
+        avg_win_return = self._return_average_metric(
+            "avg_win_return",
+            return_wins,
+            excluded_cycle_ids=tuple(
+                sorted(
+                    {
+                        *return_excluded_with_flat,
+                        *(item.cycle_id for item in return_losses),
+                    }
+                )
+            ),
+            exclusion_reasons=self._reason_union(return_reasons_with_flat, ("NOT_WIN",)),
+        )
+        avg_loss_return = self._return_average_metric(
+            "avg_loss_return",
+            return_losses,
+            excluded_cycle_ids=tuple(
+                sorted(
+                    {
+                        *return_excluded_with_flat,
+                        *(item.cycle_id for item in return_wins),
+                    }
+                )
+            ),
+            exclusion_reasons=self._reason_union(return_reasons_with_flat, ("NOT_LOSS",)),
+        )
+        return_payoff = self._return_payoff_metric(
+            return_wins,
+            return_losses,
+            excluded_cycle_ids=return_excluded_with_flat,
+            exclusion_reasons=return_reasons_with_flat,
         )
         durations = tuple(
             item
@@ -323,7 +361,7 @@ class BehaviorSummaryCalculator:
                     if item.holding_duration_seconds is not None
                 ]
             )
-            if len(durations) >= min_sample
+            if durations
             else None,
             positive_cycle_ids=tuple(item.cycle_id for item in durations),
             eligible_cycle_ids=tuple(item.cycle_id for item in durations),
@@ -332,7 +370,6 @@ class BehaviorSummaryCalculator:
                 base_reasons,
                 ("HOLDING_DURATION_UNAVAILABLE",) if duration_missing else (),
             ),
-            minimum_sample_size=min_sample,
         )
         average_metric = self._scalar_metric(
             "average_holding_duration",
@@ -357,7 +394,7 @@ class BehaviorSummaryCalculator:
                     Decimal(0),
                 )
                 / Decimal(len(durations))
-                if len(durations) >= min_sample
+                if durations
                 else None
             ),
             positive_cycle_ids=tuple(item.cycle_id for item in durations),
@@ -367,7 +404,6 @@ class BehaviorSummaryCalculator:
                 base_reasons,
                 ("HOLDING_DURATION_UNAVAILABLE",) if duration_missing else (),
             ),
-            minimum_sample_size=min_sample,
             note="Duration is measured from TradeCycle opened_at to closed_at/as_of fact.",
         )
         active_cycles = tuple(
@@ -378,7 +414,6 @@ class BehaviorSummaryCalculator:
         )
         entry_attempt_metric = self._entry_attempt_metric(
             active_cycles,
-            minimum_sample_size=min_sample,
         )
 
         plan_metric = self._coverage_metric(
@@ -388,7 +423,6 @@ class BehaviorSummaryCalculator:
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
             plan_links=plan_links,
             require_any_links=True,
@@ -401,7 +435,6 @@ class BehaviorSummaryCalculator:
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
             plan_links=plan_links,
             require_decision_links=True,
@@ -415,7 +448,6 @@ class BehaviorSummaryCalculator:
             ordered_findings,
             base_excluded=base_excluded,
             base_reasons=base_reasons,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
             plan_links=plan_links,
             require_any_links=True,
@@ -432,28 +464,24 @@ class BehaviorSummaryCalculator:
             base_excluded=base_excluded,
             base_reasons=base_reasons,
             findings=ordered_findings,
-            minimum_sample_size=min_sample,
         )
         third_metric = self._third_attempt_metric(
             selected_cycles,
             cohort_decisions,
             ordered_findings,
             cohort_excluded=cohort_excluded,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
             plan_links=plan_links,
         )
         scenario_metrics = self._scenario_metrics(
             selected_decisions,
             selected_cycles,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
         )
         no_action_count, no_action_review = self._no_action_metrics(
             selected_decisions,
             visible_decisions,
             selected_cycles,
-            minimum_sample_size=min_sample,
             decision_links=decision_links,
         )
         native_currencies = _unique_sorted(
@@ -463,7 +491,6 @@ class BehaviorSummaryCalculator:
             closed_active,
             base_excluded=base_excluded,
             native_currencies=native_currencies,
-            minimum_sample_size=min_sample,
         )
 
         return BehaviorSummary(
@@ -475,6 +502,9 @@ class BehaviorSummaryCalculator:
             avg_win=avg_win,
             avg_loss=avg_loss,
             payoff_ratio=payoff,
+            avg_win_return=avg_win_return,
+            avg_loss_return=avg_loss_return,
+            return_payoff_ratio=return_payoff,
             average_holding_duration=average_metric,
             median_holding_duration=median_metric,
             turnover=unsupported_metrics["turnover"],
@@ -502,16 +532,11 @@ class BehaviorSummaryCalculator:
             cohort_excluded_cycle_ids=tuple(sorted(cohort_excluded)),
             cohort_exclusion_reasons=_unique_sorted(cohort_excluded.values()),
             native_currencies=native_currencies,
+            return_basis=BEHAVIOR_RETURN_BASIS,
             algorithm_version=self.algorithm_version,
         )
 
     summarize = calculate
-
-    @staticmethod
-    def _validate_minimum_sample_size(value: int) -> int:
-        if type(value) is not int or value < 0:
-            raise ValueError("minimum_sample_size must be a nonnegative int")
-        return value
 
     @staticmethod
     def _cohort(
@@ -794,7 +819,6 @@ class BehaviorSummaryCalculator:
         eligible_cycle_ids: tuple[str, ...],
         excluded_cycle_ids: tuple[str, ...],
         exclusion_reasons: tuple[str, ...],
-        minimum_sample_size: int,
     ) -> BehaviorMetric:
         return BehaviorMetric(
             name=name,
@@ -806,8 +830,6 @@ class BehaviorSummaryCalculator:
             cycle_ids=_unique_sorted(positive_cycle_ids),
             eligible_cycle_ids=_unique_sorted(eligible_cycle_ids),
             excluded_cycle_ids=_unique_sorted(excluded_cycle_ids),
-            sample_sufficient=denominator >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
         )
 
     @classmethod
@@ -821,20 +843,17 @@ class BehaviorSummaryCalculator:
         eligible_cycle_ids: tuple[str, ...],
         excluded_cycle_ids: tuple[str, ...],
         exclusion_reasons: tuple[str, ...],
-        minimum_sample_size: int,
     ) -> BehaviorMetric:
         return BehaviorMetric(
             name=name,
             numerator=numerator,
             denominator=denominator,
-            value=_safe_ratio(numerator, denominator, minimum=minimum_sample_size),
+            value=_safe_ratio(numerator, denominator),
             excluded_count=len(excluded_cycle_ids),
             exclusion_reasons=exclusion_reasons,
             cycle_ids=_unique_sorted(positive_cycle_ids),
             eligible_cycle_ids=_unique_sorted(eligible_cycle_ids),
             excluded_cycle_ids=_unique_sorted(excluded_cycle_ids),
-            sample_sufficient=denominator >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
         )
 
     @classmethod
@@ -849,7 +868,6 @@ class BehaviorSummaryCalculator:
         eligible_cycle_ids: tuple[str, ...],
         excluded_cycle_ids: tuple[str, ...],
         exclusion_reasons: tuple[str, ...],
-        minimum_sample_size: int,
         native_currencies: tuple[str, ...] = (),
         note: str | None = None,
     ) -> BehaviorMetric:
@@ -863,8 +881,6 @@ class BehaviorSummaryCalculator:
             cycle_ids=_unique_sorted(positive_cycle_ids),
             eligible_cycle_ids=_unique_sorted(eligible_cycle_ids),
             excluded_cycle_ids=_unique_sorted(excluded_cycle_ids),
-            sample_sufficient=denominator >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
             native_currencies=native_currencies,
             note=note,
         )
@@ -873,8 +889,6 @@ class BehaviorSummaryCalculator:
     def _entry_attempt_metric(
         cls,
         cycles: tuple[TradeCycle, ...],
-        *,
-        minimum_sample_size: int,
     ) -> BehaviorMetric:
         attempts = sum(
             (item.opening_count + item.add_count for item in cycles),
@@ -883,7 +897,7 @@ class BehaviorSummaryCalculator:
         denominator = len(cycles)
         value = (
             Decimal(attempts) / Decimal(denominator)
-            if denominator >= minimum_sample_size and denominator
+            if denominator
             else None
         )
         return cls._scalar_metric(
@@ -895,7 +909,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=tuple(item.cycle_id for item in cycles),
             excluded_cycle_ids=(),
             exclusion_reasons=(),
-            minimum_sample_size=minimum_sample_size,
             note=(
                 "Observed opening_count + add_count; no same-entry-logic identity "
                 "is inferred."
@@ -909,7 +922,6 @@ class BehaviorSummaryCalculator:
         *,
         base_excluded: tuple[str, ...],
         native_currencies: tuple[str, ...],
-        minimum_sample_size: int,
     ) -> dict[str, BehaviorMetric]:
         specs = {
             "turnover": (
@@ -946,7 +958,6 @@ class BehaviorSummaryCalculator:
                 reason=reason,
                 native_currencies=native_currencies,
                 note=note,
-                minimum_sample_size=minimum_sample_size,
             )
             for name, (reason, note) in specs.items()
         }
@@ -959,7 +970,6 @@ class BehaviorSummaryCalculator:
         *,
         excluded_cycle_ids: tuple[str, ...],
         exclusion_reasons: tuple[str, ...],
-        minimum_sample_size: int,
         positive: bool,
     ) -> BehaviorMetric:
         valid_cycles = tuple(item for item in cycles if item.currency is not None)
@@ -986,7 +996,6 @@ class BehaviorSummaryCalculator:
                     reasons,
                     ("MULTIPLE_NATIVE_CURRENCIES",) if len(currencies) > 1 else (),
                 ),
-                minimum_sample_size=minimum_sample_size,
                 native_currencies=currencies,
                 note="Native-currency values are not converted or summed across currencies.",
             )
@@ -997,7 +1006,7 @@ class BehaviorSummaryCalculator:
         ]
         total = sum(values, Decimal(0))
         value = (
-            total / Decimal(len(values)) if len(values) >= minimum_sample_size and values else None
+            total / Decimal(len(values)) if values else None
         )
         return cls._scalar_metric(
             name,
@@ -1008,8 +1017,124 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=ids,
             excluded_cycle_ids=all_excluded,
             exclusion_reasons=reasons,
-            minimum_sample_size=minimum_sample_size,
             native_currencies=currencies,
+        )
+
+    @staticmethod
+    def _cycle_return(cycle: TradeCycle) -> Decimal:
+        assert cycle.net_realized_pnl is not None
+        assert cycle.maximum_deployed_capital is not None
+        return cycle.net_realized_pnl / cycle.maximum_deployed_capital
+
+    @classmethod
+    def _return_eligible_cycles(
+        cls,
+        cycles: tuple[TradeCycle, ...],
+        *,
+        base_excluded: tuple[str, ...],
+        base_reasons: tuple[str, ...],
+    ) -> tuple[tuple[TradeCycle, ...], tuple[str, ...], tuple[str, ...]]:
+        eligible: list[TradeCycle] = []
+        excluded = set(base_excluded)
+        reasons = set(base_reasons)
+        for cycle in cycles:
+            if cycle.net_realized_pnl is None or not cycle.net_realized_pnl.is_finite():
+                excluded.add(cycle.cycle_id)
+                reasons.add("NET_PNL_UNAVAILABLE")
+                continue
+            capital = cycle.maximum_deployed_capital
+            if capital is None or not capital.is_finite() or capital <= 0:
+                excluded.add(cycle.cycle_id)
+                reasons.add("MAXIMUM_DEPLOYED_CAPITAL_UNAVAILABLE")
+                continue
+            if cycle.currency is None or not cycle.currency.strip():
+                excluded.add(cycle.cycle_id)
+                reasons.add("NATIVE_CURRENCY_UNAVAILABLE")
+                continue
+            try:
+                value = cls._cycle_return(cycle)
+            except (ArithmeticError, ValueError):
+                excluded.add(cycle.cycle_id)
+                reasons.add("CYCLE_RETURN_UNAVAILABLE")
+                continue
+            if not value.is_finite():
+                excluded.add(cycle.cycle_id)
+                reasons.add("CYCLE_RETURN_UNAVAILABLE")
+                continue
+            eligible.append(cycle)
+        return tuple(eligible), tuple(sorted(excluded)), tuple(sorted(reasons))
+
+    @classmethod
+    def _return_average_metric(
+        cls,
+        name: str,
+        cycles: tuple[TradeCycle, ...],
+        *,
+        excluded_cycle_ids: tuple[str, ...],
+        exclusion_reasons: tuple[str, ...],
+    ) -> BehaviorMetric:
+        values = tuple(cls._cycle_return(item) for item in cycles)
+        total = sum(values, Decimal(0))
+        denominator = len(values)
+        value = (
+            total / Decimal(denominator)
+            if denominator
+            else None
+        )
+        return cls._scalar_metric(
+            name,
+            numerator=total,
+            denominator=denominator,
+            value=value,
+            positive_cycle_ids=tuple(item.cycle_id for item in cycles),
+            eligible_cycle_ids=tuple(item.cycle_id for item in cycles),
+            excluded_cycle_ids=excluded_cycle_ids,
+            exclusion_reasons=exclusion_reasons,
+            native_currencies=_unique_sorted(
+                item.currency for item in cycles if item.currency is not None
+            ),
+            note=(
+                "Equal-weight average of per-cycle net P/L divided by maximum "
+                "deployed capital; value is a fraction (0.2 = 20%)."
+            ),
+        )
+
+    @classmethod
+    def _return_payoff_metric(
+        cls,
+        wins: tuple[TradeCycle, ...],
+        losses: tuple[TradeCycle, ...],
+        *,
+        excluded_cycle_ids: tuple[str, ...],
+        exclusion_reasons: tuple[str, ...],
+    ) -> BehaviorMetric:
+        win_values = tuple(cls._cycle_return(item) for item in wins)
+        loss_values = tuple(cls._cycle_return(item) for item in losses)
+        win_total = sum(win_values, Decimal(0))
+        loss_total = sum((abs(item) for item in loss_values), Decimal(0))
+        win_count = len(win_values)
+        loss_count = len(loss_values)
+        average_win = win_total / Decimal(win_count) if win_count else Decimal(0)
+        average_loss = loss_total / Decimal(loss_count) if loss_count else Decimal(0)
+        value = average_win / average_loss if win_count and loss_count and average_loss else None
+        return cls._scalar_metric(
+            "return_payoff_ratio",
+            numerator=win_total,
+            denominator=loss_count,
+            value=value,
+            positive_cycle_ids=tuple(item.cycle_id for item in wins),
+            eligible_cycle_ids=tuple(item.cycle_id for item in (*wins, *losses)),
+            excluded_cycle_ids=excluded_cycle_ids,
+            exclusion_reasons=exclusion_reasons,
+            native_currencies=_unique_sorted(
+                item.currency
+                for item in (*wins, *losses)
+                if item.currency is not None
+            ),
+            note=(
+                "Dimensionless ratio of equal-weight average winning-cycle return "
+                "to absolute average losing-cycle return."
+            ),
         )
 
     @classmethod
@@ -1020,7 +1145,6 @@ class BehaviorSummaryCalculator:
         *,
         pnl_excluded: tuple[str, ...],
         pnl_reasons: tuple[str, ...],
-        minimum_sample_size: int,
     ) -> BehaviorMetric:
         all_cycles = (*wins, *losses)
         valid_cycles = tuple(item for item in all_cycles if item.currency is not None)
@@ -1032,6 +1156,7 @@ class BehaviorSummaryCalculator:
         reasons = cls._reason_union(pnl_reasons, ("FLAT_OR_NON_PAYOFF",))
         valid_wins = tuple(item for item in wins if item.currency is not None)
         valid_losses = tuple(item for item in losses if item.currency is not None)
+        has_both_sides = bool(valid_wins) and bool(valid_losses)
         if len(currencies) != 1 or missing_currency:
             return cls._scalar_metric(
                 "payoff_ratio",
@@ -1046,7 +1171,6 @@ class BehaviorSummaryCalculator:
                     ("NATIVE_CURRENCY_UNAVAILABLE",) if missing_currency else (),
                     ("MULTIPLE_NATIVE_CURRENCIES",) if len(currencies) > 1 else (),
                 ),
-                minimum_sample_size=minimum_sample_size,
                 native_currencies=currencies,
                 note="Payoff ratio is undefined without a single native currency and both sides.",
             )
@@ -1066,8 +1190,7 @@ class BehaviorSummaryCalculator:
         )
         value = (
             average_win / average_loss
-            if len(valid_wins) >= minimum_sample_size
-            and len(valid_losses) >= minimum_sample_size
+            if has_both_sides
             and average_loss != 0
             else None
         )
@@ -1080,7 +1203,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=ids,
             excluded_cycle_ids=pnl_excluded,
             exclusion_reasons=pnl_reasons,
-            minimum_sample_size=minimum_sample_size,
             native_currencies=currencies,
             note=(
                 "Payoff ratio is average winning-cycle P/L divided by absolute "
@@ -1098,7 +1220,6 @@ class BehaviorSummaryCalculator:
         *,
         base_excluded: tuple[str, ...],
         base_reasons: tuple[str, ...],
-        minimum_sample_size: int,
         predicate: object,
         note: str | None = None,
         decision_links: dict[str, tuple[str, ...]] | None,
@@ -1134,7 +1255,6 @@ class BehaviorSummaryCalculator:
                     else "No exact cycle-to-Plan/Decision annotation was supplied."
                 ),
                 availability=BehaviorMetricAvailability.UNAVAILABLE,
-                minimum_sample_size=minimum_sample_size,
             )
         positive: list[str] = []
         eligible = tuple(item.cycle_id for item in cycles)
@@ -1160,21 +1280,18 @@ class BehaviorSummaryCalculator:
                 eligible_cycle_ids=eligible,
                 excluded_cycle_ids=base_excluded,
                 exclusion_reasons=base_reasons,
-                minimum_sample_size=minimum_sample_size,
             )
             if note is None
             else BehaviorMetric(
                 name=name,
                 numerator=len(positive),
                 denominator=len(cycles),
-                value=_safe_ratio(len(positive), len(cycles), minimum=minimum_sample_size),
+                value=_safe_ratio(len(positive), len(cycles)),
                 excluded_count=len(base_excluded),
                 exclusion_reasons=base_reasons,
                 cycle_ids=_unique_sorted(positive),
                 eligible_cycle_ids=_unique_sorted(eligible),
                 excluded_cycle_ids=_unique_sorted(base_excluded),
-                sample_sufficient=len(cycles) >= minimum_sample_size,
-                minimum_sample_size=minimum_sample_size,
                 note=note,
             )
         )
@@ -1190,7 +1307,6 @@ class BehaviorSummaryCalculator:
         native_currencies: tuple[str, ...] = (),
         note: str,
         availability: BehaviorMetricAvailability = BehaviorMetricAvailability.NOT_SUPPORTED,
-        minimum_sample_size: int = 1,
     ) -> BehaviorMetric:
         excluded_ids = tuple(
             sorted({*base_excluded, *(item.cycle_id for item in cycles)})
@@ -1203,8 +1319,6 @@ class BehaviorSummaryCalculator:
             excluded_count=len(excluded_ids),
             exclusion_reasons=(reason,),
             excluded_cycle_ids=excluded_ids,
-            sample_sufficient=False,
-            minimum_sample_size=minimum_sample_size,
             native_currencies=native_currencies,
             note=note,
             availability=availability,
@@ -1221,7 +1335,6 @@ class BehaviorSummaryCalculator:
         base_excluded: tuple[str, ...],
         base_reasons: tuple[str, ...],
         findings: tuple[TradeRetroFinding, ...],
-        minimum_sample_size: int,
     ) -> BehaviorMetric:
         parent_by_id = {item.cycle_id: item for item in all_cycles}
         positives: list[str] = []
@@ -1243,7 +1356,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=tuple(item.cycle_id for item in closed_active),
             excluded_cycle_ids=base_excluded,
             exclusion_reasons=base_reasons,
-            minimum_sample_size=minimum_sample_size,
         )
 
     @classmethod
@@ -1254,7 +1366,6 @@ class BehaviorSummaryCalculator:
         findings: tuple[TradeRetroFinding, ...],
         *,
         cohort_excluded: dict[str, str],
-        minimum_sample_size: int,
         decision_links: dict[str, tuple[str, ...]] | None,
         plan_links: dict[str, tuple[tuple[str, int], ...]] | None,
     ) -> BehaviorMetric:
@@ -1311,7 +1422,6 @@ class BehaviorSummaryCalculator:
             eligible_cycle_ids=tuple(item.cycle_id for item in candidates),
             excluded_cycle_ids=excluded_cycle_ids,
             exclusion_reasons=reasons,
-            minimum_sample_size=minimum_sample_size,
         )
 
     @classmethod
@@ -1320,7 +1430,6 @@ class BehaviorSummaryCalculator:
         decisions: tuple[DecisionRecord, ...],
         cycles: tuple[TradeCycle, ...],
         *,
-        minimum_sample_size: int,
         decision_links: dict[str, tuple[str, ...]] | None,
     ) -> tuple[BehaviorMetric, ...]:
         with_scenario = tuple(item for item in decisions if item.scenario is not None)
@@ -1344,8 +1453,6 @@ class BehaviorSummaryCalculator:
             cycle_ids=union_cycle_ids,
             eligible_decision_ids=tuple(item.decision_id for item in with_scenario),
             excluded_decision_ids=missing,
-            sample_sufficient=len(decisions) >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
         )
         buckets: list[BehaviorMetric] = [distribution]
         for (scenario, action), bucket in sorted(by_bucket.items()):
@@ -1366,8 +1473,6 @@ class BehaviorSummaryCalculator:
                     eligible_decision_ids=tuple(item.decision_id for item in with_scenario),
                     decision_ids=bucket_ids,
                     excluded_decision_ids=missing,
-                    sample_sufficient=len(with_scenario) >= minimum_sample_size,
-                    minimum_sample_size=minimum_sample_size,
                     note="Scenario/action distribution; no aggregate discipline score.",
                 )
             )
@@ -1396,7 +1501,6 @@ class BehaviorSummaryCalculator:
         all_decisions: tuple[DecisionRecord, ...],
         cycles: tuple[TradeCycle, ...],
         *,
-        minimum_sample_size: int,
         decision_links: dict[str, tuple[str, ...]] | None,
     ) -> tuple[BehaviorMetric, BehaviorMetric]:
         no_actions = tuple(
@@ -1414,8 +1518,6 @@ class BehaviorSummaryCalculator:
             cycle_ids=cycle_ids,
             decision_ids=no_action_ids,
             eligible_decision_ids=tuple(item.decision_id for item in decisions),
-            sample_sufficient=len(decisions) >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
         )
         with_review_due = tuple(item for item in no_actions if item.review_due_at is not None)
         missing_due = tuple(item.decision_id for item in no_actions if item.review_due_at is None)
@@ -1432,7 +1534,7 @@ class BehaviorSummaryCalculator:
             name="no_action_review_completion",
             numerator=len(completed),
             denominator=len(with_review_due),
-            value=_safe_ratio(len(completed), len(with_review_due), minimum=minimum_sample_size),
+            value=_safe_ratio(len(completed), len(with_review_due)),
             excluded_count=len(missing_due),
             exclusion_reasons=("REVIEW_DUE_UNAVAILABLE",) if missing_due else (),
             cycle_ids=cls._cycle_ids_for_decisions(
@@ -1443,8 +1545,6 @@ class BehaviorSummaryCalculator:
             eligible_decision_ids=tuple(item.decision_id for item in with_review_due),
             decision_ids=tuple(item.decision_id for item in completed),
             excluded_decision_ids=missing_due,
-            sample_sufficient=len(with_review_due) >= minimum_sample_size,
-            minimum_sample_size=minimum_sample_size,
         )
         return count, review
 

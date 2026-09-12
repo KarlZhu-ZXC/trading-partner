@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
-import { ErrorNote, Paginator, Badge, Card, DataBoundary, Disclosure, Empty, PageActionMenu } from "../components/ui";
+import { ErrorNote, Paginator, Badge, Card, DataBoundary, Disclosure, Empty, PageActionMenu,
+  Select,
+} from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
 import { textDash as text } from "../lib/coerce";
@@ -379,18 +381,18 @@ export default function JudgmentScorecardsPage() {
           <div className="workspace-controls scorecards-controls">
             <label>
               <span>Subject</span>
-              <select value={subjectId} onChange={(event) => { setSubjectId(event.target.value); setThesisId(""); setHistoryOffset(0); }}>
+              <Select value={subjectId} onChange={(event) => { setSubjectId(event.target.value); setThesisId(""); setHistoryOffset(0); }}>
                 <option value={ALL_SUBJECTS}>All Subjects (Browse Only)</option>
                 {subjects.map((subject) => (
                   <option key={id(subject.subject_id)} value={id(subject.subject_id)}>
                     {text(subject.title)} ({optionLabel(subject.status)}) · {short(id(subject.primary_instrument_id))}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Thesis</span>
-              <select
+              <Select
                 value={thesisId}
                 disabled={subjectId === ALL_SUBJECTS || thesisOptions.length === 0}
                 onChange={(event) => { setThesisId(event.target.value); setHistoryOffset(0); }}
@@ -403,13 +405,13 @@ export default function JudgmentScorecardsPage() {
                     {item.title} ({optionLabel(item.status)})
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Dimension Outcome</span>
-              <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value)}>
+              <Select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value)}>
                 {outcomeSet.length > 0 && [...outcomeSet].sort().map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
-              </select>
+              </Select>
             </label>
           </div>
           <p className="card-note">

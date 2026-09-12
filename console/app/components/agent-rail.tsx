@@ -1,4 +1,5 @@
 "use client";
+import { ResizeHandle } from "./ui/controls";
 
 import {
   Archive,
@@ -19,7 +20,6 @@ import {
   RotateCcw,
   Settings2,
   Square,
-  Smartphone,
   TriangleAlert,
   Wrench,
   X,
@@ -51,7 +51,6 @@ import {
   archiveAgentConversation,
   cancelAgentTurn,
   collectEphemeralContext,
-  createTelegramHandoff,
   createAgentConversation,
   decideAgentPendingAction,
   fetchAgentConversations,
@@ -74,7 +73,8 @@ import {
   AgentMessageCard,
   AgentReceiptCard,
 } from "./agent-message-card";
-import { ConfirmationDialog, Disclosure } from "./ui";
+import { Badge, ConfirmationDialog, Disclosure } from "./ui";
+import { Button, IconButton, Input, Select, SelectableRow, Textarea, TextLink } from "./ui/controls";
 import {
   AGENT_RAIL_DEFAULT_WIDTH,
   AGENT_RAIL_MAX_VIEWPORT_RATIO,
@@ -249,7 +249,7 @@ function AgentFailureNotification({
       <header>
         <TriangleAlert aria-hidden="true" size={14} />
         <div><strong>{notice.title}</strong><code>{notice.code}</code></div>
-        <button
+        <IconButton
           aria-label="Dismiss Provider Error Notification"
           className="agent-failure-dismiss"
           onClick={onDismiss}
@@ -257,7 +257,7 @@ function AgentFailureNotification({
           type="button"
         >
           <X aria-hidden="true" size={12} />
-        </button>
+        </IconButton>
       </header>
       <p>{notice.explanation}</p>
       <dl>
@@ -273,9 +273,9 @@ function AgentFailureNotification({
       </dl>
       <footer>
         <span>{notice.next_action}</span>
-        <button className="agent-failure-retry" disabled={disabled} onClick={onRetry} type="button">
+        <Button className="agent-failure-retry" disabled={disabled} onClick={onRetry} size="sm" type="button">
           <RefreshCw aria-hidden="true" size={11} /> Retry Turn
-        </button>
+        </Button>
       </footer>
     </section>
   );
@@ -313,7 +313,6 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState(false);
-  const [handoff, setHandoff] = useState<{ token: string; expiresAt: string } | null>(null);
   const [railWidth, setRailWidth] = useState(AGENT_RAIL_DEFAULT_WIDTH);
   const [focusMode, setFocusMode] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -970,10 +969,6 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   }, [reloadDurableConversation, selectedId]);
 
   useEffect(() => {
-    setHandoff(null);
-  }, [selectedId]);
-
-  useEffect(() => {
     if (!selectedId || !latestTurn || !durableTurnActive || isStreaming(selectedId)) return;
     void reconnectTurn(
       selectedId,
@@ -1160,27 +1155,12 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     }
   }
 
-  async function createHandoff() {
-    if (!selectedId || actionBusy) return;
-    setActionBusy("handoff");
-    setActionError(null);
-    try {
-      const value = await createTelegramHandoff(selectedId);
-      setHandoff({ token: value.token, expiresAt: value.expires_at });
-    } catch (error) {
-      setActionError(errorText(error, "Unable to create a Telegram handoff"));
-    } finally {
-      setActionBusy(null);
-    }
-  }
-
   async function archiveConversation() {
     if (!selectedConversation || actionBusy) return;
     setActionBusy("archive");
     setActionError(null);
     try {
       await archiveAgentConversation(selectedConversation.conversation_id, selectedConversation.version);
-      setHandoff(null);
       await loadConversations();
     } catch (error) {
       setActionError(errorText(error, "Unable to archive this session"));
@@ -1226,7 +1206,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         role={overlayViewport ? "dialog" : "complementary"}
       >
         {!collapsed && !overlayViewport && (
-          <button
+          <ResizeHandle
             aria-label="Resize Agent Panel"
             aria-orientation="vertical"
             aria-valuemax={maximumRailWidth()}
@@ -1240,11 +1220,11 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
             type="button"
           >
             <GripVertical aria-hidden="true" size={13} />
-          </button>
+          </ResizeHandle>
         )}
         {collapsed ? (
           <div className="agent-rail-collapsed-control">
-            <button
+            <IconButton
               aria-label="Open Agent Panel"
               className="agent-rail-icon-button"
               onClick={() => onCollapsedChange(false)}
@@ -1252,7 +1232,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               type="button"
             >
               <PanelRightOpen aria-hidden="true" size={17} />
-            </button>
+            </IconButton>
             <span className="agent-rail-collapsed-label">AGENT</span>
           </div>
         ) : (
@@ -1264,10 +1244,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               </div>
               <div className="agent-rail-header-actions">
                 <span className={`agent-rail-status ${statusTone}`} aria-live="polite">
-                  <span className="pulse-dot" aria-hidden="true" />
-                  {statusLabel(status, statusLoading)}
+                  <Badge value={statusLabel(status, statusLoading)} tone={statusTone === "attention" ? "warn" : "good"} />
                 </span>
-                <button
+                <IconButton
                   aria-label="Agent Preferences"
                   aria-expanded={preferencesOpen}
                   className={`agent-rail-icon-button${preferencesOpen ? " active" : ""}`}
@@ -1277,8 +1256,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   type="button"
                 >
                   <Settings2 aria-hidden="true" size={14} />
-                </button>
-                <button
+                </IconButton>
+                <IconButton
                   aria-label={focusMode ? "Exit Agent research mode" : "Expand Agent research mode"}
                   aria-pressed={focusMode}
                   className="agent-rail-icon-button"
@@ -1288,8 +1267,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   type="button"
                 >
                   {focusMode ? <Minimize2 aria-hidden="true" size={14} /> : <Maximize2 aria-hidden="true" size={14} />}
-                </button>
-                <button
+                </IconButton>
+                <IconButton
                   aria-label="Refresh Agent Status"
                   className="agent-rail-icon-button"
                   disabled={statusLoading}
@@ -1298,8 +1277,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   type="button"
                 >
                   <RefreshCw aria-hidden="true" size={14} />
-                </button>
-                <button
+                </IconButton>
+                <IconButton
                   aria-label="Collapse Agent Panel"
                   className="agent-rail-icon-button"
                   onClick={() => onCollapsedChange(true)}
@@ -1307,12 +1286,12 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   type="button"
                 >
                   <PanelRightClose aria-hidden="true" size={16} />
-                </button>
+                </IconButton>
               </div>
             </header>
 
             <div className="agent-rail-toolbar">
-              <button
+              <Button
                 className="agent-rail-toolbar-button"
                 disabled={actionBusy === "new"}
                 onClick={() => void newConversation()}
@@ -1320,8 +1299,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               >
                 <MessageSquarePlus aria-hidden="true" size={14} />
                 New Session
-              </button>
-              <button
+              </Button>
+              <Button
                 aria-expanded={historyOpen}
                 className={`agent-rail-toolbar-button${historyOpen ? " active" : ""}`}
                 onClick={() => setHistoryOpen((current) => !current)}
@@ -1330,18 +1309,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 <History aria-hidden="true" size={14} />
                 History
                 {historyOpen ? <ChevronUp aria-hidden="true" size={12} /> : <ChevronDown aria-hidden="true" size={12} />}
-              </button>
-              <button
-                className="agent-rail-toolbar-button"
-                disabled={!selectedConversation || actionBusy !== null || selectedConversation.status !== "ACTIVE"}
-                onClick={() => void createHandoff()}
-                title="Continue This Session in Telegram"
-                type="button"
-              >
-                <Smartphone aria-hidden="true" size={13} />
-                Telegram
-              </button>
-              <button
+              </Button>
+              <Button
                 className="agent-rail-toolbar-button"
                 disabled={!selectedConversation || actionBusy !== null}
                 onClick={() => setArchiveConfirmation(true)}
@@ -1350,7 +1319,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               >
                 <Archive aria-hidden="true" size={13} />
                 Archive
-              </button>
+              </Button>
             </div>
 
             {visibleFailureNotice && !durableTurnActive && !selectedStreaming && (
@@ -1381,36 +1350,24 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   ))}
                 </Disclosure>
               )}
-              {handoff && !historyOpen && (
-                <div className="agent-rail-handoff">
-                  <strong>Continue in Telegram</strong>
-                  <p>Send <code>/continue {handoff.token}</code> to the configured Trading Partner bot.</p>
-                  <small>One-Time Code · Expires {displayDate(handoff.expiresAt)}</small>
-                  <button onClick={() => {
-                    navigator.clipboard.writeText(`/continue ${handoff.token}`).catch(() => {
-                      // Clipboard access can be denied; the token stays visible above.
-                    });
-                  }} type="button">Copy Command</button>
-                </div>
-              )}
               {preferencesOpen && preferenceDraft ? (
                 <section className="agent-preferences" aria-label="Agent Presentation Preferences">
                   <header>
                     <div><p className="card-kicker">PRESENTATION ONLY</p><h3>Agent Preferences</h3></div>
                     <small>v{preferenceDraft.version}</small>
                   </header>
-                  <p>Controls wording and presentation across Console and Telegram. It cannot store prices, positions, orders, or research state.</p>
+                  <p>Controls wording and presentation across Console. It cannot store prices, positions, orders, or research state.</p>
                   <div className="agent-preferences-grid">
-                    <label><span><b className="required-mark" aria-hidden="true">*</b>Language</span><select required value={preferenceDraft.language} onChange={(event) => updatePreferenceDraft("language", event.target.value as AgentPreferences["language"])}><option value="zh-CN">Simplified Chinese</option><option value="en">English</option></select></label>
-                    <label><span><b className="required-mark" aria-hidden="true">*</b>Answer Density</span><select required value={preferenceDraft.response_density} onChange={(event) => updatePreferenceDraft("response_density", event.target.value as AgentPreferences["response_density"])}><option value="compact">Compact</option><option value="standard">Standard</option><option value="detailed">Detailed</option></select></label>
-                    <label><span><b className="required-mark" aria-hidden="true">*</b>Risk Wording</span><select required value={preferenceDraft.risk_style} onChange={(event) => updatePreferenceDraft("risk_style", event.target.value as AgentPreferences["risk_style"])}><option value="balanced">Balanced</option><option value="cautious">Cautious</option><option value="direct">Direct</option></select></label>
-                    <label className="wide"><span>Preferred Source Codes</span><input onChange={(event) => updatePreferenceDraft("preferred_source_codes", event.target.value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 32))} placeholder="SEC, FRED, YAHOO" value={preferenceDraft.preferred_source_codes.join(", ")} /></label>
-                    <label className="toggle"><input checked={preferenceDraft.default_chart} onChange={(event) => updatePreferenceDraft("default_chart", event.target.checked)} type="checkbox" /><span>Prefer a Chart When Useful</span></label>
+                    <label><span><b className="required-mark" aria-hidden="true">*</b>Language</span><Select required value={preferenceDraft.language} onChange={(event) => updatePreferenceDraft("language", event.target.value as AgentPreferences["language"])}><option value="zh-CN">Simplified Chinese</option><option value="en">English</option></Select></label>
+                    <label><span><b className="required-mark" aria-hidden="true">*</b>Answer Density</span><Select required value={preferenceDraft.response_density} onChange={(event) => updatePreferenceDraft("response_density", event.target.value as AgentPreferences["response_density"])}><option value="compact">Compact</option><option value="standard">Standard</option><option value="detailed">Detailed</option></Select></label>
+                    <label><span><b className="required-mark" aria-hidden="true">*</b>Risk Wording</span><Select required value={preferenceDraft.risk_style} onChange={(event) => updatePreferenceDraft("risk_style", event.target.value as AgentPreferences["risk_style"])}><option value="balanced">Balanced</option><option value="cautious">Cautious</option><option value="direct">Direct</option></Select></label>
+                    <label className="wide"><span>Preferred Source Codes</span><Input onChange={(event) => updatePreferenceDraft("preferred_source_codes", event.target.value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 32))} placeholder="SEC, FRED, YAHOO" value={preferenceDraft.preferred_source_codes.join(", ")} /></label>
+                    <label className="toggle"><Input checked={preferenceDraft.default_chart} onChange={(event) => updatePreferenceDraft("default_chart", event.target.checked)} type="checkbox" /><span>Prefer a Chart When Useful</span></label>
                     <div className="agent-preference-default"><span>Web Search Background</span><strong>ON BY DEFAULT</strong></div>
                   </div>
                   <div className="agent-preferences-actions">
-                    <button disabled={actionBusy !== null} onClick={() => void resetPreferences()} type="button"><RotateCcw aria-hidden="true" size={12} /> Reset</button>
-                    <button className="primary" disabled={actionBusy !== null} onClick={() => void savePreferences()} type="button"><Check aria-hidden="true" size={12} /> Save</button>
+                    <Button size="sm" disabled={actionBusy !== null} onClick={() => void resetPreferences()} type="button"><RotateCcw aria-hidden="true" size={12} /> Reset</Button>
+                    <Button className="primary" size="sm" disabled={actionBusy !== null} onClick={() => void savePreferences()} type="button"><Check aria-hidden="true" size={12} /> Save</Button>
                   </div>
                 </section>
               ) : historyOpen ? (
@@ -1422,7 +1379,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   ) : conversations.length === 0 ? (
                     <div className="agent-rail-empty">No sessions yet. Start typing below.</div>
                   ) : conversations.map((conversation) => (
-                    <button
+                    <SelectableRow
+                      selected={conversation.conversation_id === selectedId}
                       className={`agent-rail-history-row${conversation.conversation_id === selectedId ? " active" : ""}`}
                       key={conversation.conversation_id}
                       onClick={() => { setSelectedId(conversation.conversation_id); setHistoryOpen(false); }}
@@ -1430,7 +1388,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                     >
                       <span>{initialTitle(conversation)}</span>
                       <small>{conversation.status} · {displayDate(conversation.updated_at)}</small>
-                    </button>
+                    </SelectableRow>
                   ))}
                 </div>
               ) : (
@@ -1475,9 +1433,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                         <div className="agent-rail-source-block" aria-label="Current Web Sources">
                           <span>Current Sources</span>
                           {selectedStream.sourceUrls.map((url, index) => (
-                            <a href={url} key={url} rel="noopener noreferrer" target="_blank">
+                            <TextLink href={url} key={url} rel="noopener noreferrer" target="_blank">
                               <ExternalLink aria-hidden="true" size={10} /> {index + 1}. {new URL(url).hostname}
-                            </a>
+                            </TextLink>
                           ))}
                         </div>
                       )}
@@ -1491,15 +1449,15 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                     <div className="agent-rail-tool-state">
                       <Wrench aria-hidden="true" size={13} />
                       <span>{latestTurn?.status === "WAITING_TOOL" ? "Tool work continues on the server…" : "This turn continues on the server…"}</span>
-                      <button disabled={actionBusy !== null} onClick={() => void reconnectCurrentTurn()} type="button">Reconnect</button>
+                      <Button disabled={actionBusy !== null} onClick={() => void reconnectCurrentTurn()} size="sm" type="button">Reconnect</Button>
                     </div>
                   )}
                   {!durableTurnActive && !failureNotice && latestTurn?.status === "FAILED" && latestTurn.error_code && (
                     <div className="agent-rail-error agent-turn-failed" role="status">
                       <span>Last Turn Failed · {latestTurn.error_code}</span>
-                      <button disabled={Boolean(disabledReason || selectedStreaming || actionBusy)} onClick={() => void retryFailedTurn()} type="button">
+                      <Button disabled={Boolean(disabledReason || selectedStreaming || actionBusy)} onClick={() => void retryFailedTurn()} size="sm" type="button">
                         <RefreshCw aria-hidden="true" size={11} /> Retry Turn
-                      </button>
+                      </Button>
                     </div>
                   )}
                   {!!unlinkedReceipts.length && (
@@ -1523,11 +1481,11 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                       <small>Expires {displayDate(actionablePending.expires_at)}</small>
                       {actionableToken ? (
                         <div className="agent-rail-pending-actions">
-                          <button disabled={actionBusy !== null} onClick={() => void decidePendingAction("confirm")} type="button"><Check aria-hidden="true" size={13} /> Confirm</button>
-                          <button className="reject" disabled={actionBusy !== null} onClick={() => void decidePendingAction("reject")} type="button"><X aria-hidden="true" size={13} /> Reject</button>
+                          <Button disabled={actionBusy !== null} onClick={() => void decidePendingAction("confirm")} size="sm" type="button"><Check aria-hidden="true" size={13} /> Confirm</Button>
+                          <Button className="reject" disabled={actionBusy !== null} onClick={() => void decidePendingAction("reject")} size="sm" type="button"><X aria-hidden="true" size={13} /> Reject</Button>
                         </div>
                       ) : (
-                        <button className="agent-rail-resume-action" disabled={actionBusy !== null} onClick={() => void resumePendingAction()} type="button">Resume Confirmation</button>
+                        <Button className="agent-rail-resume-action" disabled={actionBusy !== null} onClick={() => void resumePendingAction()} size="sm" type="button">Resume Confirmation</Button>
                       )}
                     </div>
                   ) : selectedStream?.pendingSummary ? (
@@ -1545,7 +1503,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               {editingMessageId && (
                 <div className="agent-composer-editing" role="status">
                   Editing an earlier prompt. Send creates a new durable turn.
-                  <button aria-label="Cancel Editing" onClick={() => { setEditingMessageId(null); setComposer(""); setComposerImages([]); }} type="button">Cancel</button>
+                  <Button aria-label="Cancel Editing" onClick={() => { setEditingMessageId(null); setComposer(""); setComposerImages([]); }} size="sm" type="button">Cancel</Button>
                 </div>
               )}
               <div className="agent-rail-composer-frame">
@@ -1554,18 +1512,19 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                     {composerImages.map((image) => (
                       <div className="agent-composer-image" key={image.id}>
                         <img alt={image.name || "Image to send"} src={image.data_url} />
-                        <button
+                        <IconButton
                           aria-label={`Remove ${image.name || "attached image"}`}
                           onClick={() => setComposerImages((current) => current.filter((item) => item.id !== image.id))}
                           type="button"
                         >
                           <X aria-hidden="true" size={11} />
-                        </button>
+                        </IconButton>
                       </div>
                     ))}
                   </div>
                 )}
-                <textarea
+                <Textarea
+                  appearance="embedded"
                   aria-label="Message Agent"
                   disabled={Boolean(disabledReason) || selectedStreaming || durableTurnActive || actionBusy !== null}
                   onChange={(event) => setComposer(event.target.value)}
@@ -1583,7 +1542,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 )}
                 <div className="agent-rail-composer-footer">
                   <div className="agent-composer-options">
-                    <input
+                    <Input
                       accept="image/png,image/jpeg"
                       aria-label="Choose Images"
                       className="agent-image-file-input"
@@ -1592,7 +1551,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                       ref={imageInputRef}
                       type="file"
                     />
-                    <button
+                    <Button
                       aria-label="Attach Images"
                       className="agent-composer-attach"
                       disabled={selectedStreaming || durableTurnActive || actionBusy !== null}
@@ -1602,10 +1561,10 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                     >
                       <ImagePlus aria-hidden="true" size={13} />
                       <span>Image</span>
-                    </button>
+                    </Button>
                     <label className="agent-model-select agent-provider-select">
                       <span className="sr-only">Agent Provider</span>
-                      <select
+                      <Select
                         aria-label="Agent Provider"
                         disabled={selectedStreaming || providerOptions.length < 2}
                         onChange={(event) => selectProvider(event.target.value)}
@@ -1614,12 +1573,12 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                         {providerOptions.map((option) => (
                           <option key={option.id} value={option.id}>{option.provider}</option>
                         ))}
-                      </select>
+                      </Select>
                       <ChevronDown aria-hidden="true" size={13} />
                     </label>
                     <label className="agent-model-select agent-model-name-select">
                       <span className="sr-only">Agent Model</span>
-                      <select
+                      <Select
                         aria-label="Agent Model"
                         disabled={selectedProviderId === "auto" || selectedStreaming || providerModelsLoading || providerModelOptions.length < 2}
                         onChange={(event) => selectModel(event.target.value)}
@@ -1632,13 +1591,13 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                         {providerModelOptions.map((option) => (
                           <option key={option.id} value={option.id}>{option.label}</option>
                         ))}
-                      </select>
+                      </Select>
                       <ChevronDown aria-hidden="true" size={13} />
                     </label>
                     {selectedProviderId !== "auto" && reasoningOptions.length > 0 && (
                       <label className="agent-model-select agent-reasoning-select">
                         <span className="sr-only">Reasoning Effort</span>
-                        <select
+                        <Select
                           aria-label="Reasoning Effort"
                           disabled={selectedStreaming}
                           onChange={(event) => selectReasoningEffort(event.target.value)}
@@ -1648,13 +1607,13 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                           {reasoningOptions.map((effort) => (
                             <option key={effort} value={effort}>{effort[0].toUpperCase() + effort.slice(1)}</option>
                           ))}
-                        </select>
+                        </Select>
                         <ChevronDown aria-hidden="true" size={13} />
                       </label>
                     )}
                   </div>
                   {selectedStreaming || durableTurnActive ? (
-                    <button
+                    <IconButton
                       aria-label="Cancel Current Agent Turn"
                       className="agent-rail-stop"
                       disabled={actionBusy !== null}
@@ -1663,9 +1622,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                       type="button"
                     >
                       <Square aria-hidden="true" size={12} />
-                    </button>
+                    </IconButton>
                   ) : (
-                    <button aria-label="Send Message" className="agent-rail-send" disabled={!canSend} type="submit"><ArrowUp aria-hidden="true" size={15} /></button>
+                    <IconButton aria-label="Send Message" className="agent-rail-send" disabled={!canSend} type="submit"><ArrowUp aria-hidden="true" size={15} /></IconButton>
                   )}
                 </div>
               </div>
@@ -1674,7 +1633,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         )}
       </aside>
       {collapsed && (
-        <button
+        <Button
           aria-label="Open Agent Panel"
           className="agent-rail-mobile-tab"
           onClick={() => onCollapsedChange(false)}
@@ -1682,7 +1641,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         >
           <PanelRightOpen aria-hidden="true" size={16} />
           <span>Agent</span>
-        </button>
+        </Button>
       )}
       <ConfirmationDialog
         open={archiveConfirmation}

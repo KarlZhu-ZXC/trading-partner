@@ -1,7 +1,9 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Button, Select, SelectableRow, Tag } from "../components/ui/controls";
+
+import { ObservationContext } from "./observation-context";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ActionButton,
@@ -9,6 +11,7 @@ import {
   Card,
   Disclosure,
   ErrorNote,
+  LinkButton,
   formatDate,
   shortId,
 } from "../components/ui";
@@ -16,7 +19,6 @@ import { getJson, listOf } from "../lib/api";
 
 type Dict = Record<string, unknown>;
 type SubjectAggregate = { subject?: Dict; state?: Dict };
-type Scope = "ALL" | "CURRENT";
 type AttributionDisplayBlock = { speakerLabel: string; body: string };
 type AttributionDisplaySection = { dateLabel: string | null; blocks: AttributionDisplayBlock[] };
 
@@ -40,7 +42,6 @@ export type ObservationInboxProps = {
   items: Dict[];
   sources: Dict[];
   activeSubjects: SubjectAggregate[];
-  selectedInstrumentIds: string[];
   busy: boolean;
   syncMessage: string | null;
   syncError: string | null;
@@ -99,7 +100,11 @@ function noteKey(item: Dict, index: number): string {
   );
 }
 
-function researchDraftHref(identity: Dict): string | null {
+function researchDraftHref(identity: Dict, revisionId: string): string | null {
+  if (revisionId) {
+    const params = new URLSearchParams({ create: "observation", note_revision_id: revisionId });
+    return `/research?${params.toString()}`;
+  }
   const instrumentId = text(identity.primary_instrument_id, "");
   if (!instrumentId) return null;
   const params = new URLSearchParams({
@@ -110,11 +115,12 @@ function researchDraftHref(identity: Dict): string | null {
   return `/research?${params.toString()}`;
 }
 
-function researchHref(identity: Dict, matchingSubjectId: string | null): string {
+function researchHref(identity: Dict, matchingSubjectId: string | null, revisionId: string): string {
   if (matchingSubjectId) {
-    return `/research#subject-${encodeURIComponent(matchingSubjectId)}`;
+    const source = revisionId ? `?note_revision_id=${encodeURIComponent(revisionId)}` : "";
+    return `/research${source}#subject-${encodeURIComponent(matchingSubjectId)}`;
   }
-  return researchDraftHref(identity) ?? "/research";
+  return researchDraftHref(identity, revisionId) ?? "/research";
 }
 
 function matchingSubjectsFor(
@@ -266,7 +272,6 @@ export function ObservationInbox({
   items,
   sources,
   activeSubjects,
-  selectedInstrumentIds,
   busy,
   syncMessage,
   syncError,
@@ -280,8 +285,6 @@ export function ObservationInbox({
   positionContext,
   cyclesContext,
 }: ObservationInboxProps) {
-  const [scope, setScope] = useState<Scope>("ALL");
-  const [query, setQuery] = useState("");
   const [selectedNoteKey, setSelectedNoteKey] = useState<string | null>(null);
   const [historyByNote, setHistoryByNote] = useState<Record<string, Dict[]>>(
     {},
@@ -289,30 +292,7 @@ export function ObservationInbox({
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<Record<string, string>>({});
   const [subjectOverrides, setSubjectOverrides] = useState<Record<string, string>>({});
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visible = useMemo(
-    () =>
-      items.filter((item) => {
-        const identity = asDict(item.identity);
-        const revision = asDict(item.revision);
-        const matchesScope =
-          scope === "ALL" ||
-          selectedInstrumentIds.length === 0 ||
-          selectedInstrumentIds.includes(text(identity.primary_instrument_id, ""));
-        if (!matchesScope) return false;
-        if (!normalizedQuery) return true;
-        return [
-          identity.title,
-          identity.primary_instrument_id,
-          identity.source,
-          revision.summary,
-          revision.source_timestamp,
-        ]
-          .map((value) => text(value, "").toLocaleLowerCase())
-          .some((value) => value.includes(normalizedQuery));
-      }),
-    [items, normalizedQuery, scope, selectedInstrumentIds],
-  );
+  const visible = items;
 
   useEffect(() => {
     if (visible.length === 0) {
@@ -409,6 +389,7 @@ export function ObservationInbox({
   const selectedResearchHref = researchHref(
     selectedIdentity,
     selectedMatchingSubjectId,
+    selectedRevisionId,
   );
   const selectedInstrumentIdForContext = text(
     selectedIdentity.primary_instrument_id,
@@ -429,22 +410,8 @@ export function ObservationInbox({
       title="Latest Thinking"
       action={
         <div className="page-actions">
-          <input
-            aria-label="Filter Notes"
-            placeholder="Symbol or note"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <select
-            aria-label="Note Scope"
-            value={scope}
-            onChange={(event) => setScope(event.target.value as Scope)}
-          >
-            <option value="ALL">All Notes</option>
-            <option value="CURRENT">Current Instrument</option>
-          </select>
-          <Badge value={`${sources.length} SOURCES`} />
-          <Badge value={`${items.length} TOTAL`} />
+          <Tag>{sources.length} SOURCES</Tag>
+          <Tag>{items.length} NOTES</Tag>
           <ActionButton busy={busy} onClick={onRefresh}>
             Refresh Sources
           </ActionButton>
@@ -459,7 +426,7 @@ export function ObservationInbox({
 
       {visible.length === 0 ? (
         <p className="observation-empty-inline">
-          No notes match this scope and filter. Clear the filter, switch scope,
+          No notes match the page filters. Clear the filters,
           or refresh sources.
         </p>
       ) : (
@@ -493,7 +460,8 @@ export function ObservationInbox({
                   "No summary available.",
                 );
                 return (
-                  <button
+                  <SelectableRow
+                    selected={isSelected}
                     key={key}
                     className={`notes-cell${isSelected ? " selected" : ""}`}
                     type="button"
@@ -516,7 +484,7 @@ export function ObservationInbox({
                       <Badge value={`ANALYSIS · ${status}`} tone={status === "FAILED" ? "bad" : status === "SUCCEEDED" ? "good" : "neutral"} />
                       {review.status ? <Badge value={`REVIEW · ${upper(review.status)}`} tone={["ADOPTED", "NO_ACTION"].includes(upper(review.status)) ? "good" : "warn"} /> : null}
                     </span>
-                  </button>
+                  </SelectableRow>
                 );
               })}
             </div>
@@ -705,10 +673,11 @@ export function ObservationInbox({
                   </Disclosure>
                 </section>
 
+                {selectedReady && selectedReview.status ? <ObservationContext key={selectedRevisionId} revisionId={selectedRevisionId} /> : null}
+
                 <div className="portfolio-form-actions notes-actions">
-                  {selectedMatchingSubjects.length > 1 ? <label className="research-field"><span><b className="required-mark" aria-hidden="true">*</b>Research Subject</span><select value={selectedMatchingSubjectId ?? ""} onChange={(event) => { const value = event.target.value; setSubjectOverrides((current) => ({ ...current, [selectedNoteId]: value })); if (value) onSelectSubject(value); }}><option value="">Choose the exact Research Subject</option>{selectedMatchingSubjects.map((item) => { const candidate = asDict(item.subject); const candidateId = text(candidate.subject_id, ""); return <option key={candidateId} value={candidateId}>{text(candidate.title, "Untitled Research Subject")} · {upper(candidate.status)}</option>; })}</select><small>More than one Research Subject uses this Instrument. Selection is required; the system will not guess.</small></label> : null}
-                  <Link
-                    className="action-button default"
+                  {selectedMatchingSubjects.length > 1 ? <label className="research-field"><span><b className="required-mark" aria-hidden="true">*</b>Research Subject</span><Select value={selectedMatchingSubjectId ?? ""} onChange={(event) => { const value = event.target.value; setSubjectOverrides((current) => ({ ...current, [selectedNoteId]: value })); if (value) onSelectSubject(value); }}><option value="">Choose the exact Research Subject</option>{selectedMatchingSubjects.map((item) => { const candidate = asDict(item.subject); const candidateId = text(candidate.subject_id, ""); return <option key={candidateId} value={candidateId}>{text(candidate.title, "Untitled Research Subject")} · {upper(candidate.status)}</option>; })}</Select><small>More than one Research Subject uses this Instrument. Selection is required; the system will not guess.</small></label> : null}
+                  <LinkButton
                     href={selectedResearchHref}
                     onClick={() => {
                       if (selectedMatchingSubjectId) {
@@ -717,7 +686,7 @@ export function ObservationInbox({
                     }}
                   >
                     Open Research
-                  </Link>
+                  </LinkButton>
                   {selectedReady && selectedMatchingSubjectId ? (
                     <ActionButton
                       busy={reviewBusyId === text(selectedRevision.note_revision_id, "")}
@@ -728,9 +697,9 @@ export function ObservationInbox({
                     </ActionButton>
                   ) : null}
                   {selectedReady && !["ADOPTED", "NO_ACTION"].includes(upper(selectedReview.status, "PENDING")) ? (
-                    <button type="button" onClick={() => { void onDeferReview(selected, selectedMatchingSubjectId); }}>
+                    <Button type="button" onClick={() => { void onDeferReview(selected, selectedMatchingSubjectId); }}>
                       Defer Review
-                    </button>
+                    </Button>
                   ) : null}
                   {selectedHasFullText &&
                   !selectedReady &&

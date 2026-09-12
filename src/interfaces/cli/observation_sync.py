@@ -50,12 +50,23 @@ async def _run(args: argparse.Namespace) -> int:
         return 0 if receipt.status is not NoteSyncStatus.FAILED else 1
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(*, moomoo_only: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="trading-partner-observation-sync",
-        description="Import every configured external observation source.",
+        prog=(
+            "trading-partner-moomoo-notes-sync"
+            if moomoo_only
+            else "trading-partner-observation-sync"
+        ),
+        description=(
+            "Import private Moomoo Notes without writing to Moomoo."
+            if moomoo_only
+            else "Import every configured external observation source."
+        ),
     )
-    parser.add_argument("--source", default=None)
+    if moomoo_only:
+        parser.set_defaults(source="MOOMOO_NOTE")
+    else:
+        parser.add_argument("--source", default=None)
     parser.add_argument("--analyze", action="store_true")
     parser.add_argument("--analysis-limit", type=int, default=3)
     parser.add_argument("--retry-failed", action="store_true")

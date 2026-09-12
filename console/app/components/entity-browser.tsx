@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
+import { Button, IconButton, Input, Select } from "./ui/controls";
 
 export type EntityBrowserOption = {
   value: string;
@@ -168,7 +169,8 @@ export function EntityBrowser<T>({
               <span>{search.label}</span>
               <span className="entity-filter-control">
                 <Search aria-hidden="true" />
-                <input
+                <Input
+                  appearance="embedded"
                   type="search"
                   value={search.value}
                   onChange={(event) => search.onChange(event.target.value)}
@@ -181,30 +183,30 @@ export function EntityBrowser<T>({
           {status && (
             <label className="entity-filter-status">
               <span>{status.label}</span>
-              <select value={status.value} onChange={(event) => status.onChange(event.target.value)} aria-label={status.ariaLabel}>
+              <Select value={status.value} onChange={(event) => status.onChange(event.target.value)} aria-label={status.ariaLabel}>
                 {status.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              </Select>
             </label>
           )}
-          <button className="entity-filter-clear" type="button" disabled={clearDisabled} onClick={onClearFilters}>
+          <Button className="entity-filter-clear" size="sm" type="button" disabled={clearDisabled} onClick={onClearFilters}>
             <X aria-hidden="true" /> Clear Filters
-          </button>
+          </Button>
           {resultLabel && <span className="entity-filter-results" aria-live="polite">{resultLabel(filteredItems.length, items.length)}</span>}
         </div>
       )}
       {isSelectedOutsideFilter && filteredNotice}
       {items.length === 0 ? emptyMessage : filteredItems.length === 0 ? noMatchesMessage : (
         <div className="entity-browser">
-          <button className="entity-browser-arrow" type="button" disabled={page === 0} onClick={() => { setPageDirection("previous"); setPage((current) => Math.max(0, current - 1)); }} aria-label={previousAriaLabel}>
+          <IconButton className="entity-browser-arrow" type="button" disabled={page === 0} onClick={() => { setPageDirection("previous"); setPage((current) => Math.max(0, current - 1)); }} aria-label={previousAriaLabel}>
             <ChevronLeft aria-hidden="true" />
-          </button>
+          </IconButton>
           <div className={`entity-index-list slide-${pageDirection}`} key={`${page}-${pageSize}`} style={{ "--entity-per-page": pageSize } as CSSProperties} role="listbox" aria-label={listAriaLabel}>
             {visibleItems.map((item) => renderItem(item, selectedId === getId(item), selectEntity))}
           </div>
           <div className="entity-browser-next-rail">
-            <button className="entity-browser-arrow" type="button" disabled={page >= pageCount - 1} onClick={() => { setPageDirection("next"); setPage((current) => Math.min(pageCount - 1, current + 1)); }} aria-label={nextAriaLabel}>
+            <IconButton className="entity-browser-arrow" type="button" disabled={page >= pageCount - 1} onClick={() => { setPageDirection("next"); setPage((current) => Math.min(pageCount - 1, current + 1)); }} aria-label={nextAriaLabel}>
               <ChevronRight aria-hidden="true" />
-            </button>
+            </IconButton>
           </div>
           {showRange && <span className="entity-browser-range" aria-label={rangeAriaLabel(rangeStart, rangeEnd, filteredItems.length)}>
             <strong>{rangeStart}–{rangeEnd}</strong><span>/ {filteredItems.length}</span>

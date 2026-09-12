@@ -1,5 +1,7 @@
 "use client";
 
+import { consoleScope } from "../styles/scopes";
+
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -21,6 +23,7 @@ import {
 import { ThemeSwitch } from "./theme-switch";
 import { AgentRail } from "./agent-rail";
 import { GlobalNotifications } from "./global-notifications";
+import { Button, DismissLayer, IconButton } from "./ui/controls";
 
 export const CONSOLE_PAGE_LABELS = {
   overview: "Overview",
@@ -198,7 +201,7 @@ export function ConsoleShell({
   }
 
   return (
-    <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}${agentRailCollapsed ? " agent-rail-collapsed" : ""}`}>
+    <div className={`${consoleScope} app-shell${collapsed ? " sidebar-collapsed" : ""}${agentRailCollapsed ? " agent-rail-collapsed" : ""}`}>
       <aside className="sidebar" id="console-navigation-panel">
         <div className="sidebar-header">
           <Link className="brand" href="/" aria-label="Trading Partner Console Home">
@@ -235,10 +238,10 @@ export function ConsoleShell({
         </nav>
         <div className="sidebar-bottom">
           {lanMode ? (
-            <button className="lan-sign-out" onClick={signOutLanSession} type="button">
+            <Button className="lan-sign-out" onClick={signOutLanSession} type="button">
               <LogOut aria-hidden="true" />
               <span className="theme-switch-label">Sign Out LAN Session</span>
-            </button>
+            </Button>
           ) : null}
           <div className="sidebar-foot">
             <span className="pulse-dot" />
@@ -249,7 +252,7 @@ export function ConsoleShell({
           </div>
         </div>
       </aside>
-      <button
+      <DismissLayer
         aria-label="Close Open Side Panel"
         className={`workspace-pane-backdrop${overlayOpen ? " visible" : ""}`}
         onClick={() => {
@@ -262,7 +265,7 @@ export function ConsoleShell({
       <main className="main-content">
         <GlobalNotifications />
         <header className="global-header">
-          <button
+          <IconButton
             aria-controls="console-navigation-panel"
             aria-expanded={!collapsed}
             aria-label={collapsed ? "Open navigation panel" : "Close navigation panel"}
@@ -272,13 +275,13 @@ export function ConsoleShell({
             type="button"
           >
             {collapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
-          </button>
+          </IconButton>
           <div className="global-header-actions">
             <div className="environment-chip">
               <span className="pulse-dot" /> {lanMode ? "LAN SESSION" : "DEVELOPMENT"}
             </div>
             <ThemeSwitch />
-            <button
+            <IconButton
               aria-controls="console-agent-panel"
               aria-expanded={!agentRailCollapsed}
               aria-label={agentRailCollapsed ? "Open Agent Panel" : "Close Agent Panel"}
@@ -288,7 +291,7 @@ export function ConsoleShell({
               type="button"
             >
               {agentRailCollapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
-            </button>
+            </IconButton>
           </div>
         </header>
         <header className="page-header">

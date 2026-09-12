@@ -22,7 +22,6 @@ def _register_market_and_us(
         READ_PROVIDER,
         _all_fields,
         _copy_handler,
-        _register_dispatch_tool,
         _register_flat_dispatch_tool,
         _spec,
     )
@@ -89,8 +88,11 @@ def _register_market_and_us(
     )
     _register_flat_dispatch_tool(
         registry,
-        name="us_company_get",
-        description=("Read US equity company facts or dated US equity/ETF live news."),
+        name="us_get_facts",
+        description=(
+            "Read US equity company facts, dated US equity/ETF live news, vintage-safe "
+            "macro context, source-separated sentiment, or current prediction-market context."
+        ),
         variants=(
             _spec(
                 "fundamentals_snapshot",
@@ -133,17 +135,6 @@ def _register_market_and_us(
                 us_context.market_get_live_news,
                 _all_fields(us_context.market_get_live_news),
             ),
-        ),
-        policy=READ_PROVIDER,
-    )
-    _register_dispatch_tool(
-        registry,
-        name="us_context_get",
-        description=(
-            "Read vintage-safe macro, source-separated sentiment, or current "
-            "prediction-market context."
-        ),
-        variants=(
             _spec(
                 "macro",
                 us_context.us_get_macro_context,

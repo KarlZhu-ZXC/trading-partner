@@ -8,7 +8,6 @@ from typing import Protocol
 from domain.agent.enums import AgentChannel, AgentTurnStatus
 from domain.agent.models import (
     AgentChannelBinding,
-    AgentChannelCursor,
     AgentConversation,
     AgentMessage,
     AgentToolReceipt,
@@ -140,20 +139,3 @@ class AgentConversationRepository(Protocol):
         expected_version: int | None = None,
         now: datetime | None = None,
     ) -> AgentConversation: ...
-
-    def get_cursor(
-        self,
-        channel: AgentChannel,
-        cursor_key: str = "default",
-    ) -> AgentChannelCursor | None: ...
-
-    def advance_cursor(
-        self,
-        channel: AgentChannel,
-        cursor_key: str = "default",
-        update_id: int | None = None,
-        expected_update_id: int | None = None,
-        *,
-        next_update_id: int | None = None,
-        now: datetime | None = None,
-    ) -> AgentChannelCursor: ...

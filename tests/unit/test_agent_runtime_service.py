@@ -179,13 +179,6 @@ class MemoryConversationRepository:
         self.conversations[conversation_id] = updated
         return updated
 
-    def get_cursor(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    def advance_cursor(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError
-
-
 class QueueModelProvider:
     def __init__(self, responses: list[ModelResponse]) -> None:
         self.responses = responses
@@ -253,10 +246,17 @@ class FakeGateway:
         self.reads: list[tuple[str, str | None, dict[str, Any]]] = []
         self.proposals: list[tuple[str, str, dict[str, Any]]] = []
 
-    def search(self, query: str, limit: int = 3) -> tuple[AgentToolDescriptor, ...]:
+    def search(
+        self,
+        query: str,
+        limit: int = 3,
+        *,
+        mode: str = "read",
+    ) -> tuple[AgentToolDescriptor, ...]:
+        _ = mode
         return (
             AgentToolDescriptor(
-                capability="account_get",
+                capability="portfolio_get",
                 operation="positions",
                 description="Read positions",
                 schema={"type": "object"},
@@ -1284,7 +1284,7 @@ async def test_agent_runtime_searches_then_reads_and_persists_receipt() -> None:
                         name="tp_read",
                         arguments=json.dumps(
                             {
-                                "capability": "account_get",
+                                "capability": "portfolio_get",
                                 "operation": "positions",
                                 "arguments": {},
                             }
@@ -1313,7 +1313,7 @@ async def test_agent_runtime_searches_then_reads_and_persists_receipt() -> None:
 
     assert result.tool_rounds == 2
     assert result.tool_receipts[0].request_id == "req_test"
-    assert repository.receipts[0].capability == "account_get"
+    assert repository.receipts[0].capability == "portfolio_get"
     assert len(model.requests) == 3
     assert result.usage == ModelUsage(input_tokens=60, output_tokens=10, total_tokens=70)
     assert result.model_latency_ms == 500
@@ -1337,7 +1337,7 @@ async def test_independent_reads_run_in_parallel_but_tool_messages_keep_model_or
                         name="tp_read",
                         arguments=json.dumps(
                             {
-                                "capability": "account_get",
+                                "capability": "portfolio_get",
                                 "operation": "positions",
                                 "arguments": {},
                             }
@@ -1348,7 +1348,7 @@ async def test_independent_reads_run_in_parallel_but_tool_messages_keep_model_or
                         name="tp_read",
                         arguments=json.dumps(
                             {
-                                "capability": "account_get",
+                                "capability": "portfolio_get",
                                 "operation": "positions",
                                 "arguments": {"snapshot_id": "s2"},
                             }
@@ -1386,7 +1386,7 @@ async def test_schema_errors_include_only_safe_missing_and_invalid_field_names()
                     ModelToolCall(
                         id="invalid_read",
                         name="tp_read",
-                        arguments=json.dumps({"capability": "account_get"}),
+                        arguments=json.dumps({"capability": "portfolio_get"}),
                     ),
                 )
             ),

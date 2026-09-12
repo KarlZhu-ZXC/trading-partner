@@ -22,12 +22,10 @@ def test_behavior_summary_adapter_excludes_internal_container_from_request() -> 
         providers=("schwab",),
         account_refs=("account_1",),
         classifications=("ACTIVE_TRADE",),
-        minimum_sample_size=5,
     )
 
     request = coordinator.get_behavior_summary.call_args.args[0]
     assert request.providers == ("schwab",)
     assert request.account_refs == ("account_1",)
     assert request.classifications == ("ACTIVE_TRADE",)
-    assert request.minimum_sample_size == 5
     assert result["ok"] is True

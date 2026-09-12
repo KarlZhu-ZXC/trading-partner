@@ -11,7 +11,6 @@ from infrastructure.observability.tracing import (
     OpenTelemetryAdapter,
     _reset_tracing_for_tests,
     configure_tracing,
-    hash_telemetry_id,
 )
 
 
@@ -88,14 +87,6 @@ def test_tracing_records_error_type_without_exception_body(tmp_path: Path) -> No
     assert span.events == ()
     assert "must-not-export" not in repr(span)
     _reset_tracing_for_tests()
-
-
-def test_telemetry_identity_hash_is_stable_and_non_reversible() -> None:
-    value = "agent_conversation_private"
-    hashed = hash_telemetry_id(value)
-    assert hashed == hash_telemetry_id(value)
-    assert len(hashed) == 16
-    assert value not in hashed
 
 
 def test_unknown_span_name_cannot_export_sensitive_text(tmp_path: Path) -> None:

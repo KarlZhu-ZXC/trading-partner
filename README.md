@@ -87,8 +87,7 @@ ETF, theme, macro question, catalyst, or portfolio concern—not only an equity.
 - **Technical analysis:** shared daily/weekly indicators, market structure,
   support/resistance, candlestick patterns, and auditable charts.
 - **Safe workflows:** deep dives, catalyst and market reviews, peer comparisons,
-  deterministic Trade Retro, a manual QuantConnect Free code/result bridge, and
-  confirmation-gated US stock/ETF orders.
+  deterministic Trade Retro, and confirmation-gated US stock/ETF orders.
 
 ## <img src="docs/assets/readme/sections/safety.svg" alt="" width="24" /> Safety boundary
 
@@ -98,9 +97,7 @@ Its Schwab order boundary is deliberately narrow: explicitly confirmed, single-l
 US stock/ETF orders through one grouped `broker_order_manage` tool. There is no
 generic broker request, order replacement, or options/complex-order builder. Every
 live submit consumes a short-lived durable preview and exact user authorization;
-an unknown Provider response is recorded and never retried automatically. The
-QuantConnect Free bridge only prepares code and imports a result after you operate
-the web UI yourself.
+an unknown Provider response is recorded and never retried automatically.
 
 Technical outputs are derived facts—not forecasts, strategies, or trade signals.
 Ordinary portfolio questions read durable snapshots; a broker is refreshed only
@@ -148,8 +145,8 @@ configured or reachable.
 
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Local Console
 
-The optional Console is a loopback-only control room over the same application
-services and the 27-capability MCP registry, with an opt-in Shared Agent rail:
+The optional Console is a local control room over the same application services
+and public capability registry, with an opt-in Shared Agent rail:
 
 ```bash
 # Terminal 1
@@ -219,9 +216,7 @@ owner-only CLIs are documented in the
 
 Telegram delivery is opt-in: create a bot with `@BotFather`, message it once, then
 set `NOTIFICATIONS_ENABLED`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` in the
-gitignored `.env`. The optional Telegram Agent poller
-(`uv run trading-partner-agent telegram ...`) is independent of Monitor delivery;
-the maintenance guide records the delivery, retry, and LLM-boundary contracts.
+gitignored `.env`. The maintenance guide records the delivery and retry contracts.
 
 ## <img src="docs/assets/readme/sections/architecture.svg" alt="" width="24" /> Architecture
 
@@ -263,7 +258,6 @@ them are documented in [AGENTS.md](AGENTS.md).
 - [MCP capability and trust boundary](docs/guide/mcp-capability-boundary.md)
 - [MCP host setup: Claude Desktop, Cursor, and generic stdio](docs/guide/mcp-host-setup.md)
 - [Local Console and maintenance](docs/operations/local-console-and-maintenance.md)
-- [QuantConnect Free manual validation](docs/guide/quantconnect-free-bridge.md)
 - [Documentation index](docs/README.md)
 - [Known operational issues](docs/operations/known-issues.md)
 - [Product roadmap](docs/roadmap/global-roadmap-cn-us.md)

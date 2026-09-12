@@ -1,7 +1,10 @@
 "use client";
 
+import { Input, Button, FilterChip } from "./ui/controls";
+import multiStyles from "./ui/multi-select.module.css";
+
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Plus, Search, X } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 
 export type AutosuggestOption = {
   value: string;
@@ -108,14 +111,14 @@ export function MultiSelectAutosuggest({
     }
   }
 
-  return <div className="multi-autosuggest" ref={rootRef}>
+  return <div className={`${multiStyles.root} multi-autosuggest`} ref={rootRef}>
     <span className="multi-autosuggest-label">{label}</span>
     <div className={`multi-autosuggest-control${open ? " open" : ""}`} onClick={() => inputRef.current?.focus()}>
-      {selected.map((option) => <span className="multi-autosuggest-chip" key={option.value} title={option.description}><span>{option.label}</span><button type="button" aria-label={`Remove ${option.label}`} onClick={(event) => { event.stopPropagation(); remove(option.value); }}><X aria-hidden="true" /></button></span>)}
-      <span className="multi-autosuggest-input-wrap"><Search aria-hidden="true" /><input ref={inputRef} role="combobox" aria-label={label} aria-autocomplete="list" aria-expanded={open} aria-controls={listboxId} aria-activedescendant={open && suggestions[activeIndex] ? `${listboxId}-${activeIndex}` : undefined} autoComplete="off" value={query} placeholder={selected.length ? "Add…" : placeholder} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); setOpen(true); }} onKeyDown={handleKeyDown} /></span>
+      {selected.map((option) => <FilterChip key={option.value} label={option.label} title={option.description} onRemove={() => remove(option.value)}>{option.label}</FilterChip>)}
+      <span className="multi-autosuggest-input-wrap"><Search aria-hidden="true" /><Input appearance="embedded" ref={inputRef} role="combobox" aria-label={label} aria-autocomplete="list" aria-expanded={open} aria-controls={listboxId} aria-activedescendant={open && suggestions[activeIndex] ? `${listboxId}-${activeIndex}` : undefined} autoComplete="off" value={query} placeholder={selected.length ? "Add…" : placeholder} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); setOpen(true); }} onKeyDown={handleKeyDown} /></span>
     </div>
     {open ? <div className="multi-autosuggest-menu" id={listboxId} role="listbox" aria-label={`${label} Suggestions`}>
-      {suggestions.length ? suggestions.map((option, index) => <button id={`${listboxId}-${index}`} type="button" role="option" aria-selected={false} className={index === activeIndex ? "active" : ""} key={option.value} onPointerDown={(event) => event.preventDefault()} onClick={() => select(option)}><span><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span><Plus aria-hidden="true" /></button>) : <p>No matching suggestions.</p>}
+      {suggestions.length ? suggestions.map((option, index) => <Button id={`${listboxId}-${index}`} type="button" role="option" aria-selected={false} className={index === activeIndex ? "active" : ""} key={option.value} onPointerDown={(event) => event.preventDefault()} onClick={() => select(option)}><span><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span><Plus aria-hidden="true" /></Button>) : <p>No matching suggestions.</p>}
       {query.trim() ? <small className="multi-autosuggest-hint">Typed text is not applied until a suggestion is selected.</small> : null}
     </div> : null}
   </div>;

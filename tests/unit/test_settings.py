@@ -54,10 +54,6 @@ def test_phase2_watchlist_defaults() -> None:
     assert settings.post_market_sync_lock_path.is_relative_to(
         (settings_module.PROJECT_ROOT / "data").resolve()
     )
-    assert (
-        settings.telegram_agent_lock_path
-        == (settings_module.PROJECT_ROOT / "data/locks/telegram_agent.lock").resolve()
-    )
     assert settings.moomoo_notes_remote_enabled is True
     assert (
         settings.moomoo_notes_cookie_path
@@ -153,22 +149,6 @@ def test_post_market_sync_lock_path_rejects_outside_data_and_blank() -> None:
         _base_settings(post_market_sync_lock_path="data/../README.md")
 
 
-def test_telegram_agent_lock_path_rejects_outside_data_and_blank() -> None:
-    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
-        _base_settings(telegram_agent_lock_path="/tmp/telegram-agent.lock")
-    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
-        _base_settings(telegram_agent_lock_path="   ")
-    with pytest.raises(ValidationError, match="telegram_agent_lock_path"):
-        _base_settings(telegram_agent_lock_path="data/../README.md")
-
-
-def test_telegram_agent_user_id_is_optional_numeric_allowlist() -> None:
-    assert _base_settings(telegram_agent_user_id=" 42 ").telegram_agent_user_id == "42"
-    assert _base_settings(telegram_agent_user_id=None).telegram_agent_user_id is None
-    with pytest.raises(ValidationError, match="telegram_agent_user_id"):
-        _base_settings(telegram_agent_user_id="group-member")
-
-
 def test_telegram_notifications_are_optional_but_complete_when_enabled() -> None:
     disabled = _base_settings()
     assert disabled.notifications_enabled is False
@@ -220,9 +200,9 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert defaults.tavily_search_depth == "basic"
     assert defaults.llm_output_language == "zh-CN"
     assert defaults.deepseek_model == "deepseek-v4-flash"
-    assert defaults.opencode_go_model == "deepseek-v4-flash"
-    assert defaults.external_note_analysis_model == "qwen3.8-flash"
-    assert defaults.external_note_review_model == "qwen3.8-max"
+    assert defaults.opencode_go_model == "deepseek-flash"
+    assert defaults.external_note_analysis_model == "deepseek-flash"
+    assert defaults.external_note_review_model == "deepseek-flash"
     assert defaults.observation_review_workflow_enabled is True
     assert defaults.external_note_review_reasoning_effort is None
     assert defaults.external_note_contributor_training_opt_in is False
@@ -262,12 +242,17 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert opencode_go.resolved_llm_provider_id == "opencode_go"
     assert opencode_go.resolved_llm_config is not None
     assert opencode_go.resolved_llm_config.base_url == "https://opencode.ai/zen/go/v1"
+    assert opencode_go.resolved_llm_config.model == "deepseek-flash"
+    assert opencode_go.default_agent_llm_id == "opencode_go"
+    assert opencode_go.resolved_agent_llm_configs["opencode_go"].model == "deepseek-flash"
+    assert opencode_go.resolved_monitor_judgment_config is not None
+    assert opencode_go.resolved_monitor_judgment_config.model == "deepseek-flash"
     assert opencode_go.resolved_external_note_analysis_config is not None
-    assert opencode_go.resolved_external_note_analysis_config.model == "qwen3.8-flash"
+    assert opencode_go.resolved_external_note_analysis_config.model == "deepseek-flash"
     assert opencode_go.resolved_external_note_analysis_config.reasoning_effort == "max"
     assert opencode_go.resolved_external_note_analysis_config.timeout_seconds == 120.0
     assert opencode_go.resolved_external_note_review_config is not None
-    assert opencode_go.resolved_external_note_review_config.model == "qwen3.8-max"
+    assert opencode_go.resolved_external_note_review_config.model == "deepseek-flash"
     assert opencode_go.resolved_external_note_review_config.reasoning_effort == "max"
     assert "test-opencode-go-secret" not in repr(opencode_go)
 
@@ -411,7 +396,7 @@ def test_agent_model_catalog_exposes_each_configured_legacy_endpoint() -> None:
     assert configs["bailian"].native_web_extractor == "disabled"
     assert configs["deepseek"].model == "deepseek-v4-flash"
     assert configs["deepseek"].native_web_search == "disabled"
-    assert configs["opencode_go"].model == "deepseek-v4-flash"
+    assert configs["opencode_go"].model == "deepseek-flash"
     assert configs["opencode_go"].native_web_search == "disabled"
     assert configs["opencode_zen"].model == "gpt-5.6-luna"
     assert configs["opencode_zen"].api_key == configs["opencode_go"].api_key
@@ -433,8 +418,8 @@ def test_env_example_contains_required_keys() -> None:
         "PROVIDER_RETRY_MAX_ATTEMPTS=2",
         "PROVIDER_RETRY_BASE_DELAY_SECONDS=0.05",
         "PROVIDER_RETRY_MAX_DELAY_SECONDS=1.0",
-        "EXTERNAL_NOTE_ANALYSIS_MODEL=qwen3.8-flash",
-        "EXTERNAL_NOTE_REVIEW_MODEL=qwen3.8-max",
+        "EXTERNAL_NOTE_ANALYSIS_MODEL=deepseek-flash",
+        "EXTERNAL_NOTE_REVIEW_MODEL=deepseek-flash",
         "EXTERNAL_NOTE_REVIEW_REASONING_EFFORT=",
         "EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=false",
         "OBSERVATION_REVIEW_WORKFLOW_ENABLED=true",
@@ -472,7 +457,7 @@ def test_env_example_contains_required_keys() -> None:
         "DEEPSEEK_MODEL=deepseek-v4-flash",
         "OPENCODE_GO_API_KEY=",
         "OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1",
-        "OPENCODE_GO_MODEL=deepseek-v4-flash",
+        "OPENCODE_GO_MODEL=deepseek-flash",
         "LLM_REASONING_EFFORT=max",
         "LLM_OUTPUT_LANGUAGE=zh-CN",
         "MONITOR_JUDGMENT_MODEL=deepseek-v4-flash-0731",

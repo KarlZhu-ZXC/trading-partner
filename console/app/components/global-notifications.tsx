@@ -6,6 +6,7 @@ import {
   CONSOLE_NOTIFICATION_EVENT,
   type ConsoleNotificationDetail,
 } from "../lib/notifications";
+import { IconButton } from "./ui/controls";
 
 type NotificationItem = ConsoleNotificationDetail & { id: string };
 
@@ -43,7 +44,7 @@ export function GlobalNotifications() {
           <div className={`global-notification ${tone}`} role={tone === "error" ? "alert" : "status"} key={item.id}>
             <Icon aria-hidden="true" />
             <div><strong>{item.title}</strong>{item.message ? <span>{item.message}</span> : null}</div>
-            <button type="button" aria-label="Dismiss Notification" onClick={() => setItems((current) => current.filter((candidate) => candidate.id !== item.id))}><X aria-hidden="true" /></button>
+            <IconButton size="sm" type="button" aria-label="Dismiss Notification" onClick={() => setItems((current) => current.filter((candidate) => candidate.id !== item.id))}><X aria-hidden="true" /></IconButton>
           </div>
         );
       })}

@@ -1,3 +1,4 @@
+import { consoleStyles } from "./style-sources.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
@@ -94,7 +95,7 @@ test("uses the sidebar project logo as the browser tab icon", async () => {
 test("restores the persisted sidebar width before paint and keeps it in sync", async () => {
   const layoutSource = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
 
   assert.match(layoutSource, /trading-partner-sidebar-collapsed/);
   assert.match(layoutSource, /trading-partner-agent-rail-collapsed/);
@@ -111,7 +112,7 @@ test("restores the persisted sidebar width before paint and keeps it in sync", a
 test("provides independent Obsidian-style navigation and Agent panel toggles", async () => {
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
 
   assert.match(shellSource, /aria-controls="console-navigation-panel"/);
   assert.match(shellSource, /aria-controls="console-agent-panel"/);
@@ -231,10 +232,11 @@ test("specialist pages share compact Header actions while Overview remains indep
 test("journal reuses durable workflow stages without replacing specialist pages", async () => {
   const source = await readFile(new URL("../app/decision-workbench/page.tsx", import.meta.url), "utf8");
   const observationSource = await readFile(new URL("../app/decision-workbench/observation-inbox.tsx", import.meta.url), "utf8");
+  const refreshSource = await readFile(new URL("../app/components/observation-refresh-status.tsx", import.meta.url), "utf8");
   const scenarioSource = await readFile(new URL("../app/decision-workbench/scenario-digest.tsx", import.meta.url), "utf8");
   const autosuggestSource = await readFile(new URL("../app/components/multi-select-autosuggest.tsx", import.meta.url), "utf8");
   const cycleAdjustmentSource = await readFile(new URL("../app/decision-workbench/cycle-adjustment-editor.tsx", import.meta.url), "utf8");
-  const journalStyles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const journalStyles = (await Promise.all(["tokens.css", "components/ui/controls.module.css", "components/ui/multi-select.module.css", "decision-workbench/journal.module.css"].map((file) => readFile(new URL(`../app/${file}`, import.meta.url), "utf8")))).join("\n");
   assert.match(source, /\/api\/decision-workbench/);
   assert.match(source, /useApi<JournalWorkbenchResponse>/);
   assert.match(source, /useApi<ObservationInboxResponse>/);
@@ -253,14 +255,22 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(source, /ObservationInbox/);
   assert.match(observationSource, /title="Latest Thinking"/);
   assert.match(observationSource, /Refresh Sources/);
-  assert.match(observationSource, /Note Scope/);
-  assert.match(observationSource, /All Notes/);
+  assert.doesNotMatch(observationSource, /Note Scope|Symbol or note/);
+  assert.match(source, /label="Search Notes"/);
+  assert.match(source, /notesQuery/);
   assert.match(observationSource, /Open Research/);
   assert.match(observationSource, /create: "observation"/);
   assert.match(observationSource, /Choose the exact Research Subject/);
   assert.match(observationSource, /the system will not guess/);
   assert.match(source, /compactNextSteps/);
-  assert.match(source, /\/api\/observations\/sync/);
+  assert.match(source, /await startObservationRefresh\(\)/);
+  assert.match(source, /<ObservationRefreshStatus/);
+  assert.match(refreshSource, /postApi<Response>\("\/api\/observation-refresh", \{ request_id: requestId \}\)/);
+  assert.match(refreshSource, /getJson\(`\/api\/observation-refresh\//);
+  assert.match(refreshSource, /localStorage\.setItem\(STORAGE_KEY, response\.data\.request_id\)/);
+  assert.match(refreshSource, /localStorage\.getItem\(STORAGE_KEY\)/);
+  assert.match(refreshSource, /await startObservationRefresh\(requestId \?\? undefined\)/);
+  assert.doesNotMatch(source, /\/api\/observations\/sync/);
   assert.match(observationSource, /Review View Change/);
   assert.match(observationSource, /Revision History/);
   assert.match(observationSource, /attributionSections/);
@@ -303,14 +313,18 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.doesNotMatch(source, /Save Classification/);
   assert.match(source, /BehaviorPanel/);
   assert.match(source, /Custom Range/);
-  assert.match(source, /behavior_start=/);
-  assert.match(source, /behavior_end=/);
-  assert.match(source, /label><span>Start Date/);
-  assert.match(source, /label><span>End Date/);
+  assert.match(source, /activityDateParameter\("behavior_start", selectedPeriodStart, periodWindowValid, usesActivityFilters\)/);
+  assert.match(source, /activityDateParameter\("behavior_end", selectedPeriodEnd, periodWindowValid, usesActivityFilters\)/);
+  assert.match(source, /<DateRange start=\{customPeriodStart\} end=\{customPeriodEnd\}/);
   assert.match(source, /Other Metrics & Audit Details/);
   assert.match(source, /payload value does not match/);
   assert.match(source, /metricInteger\(metric\.numerator\)/);
   assert.match(source, /Payoff ratio/i);
+  assert.match(source, /Payoff Ratio · Amount/);
+  assert.match(source, /Payoff Ratio · Return %/);
+  assert.match(source, /avg_win_return/);
+  assert.match(source, /avg_loss_return/);
+  assert.doesNotMatch(source, /sample_sufficient|minimum_sample_size|minimum sample/);
   assert.doesNotMatch(source, /behaviorPercent/);
   assert.match(source, /CycleAdjustmentEditor/);
   assert.match(source, /title="Traded Instruments"/);
@@ -324,8 +338,8 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(cycleAdjustmentSource, /Apply Revision/);
   assert.match(source, /Create Weekly Review/);
   assert.match(source, /NEW, PERSISTENT, RESOLVED, and RECURRED/);
-  assert.ok(source.indexOf("Data Confidence") < source.indexOf("Results"));
-  assert.ok(source.indexOf("Results") < source.indexOf("Holding Patterns"));
+  assert.doesNotMatch(source, /<Card title="Results"/);
+  assert.ok(source.indexOf("Data Confidence") < source.indexOf("Holding Patterns"));
   assert.ok(source.indexOf("Holding Patterns") < source.indexOf("Latest Changes"));
   assert.ok(source.indexOf("Latest Changes") < source.indexOf("Needs Review"));
   assert.match(source, /journal-panel-reviews/);
@@ -362,13 +376,12 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(autosuggestSource, /role="listbox"/);
   assert.match(autosuggestSource, /Typed text is not applied until a suggestion is selected/);
   assert.match(autosuggestSource, /onClick=\{\(\) => select\(option\)\}/);
-  assert.match(journalStyles, /--journal-filter-control-height:48px/);
-  assert.match(journalStyles, /journal-filter-bar > label > select[^}]*height:var\(--journal-filter-control-height\)/);
-  assert.match(journalStyles, /multi-autosuggest-control[^}]*min-height:var\(--journal-filter-control-height,48px\)/);
-  assert.match(journalStyles, /journal-more-filters > summary[^}]*height:var\(--journal-filter-control-height\)/);
+  assert.match(journalStyles, /--control-height: 38px/);
+  assert.match(journalStyles, /min-height:var\(--control-height\)/);
+  assert.match(source, /<FilterBar aria-label="Journal Filters"/);
   assert.match(source, /cycleStatusTone/);
   assert.match(source, /cycleQualityTone/);
-  assert.match(source, /cycleClassificationTone/);
+  assert.match(source, /<Tag>\{text\(selectedCycle.classification/);
   assert.match(source, /Data Quality/);
   assert.match(source, /<QuickLink href="\/portfolio#activity">Open Portfolio<\/QuickLink>/);
   assert.match(source, /Open Portfolio/);
@@ -440,10 +453,6 @@ test("content disclosures and cross-page shortcuts use shared Console primitives
     if (entry === "components/ui.tsx") {
       assert.equal(nativeDetails.length, 1, "Disclosure owns the native details element");
       assert.equal(nativeSummaries.length, 1, "Disclosure owns the native summary element");
-    } else if (entry === "decision-workbench/page.tsx") {
-      assert.equal(nativeDetails.length, 1, "Journal keeps only the dedicated More Filters popover");
-      assert.equal(nativeSummaries.length, 1, "Journal keeps only the dedicated More Filters trigger");
-      assert.match(source, /className="journal-more-filters"/);
     } else {
       assert.equal(nativeDetails.length, 0, `${entry} must use the shared Disclosure component`);
       assert.equal(nativeSummaries.length, 0, `${entry} must use the shared Disclosure component`);
@@ -463,7 +472,7 @@ test("monitor evidence labels support explicit and legacy previous-close feature
 
 test("portfolio displays valuation-only Snapshot Price and title-cases table headers", async () => {
   const source = await readFile(new URL("../app/portfolio/page.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
 
   assert.match(source, /function snapshotPrice\(/);
   assert.match(source, /Math\.abs\(marketValue\) \/ quantity/);
@@ -486,7 +495,8 @@ test("portfolio displays valuation-only Snapshot Price and title-cases table hea
   assert.match(source, /gross exposure—not account NAV or long\/short net exposure/);
   assert.match(source, /function compactInstrumentId\(/);
   assert.match(source, /parts\.length >= 3 \? `\$\{parts\[1\]\}:\$\{parts\.slice\(2\)\.join\(":"\)\}`/);
-  assert.match(styles, /thead th,.agent-message-table-wrap th \{ text-transform:capitalize; \}/);
+  assert.match(styles, /thead th \{ text-transform:capitalize; \}/);
+  assert.match(styles, /\.agent-message-table-wrap th \{ text-transform:capitalize; \}/);
 });
 
 test("scorecards route uses judgment scorecard source-contract calls", async () => {
@@ -522,7 +532,7 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   const source = await readFile(new URL("../app/research/page.tsx", import.meta.url), "utf8");
   const entitySource = await readFile(new URL("../app/components/entity-browser.tsx", import.meta.url), "utf8");
   const continuitySource = await readFile(new URL("../app/research/research-continuity.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/research/);
   assert.match(source, /decision-workbench\?subject_id=.*capture=decision/);
@@ -601,12 +611,12 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(entitySource, /target === "viewport"/);
   assert.match(entitySource, /setPage\(Math\.floor\(selectedIndex \/ pageSize\)\)/);
   assert.match(styles, /\.entity-index-list \{ display:grid; grid-template-columns:repeat\(var\(--entity-per-page,6\),minmax\(0,1fr\)\)/);
-  assert.match(styles, /\.entity-browser \{ display:grid; grid-template-columns:28px minmax\(0,1fr\) 28px/);
+  assert.match(styles, /\.entity-browser \{ display:grid; grid-template-columns:var\(--control-height\) minmax\(0,1fr\) var\(--control-height\)/);
   assert.match(styles, /@keyframes entity-items-next/);
   assert.match(entitySource, /slide-\$\{pageDirection\}/);
   assert.match(styles, /-webkit-line-clamp:2/);
   assert.match(styles, /\.research-section-nav \{ position:sticky/);
-  assert.match(styles, /\.horizontal-tabs button\.selected/);
+  assert.match(styles, /\.tabs button\[aria-selected="true"\]/);
   assert.match(styles, /\.research-module-panel\[hidden\] \{ display:none; \}/);
   assert.doesNotMatch(shellSource, /className="eyebrow"/);
   assert.doesNotMatch(shellSource, /eyebrow:\s*string/);
@@ -617,15 +627,15 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
   assert.match(source, /instrument_resolve/);
   assert.match(source, /role="combobox"/);
   assert.match(source, /candidate-instrument-suggestions/);
-  assert.match(styles, /\.research-selection-create > \.research-field > input,\.research-selection-create > \.research-field > select \{ height:38px; \}/);
-  assert.match(styles, /\.research-combobox-control input \{[^}]*height:100%/);
+  assert.match(styles, /\.input[^}]*min-height:var\(--control-height\)/);
+  assert.match(source, /<Input appearance="embedded" id="candidate-instrument-query"/);
   assert.doesNotMatch(source, /custom values cannot be submitted/);
   assert.doesNotMatch(source, /For example, keep this blank/);
   assert.match(source, /research-field-immutable/);
   assert.match(source, /disabled=\{editing\}/);
   assert.match(source, /title="Instruments"/);
   assert.doesNotMatch(source, /Primary identity and the durable Instrument Selection pool/);
-  assert.match(styles, /\.research-selection-card > \.card-head \{ margin-bottom:0; padding-bottom:0; border-bottom:0; \}/);
+  assert.match(styles, /\.cardHead[^}]*border-bottom:1px solid var\(--line\)/);
   assert.match(source, /research-overview-instruments/);
   assert.match(source, /additionalInstrumentCandidates/);
   assert.match(source, /ATTACHED_INSTRUMENT_STATUSES/);
@@ -685,14 +695,14 @@ test("card headings separate domain, object, and supporting context", async () =
   const overviewSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const agendaSource = await readFile(new URL("../app/agenda/page.tsx", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../app/components/ui.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = (await consoleStyles()) + (await readFile(new URL("../app/components/ui/patterns.module.css", import.meta.url), "utf8"));
 
   assert.match(uiSource, /subtitle\?: string/);
   assert.match(uiSource, /description\?: string/);
   assert.match(uiSource, /card-heading-copy/);
   assert.match(uiSource, /const bodyDescription = kicker \? \(description \?\? subtitle\) : description/);
   assert.match(uiSource, /!kicker && subtitle && <p className="card-subtitle">/);
-  assert.ok(uiSource.indexOf('</header>') < uiSource.indexOf('{bodyDescription && <p className="card-description">'));
+  assert.ok(uiSource.indexOf('<SectionHeader title={title}') < uiSource.indexOf('{bodyDescription && <p'));
   assert.match(uiSource, /export function DescriptionList/);
   assert.match(uiSource, /export function HorizontalTabs/);
   assert.match(uiSource, /export function Disclosure/);
@@ -701,10 +711,10 @@ test("card headings separate domain, object, and supporting context", async () =
   assert.match(uiSource, /role="tablist"/);
   assert.match(uiSource, /event\.key === "Home"/);
   assert.match(uiSource, /event\.key === "End"/);
-  assert.match(styles, /\.card-head[^}]*border-bottom:1px solid var\(--line\)/);
+  assert.match(styles, /\.cardHead[^}]*border-bottom:1px solid var\(--line\)/);
   assert.match(styles, /\.card-subtitle/);
-  assert.match(styles, /\.description-list > div[^}]*border:1px solid var\(--line\)[^}]*background:var\(--panel\)/);
-  assert.match(styles, /\.badge \{[^}]*border:1px solid currentColor;[^}]*padding:3px 7px;[^}]*background:var\(--panel-solid\)/);
+  assert.match(styles, /\.description \{[^}]*border-top:1px solid var\(--line\)/);
+  assert.doesNotMatch(styles, /\.badge \{[^}]*(?:border:|padding:|background:)/);
   assert.match(styles, /\.badge::before/);
   assert.match(overviewSource, /kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps"/);
   assert.match(overviewSource, /kicker="JUDGMENT INTAKE" title="View Inbox"/);
@@ -787,7 +797,7 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
 test("portfolio is a four-tab durable hub with explicit account writes", async () => {
   const portfolioSource = await readFile(new URL("../app/portfolio/page.tsx", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../app/components/ui.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
 
   assert.match(portfolioSource, /\/api\/portfolio\?transaction_limit=500&coverage_limit=100/);
   assert.match(portfolioSource, /Holdings/);
@@ -795,7 +805,7 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /Trade Cycles/);
   assert.match(portfolioSource, /cyclePnlDisplay/);
   assert.match(portfolioSource, /cycleStatusTone/);
-  assert.match(portfolioSource, /cycleClassificationTone/);
+  assert.match(portfolioSource, /<Tag>\{text\(cycle.classification/);
   assert.match(portfolioSource, /Gross P\/L/);
   assert.match(portfolioSource, /Fees unavailable/);
   assert.match(portfolioSource, /tradeCyclesEnvelope/);
@@ -825,11 +835,11 @@ test("portfolio is a four-tab durable hub with explicit account writes", async (
   assert.match(portfolioSource, /label: "Data Time"/);
   assert.doesNotMatch(portfolioSource, /portfolio-account-facts/);
   assert.doesNotMatch(portfolioSource, /<dt>account_as_of<\/dt>|<dt>fetched_at<\/dt>|<dt>Account environment<\/dt>/);
-  assert.match(portfolioSource, /portfolio-account-title[^>]*>\{accountSource\(account\)\}/);
+  assert.match(portfolioSource, /portfolio-account-title[^>]*>\{accountLabel\(account\)\}/);
   assert.match(portfolioSource, /Broker valuation only/);
   assert.match(uiSource, /ChevronsUpDown/);
   assert.match(uiSource, /className=\{`sort-indicator\$\{active \? " active" : ""\}`\}/);
-  assert.match(styles, /\.portfolio-desktop-table \.sort-header[^}]*min-height:44px/);
+  assert.match(styles, /\.sortButton[^}]*min-height:32px/);
   assert.match(styles, /\.sort-indicator \{[^}]*width:20px;[^}]*height:24px/);
   assert.match(styles, /\.trade-cycle-list/);
   assert.match(portfolioSource, /execution_effect/);
@@ -859,9 +869,7 @@ test("keeps the default console UI copy English-only", async () => {
 });
 
 test("keeps small metadata contrast above the normal-text threshold", async () => {
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(styles, /:root[\s\S]*--dim: #627067;/);
-  assert.match(styles, /html\[data-theme="dark"\][\s\S]*--dim: #8d9992;/);
+
   const luminance = (hex) => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
       .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
@@ -871,8 +879,14 @@ test("keeps small metadata contrast above the normal-text threshold", async () =
     const values = [luminance(foreground), luminance(background)].sort((left, right) => right - left);
     return (values[0] + 0.05) / (values[1] + 0.05);
   };
-  assert.ok(contrast("#627067", "#f3f6f2") >= 4.5);
-  assert.ok(contrast("#8d9992", "#141b18") >= 4.5);
+  const tokens = await readFile(new URL("../app/tokens.css", import.meta.url), "utf8");
+  const blocks = [tokens.split('html[data-theme="dark"]')[0], tokens.split('html[data-theme="dark"]')[1]];
+  for (const block of blocks) {
+    const value = (name) => block.match(new RegExp(`--${name}: (#[a-f0-9]{6});`, "i"))[1];
+    for (const foreground of ["ink", "muted", "dim"]) {
+      for (const background of ["canvas", "panel"]) assert.ok(contrast(value(foreground), value(background)) >= 4.5, `${foreground} on ${background}`);
+    }
+  }
 });
 
 test("legacy Chat route redirects to the shared Agent Rail", async () => {
@@ -914,7 +928,7 @@ test("legacy Chat route redirects to the shared Agent Rail", async () => {
   assert.match(railSource, /aria-label="Reasoning Effort"/);
   assert.match(railSource, /continues on the server/);
   assert.match(railSource, /AgentMessageContent/);
-  assert.match(railSource, /Continue in Telegram/);
+  assert.doesNotMatch(railSource, /Continue in Telegram|createTelegramHandoff/);
   assert.match(railSource, /archiveAgentConversation/);
   assert.match(railSource, /Resize Agent Panel/);
   assert.match(railSource, /Expand Agent research mode/);
@@ -976,7 +990,7 @@ test("keeps the Agent rail width and focus mode accessible and durable", async (
   const layoutSource = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
   const railConstants = await readFile(new URL("../app/lib/agent-rail-layout.mjs", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await consoleStyles();
   assert.match(layoutSource, /trading-partner-agent-rail-width/);
   // The boot script and the rail must clamp to the SAME shared bounds.
   assert.match(railConstants, /AGENT_RAIL_MIN_WIDTH = 320/);

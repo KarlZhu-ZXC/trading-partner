@@ -77,12 +77,10 @@ class AttentionClosureCode(StrEnum):
 READ_ONLY_NEXT_READ_TOOLS = frozenset(
     {
         "system_health",
-        "investment_case_read",
-        "research_judgment_get",
-        "research_memory_get",
+        "research_get",
         "monitor_read",
         "broker_order_manage",
-        "portfolio_analyze",
+        "portfolio_get",
         "view_get",
     }
 )

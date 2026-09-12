@@ -1,4 +1,5 @@
 "use client";
+import { Tag } from "../components/ui/controls";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -23,12 +24,19 @@ import {
   displayJson,
   formatDate,
   shortId,
+  Button,
+  Input,
+  Select,
+  SelectableRow,
+  Textarea,
 } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
-import { envelopeData, listOf, postApi, useApi } from "../lib/api";
+import { envelopeData, getJson, listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { notifyConsole } from "../lib/notifications";
+import { observationResearchSeed, type ObservationResearchDraft, type ObservationResearchSeed } from "../lib/observation-research-draft";
 import { ResearchContinuity } from "./research-continuity";
+import { ObservationResearchSource } from "./observation-research-source";
 import { textDash as text } from "../lib/coerce";
 import { EntityBrowser } from "../components/entity-browser";
 
@@ -70,6 +78,10 @@ const RESEARCH_PAGE_SIZE = {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asDict(value: unknown): Dict {
+  return value && typeof value === "object" ? value as Dict : {};
 }
 
 function stateData(item: SubjectAggregate): Dict | null {
@@ -205,15 +217,15 @@ function SubjectEditor({
     <Card className="research-editor-card" kicker={editing ? "SUBJECT METADATA · AUDITED UPDATE" : "RESEARCH SUBJECT"} title={editing ? "Edit Research Subject Metadata" : "Create Research Subject"}>
       <p className="card-note">{editing ? "Title, summary, tags, and links are editable metadata. Research Subject Type and Primary Instrument define the durable identity and cannot change after creation." : "Create the durable research identity. Later metadata writes leave an auditable confirmation record and do not modify Thesis revisions or positions."}</p>
       <div className="research-form-grid">
-        <Field label="Research Subject Type" required={!editing} className={editing ? "research-field-immutable" : ""}><select value={draft.subjectType} required={!editing} disabled={editing} onChange={(event) => onChange({ ...draft, subjectType: event.target.value })}>{SUBJECT_TYPES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</select></Field>
-        <Field label="Primary Instrument ID" required={!editing && primaryInstrumentRequired} className={editing ? "research-field-immutable" : ""}><input value={draft.instrument} required={!editing && primaryInstrumentRequired} disabled={editing} onChange={(event) => onChange({ ...draft, instrument: event.target.value })} placeholder={draft.subjectType === "theme" ? "Leave blank" : "equity:US:NVDA"} /></Field>
-        <Field label="Title" className="research-field-wide" required><input value={draft.title} required onChange={(event) => onChange({ ...draft, title: event.target.value })} placeholder="e.g. NVDA AI infrastructure tracking" /></Field>
-        <Field label="Summary" className="research-field-wide" required><textarea value={draft.summary} required onChange={(event) => onChange({ ...draft, summary: event.target.value })} rows={5} placeholder="Record the long-term question, scope, and boundaries for this Research Subject." /></Field>
-        <Field label="Topic Tags"><input value={draft.tags} onChange={(event) => onChange({ ...draft, tags: event.target.value })} placeholder="ai, valuation, catalyst" /></Field>
-        <Field label="Linked Research Subject IDs"><textarea value={draft.linkedSubjectIds} onChange={(event) => onChange({ ...draft, linkedSubjectIds: event.target.value })} rows={2} placeholder="One case_<uuid7> per line" /></Field>
+        <Field label="Research Subject Type" required={!editing} className={editing ? "research-field-immutable" : ""}><Select value={draft.subjectType} required={!editing} disabled={editing} onChange={(event) => onChange({ ...draft, subjectType: event.target.value })}>{SUBJECT_TYPES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</Select></Field>
+        <Field label="Primary Instrument ID" required={!editing && primaryInstrumentRequired} className={editing ? "research-field-immutable" : ""}><Input value={draft.instrument} required={!editing && primaryInstrumentRequired} disabled={editing} onChange={(event) => onChange({ ...draft, instrument: event.target.value })} placeholder={draft.subjectType === "theme" ? "Leave blank" : "equity:US:NVDA"} /></Field>
+        <Field label="Title" className="research-field-wide" required><Input value={draft.title} required onChange={(event) => onChange({ ...draft, title: event.target.value })} placeholder="e.g. NVDA AI infrastructure tracking" /></Field>
+        <Field label="Summary" className="research-field-wide" required><Textarea value={draft.summary} required onChange={(event) => onChange({ ...draft, summary: event.target.value })} rows={5} placeholder="Record the long-term question, scope, and boundaries for this Research Subject." /></Field>
+        <Field label="Topic Tags"><Input value={draft.tags} onChange={(event) => onChange({ ...draft, tags: event.target.value })} placeholder="ai, valuation, catalyst" /></Field>
+        <Field label="Linked Research Subject IDs"><Textarea value={draft.linkedSubjectIds} onChange={(event) => onChange({ ...draft, linkedSubjectIds: event.target.value })} rows={2} placeholder="One case_<uuid7> per line" /></Field>
       </div>
       <ErrorNote role="alert">{error}</ErrorNote>
-      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>{editing ? "Save Research Subject" : "Create Research Subject"}</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></FormActions>
+      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>{editing ? "Save Research Subject" : "Create Research Subject"}</ActionButton><Button className="close-button" type="button" onClick={onCancel}>Cancel</Button></FormActions>
     </Card>
   );
 }
@@ -278,6 +290,17 @@ function thesisDraftFrom(thesis: Dict | undefined, revision: Dict | undefined, r
   };
 }
 
+function thesisDraftFromObservation(seed: ObservationResearchSeed): ThesisDraft {
+  return {
+    ...EMPTY_THESIS_DRAFT,
+    title: seed.thesis.title,
+    statement: seed.thesis.statement,
+    rationale: seed.thesis.rationale,
+    invalidationCheckNote: seed.thesis.invalidationCheckNote,
+    thesisStatus: "draft",
+  };
+}
+
 function ThesisEditor({
   draft,
   thesisId,
@@ -318,29 +341,29 @@ function ThesisEditor({
       <div className="research-thesis-editor-heading"><div><p className="card-kicker">{thesisId ? "THESIS REVISION · APPEND ONLY" : "THESIS · CANDIDATE"}</p><h3>{thesisId ? "Edit Thesis · Propose New Revision" : "Create New Thesis"}</h3></div><Badge value={subjectStatus.toUpperCase()} /></div>
       <p className="card-note">Historical revisions are never overwritten. Saving creates a pending candidate that must be explicitly Confirmed or Rejected.</p>
       <div className="research-form-grid">
-        <Field label="Title" className="research-field-wide" required><input value={draft.title} required onChange={(event) => onChange({ ...draft, title: event.target.value })} /></Field>
-        <Field label="Thesis Role" required><select value={draft.thesisRole} required onChange={(event) => onChange({ ...draft, thesisRole: event.target.value, parentThesisId: event.target.value === "sub" ? draft.parentThesisId : "" })}>{THESIS_ROLES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</select></Field>
-        {draft.thesisRole === "sub" && <Field label="Parent PRIMARY Thesis" required><select value={draft.parentThesisId} required onChange={(event) => onChange({ ...draft, parentThesisId: event.target.value, rivalThesisIds: draft.rivalThesisIds.filter((id) => id !== event.target.value) })}><option value="">Select a Parent Thesis</option>{primaryTargets.map((item) => <option value={text(item.thesis_id)} key={text(item.thesis_id)}>{text(item.title, "Unnamed PRIMARY")} · {text(item.status)}</option>)}</select></Field>}
-        <Field label="Rival Theses" className="research-field-wide"><div className="research-thesis-relation-options">{relationshipTargets.length === 0 ? <span className="muted">No other Theses available.</span> : relationshipTargets.map((item) => { const id = text(item.thesis_id); const disabled = id === draft.parentThesisId; return <label key={id}><input type="checkbox" checked={draft.rivalThesisIds.includes(id)} disabled={disabled} onChange={(event) => onChange({ ...draft, rivalThesisIds: event.target.checked ? [...draft.rivalThesisIds, id] : draft.rivalThesisIds.filter((value) => value !== id) })} /><span>{text(item.title, "Unnamed Thesis")} · {text(item.role).toUpperCase()} · {text(item.status)}</span></label>; })}</div><small>Use this to declare competing explanations or contrary judgments; a parent Thesis cannot also be marked as a rival.</small></Field>
-        <Field label="Candidate Status" required><div className="research-status-control">{thesisId && <label className="research-status-toggle"><input type="checkbox" checked={statusExplicit} onChange={(event) => onStatusExplicitChange(event.target.checked)} /><span>Also Update Status</span></label>}<select value={draft.thesisStatus} required disabled={Boolean(thesisId) && !statusExplicit} onChange={(event) => onChange({ ...draft, thesisStatus: event.target.value })}>{THESIS_STATUSES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</select></div></Field>
-        <Field label="Confidence" required><select value={draft.confidenceBand} required onChange={(event) => onChange({ ...draft, confidenceBand: event.target.value })}>{CONFIDENCE_BANDS.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</select></Field>
-        <Field label="Rating" required><select value={draft.rating} required onChange={(event) => onChange({ ...draft, rating: event.target.value })}>{RATINGS.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</select></Field>
-        <Field label="Replacement Revision No"><input inputMode="numeric" value={draft.replacesRevisionNo} onChange={(event) => onChange({ ...draft, replacesRevisionNo: event.target.value.replace(/[^0-9]/g, "") })} placeholder="Current Revision No" /></Field>
-        <Field label="Statement" className="research-field-wide" required><textarea value={draft.statement} required onChange={(event) => onChange({ ...draft, statement: event.target.value })} rows={5} /></Field>
-        <Field label="Rationale" className="research-field-wide" required><textarea value={draft.rationale} required onChange={(event) => onChange({ ...draft, rationale: event.target.value })} rows={5} /></Field>
-        <Field label="Invalidation Check Note" className="research-field-wide" required><textarea value={draft.invalidationCheckNote} required onChange={(event) => onChange({ ...draft, invalidationCheckNote: event.target.value })} rows={4} /></Field>
+        <Field label="Title" className="research-field-wide" required><Input value={draft.title} required onChange={(event) => onChange({ ...draft, title: event.target.value })} /></Field>
+        <Field label="Thesis Role" required><Select value={draft.thesisRole} required onChange={(event) => onChange({ ...draft, thesisRole: event.target.value, parentThesisId: event.target.value === "sub" ? draft.parentThesisId : "" })}>{THESIS_ROLES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</Select></Field>
+        {draft.thesisRole === "sub" && <Field label="Parent PRIMARY Thesis" required><Select value={draft.parentThesisId} required onChange={(event) => onChange({ ...draft, parentThesisId: event.target.value, rivalThesisIds: draft.rivalThesisIds.filter((id) => id !== event.target.value) })}><option value="">Select a Parent Thesis</option>{primaryTargets.map((item) => <option value={text(item.thesis_id)} key={text(item.thesis_id)}>{text(item.title, "Unnamed PRIMARY")} · {text(item.status)}</option>)}</Select></Field>}
+        <Field label="Rival Theses" className="research-field-wide"><div className="research-thesis-relation-options">{relationshipTargets.length === 0 ? <span className="muted">No other Theses available.</span> : relationshipTargets.map((item) => { const id = text(item.thesis_id); const disabled = id === draft.parentThesisId; return <label key={id}><Input type="checkbox" checked={draft.rivalThesisIds.includes(id)} disabled={disabled} onChange={(event) => onChange({ ...draft, rivalThesisIds: event.target.checked ? [...draft.rivalThesisIds, id] : draft.rivalThesisIds.filter((value) => value !== id) })} /><span>{text(item.title, "Unnamed Thesis")} · {text(item.role).toUpperCase()} · {text(item.status)}</span></label>; })}</div><small>Use this to declare competing explanations or contrary judgments; a parent Thesis cannot also be marked as a rival.</small></Field>
+        <Field label="Candidate Status" required><div className="research-status-control">{thesisId && <label className="research-status-toggle"><Input type="checkbox" checked={statusExplicit} onChange={(event) => onStatusExplicitChange(event.target.checked)} /><span>Also Update Status</span></label>}<Select value={draft.thesisStatus} required disabled={Boolean(thesisId) && !statusExplicit} onChange={(event) => onChange({ ...draft, thesisStatus: event.target.value })}>{THESIS_STATUSES.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</Select></div></Field>
+        <Field label="Confidence" required><Select value={draft.confidenceBand} required onChange={(event) => onChange({ ...draft, confidenceBand: event.target.value })}>{CONFIDENCE_BANDS.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</Select></Field>
+        <Field label="Rating" required><Select value={draft.rating} required onChange={(event) => onChange({ ...draft, rating: event.target.value })}>{RATINGS.map((value) => <option key={value} value={value}>{optionLabel(value)}</option>)}</Select></Field>
+        <Field label="Replacement Revision No"><Input inputMode="numeric" value={draft.replacesRevisionNo} onChange={(event) => onChange({ ...draft, replacesRevisionNo: event.target.value.replace(/[^0-9]/g, "") })} placeholder="Current Revision No" /></Field>
+        <Field label="Statement" className="research-field-wide" required><Textarea value={draft.statement} required onChange={(event) => onChange({ ...draft, statement: event.target.value })} rows={5} /></Field>
+        <Field label="Rationale" className="research-field-wide" required><Textarea value={draft.rationale} required onChange={(event) => onChange({ ...draft, rationale: event.target.value })} rows={5} /></Field>
+        <Field label="Invalidation Check Note" className="research-field-wide" required><Textarea value={draft.invalidationCheckNote} required onChange={(event) => onChange({ ...draft, invalidationCheckNote: event.target.value })} rows={4} /></Field>
       </div>
       {subjectStatus === "draft" && ["active", "strengthened", "weakened"].includes(draft.thesisStatus) && (!thesisId || statusExplicit) && <div className="research-state-warning" role="status">A Draft Research Subject cannot confirm a live Thesis. Submit and confirm a Research Subject activation candidate first, or keep Thesis status at DRAFT.</div>}
       <div className="research-array-editor">
-        <div className="research-array-heading"><div><p className="card-kicker">THESIS PREMISES</p><h3>Assumptions</h3></div><button className="close-button" type="button" onClick={() => onChange({ ...draft, assumptions: [...draft.assumptions, { statement: "", basis: "", falsifiability: "" }] })}>Add Assumption</button></div>
-        {draft.assumptions.length === 0 ? <p className="muted">No assumptions yet; add at least one if this judgment should be challenged over time.</p> : draft.assumptions.map((item, index) => <div className="research-array-row" key={`assumption-${index}`}><Field label="Statement"><textarea rows={3} value={item.statement} onChange={(event) => updateAssumption(index, "statement", event.target.value)} /></Field><Field label="Basis"><textarea rows={3} value={item.basis} onChange={(event) => updateAssumption(index, "basis", event.target.value)} /></Field><Field label="Falsifiability"><textarea rows={3} value={item.falsifiability} onChange={(event) => updateAssumption(index, "falsifiability", event.target.value)} /></Field><button className="close-button" type="button" onClick={() => onChange({ ...draft, assumptions: draft.assumptions.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}
+        <div className="research-array-heading"><div><p className="card-kicker">THESIS PREMISES</p><h3>Assumptions</h3></div><Button className="close-button" type="button" onClick={() => onChange({ ...draft, assumptions: [...draft.assumptions, { statement: "", basis: "", falsifiability: "" }] })}>Add Assumption</Button></div>
+        {draft.assumptions.length === 0 ? <p className="muted">No assumptions yet; add at least one if this judgment should be challenged over time.</p> : draft.assumptions.map((item, index) => <div className="research-array-row" key={`assumption-${index}`}><Field label="Statement"><Textarea rows={3} value={item.statement} onChange={(event) => updateAssumption(index, "statement", event.target.value)} /></Field><Field label="Basis"><Textarea rows={3} value={item.basis} onChange={(event) => updateAssumption(index, "basis", event.target.value)} /></Field><Field label="Falsifiability"><Textarea rows={3} value={item.falsifiability} onChange={(event) => updateAssumption(index, "falsifiability", event.target.value)} /></Field><Button className="close-button" type="button" onClick={() => onChange({ ...draft, assumptions: draft.assumptions.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button></div>)}
       </div>
       <div className="research-array-editor">
-        <div className="research-array-heading"><div><p className="card-kicker">FALSIFIABILITY</p><h3>Invalidation Conditions</h3></div><button className="close-button" type="button" onClick={() => onChange({ ...draft, invalidations: [...draft.invalidations, { description: "", observable: "", severity: "soft" }] })}>Add Condition</button></div>
-        {draft.invalidations.length === 0 ? <p className="muted">No invalidation conditions yet.</p> : draft.invalidations.map((item, index) => <div className="research-array-row" key={`invalidation-${index}`}><Field label="Description"><textarea rows={3} value={item.description} onChange={(event) => updateInvalidation(index, "description", event.target.value)} /></Field><Field label="Observable"><textarea rows={3} value={item.observable} onChange={(event) => updateInvalidation(index, "observable", event.target.value)} /></Field><Field label="Severity"><select value={item.severity} onChange={(event) => updateInvalidation(index, "severity", event.target.value)}>{INVALIDATION_SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field><button className="close-button" type="button" onClick={() => onChange({ ...draft, invalidations: draft.invalidations.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}
+        <div className="research-array-heading"><div><p className="card-kicker">FALSIFIABILITY</p><h3>Invalidation Conditions</h3></div><Button className="close-button" type="button" onClick={() => onChange({ ...draft, invalidations: [...draft.invalidations, { description: "", observable: "", severity: "soft" }] })}>Add Condition</Button></div>
+        {draft.invalidations.length === 0 ? <p className="muted">No invalidation conditions yet.</p> : draft.invalidations.map((item, index) => <div className="research-array-row" key={`invalidation-${index}`}><Field label="Description"><Textarea rows={3} value={item.description} onChange={(event) => updateInvalidation(index, "description", event.target.value)} /></Field><Field label="Observable"><Textarea rows={3} value={item.observable} onChange={(event) => updateInvalidation(index, "observable", event.target.value)} /></Field><Field label="Severity"><Select value={item.severity} onChange={(event) => updateInvalidation(index, "severity", event.target.value)}>{INVALIDATION_SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field><Button className="close-button" type="button" onClick={() => onChange({ ...draft, invalidations: draft.invalidations.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button></div>)}
       </div>
       <ErrorNote role="alert">{error}</ErrorNote>
-      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>Propose Candidate</ActionButton><button className="close-button" type="button" onClick={onCancel}>Cancel</button></FormActions>
+      <FormActions className="research-form-actions"><ActionButton onClick={onSave} busy={busy}>Propose Candidate</ActionButton><Button className="close-button" type="button" onClick={onCancel}>Cancel</Button></FormActions>
     </section>
   );
 }
@@ -359,7 +382,7 @@ function MonitorLinks({ monitorData, subjectId, loading }: { monitorData: Dict |
 function ThesisSummary({ thesis, revision, assumptions, invalidations }: { thesis: Dict; revision?: Dict; assumptions: Dict[]; invalidations: Dict[] }) {
   return (
     <article className="research-thesis-summary">
-      <header><div><strong>{text(thesis.title, "Unnamed Thesis")}</strong><small className="mono">{text(thesis.thesis_id)}</small></div><div className="research-thesis-badges"><Badge value={text(thesis.status, "UNKNOWN").toUpperCase()} /><span className="research-role">{text(thesis.role).toUpperCase()}</span></div></header>
+      <header><div><strong>{text(thesis.title, "Unnamed Thesis")}</strong><small className="mono">{text(thesis.thesis_id)}</small></div><div className="research-thesis-badges"><Badge value={text(thesis.status, "UNKNOWN").toUpperCase()} /><Tag>{text(thesis.role).toUpperCase()}</Tag></div></header>
       <div className="research-thesis-facts"><div><span>Created</span><strong>{formatDate(thesis.created_at)}</strong></div><div><span>Status</span><strong>{text(thesis.status).toUpperCase()}</strong></div><div><span>Role</span><strong>{text(thesis.role).toUpperCase()}</strong></div><div><span>Rating</span><strong>{text(revision?.rating).toUpperCase()}</strong></div><div><span>Confidence</span><strong>{text(revision?.confidence_band).toUpperCase()}</strong></div><div><span>Current Revision</span><strong>v{text(thesis.current_revision_no)}</strong><small>latest v{text(revision?.revision_no)} · {formatDate(revision?.created_at)}</small></div></div>
       <section className="research-latest-revision"><header><div><span>LATEST REVISION</span><strong>Statement & Supporting Judgment</strong></div><Badge value={`V${text(revision?.revision_no, text(thesis.current_revision_no))}`} /></header><p className="research-latest-statement">{text(revision?.statement, "No latest revision statement.")}</p>{revision && <div className="research-thesis-detail-grid"><div><span>Rationale</span><p>{text(revision.rationale)}</p></div><div><span>Invalidation Check</span><p>{text(revision.invalidation_check_note)}</p></div></div>}</section>
       {(text(thesis.parent_thesis_id, "") || stringList(thesis.rival_thesis_ids).length > 0) && <div className="research-thesis-relations">{text(thesis.parent_thesis_id, "") && <span>Parent Thesis · <code>{shortId(thesis.parent_thesis_id)}</code></span>}{stringList(thesis.rival_thesis_ids).length > 0 && <span>Rivals · {stringList(thesis.rival_thesis_ids).map((id) => <code key={id}>{shortId(id)}</code>)}</span>}</div>}
@@ -378,7 +401,7 @@ function ThesisRelationshipList({ theses, revisions, assumptions, invalidations,
   }
   const renderThesis = (thesis: Dict, depth: number): ReactNode => {
     const thesisId = text(thesis.thesis_id);
-    return <div className={`research-thesis-node depth-${depth}`} key={thesisId}><ThesisSummary thesis={thesis} revision={revisions.get(thesisId)} assumptions={assumptions.filter((item) => String(item.thesis_id) === thesisId)} invalidations={invalidations.filter((item) => String(item.thesis_id) === thesisId)} /><div className="research-thesis-actions"><button className="close-button" type="button" onClick={() => onEdit(thesis)}>Edit Thesis · New Revision</button></div>{(childrenByParent.get(thesisId) ?? []).map((child) => renderThesis(child, depth + 1))}</div>;
+    return <div className={`research-thesis-node depth-${depth}`} key={thesisId}><ThesisSummary thesis={thesis} revision={revisions.get(thesisId)} assumptions={assumptions.filter((item) => String(item.thesis_id) === thesisId)} invalidations={invalidations.filter((item) => String(item.thesis_id) === thesisId)} /><div className="research-thesis-actions"><Button className="close-button" type="button" onClick={() => onEdit(thesis)}>Edit Thesis · New Revision</Button></div>{(childrenByParent.get(thesisId) ?? []).map((child) => renderThesis(child, depth + 1))}</div>;
   };
   return <div className="research-thesis-list">{roots.map((thesis) => renderThesis(thesis, 0))}</div>;
 }
@@ -460,7 +483,7 @@ function PendingCandidate({ candidate, subjectStatus, onDecision, busy }: { cand
       setDecisionError(cause instanceof Error ? cause.message : "Candidate decision failed.");
     }
   }
-  return <article className="research-candidate"><header><div><strong>{candidateTitle(kind, payload)}</strong><small>{text(candidate.candidate_id)} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><CandidateReviewDetails candidate={candidate} payload={payload} kind={kind} /><ErrorNote role="alert">{decisionError}</ErrorNote><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => { void submit("confirm"); }} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><input ref={rejectionInputRef} required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { void submit("reject"); }} busy={busy}>Reject Candidate</ActionButton><button className="research-withdraw-button" type="button" disabled={busy} onClick={() => { void submit("withdraw"); }}>Withdraw Proposal</button></div></section></div></article>;
+  return <article className="research-candidate"><header><div><strong>{candidateTitle(kind, payload)}</strong><small>{text(candidate.candidate_id)} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><CandidateReviewDetails candidate={candidate} payload={payload} kind={kind} /><ErrorNote role="alert">{decisionError}</ErrorNote><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => { void submit("confirm"); }} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><Input ref={rejectionInputRef} required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { void submit("reject"); }} busy={busy}>Reject Candidate</ActionButton><Button className="research-withdraw-button" type="button" disabled={busy} onClick={() => { void submit("withdraw"); }}>Withdraw Proposal</Button></div></section></div></article>;
 }
 
 function ResearchSubjectDetail({
@@ -471,6 +494,9 @@ function ResearchSubjectDetail({
   onRefresh,
   onWrite,
   busy,
+  observationSeed,
+  autoOpenSeedThesis,
+  onSeedThesisOpened,
 }: {
   item: SubjectAggregate;
   monitorData: Dict | null;
@@ -479,6 +505,9 @@ function ResearchSubjectDetail({
   onRefresh: () => void;
   onWrite: (toolName: string, request: Dict, confirmation?: string) => Promise<Dict>;
   busy: boolean;
+  observationSeed: ObservationResearchSeed | null;
+  autoOpenSeedThesis: boolean;
+  onSeedThesisOpened: () => void;
 }) {
   const researchSubject = item.subject ?? {};
   const state = stateData(item) ?? {};
@@ -490,6 +519,7 @@ function ResearchSubjectDetail({
   const openQuestions = listOf<Dict>(state, "open_questions");
   const instrumentCandidates = listOf<Dict>(state, "watchlist_items").filter((candidate) => ATTACHED_INSTRUMENT_STATUSES.has(text(candidate.status, "")));
   const primaryInstrumentId = text(researchSubject.primary_instrument_id, "");
+  const sourceMatches = Boolean(observationSeed?.ready && observationSeed.source.instrument_id && primaryInstrumentId === observationSeed.source.instrument_id);
   const additionalInstrumentCandidates = instrumentCandidates.filter((candidate) => text(candidate.instrument_id, "") !== primaryInstrumentId);
   const instrumentInventory = [
     ...(primaryInstrumentId ? [{ instrumentId: primaryInstrumentId, displayName: shortId(primaryInstrumentId), status: "PRIMARY" }] : []),
@@ -546,6 +576,9 @@ function ResearchSubjectDetail({
   const [archiveReasonOpen, setArchiveReasonOpen] = useState(false);
   const [archiveReason, setArchiveReason] = useState("Research scope ended or judgment invalidated");
   const [archiveReasonError, setArchiveReasonError] = useState<string | null>(null);
+  const [thesisSourceRevisionId, setThesisSourceRevisionId] = useState<string | null>(null);
+  const [planReviewRequest, setPlanReviewRequest] = useState(0);
+  const [planEditorOpen, setPlanEditorOpen] = useState(false);
 
   useEffect(() => {
     const syncModuleFromUrl = () => {
@@ -562,6 +595,9 @@ function ResearchSubjectDetail({
     setSubjectEditor(false);
     setThesisEditor(false);
     setThesisId(null);
+    setThesisSourceRevisionId(null);
+    setPlanReviewRequest(0);
+    setPlanEditorOpen(false);
     setThesisStatusExplicit(false);
     setCandidateMarket(instrumentMarket(researchSubject.primary_instrument_id));
     setCandidateInstrumentQuery("");
@@ -578,7 +614,7 @@ function ResearchSubjectDetail({
     setArchiveConfirmation(false);
     setRestoreConfirmation(false);
     setArchiveReasonOpen(false);
-  }, [researchSubject.subject_id, researchSubject.updated_at]);
+  }, [researchSubject.subject_id]);
 
   useEffect(() => {
     const query = candidateInstrumentQuery.trim();
@@ -720,7 +756,7 @@ function ResearchSubjectDetail({
     } catch { /* onWrite keeps the local error visible */ }
   }
 
-  function startThesisEditor(target?: Dict, createNew = false) {
+  function startThesisEditor(target?: Dict, createNew = false, seedOverride?: ObservationResearchSeed | null) {
     setDetailError(null);
     const thesis = createNew ? undefined : target ?? theses[0];
     const revision = thesis ? revisions.get(String(thesis.thesis_id)) : undefined;
@@ -729,15 +765,25 @@ function ResearchSubjectDetail({
     const revisionNo = revision?.revision_no == null ? null : String(revision.revision_no);
     const revisionAssumptions = assumptions.filter((item) => String(item.thesis_id) === thesisKey && (revisionNo === null || String(item.revision_no) === revisionNo));
     const revisionInvalidations = invalidations.filter((item) => String(item.thesis_id) === thesisKey && (revisionNo === null || String(item.revision_no) === revisionNo));
-    const draft = thesisDraftFrom(thesis, revision, revisionAssumptions, revisionInvalidations);
-    if (!thesis) draft.thesisStatus = String(researchSubject.status).toLowerCase() === "draft" ? "draft" : "active";
-    if (!thesis && theses.some((item) => text(item.role) === "primary" && LIVE_THESIS_STATUSES.has(text(item.status)))) {
+    const importedSeed = createNew && seedOverride?.ready && sourceMatches ? seedOverride : null;
+    const draft = importedSeed
+      ? thesisDraftFromObservation(importedSeed)
+      : thesisDraftFrom(thesis, revision, revisionAssumptions, revisionInvalidations);
+    if (!thesis && !importedSeed) draft.thesisStatus = String(researchSubject.status).toLowerCase() === "draft" ? "draft" : "active";
+    if (!thesis && !importedSeed && theses.some((item) => text(item.role) === "primary" && LIVE_THESIS_STATUSES.has(text(item.status)))) {
       draft.thesisRole = "competitor";
     }
     setThesisDraft(draft);
     setThesisStatusExplicit(!thesis);
+    setThesisSourceRevisionId(importedSeed?.source.note_revision_id ?? null);
     setThesisEditor(true);
   }
+
+  useEffect(() => {
+    if (!autoOpenSeedThesis || !observationSeed || !sourceMatches || thesisEditor) return;
+    startThesisEditor(undefined, true, observationSeed);
+    onSeedThesisOpened();
+  }, [autoOpenSeedThesis, observationSeed?.source.note_revision_id, sourceMatches, thesisEditor]);
 
   async function saveThesis() {
     setDetailError(null);
@@ -770,8 +816,12 @@ function ResearchSubjectDetail({
     if (!thesisId || thesisStatusExplicit) payload.thesis_status = thesisDraft.thesisStatus;
     if (!payload.title || !payload.statement || !payload.rationale || !payload.invalidation_check_note) { setDetailError("Thesis title, statement, rationale, and invalidation check note are required."); return; }
     try {
-      await onWrite("research_judgment_propose", { operation: "thesis_revision", case_id: text(researchSubject.subject_id), thesis_id: thesisId, payload, proposed_by: "user", proposed_by_rationale: "Thesis revision proposed from the local Research workspace", idempotency_key: idempotencyKey("thesis-propose") }, "research_judgment_propose");
+      const proposedByRationale = thesisSourceRevisionId
+        ? `Thesis draft imported from Observation revision ${thesisSourceRevisionId}; user reviewed and proposed this candidate.`
+        : "Thesis revision proposed from the local Research workspace";
+      await onWrite("research_judgment_propose", { operation: "thesis_revision", case_id: text(researchSubject.subject_id), thesis_id: thesisId, payload, proposed_by: "user", proposed_by_rationale: proposedByRationale, idempotency_key: idempotencyKey("thesis-propose") }, "research_judgment_propose");
       setThesisEditor(false);
+      setThesisSourceRevisionId(null);
       onRefresh();
     } catch { /* onWrite keeps the local error visible */ }
   }
@@ -824,18 +874,36 @@ function ResearchSubjectDetail({
   const tags = stringList(researchSubject.topic_tags);
   return (
     <div className="research-detail-stack">
+      <ObservationResearchSource
+        seed={observationSeed}
+        subjectInstrumentId={primaryInstrumentId}
+        thesisEditorOpen={thesisEditor}
+        planEditorOpen={planEditorOpen}
+        onUseThesis={() => {
+          if (observationSeed && sourceMatches && !thesisEditor) {
+            selectModule("thesis");
+            startThesisEditor(undefined, true, observationSeed);
+          }
+        }}
+        onUsePlan={() => {
+          if (observationSeed && sourceMatches && !planEditorOpen) {
+            selectModule("trade-plan");
+            setPlanReviewRequest((current) => current + 1);
+          }
+        }}
+      />
       <HorizontalTabs className="research-section-nav" items={RESEARCH_MODULES.map((module) => ({ id: module.key, label: module.label, attention: module.key === "overview" && pendingCandidates.length > 0, suffix: module.key === "overview" && pendingCandidates.length > 0 ? <span className="horizontal-tab-count" aria-label={`${pendingCandidates.length} Pending Candidates`}>{pendingCandidates.length}</span> : undefined }))} value={activeModule} onChange={selectModule} ariaLabel="Research Subject Modules" idPrefix="research-tab" panelIdPrefix="research-panel" />
       <section id="research-panel-overview" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-overview" hidden={activeModule !== "overview"}>
-      <Card id="research-section-overview" className="research-subject-detail" kicker={text(researchSubject.subject_type, "RESEARCH SUBJECT").replaceAll("_", " ").toUpperCase()} title={text(researchSubject.title, "Unnamed Research Subject")} action={<div className="research-detail-actions"><Badge value={text(researchSubject.status, "UNKNOWN").toUpperCase()} /><Link className="close-button" href={`/decision-workbench?subject_id=${encodeURIComponent(text(researchSubject.subject_id))}&capture=decision`}>Record Decision</Link><button className="close-button" type="button" onClick={() => { setDetailError(null); setSubjectEditor((value) => !value); }}>{subjectEditor ? "Close Editor" : "Edit Research Subject"}</button>{String(researchSubject.status).toLowerCase() === "draft" && <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void activateSubject(); }}>Start Tracking</button>}{String(researchSubject.status).toLowerCase() === "archived" ? <button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void restoreSubject(); }}>Restore to Draft</button> : <button className="close-button warning-text" type="button" disabled={busy} onClick={archiveSubject}>Archive</button>}</div>}>
+      <Card id="research-section-overview" className="research-subject-detail" kicker={text(researchSubject.subject_type, "RESEARCH SUBJECT").replaceAll("_", " ").toUpperCase()} title={text(researchSubject.title, "Unnamed Research Subject")} action={<div className="research-detail-actions"><Badge value={text(researchSubject.status, "UNKNOWN").toUpperCase()} /><Link className="close-button" href={`/decision-workbench?subject_id=${encodeURIComponent(text(researchSubject.subject_id))}&capture=decision`}>Record Decision</Link><Button className="close-button" type="button" onClick={() => { setDetailError(null); setSubjectEditor((value) => !value); }}>{subjectEditor ? "Close Editor" : "Edit Research Subject"}</Button>{String(researchSubject.status).toLowerCase() === "draft" && <Button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void activateSubject(); }}>Start Tracking</Button>}{String(researchSubject.status).toLowerCase() === "archived" ? <Button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void restoreSubject(); }}>Restore to Draft</Button> : <Button className="close-button warning-text" type="button" disabled={busy} onClick={archiveSubject}>Archive</Button>}</div>}>
         <DescriptionList columns={3} items={[{ label: "Instruments", value: instrumentInventory.length === 0 ? "—" : <span className="research-overview-instruments">{instrumentInventory.map((instrument) => <span key={`${instrument.status}-${instrument.instrumentId}`}><strong>{instrument.displayName}</strong><small>{instrument.status}</small></span>)}</span> }, { label: "Created", value: formatDate(researchSubject.created_at) }, { label: "Updated", value: formatDate(researchSubject.updated_at) }]} />
         <p className="research-summary">{text(researchSubject.summary, "No Research Subject summary.")}</p>
-        <div className="research-tags" aria-label="Research Subject Tags">{tags.length === 0 ? <span className="muted">No Tags</span> : tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
-        {stringList(researchSubject.linked_subject_ids).length > 0 && <div className="research-linked-subjects"><span>Linked Research Subjects</span>{stringList(researchSubject.linked_subject_ids).map((subjectId) => <button type="button" key={subjectId} onClick={() => onSelectSubject(subjectId)}>{shortId(subjectId)}</button>)}</div>}
+        <div className="research-tags" aria-label="Research Subject Tags">{tags.length === 0 ? <span className="muted">No Tags</span> : tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div>
+        {stringList(researchSubject.linked_subject_ids).length > 0 && <div className="research-linked-subjects"><span>Linked Research Subjects</span>{stringList(researchSubject.linked_subject_ids).map((subjectId) => <Button type="button" key={subjectId} onClick={() => onSelectSubject(subjectId)}>{shortId(subjectId)}</Button>)}</div>}
         {failure && <div className="research-state-error" role="status"><strong>Partial Read Failed</strong><span>{failure}</span><small>Research Subject metadata remains editable; fix state loading before editing Thesis.</small></div>}
       </Card>
       {subjectEditor && <SubjectEditor draft={subjectDraft} editing busy={busy} error={detailError} onChange={setSubjectDraft} onCancel={() => setSubjectEditor(false)} onSave={() => { void saveSubject(); }} />}
       <Card id="research-section-continuity" className="research-continuity-check" kicker="RESEARCH HEALTH" title="Health Check" action={continuitySignals.length > 0 ? <Badge value={`${continuitySignals.length} OPEN`} /> : undefined}>
-        {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core Judgment Controls Are Present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => signal.key === "candidates" ? <button className="continuity-checklist-action" type="button" key={signal.key} onClick={() => goToSection("research-section-review")}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div><span className="continuity-action-copy">Open Queue <ArrowDown aria-hidden="true" /></span></button> : <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
+        {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core Judgment Controls Are Present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => signal.key === "candidates" ? <Button className="continuity-checklist-action" type="button" key={signal.key} onClick={() => goToSection("research-section-review")}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div><span className="continuity-action-copy">Open Queue <ArrowDown aria-hidden="true" /></span></Button> : <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
       </Card>
       {pendingCandidates.length > 0 && <Card id="research-section-review" className="research-candidates-card" kicker="DECISION REQUIRED" title="Pending Candidates" description="Review the complete proposed change, then confirm, reject, or withdraw that exact Candidate." action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onDecision={decideCandidate} />)}</Card>}
       <Disclosure className="research-raw" variant="code" title={<>View This Research Subject&apos;s Durable State</>}><pre>{displayJson(state)}</pre></Disclosure>
@@ -844,14 +912,14 @@ function ResearchSubjectDetail({
       <Card id="research-section-selection" className="research-selection-card" kicker="INSTRUMENT SELECTION" title="Instruments" action={<Badge value={`${instrumentInventory.length} INSTRUMENTS`} />}>
         <div className="research-selection-subhead"><strong>Propose Instrument</strong></div>
         <div className="research-selection-create">
-          <Field label="Market" required><select value={candidateMarket} required onChange={(event) => { setCandidateMarket(event.target.value); setCandidateInstrumentQuery(""); setCandidateInstrumentId(""); setCandidateDisplayName(""); setCandidateSuggestions([]); setCandidateResolveMessage(null); }}>{CANDIDATE_MARKETS.map((market) => <option key={market}>{market}</option>)}</select></Field>
+          <Field label="Market" required><Select value={candidateMarket} required onChange={(event) => { setCandidateMarket(event.target.value); setCandidateInstrumentQuery(""); setCandidateInstrumentId(""); setCandidateDisplayName(""); setCandidateSuggestions([]); setCandidateResolveMessage(null); }}>{CANDIDATE_MARKETS.map((market) => <option key={market}>{market}</option>)}</Select></Field>
           <div className="research-field research-instrument-combobox">
             <label htmlFor="candidate-instrument-query"><span><b className="required-mark" aria-hidden="true">*</b>Instrument ID</span></label>
-            <div className={`research-combobox-control${candidateInstrumentId ? " selected" : ""}`}><Search aria-hidden="true" /><input id="candidate-instrument-query" role="combobox" aria-autocomplete="list" aria-expanded={candidateSuggestionsOpen} aria-controls="candidate-instrument-suggestions" required autoComplete="off" value={candidateInstrumentQuery} onFocus={() => { if (candidateSuggestions.length > 0 || candidateResolveMessage) setCandidateSuggestionsOpen(true); }} onBlur={() => window.setTimeout(() => setCandidateSuggestionsOpen(false), 120)} onChange={(event) => { setCandidateInstrumentQuery(event.target.value); setCandidateInstrumentId(""); setCandidateDisplayName(""); setCandidateSuggestionsOpen(true); setCandidateProposalError(null); }} placeholder="Search symbol or name, e.g. UCO" />{candidateResolving && <span className="research-combobox-loading">Searching…</span>}</div>
-            {candidateSuggestionsOpen && (candidateSuggestions.length > 0 || candidateResolveMessage) && <div className="research-combobox-options" id="candidate-instrument-suggestions" role="listbox">{candidateSuggestions.map((suggestion) => <button type="button" role="option" aria-selected={candidateInstrumentId === suggestion.instrument_id} key={suggestion.instrument_id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setCandidateInstrumentId(suggestion.instrument_id); setCandidateInstrumentQuery(suggestion.instrument_id); setCandidateDisplayName(suggestion.name); setCandidateSuggestionsOpen(false); setCandidateResolveMessage(null); setCandidateProposalError(null); }}><strong>{suggestion.symbol} · {suggestion.name}</strong><small>{suggestion.instrument_id}{suggestion.exchange ? ` · ${suggestion.exchange}` : ""}</small></button>)}{candidateSuggestions.length === 0 && candidateResolveMessage && <p role="status">{candidateResolveMessage}</p>}</div>}
+            <div className={`research-combobox-control${candidateInstrumentId ? " selected" : ""}`}><Search aria-hidden="true" /><Input appearance="embedded" id="candidate-instrument-query" role="combobox" aria-autocomplete="list" aria-expanded={candidateSuggestionsOpen} aria-controls="candidate-instrument-suggestions" required autoComplete="off" value={candidateInstrumentQuery} onFocus={() => { if (candidateSuggestions.length > 0 || candidateResolveMessage) setCandidateSuggestionsOpen(true); }} onBlur={() => window.setTimeout(() => setCandidateSuggestionsOpen(false), 120)} onChange={(event) => { setCandidateInstrumentQuery(event.target.value); setCandidateInstrumentId(""); setCandidateDisplayName(""); setCandidateSuggestionsOpen(true); setCandidateProposalError(null); }} placeholder="Search symbol or name, e.g. UCO" />{candidateResolving && <span className="research-combobox-loading">Searching…</span>}</div>
+            {candidateSuggestionsOpen && (candidateSuggestions.length > 0 || candidateResolveMessage) && <div className="research-combobox-options" id="candidate-instrument-suggestions" role="listbox">{candidateSuggestions.map((suggestion) => <SelectableRow type="button" role="option" selected={candidateInstrumentId === suggestion.instrument_id} aria-selected={candidateInstrumentId === suggestion.instrument_id} key={suggestion.instrument_id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setCandidateInstrumentId(suggestion.instrument_id); setCandidateInstrumentQuery(suggestion.instrument_id); setCandidateDisplayName(suggestion.name); setCandidateSuggestionsOpen(false); setCandidateResolveMessage(null); setCandidateProposalError(null); }}><strong>{suggestion.symbol} · {suggestion.name}</strong><small>{suggestion.instrument_id}{suggestion.exchange ? ` · ${suggestion.exchange}` : ""}</small></SelectableRow>)}{candidateSuggestions.length === 0 && candidateResolveMessage && <p role="status">{candidateResolveMessage}</p>}</div>}
           </div>
-          <Field label="Display Name" required><input value={candidateDisplayName} required readOnly placeholder="Filled after Instrument selection" /></Field>
-          <Field label="Reason"><input value={candidateThesisHint} onChange={(event) => setCandidateThesisHint(event.target.value)} placeholder="Optional" /></Field>
+          <Field label="Display Name" required><Input value={candidateDisplayName} required readOnly placeholder="Filled after Instrument selection" /></Field>
+          <Field label="Reason"><Input value={candidateThesisHint} onChange={(event) => setCandidateThesisHint(event.target.value)} placeholder="Optional" /></Field>
           <ActionButton onClick={() => { void proposeInstrumentCandidate(); }} busy={busy || candidateResolving} disabled={!candidateInstrumentId || !candidateDisplayName}>Propose Instrument</ActionButton>
         </div>
         {candidateProposalError && <div className="inline-error research-selection-feedback" role="alert">{candidateProposalError}</div>}
@@ -862,11 +930,11 @@ function ResearchSubjectDetail({
       </section>
       <section id="research-panel-thesis" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-thesis" hidden={activeModule !== "thesis"}>
       <Card id="research-section-thesis" className="research-theses-card" kicker="CURRENT JUDGMENT" title="Thesis" description="Versioned, falsifiable research judgments." action={!thesisEditor ? <ActionButton onClick={() => startThesisEditor(undefined, true)}>Create Thesis</ActionButton> : <Badge value="EDITING" />}>
-        {thesisEditor ? <ThesisEditor draft={thesisDraft} thesisId={thesisId} availableTheses={theses} statusExplicit={thesisStatusExplicit} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} error={detailError} onChange={setThesisDraft} onStatusExplicitChange={setThesisStatusExplicit} onCancel={() => setThesisEditor(false)} onSave={() => { void saveThesis(); }} /> : theses.length === 0 ? <div className="research-no-thesis"><p>This Research Subject has no Thesis yet. Create a new Thesis candidate; Draft Research Subjects default to DRAFT Thesis.</p><ActionButton onClick={() => startThesisEditor(undefined, true)}>Create Thesis</ActionButton></div> : <ThesisRelationshipList theses={theses} revisions={revisions} assumptions={assumptions} invalidations={invalidations} onEdit={startThesisEditor} />}
+        {thesisEditor ? <ThesisEditor draft={thesisDraft} thesisId={thesisId} availableTheses={theses} statusExplicit={thesisStatusExplicit} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} error={detailError} onChange={setThesisDraft} onStatusExplicitChange={setThesisStatusExplicit} onCancel={() => { setThesisEditor(false); setThesisSourceRevisionId(null); }} onSave={() => { void saveThesis(); }} /> : theses.length === 0 ? <div className="research-no-thesis"><p>This Research Subject has no Thesis yet. Create a new Thesis candidate; Draft Research Subjects default to DRAFT Thesis.</p><ActionButton onClick={() => startThesisEditor(undefined, true)}>Create Thesis</ActionButton></div> : <ThesisRelationshipList theses={theses} revisions={revisions} assumptions={assumptions} invalidations={invalidations} onEdit={startThesisEditor} />}
       </Card>
       <Card className="research-context-card" kicker="OPEN ENDS" title="Judgment Context" description="Questions that remain unresolved."><div className="research-context-grid research-context-single"><div><span>Open Questions · {openQuestions.length}</span>{openQuestions.length === 0 ? <p className="muted">No open questions.</p> : <ul>{openQuestions.map((question) => <li key={text(question.question_id)}>{text(question.text)}</li>)}</ul>}</div></div></Card>
       </section>
-      <ResearchContinuity activeModule={activeModule} subject={researchSubject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} />
+      <ResearchContinuity activeModule={activeModule} subject={researchSubject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} observationSeed={observationSeed} planReviewRequest={planReviewRequest} onPlanEditingChange={setPlanEditorOpen} />
       <section id="research-panel-monitors" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-monitors" hidden={activeModule !== "monitors"}>
       <MonitorLinks monitorData={monitorData} loading={monitorLoading} subjectId={text(researchSubject.subject_id)} />
       </section>
@@ -918,11 +986,22 @@ export default function ResearchPage() {
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [subjectEditor, setSubjectEditor] = useState(false);
   const [subjectDraft, setSubjectDraft] = useState<SubjectDraft>(EMPTY_SUBJECT_DRAFT);
+  const subjectEditorTouchedRef = useRef(false);
   const [subjectEditorError, setSubjectEditorError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
+  const [observationRevisionId, setObservationRevisionId] = useState<string | null>(null);
+  const [observationSeed, setObservationSeed] = useState<ObservationResearchSeed | null>(null);
+  const [observationSeedLoading, setObservationSeedLoading] = useState(false);
+  const [observationSeedError, setObservationSeedError] = useState<string | null>(null);
+  const [autoOpenSeedSubjectId, setAutoOpenSeedSubjectId] = useState<string | null>(null);
   useEffect(() => {
     const url = new URL(window.location.href);
+    const revisionId = url.searchParams.get("note_revision_id")?.trim() ?? "";
+    if (revisionId) {
+      setObservationRevisionId(revisionId);
+      return;
+    }
     if (url.searchParams.get("create") !== "observation") return;
     const instrumentId = url.searchParams.get("instrument_id")?.trim() ?? "";
     if (!instrumentId) return;
@@ -936,6 +1015,7 @@ export default function ResearchPage() {
       tags: `${symbol.toLowerCase()}, observation_source`,
       linkedSubjectIds: "",
     });
+    subjectEditorTouchedRef.current = false;
     setSubjectEditorError(null);
     setSubjectEditor(true);
     url.searchParams.delete("create");
@@ -943,6 +1023,44 @@ export default function ResearchPage() {
     url.searchParams.delete("title");
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
+
+  useEffect(() => {
+    if (!observationRevisionId) return;
+    let cancelled = false;
+    setObservationSeedLoading(true);
+    setObservationSeedError(null);
+    void getJson(`/api/observations/${encodeURIComponent(observationRevisionId)}/research-draft`)
+      .then((response) => {
+        if (cancelled) return;
+        const envelope = asDict(response);
+        const draft = asDict(envelope.data ?? envelope) as ObservationResearchDraft;
+        if (text(asDict(draft.source).note_revision_id, "") !== observationRevisionId) {
+          throw new Error("Research source revision did not match the requested Observation revision.");
+        }
+        const seed = observationResearchSeed(draft);
+        setObservationSeed(seed);
+        if (!subjectEditorTouchedRef.current && new URL(window.location.href).searchParams.get("create") === "observation") {
+          subjectEditorTouchedRef.current = false;
+          setSubjectDraft({
+            subjectType: seed.subject.subjectType,
+            title: seed.subject.title,
+            summary: seed.subject.summary,
+            instrument: seed.subject.instrument,
+            tags: seed.subject.tags,
+            linkedSubjectIds: seed.subject.linkedSubjectIds,
+          });
+          setSubjectEditorError(null);
+          setSubjectEditor(true);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setObservationSeedError(cause instanceof Error ? cause.message : "Unable to load the Observation research source.");
+      })
+      .finally(() => {
+        if (!cancelled) setObservationSeedLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [observationRevisionId]);
   useAgentPageContext({ surface: "research", selected_subject_id: selectedSubjectId });
   const items = listOf<SubjectAggregate>(result.data, "subjects");
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -992,8 +1110,18 @@ export default function ResearchPage() {
         setQuery("");
         setStatus("DRAFT");
         setSelectedSubjectId(createdId);
+        const url = new URL(window.location.href);
+        url.hash = `subject-${createdId}`;
+        url.searchParams.delete("create");
+        url.searchParams.delete("instrument_id");
+        url.searchParams.delete("title");
+        window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        if (observationSeed?.ready && observationSeed.source.instrument_id === subjectDraft.instrument.trim()) {
+          setAutoOpenSeedSubjectId(createdId);
+        }
       }
       setSubjectEditor(false);
+      subjectEditorTouchedRef.current = false;
       setSubjectEditorError(null);
       setSubjectDraft(EMPTY_SUBJECT_DRAFT);
       result.refresh();
@@ -1002,7 +1130,7 @@ export default function ResearchPage() {
 
   return (
     <ConsoleShell active="research" pageActions={<PageActionMenu ariaLabel="Research Page Actions" items={[
-      { id: "create", label: subjectEditor ? "Close Create" : "Create Research Subject", description: "Open the Research Subject editor", icon: <Plus aria-hidden="true" />, onSelect: () => { setSubjectDraft(EMPTY_SUBJECT_DRAFT); setSubjectEditorError(null); setSubjectEditor((value) => !value); } },
+      { id: "create", label: subjectEditor ? "Close Create" : "Create Research Subject", description: "Open the Research Subject editor", icon: <Plus aria-hidden="true" />, onSelect: () => { subjectEditorTouchedRef.current = true; setSubjectDraft(EMPTY_SUBJECT_DRAFT); setSubjectEditorError(null); setSubjectEditor((value) => !value); } },
       { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload durable Research data", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
     ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
@@ -1023,7 +1151,7 @@ export default function ResearchPage() {
                   status={{ value: status, onChange: setStatus, label: "Status", ariaLabel: "Filter by Research Subject Status", options: [{ value: "ALL", label: "All (Including Archived)" }, ...SUBJECT_STATUSES.map((value) => ({ value: value.toUpperCase(), label: optionLabel(value) }))] }}
                   onClearFilters={clearSubjectFilters}
                   clearDisabled={!query && status === "ALL"}
-                  filteredNotice={<div className="entity-filter-notice" role="status"><span>The current Research Subject is outside this filter.</span><button type="button" onClick={clearSubjectFilters}>Show Current</button></div>}
+                  filteredNotice={<div className="entity-filter-notice" role="status"><span>The current Research Subject is outside this filter.</span><Button type="button" onClick={clearSubjectFilters}>Show Current</Button></div>}
                   resultLabel={(count) => <><strong>{count}</strong> {count === 1 ? "Subject" : "Subjects"}</>}
                   emptyMessage={<Empty>No durable Research Subjects.</Empty>}
                   noMatchesMessage={<Empty>No Research Subjects match the current filters.</Empty>}
@@ -1039,13 +1167,18 @@ export default function ResearchPage() {
                     const subjectId = String(researchSubject.subject_id ?? "");
                     const state = stateData(item) ?? {};
                     const thesisCount = listOf<Dict>(state, "theses").length;
-                    return <button type="button" role="option" aria-selected={isSelected} id={`research-subject-${subjectId}`} className={`research-index-item ${isSelected ? "selected" : ""}`} onClick={() => select(subjectId)} key={subjectId}><span className="research-index-status"><span className={`research-status-dot status-${text(researchSubject.status, "unknown").toLowerCase()}`} aria-hidden="true" />{text(researchSubject.status, "UNKNOWN")}</span><strong>{text(researchSubject.title, "Unnamed Research Subject")}</strong><small>{shortId(researchSubject.primary_instrument_id)} · {thesisCount} Thesis</small><time>{formatDate(researchSubject.updated_at)}</time></button>;
+                    return <SelectableRow type="button" role="option" selected={isSelected} aria-selected={isSelected} id={`research-subject-${subjectId}`} className={`research-index-item ${isSelected ? "selected" : ""}`} onClick={() => select(subjectId)} key={subjectId}><span className="research-index-status"><Badge value={text(researchSubject.status, "UNKNOWN")} /></span><strong>{text(researchSubject.title, "Unnamed Research Subject")}</strong><small>{shortId(researchSubject.primary_instrument_id)} · {thesisCount} Thesis</small><time>{formatDate(researchSubject.updated_at)}</time></SelectableRow>;
                   }}
                 />
               </Card>
             </aside>
-            {subjectEditor && <SubjectEditor draft={subjectDraft} editing={false} busy={writing} error={subjectEditorError} onChange={setSubjectDraft} onCancel={() => setSubjectEditor(false)} onSave={() => { void createSubject(); }} />}
-            <main className="research-detail" aria-live="polite">{selected ? <ResearchSubjectDetail item={selected} monitorData={monitorResult.data} monitorLoading={monitorResult.loading} onSelectSubject={selectSubject} onRefresh={result.refresh} onWrite={write} busy={writing} /> : <Empty>Select a Research Subject above.</Empty>}</main>
+            {subjectEditor && <SubjectEditor draft={subjectDraft} editing={false} busy={writing} error={subjectEditorError} onChange={(next) => { subjectEditorTouchedRef.current = true; setSubjectDraft(next); }} onCancel={() => setSubjectEditor(false)} onSave={() => { void createSubject(); }} />}
+            {subjectEditor && observationSeed ? <ObservationResearchSource seed={observationSeed} subjectInstrumentId={subjectDraft.instrument} thesisEditorOpen={false} planEditorOpen={false} actionsDisabled onUseThesis={() => undefined} onUsePlan={() => undefined} /> : null}
+            <main className="research-detail" aria-live="polite">
+              {observationSeedLoading ? <Card className="research-observation-source-loading" kicker="REVIEW SOURCE" title="Loading Observation Review"><p className="card-note">Loading the exact Observation revision…</p></Card> : null}
+              {observationSeedError ? <ErrorNote role="alert">{observationSeedError}</ErrorNote> : null}
+              {selected ? <ResearchSubjectDetail item={selected} monitorData={monitorResult.data} monitorLoading={monitorResult.loading} onSelectSubject={selectSubject} onRefresh={result.refresh} onWrite={write} busy={writing} observationSeed={subjectEditor ? null : observationSeed} autoOpenSeedThesis={autoOpenSeedSubjectId === text(selected.subject?.subject_id, "")} onSeedThesisOpened={() => setAutoOpenSeedSubjectId(null)} /> : <Empty>Select a Research Subject above.</Empty>}
+            </main>
           </div>
           {monitorResult.error && <div className="inline-error">Failed to read linked Monitors: {monitorResult.error}. The Research Subject remains available for viewing and editing.</div>}
         </div>

@@ -9,7 +9,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from application.dto.attention import AttentionQueryInput
-from interfaces.mcp.server import create_capability_registry, create_mcp_server
+from interfaces.mcp.server import create_capability_registry
 from interfaces.mcp.validation import closed_variant_invalid_details, tool_input_invalid_envelope
 from interfaces.shared.result_compaction import (
     CANONICAL_RESULT_MAX_BYTES,
@@ -17,6 +17,7 @@ from interfaces.shared.result_compaction import (
     compact_mcp_result,
     encode_result,
 )
+from mcp_helpers import routed_mcp_server
 
 
 def _container() -> MagicMock:
@@ -75,7 +76,7 @@ async def test_fastmcp_call_tool_uses_the_same_compactor() -> None:
     container = _container()
     huge = _huge_envelope()
     container.services.monitoring.dashboard.return_value.model_dump.return_value = huge
-    server = create_mcp_server(container)
+    server = routed_mcp_server(container)
     result = await server._tool_manager.call_tool(
         "monitor_read",
         {"request": {"operation": "dashboard"}},
@@ -159,9 +160,9 @@ async def test_closed_variant_invalid_does_not_call_application() -> None:
 @pytest.mark.asyncio
 async def test_transport_missing_request_stays_mcp_error_and_is_redacted() -> None:
     container = _container()
-    server = create_mcp_server(container)
+    server = routed_mcp_server(container)
     with pytest.raises(ToolError) as exc:
-        await server._tool_manager.call_tool("investment_case_read", {})
+        await server._tool_manager.call_tool("research_get", {})
     message = str(exc.value)
     assert "Traceback" not in message
     assert "/Users/" not in message
@@ -175,7 +176,7 @@ def test_validation_details_do_not_echo_payload_or_exception_text() -> None:
     serialized = json.dumps(details)
     assert "sk-live" not in serialized
     envelope = tool_input_invalid_envelope(
-        tool="investment_case_read",
+        tool="research_get",
         operation="attention",
         error=exc.value,
     )

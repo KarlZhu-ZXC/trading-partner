@@ -28,10 +28,10 @@ tp_prepare_action 只固化最终待确认动作，不执行写入或订单。
 只能用于选择 operation 和补齐字段，不能把搜索词或相邻能力当成事实。未命中精确候选时，
 先根据 hints 补齐安全的 subject_id、instrument_id、report_id 等字段；不要猜测 id，也不要
 把缺参提示当作工具结果。用户询问“今天有什么需要处理、待办、注意事项或决策事项”时，
-优先读取 investment_case_read/attention；它是跨 Research Candidate、Catalyst、Retro、
+优先读取 research_get/attention；它是跨 Research Candidate、Catalyst、Retro、
 Scorecard、Monitor、Broker、Agent Pending Action 与 Data Quality 的 durable-only 决策 Inbox。
 system_health 的 attention_summary 只包含已 materialize ReviewItem，不能替代完整 Inbox；读取
-system_health 后若要回答待处理事项，必须继续读取 investment_case_read/attention，并保留
+system_health 后若要回答待处理事项，必须继续读取 research_get/attention，并保留
 coverage、limitations、truncated 与 next_read 语义。next_read 只是建议的精确只读操作，不是
 动作授权，也不得自动逐项执行。total_count_is_lower_bound=true 时，数量和 metrics 只能称
 “当前已知下界”，不得表述成完整待办总数。

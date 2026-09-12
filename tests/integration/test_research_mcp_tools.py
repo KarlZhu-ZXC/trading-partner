@@ -83,12 +83,12 @@ class _CompactSession:
     _GROUPED = {
         "investment_case_create": ("investment_case_manage", "create"),
         "investment_case_update": ("investment_case_manage", "update"),
-        "investment_case_query": ("investment_case_read", "query"),
+        "investment_case_query": ("research_get", "query"),
         "investment_case_archive": ("investment_case_manage", "archive"),
-        "research_state_get": ("research_judgment_get", "state"),
+        "research_state_get": ("research_get", "state"),
         "research_state_update": ("research_judgment_propose", "research_state"),
         "thesis_revision_propose": ("research_judgment_propose", "thesis_revision"),
-        "thesis_history_get": ("research_judgment_get", "thesis_history"),
+        "thesis_history_get": ("research_get", "thesis_history"),
     }
     def __init__(self, session: ClientSession) -> None:
         self._session = session
@@ -96,7 +96,7 @@ class _CompactSession:
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         if name in self._GROUPED:
             target, operation = self._GROUPED[name]
-            return await self._session.call_tool(
+            return await self.call_tool(
                 target,
                 {"request": {"operation": operation, **arguments}},
             )
@@ -105,7 +105,16 @@ class _CompactSession:
                 "research_judgment_confirm",
                 {"request": {"operation": "candidate", **arguments}},
             )
-        return await self._session.call_tool(name, arguments)
+        if name in PUBLIC_TOOL_NAMES:
+            return await self._session.call_tool(name, arguments)
+        if name == "investment_case_manage":
+            # The lifecycle test explicitly authorizes its Subject mutations.
+            return await self._session.call_tool("capability_write", {
+                "tool": name, "arguments": arguments, "confirmation": name,
+            })
+        return await self._session.call_tool("capability_read", {
+            "tool": name, "arguments": arguments,
+        })
 
 
 def _revision_payload(**overrides: Any) -> dict[str, Any]:
@@ -160,6 +169,23 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert names == EXPECTED_TOOLS
+        assert len(names) == 9
+        discovery_result = await session.call_tool(
+            "capability_discover", {"tool": "portfolio_get", "operation": "positions"}
+        )
+        assert discovery_result.isError is False
+        discovery = json.loads(discovery_result.content[0].text)
+        from jsonschema import Draft202012Validator
+
+        Draft202012Validator(discovery["inputSchema"]).validate(
+            {"request": {"operation": "positions"}}
+        )
+        assert "behavior_summary" not in json.dumps(discovery["inputSchema"])
+        assert discovery["call_tool"] == "capability_read"
+        assert "portfolio_get" not in names
+        rejected = await session.call_tool("portfolio_get", {"request": {"operation": "positions"}})
+        assert rejected.isError
+        assert {tool.name for tool in (await session.list_tools()).tools} == names
         # No old aliases or internal Evidence writes.
         assert "open_question_create" not in names
         assert "thesis_revision_reject" not in names

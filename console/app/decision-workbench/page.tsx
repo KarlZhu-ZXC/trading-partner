@@ -1,5 +1,14 @@
 "use client";
 
+import { ObservationRefreshStatus, startObservationRefresh } from "../components/observation-refresh-status";
+import { Tag } from "../components/ui/controls";
+
+import journalStyles from "./journal.module.css";
+
+import { Button, Input, Select, Textarea, Table, SelectableRow, LinkButton, FilterBar, DateRange } from "../components/ui/controls";
+
+import { useAccountLabel } from "../components/account-aliases";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -10,6 +19,7 @@ import { MultiSelectAutosuggest, type AutosuggestOption } from "../components/mu
 import { envelopeData, getJson, listOf, postApi, useApi } from "../lib/api";
 import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
 import { useAgentPageContext } from "../lib/agent-page-context";
+import { CYCLE_ACTIVITY_COUNTS_HELP, cycleActivityCounts } from "../lib/trade-cycle-counts";
 import { ObservationInbox } from "./observation-inbox";
 import { RetroReviewList } from "./retro-review-list";
 import { ScenarioDigest } from "./scenario-digest";
@@ -32,6 +42,7 @@ type JournalWorkbenchResponse = {
   timeline?: unknown;
   trade_cycles?: unknown;
   transactions?: unknown;
+  history_filter_options?: unknown;
 };
 
 type ObservationInboxResponse = {
@@ -148,7 +159,7 @@ function selectedPeriodWindow(
   return {
     start,
     end,
-    valid: !start || !end || Date.parse(start) <= Date.parse(end),
+    valid: filter !== "CUSTOM" || Boolean(start && end && Date.parse(start) <= Date.parse(end)),
   };
 }
 
@@ -189,6 +200,16 @@ function startOfDayIsoOrNull(value: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function activityDateParameter(name: string, value: string | null, valid: boolean, active: boolean): string {
+  return active && valid && value ? `${name}=${encodeURIComponent(value)}` : "";
+}
+
+function matchesCycleActivity(transaction: Dict, cycle: Dict | null, activityIds: Set<string>): boolean {
+  return activityIds.has(text(transaction.provider_transaction_id, ""))
+    && text(transaction.account_ref, "") === text(cycle?.account_ref, "")
+    && text(transaction.provider, "") === text(cycle?.provider, "");
 }
 
 function cycleReviewTime(cycle: Dict): number {
@@ -256,12 +277,6 @@ function cycleQualityTone(value: unknown): "good" | "warn" | "neutral" {
   return "neutral";
 }
 
-function cycleClassificationTone(value: unknown): "good" | "warn" | "neutral" {
-  const classification = upper(value);
-  if (["ACTIVE_TRADE", "LONG_TERM_INVESTMENT"].includes(classification)) return "good";
-  if (classification === "UNCLASSIFIED") return "warn";
-  return "neutral";
-}
 
 function futureDateInput(days: number): string {
   const value = new Date();
@@ -313,13 +328,14 @@ function StepList({ items, busy, onTransition }: { items: NextStep[]; busy: stri
 const BEHAVIOR_PRIMARY_METRICS = [
   { name: "closed_active_trade_cycles", label: "Closed Active Cycles", kind: "count" },
   { name: "win_rate", label: "Win Rate", kind: "rate" },
-  { name: "payoff_ratio", label: "Payoff Ratio", kind: "payoff" },
+  { name: "payoff_ratio", label: "Payoff Ratio · Amount", kind: "payoff_amount" },
+  { name: "return_payoff_ratio", label: "Payoff Ratio · Return %", kind: "payoff_return" },
   { name: "plan_coverage", label: "Plan Coverage", kind: "rate" },
   { name: "pre_fill_decision_coverage", label: "Pre-Fill Decision Coverage", kind: "rate" },
 ] as const;
 
 const BEHAVIOR_SECONDARY_METRICS = [
-  "wins", "losses", "flat", "avg_win", "avg_loss", "average_holding_duration",
+  "wins", "losses", "flat", "avg_win", "avg_loss", "avg_win_return", "avg_loss_return", "average_holding_duration",
   "median_holding_duration", "turnover", "pre_fill_invalidation_proxy",
   "invalidation_adherence", "same_day_reentry", "entry_attempt_count",
   "same_entry_logic_attempt_count", "third_attempt_without_new_plan",
@@ -334,13 +350,14 @@ const BEHAVIOR_RATE_METRICS = new Set([
   "planned_holding_period_mismatch", "no_action_review_completion",
 ]);
 const BEHAVIOR_MONEY_METRICS = new Set(["avg_win", "avg_loss"]);
+const BEHAVIOR_RETURN_METRICS = new Set(["avg_win_return", "avg_loss_return"]);
 const BEHAVIOR_DURATION_METRICS = new Set(["average_holding_duration", "median_holding_duration"]);
 const BEHAVIOR_AVERAGE_METRICS = new Set(["entry_attempt_count"]);
 
 type BehaviorMetricPresentation = {
   result: string;
   formula: string;
-  status: "AVAILABLE" | "LIMITED" | "UNAVAILABLE" | "NOT_SUPPORTED" | "INCONSISTENT";
+  status: "AVAILABLE" | "UNAVAILABLE" | "NOT_SUPPORTED" | "INCONSISTENT";
 };
 
 function metricNumber(value: unknown): number | null {
@@ -384,6 +401,18 @@ function metricMoney(value: unknown, metric: Dict): string {
   }).format(parsed);
 }
 
+function metricPercent(value: unknown): string {
+  const parsed = metricNumber(value);
+  return parsed == null ? "—" : `${(parsed * 100).toFixed(1)}%`;
+}
+
+function metricSampleLabel(metric: Dict, singular: string): string {
+  const count = metricNumber(metric.denominator ?? metric.avg_count ?? metric.sample_count);
+  const plural = singular === "loss" ? "losses" : `${singular}s`;
+  if (count == null) return `— ${plural}`;
+  return `${metricInteger(count)} ${count === 1 ? singular : plural}`;
+}
+
 function metricDuration(value: unknown): string {
   const seconds = metricNumber(value);
   if (seconds == null) return "—";
@@ -395,8 +424,14 @@ function metricBaseStatus(metric: Dict): BehaviorMetricPresentation["status"] {
   const availability = upper(metric.availability, "AVAILABLE");
   if (availability === "NOT_SUPPORTED") return "NOT_SUPPORTED";
   if (availability !== "AVAILABLE") return "UNAVAILABLE";
-  if (metric.sample_sufficient === false) return "LIMITED";
   return metric.value == null ? "UNAVAILABLE" : "AVAILABLE";
+}
+
+function combinedMetricStatus(...metrics: Dict[]): BehaviorMetricPresentation["status"] {
+  const statuses = metrics.map(metricBaseStatus);
+  if (statuses.includes("NOT_SUPPORTED")) return "NOT_SUPPORTED";
+  if (statuses.includes("UNAVAILABLE")) return "UNAVAILABLE";
+  return "AVAILABLE";
 }
 
 function ratePresentation(metric: Dict): BehaviorMetricPresentation {
@@ -415,15 +450,21 @@ function ratePresentation(metric: Dict): BehaviorMetricPresentation {
   return { result: `${(calculated * 100).toFixed(1)}%`, formula: `${formula} = ${(calculated * 100).toFixed(1)}%`, status };
 }
 
-function payoffPresentation(summary: Dict): BehaviorMetricPresentation {
-  const payoff = asDict(summary.payoff_ratio);
-  const avgWin = asDict(summary.avg_win);
-  const avgLoss = asDict(summary.avg_loss);
+function payoffPresentation(summary: Dict, basis: "amount" | "return"): BehaviorMetricPresentation {
+  const isReturn = basis === "return";
+  const payoff = asDict(summary[isReturn ? "return_payoff_ratio" : "payoff_ratio"]);
+  const avgWin = asDict(summary[isReturn ? "avg_win_return" : "avg_win"]);
+  const avgLoss = asDict(summary[isReturn ? "avg_loss_return" : "avg_loss"]);
   const win = metricNumber(avgWin.value);
-  const loss = Math.abs(metricNumber(avgLoss.value) ?? 0);
+  const lossValue = metricNumber(avgLoss.value);
+  const loss = Math.abs(lossValue ?? 0);
   const wireValue = metricNumber(payoff.value);
-  const formula = `${metricMoney(avgWin.value, avgWin)} avg win ÷ ${metricMoney(loss || null, avgLoss)} avg loss`;
-  const status = metricBaseStatus(payoff);
+  const winCount = metricSampleLabel(avgWin, "win");
+  const lossCount = metricSampleLabel(avgLoss, "loss");
+  const formula = isReturn
+    ? `Return %: ${metricPercent(avgWin.value)} avg win return (${winCount}) ÷ ${metricPercent(loss || null)} abs avg loss return (${lossCount})`
+    : `Amount: ${metricMoney(avgWin.value, avgWin)} avg win (${winCount}) ÷ ${metricMoney(loss || null, avgLoss)} abs avg loss (${lossCount})`;
+  const status = combinedMetricStatus(payoff, avgWin, avgLoss);
   if (status !== "AVAILABLE" || win == null || loss <= 0 || wireValue == null) {
     return { result: "—", formula, status };
   }
@@ -431,7 +472,7 @@ function payoffPresentation(summary: Dict): BehaviorMetricPresentation {
   if (Math.abs(calculated - wireValue) > 1e-9) {
     return { result: "—", formula: `${formula} · payload value does not match`, status: "INCONSISTENT" };
   }
-  return { result: calculated.toFixed(2), formula: `${formula} = ${calculated.toFixed(2)}`, status };
+  return { result: `${calculated.toFixed(2)}x`, formula: `${formula} = ${calculated.toFixed(2)}x`, status };
 }
 
 function countPresentation(metric: Dict): BehaviorMetricPresentation {
@@ -451,6 +492,15 @@ function secondaryMetricPresentation(name: string, metric: Dict): BehaviorMetric
     status,
   };
   if (BEHAVIOR_RATE_METRICS.has(name)) return ratePresentation(metric);
+  if (BEHAVIOR_RETURN_METRICS.has(name)) {
+    const side = name === "avg_win_return" ? "winning" : "losing";
+    const average = metricPercent(metric.value);
+    return {
+      result: status === "AVAILABLE" ? average : "—",
+      formula: `${metricPercent(metric.numerator)} total ${side} returns ÷ ${metricInteger(metric.denominator)} ${side} Cycles${average === "—" ? "" : ` = ${average}`}`,
+      status,
+    };
+  }
   if (BEHAVIOR_MONEY_METRICS.has(name)) return {
     result: status === "AVAILABLE" ? metricMoney(metric.value, metric) : "—",
     formula: `${metricMoney(metric.numerator, metric)} total ÷ ${metricInteger(metric.denominator)} Cycles`,
@@ -486,8 +536,10 @@ function BehaviorPanel({ value }: { value: Dict }) {
     const metric = asDict(value[item.name]);
     const presentation = item.kind === "rate"
       ? ratePresentation(metric)
-      : item.kind === "payoff"
-        ? payoffPresentation(value)
+      : item.kind === "payoff_amount"
+        ? payoffPresentation(value, "amount")
+        : item.kind === "payoff_return"
+          ? payoffPresentation(value, "return")
         : countPresentation(metric);
     return { ...item, metric, presentation };
   });
@@ -497,13 +549,13 @@ function BehaviorPanel({ value }: { value: Dict }) {
     ...scenarioMetrics.map((metric) => ({ name: text(metric.name, "scenario_action"), metric })),
   ];
   return <>
-    <div className="behavior-primary-grid">{primary.map(({ name, label, metric, presentation }) => <article key={name}>
+    <div className="behavior-primary-grid"><p className="behavior-payoff-help">Each Cycle Return = net P/L ÷ peak held purchase cost. Winning and losing returns are averaged separately with equal Cycle weights.</p>{primary.map(({ name, label, metric, presentation }) => <article key={name}>
       <header><span>{label}</span><Badge value={presentation.status} tone={presentation.status === "AVAILABLE" ? "good" : presentation.status === "INCONSISTENT" ? "bad" : "warn"} /></header>
       <strong>{presentation.result}</strong>
       <code>{presentation.formula}</code>
-      <small>{metricInteger(metric.excluded_count)} excluded · minimum sample {metricInteger(metric.minimum_sample_size)}</small>
+      <small>{metricInteger(metric.excluded_count)} excluded</small>
     </article>)}</div>
-    <Disclosure variant="compact" title="Other Metrics & Audit Details" meta={`${secondary.length} METRICS`}><div className="table-wrap behavior-audit-table"><table><thead><tr><th>Metric</th><th>Result</th><th>Calculation</th><th>Excluded</th><th>Status</th></tr></thead><tbody>{secondary.map(({ name, metric }) => { const presentation = secondaryMetricPresentation(name, metric); return <tr key={name}><td data-label="Metric"><strong>{metricLabel(name)}</strong>{metric.note ? <small className="table-sub">{text(metric.note)}</small> : null}</td><td data-label="Result">{presentation.result}</td><td data-label="Calculation"><code>{presentation.formula}</code></td><td data-label="Excluded">{metricInteger(metric.excluded_count)}<small className="table-sub">{listOf<string>(metric, "exclusion_reasons").map(exclusionLabel).join(" · ") || "None"}</small></td><td data-label="Status"><Badge value={presentation.status} tone={presentation.status === "AVAILABLE" ? "good" : presentation.status === "INCONSISTENT" ? "bad" : "warn"} />{metric.unavailable_reason ? <small className="table-sub">{exclusionLabel(text(metric.unavailable_reason))}</small> : null}</td></tr>; })}</tbody></table></div></Disclosure>
+    <Disclosure variant="compact" title="Other Metrics & Audit Details" meta={`${secondary.length} METRICS`}><div className="table-wrap behavior-audit-table"><Table><thead><tr><th>Metric</th><th>Result</th><th>Calculation</th><th>Excluded</th><th>Status</th></tr></thead><tbody>{secondary.map(({ name, metric }) => { const presentation = secondaryMetricPresentation(name, metric); return <tr key={name}><td data-label="Metric"><strong>{metricLabel(name)}</strong>{metric.note ? <small className="table-sub">{text(metric.note)}</small> : null}</td><td data-label="Result">{presentation.result}</td><td data-label="Calculation"><code>{presentation.formula}</code></td><td data-label="Excluded">{metricInteger(metric.excluded_count)}<small className="table-sub">{listOf<string>(metric, "exclusion_reasons").map(exclusionLabel).join(" · ") || "None"}</small></td><td data-label="Status"><Badge value={presentation.status} tone={presentation.status === "AVAILABLE" ? "good" : presentation.status === "INCONSISTENT" ? "bad" : "warn"} />{metric.unavailable_reason ? <small className="table-sub">{exclusionLabel(text(metric.unavailable_reason))}</small> : null}</td></tr>; })}</tbody></Table></div></Disclosure>
   </>;
 }
 
@@ -539,6 +591,7 @@ function CurrentViewCard({
 }
 
 export default function DecisionWorkbenchPage() {
+  const accountLabel = useAccountLabel();
   const [requestedSubjectId, setRequestedSubjectId] = useState("");
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -575,6 +628,7 @@ export default function DecisionWorkbenchPage() {
   const [noteSyncMessage, setNoteSyncMessage] = useState<string | null>(null);
   const [noteAnalysisBusyId, setNoteAnalysisBusyId] = useState<string | null>(null);
   const [noteReviewBusyId, setNoteReviewBusyId] = useState<string | null>(null);
+  const [notesQuery, setNotesQuery] = useState("");
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("ALL");
   const [customPeriodStart, setCustomPeriodStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [customPeriodEnd, setCustomPeriodEnd] = useState(() => dateInputValue());
@@ -600,17 +654,20 @@ export default function DecisionWorkbenchPage() {
   const selectedPeriodStart = selectedPeriod.start;
   const selectedPeriodEnd = selectedPeriod.end;
   const periodWindowValid = selectedPeriod.valid;
+  const activeWindowValid = periodWindowValid || journalTab === "notes" || journalTab === "reviews";
+  const usesActivityFilters = journalTab !== "notes" && journalTab !== "reviews";
   const workbenchQuery = [
     requestedSubjectId ? `subject_id=${encodeURIComponent(requestedSubjectId)}` : "",
+    ...subjectFilters.map((value) => `subject_ids=${encodeURIComponent(value)}`),
     ...classificationFilters.map((value) => `classifications=${encodeURIComponent(value)}`),
-    ...accountFilters.map((value) => `account_refs=${encodeURIComponent(value)}`),
+    ...(usesActivityFilters ? accountFilters : []).map((value) => `account_refs=${encodeURIComponent(value)}`),
     ...instrumentFilters.map((value) => `instrument_ids=${encodeURIComponent(value)}`),
-    selectedPeriodStart && periodWindowValid ? `behavior_start=${encodeURIComponent(selectedPeriodStart)}` : "",
-    selectedPeriodEnd && periodWindowValid ? `behavior_end=${encodeURIComponent(selectedPeriodEnd)}` : "",
+    activityDateParameter("behavior_start", selectedPeriodStart, periodWindowValid, usesActivityFilters),
+    activityDateParameter("behavior_end", selectedPeriodEnd, periodWindowValid, usesActivityFilters),
   ].filter(Boolean).join("&");
-  const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`);
+  const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`, { enabled: activeWindowValid });
   const observationApi = useApi<ObservationInboxResponse>("/api/observations?limit=100", {
-    enabled: journalTab === "notes",
+    enabled: journalTab === "notes" || journalTab === "overview",
   });
   const subjects = listOf<SubjectAggregate>(workbenchApi.data, "subjects");
   const activeSubjects = useMemo(
@@ -733,7 +790,7 @@ export default function DecisionWorkbenchPage() {
   useEffect(() => {
     setSelectedCycleId("");
     setCycleOffset(0);
-  }, [accountFilters, classificationFilters, cycleSortMode, cycleStatusFilters, instrumentFilters, periodFilter, qualityFilter]);
+  }, [accountFilters, classificationFilters, cycleSortMode, cycleStatusFilters, instrumentFilters, periodFilter, customPeriodStart, customPeriodEnd, qualityFilter]);
 
   useEffect(() => {
     setSelectedCycleId("");
@@ -766,10 +823,11 @@ export default function DecisionWorkbenchPage() {
     listOf<Dict>(account, "positions")
       .map((position): Dict => ({ ...position, account_ref: account.account_ref, provider: account.provider })),
   );
-  const allTransactions = listOf<Dict>(
-    unwrap(asDict(workbenchApi.data?.transactions)),
-    "transactions",
-  );
+  const transactionData = unwrap(asDict(workbenchApi.data?.transactions));
+  const allTransactions = [
+    ...listOf<Dict>(transactionData, "transactions"),
+    ...listOf<Dict>(transactionData, "cycle_activities"),
+  ];
   const subjectInstrumentFilters = activeSubjects
     .filter((item) => subjectFilters.includes(text(item.subject?.subject_id, "")))
     .map((item) => text(item.subject?.primary_instrument_id, ""))
@@ -782,10 +840,13 @@ export default function DecisionWorkbenchPage() {
     activeInstrumentFilters,
     instrumentId,
   );
-  const filteredExternalNotes = externalNotes.filter((item) =>
-    activeInstrumentFilters.length === 0
-      || activeInstrumentFilters.includes(text(asDict(item.identity).primary_instrument_id, ""))
-  );
+  const filteredExternalNotes = externalNotes.filter((item) => {
+    const identity = asDict(item.identity);
+    const revision = asDict(item.revision);
+    const matchesInstrument = activeInstrumentFilters.length === 0 || activeInstrumentFilters.includes(text(identity.primary_instrument_id, ""));
+    const query = journalTab === "notes" ? notesQuery.trim().toLocaleLowerCase() : "";
+    return matchesInstrument && (!query || [identity.title, revision.summary].some((value) => text(value, "").toLocaleLowerCase().includes(query)));
+  });
   const activePeriodStart = selectedPeriodStart ? Date.parse(selectedPeriodStart) : null;
   const activePeriodEnd = selectedPeriodEnd ? Date.parse(selectedPeriodEnd) : null;
   const relatedPositions = allPositions
@@ -812,7 +873,7 @@ export default function DecisionWorkbenchPage() {
   const relatedOrderIntents = listOf<Dict>(workbenchApi.data, "order_intents")
     .filter((item) => activeInstrumentFilters.length === 0 || activeInstrumentFilters.includes(text(item.instrument_id, "")))
     .filter((item) => subjectFilters.length === 0 || !item.case_id || subjectFilters.includes(text(item.case_id, "")));
-  const transactionWindowLimited = allTransactions.length >= 500;
+  const transactionWindowLimited = transactionData.history_complete !== true && allTransactions.length >= 500;
   const latestTransaction = relatedTransactions[0] ?? null;
   const heldQuantity = relatedPositions.reduce(
     (total, position) => total + number(position.quantity),
@@ -896,35 +957,22 @@ export default function DecisionWorkbenchPage() {
   const selectedCyclePnl = selectedCycle ? cyclePnlPresentation(selectedCycle) : null;
   const selectedCycleActivityIds = new Set(listOf<string>(selectedCycle, "activity_ids"));
   const selectedCycleTransactions = allTransactions.filter((transaction) =>
-    selectedCycleActivityIds.has(text(transaction.provider_transaction_id, ""))
+    matchesCycleActivity(transaction, selectedCycle, selectedCycleActivityIds)
   );
   const closedPnlCycles = tradeCycles.filter((cycle) =>
     upper(cycle.status) === "CLOSED"
       && upper(cycle.classification) !== "CASH_MANAGEMENT"
       && cycle.net_realized_pnl != null
   );
-  const wins = closedPnlCycles.filter((cycle) => number(cycle.net_realized_pnl) > 0);
-  const losses = closedPnlCycles.filter((cycle) => number(cycle.net_realized_pnl) < 0);
-  const grossWins = wins.reduce((total, cycle) => total + number(cycle.net_realized_pnl), 0);
-  const grossLosses = Math.abs(losses.reduce((total, cycle) => total + number(cycle.net_realized_pnl), 0));
-  const realizedPnl = grossWins - grossLosses;
-  const averageWin = wins.length ? grossWins / wins.length : null;
-  const averageLoss = losses.length ? grossLosses / losses.length : null;
-  const payoffRatio = averageWin != null && averageLoss ? averageWin / averageLoss : null;
-  const profitFactor = grossLosses ? grossWins / grossLosses : null;
-  const winRate = closedPnlCycles.length ? wins.length / closedPnlCycles.length : null;
-  const holdingDurations = closedPnlCycles
-    .map((cycle) => number(cycle.holding_duration_seconds))
-    .filter((value) => value > 0)
-    .sort((left, right) => left - right);
-  const medianHoldingDays = holdingDurations.length
-    ? holdingDurations[Math.floor(holdingDurations.length / 2)] / 86_400
-    : null;
+  const historyFilterOptions = asDict(workbenchApi.data?.history_filter_options);
   const accountOptions = Array.from(new Set([
+    ...listOf<string>(historyFilterOptions, "account_refs"),
     ...accountRows.map((account) => text(account.account_ref, "")),
     ...allTradeCycles.map((cycle) => text(cycle.account_ref, "")),
+    ...allTransactions.map((transaction) => text(transaction.account_ref, "")),
   ].filter(Boolean))).sort();
   const instrumentOptions = Array.from(new Set([
+    ...listOf<string>(historyFilterOptions, "instrument_ids"),
     ...allTradeCycles.map((cycle) => text(cycle.instrument_id, "")),
     ...allTransactions.map((transaction) => text(transaction.instrument_id, "")),
   ].filter(Boolean))).sort();
@@ -932,7 +980,7 @@ export default function DecisionWorkbenchPage() {
     const account = accountRows.find((item) => text(item.account_ref, "") === value);
     return {
       value,
-      label: `${upper(account?.provider, "ACCOUNT")} · ${shortId(value)}`,
+      label: accountLabel({ ...account, account_ref: value }),
       description: `${listOf<Dict>(account, "positions").length} durable position${listOf<Dict>(account, "positions").length === 1 ? "" : "s"}`,
     };
   });
@@ -1088,7 +1136,7 @@ export default function DecisionWorkbenchPage() {
 
   useEffect(() => {
     setTimelineOffset(0);
-  }, [accountFilters, instrumentFilters, periodFilter, subjectFilters]);
+  }, [accountFilters, instrumentFilters, periodFilter, customPeriodStart, customPeriodEnd, subjectFilters]);
 
   useEffect(() => {
     if (timelineOffset >= journalTimelineRows.length && timelineOffset !== 0) {
@@ -1707,16 +1755,19 @@ export default function DecisionWorkbenchPage() {
     setPendingNoteDecision(null);
   }, [pendingNoteDecision, selected, subject, subjectId]);
 
+  useEffect(() => {
+    const reload = () => { observationApi.refresh(); workbenchApi.refresh(); };
+    window.addEventListener("tp-observation-data-changed", reload);
+    return () => window.removeEventListener("tp-observation-data-changed", reload);
+  }, [observationApi.refresh, workbenchApi.refresh]);
+
   async function refreshObservationSources() {
     setNoteSyncBusy(true);
     setNoteSyncError(null);
     setNoteSyncMessage(null);
     try {
-      const result = await postApi<Dict>("/api/observations/sync", { source_code: null, analyze: false });
-      const receipt = asDict(result.data);
-      setNoteSyncMessage(
-        `${text(receipt.notes_seen, "0")} note(s) scanned · ${text(receipt.revisions_created, "0")} revision(s) added${receipt.analysis_started === true ? " · background analysis started" : ""}.`,
-      );
+      await startObservationRefresh();
+      setNoteSyncMessage("Refresh started. Progress and recovery remain available in Operations.");
       observationApi.refresh();
     } catch (cause) {
       setNoteSyncError(cause instanceof Error ? cause.message : "Observation source sync failed.");
@@ -1782,57 +1833,54 @@ export default function DecisionWorkbenchPage() {
     { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
     { id: "refresh", label: loading ? "Refreshing…" : "Refresh", description: "Reload durable workflow context", icon: <RefreshCw aria-hidden="true" className={loading ? "spin" : undefined} />, disabled: loading, onSelect: workbenchApi.refresh },
   ]} />}>
-    <DataBoundary loading={loading} error={error}>
-      <div className="decision-workbench">
-        <section className="journal-filter-bar" aria-label="Journal Filters">
-          <label><span>Period</span><select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as PeriodFilter)}><option value="ALL">All History</option><option value="30D">Last 30 Days</option><option value="90D">Last 90 Days</option><option value="YTD">Year to Date</option><option value="CUSTOM">Custom Range</option></select></label>
-          {periodFilter === "CUSTOM" ? <><label><span>Start Date</span><input type="date" value={customPeriodStart} onChange={(event) => setCustomPeriodStart(event.target.value)} /></label><label><span>End Date</span><input type="date" value={customPeriodEnd} onChange={(event) => setCustomPeriodEnd(event.target.value)} /></label></> : null}
-          <MultiSelectAutosuggest label="Account" placeholder="All Accounts" options={accountAutosuggestOptions} value={accountFilters} onChange={setAccountFilters} />
-          <MultiSelectAutosuggest label="Instrument" placeholder="All Instruments" options={instrumentAutosuggestOptions} value={instrumentFilters} onChange={setInstrumentFilters} />
-          <label><span>Quality{journalTab === "behavior" ? " · Cycle Browser Only" : ""}</span><select value={qualityFilter} disabled={journalTab === "behavior"} title={journalTab === "behavior" ? "Behavior preserves calculator exclusions instead of filtering by Cycle quality." : undefined} onChange={(event) => setQualityFilter(event.target.value)}><option value="ALL">All Quality</option><option value="COMPLETE">Complete</option><option value="INCOMPLETE">Incomplete</option></select></label>
-          <MultiSelectAutosuggest label="Status" placeholder="All Statuses" options={CYCLE_STATUS_OPTIONS} value={cycleStatusFilters} onChange={(values) => setCycleStatusFilters(values as CycleStatusFilter[])} />
-          <details className="journal-more-filters"><summary>More Filters{subjectFilters.length + classificationFilters.length ? ` (${subjectFilters.length + classificationFilters.length})` : ""}</summary><div><MultiSelectAutosuggest label="Research Subject" placeholder="All Research Subjects" options={subjectAutosuggestOptions} value={subjectFilters} onChange={updateSubjectFilters} /><MultiSelectAutosuggest label="Classification" placeholder="All Classifications" options={CLASSIFICATION_OPTIONS} value={classificationFilters} onChange={(values) => setClassificationFilters(values as ActivityClassification[])} /></div></details>
-          <p className="journal-filter-scope">Period, Account, Instrument, and Classification are applied to the durable Behavior cohort. Quality applies to the Cycle browser; Subject selects research context and Review scope.{!periodWindowValid ? " The custom date range is invalid: Start Date must not be after End Date." : ""}</p>
-        </section>
+    <div className={`${journalStyles.root} decision-workbench`}>
+        <FilterBar aria-label="Journal Filters">
+          {journalTab !== "notes" && journalTab !== "reviews" ? <>
+            <FormField label="Period"><Select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as PeriodFilter)}><option value="ALL">All History</option><option value="30D">Last 30 Days</option><option value="90D">Last 90 Days</option><option value="YTD">Year to Date</option><option value="CUSTOM">Custom Range</option></Select></FormField>
+            {periodFilter === "CUSTOM" ? <DateRange start={customPeriodStart} end={customPeriodEnd} onStartChange={setCustomPeriodStart} onEndChange={setCustomPeriodEnd} invalid={!periodWindowValid} /> : null}
+            <MultiSelectAutosuggest label="Account" placeholder="All Accounts" options={accountAutosuggestOptions} value={accountFilters} onChange={setAccountFilters} />
+          </> : null}
+          {journalTab !== "reviews" ? <MultiSelectAutosuggest label="Instrument" placeholder="All Instruments" options={instrumentAutosuggestOptions} value={instrumentFilters} onChange={setInstrumentFilters} /> : null}
+          {journalTab === "notes" ? <FormField label="Search Notes"><Input placeholder="Title or summary" value={notesQuery} onChange={(event) => setNotesQuery(event.target.value)} /></FormField> : null}
+          {journalTab === "cycles" || journalTab === "overview" ? <>
+            <FormField label="Quality"><Select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}><option value="ALL">All Quality</option><option value="COMPLETE">Complete</option><option value="INCOMPLETE">Incomplete</option></Select></FormField>
+            <MultiSelectAutosuggest label="Status" placeholder="All Statuses" options={CYCLE_STATUS_OPTIONS} value={cycleStatusFilters} onChange={(values) => setCycleStatusFilters(values as CycleStatusFilter[])} />
+          </> : null}
+          <MultiSelectAutosuggest label="Research Subject" placeholder="All Research Subjects" options={subjectAutosuggestOptions} value={subjectFilters} onChange={updateSubjectFilters} />
+          {["overview", "cycles", "behavior"].includes(journalTab) ? <MultiSelectAutosuggest label="Classification" placeholder="All Classifications" options={CLASSIFICATION_OPTIONS} value={classificationFilters} onChange={(values) => setClassificationFilters(values as ActivityClassification[])} /> : null}
+          <Button size="sm" onClick={() => { setNotesQuery(""); setPeriodFilter("ALL"); setAccountFilters([]); setInstrumentFilters([]); setClassificationFilters([]); setQualityFilter("ALL"); setCycleStatusFilters([]); updateSubjectFilters([]); }}>Clear Filters</Button>
+        </FilterBar>
+        {usesActivityFilters ? <p className="card-note">Dates include both endpoints. Activity uses execution time; Cycles and Behavior use close time, or opening time for open Cycles. Earlier fills remain included when reconstructing a Cycle.</p> : null}
+        {!activeWindowValid ? <div className="inline-error" role="alert">Enter both dates. Start Date must not be after End Date.</div> : null}
 
         {captureContextError ? <div className="inline-error" role="alert">{captureContextError}</div> : null}
 
         {selected ? <section className="decision-subject-hero journal-subject-context">
             <div><span>{upper(subject.subject_type, "RESEARCH SUBJECT")}</span><h2>{text(subject.title, "Unnamed Research Subject")}</h2><p>{text(subject.summary, "No stable research scope recorded.")}</p></div>
-            <div className="decision-subject-meta"><Badge value={upper(subject.status)} /><strong>{shortId(subject.primary_instrument_id)}</strong><small className="mono">{subjectId}</small></div>
+            <div className="decision-subject-meta"><Badge value={upper(subject.status)} /><strong>{shortId(subject.primary_instrument_id)}</strong></div>
           </section> : null}
 
           <HorizontalTabs items={journalTabs} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
 
+          {!activeWindowValid ? <Empty>Correct the date range to view Journal results.</Empty> : <DataBoundary loading={loading} error={error}>
           <section id="journal-panel-overview" role="tabpanel" aria-labelledby="journal-tab-overview" hidden={journalTab !== "overview"} className="journal-panel-stack">
           <CurrentViewCard subjectId={subjectId} currentView={currentView} subject={subject} loading={currentViewApi.loading} error={currentViewApi.error} />
           <Card title="Data Confidence" action={<Badge value={partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : "AVAILABLE"} />}>
             <div className="journal-confidence-strip">
-              <span>Transactions<strong>{transactionsUnavailable ? "—" : allTransactions.length}</strong><small>{transactionWindowLimited ? "Bounded read" : "Durable facts"}</small></span>
+              <span>Transactions<strong>{transactionsUnavailable ? "—" : filteredTransactions.length}</strong><small>{transactionWindowLimited ? "Bounded read" : "Durable facts in period"}</small></span>
               <span>Complete Cycles<strong>{allTradeCycles.filter((cycle) => upper(cycle.quality) === "COMPLETE").length} / {allTradeCycles.length}</strong><small>Long-only projection</small></span>
               <span>Unresolved<strong>{allTradeCycles.filter((cycle) => upper(cycle.status) === "UNRESOLVED").length}</strong><small>Excluded from outcomes</small></span>
               <span>Account Returns<strong>{performanceSeries.some((item) => item.twr != null) ? "Available" : "Unavailable"}</strong><small>TWR / XIRR / drawdown</small></span>
             </div>
-            {partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? <div className="journal-remediation"><strong>Why confidence is partial</strong><ul>{partialFailures.map((failure) => <li key={failure}>{metricLabel(failure)} read failed; retry durable context before acting.</li>)}{transactionWindowLimited ? <li>Transaction history reached the 500-row local read boundary.</li> : null}{tradeCycleProjectionIncomplete ? <li>{incompleteCycleCount} Cycle(s) lack complete prices, fees, or reconstruction coverage.</li> : null}</ul><div className="page-actions"><ActionButton onClick={workbenchApi.refresh}>Retry Durable Reads</ActionButton><QuickLink href="/operations">Open Data Quality Center</QuickLink></div></div> : null}
-          </Card>
-
-          <Card title="Results" action={<button type="button" onClick={() => selectJournalTab("cycles")}>Open Trade Cycles</button>}>
-            <div className="journal-result-grid">
-              <span>Closed Cycles<strong>{closedPnlCycles.length}</strong><small>{wins.length} wins · {losses.length} losses</small></span>
-              <span>Realized P/L<strong className={realizedPnl < 0 ? "negative" : "positive"}>{formatMoney(realizedPnl)}</strong><small>Known Cycle P/L · fee coverage may be incomplete</small></span>
-              <span>Win Rate<strong>{winRate == null ? "—" : `${(winRate * 100).toFixed(1)}%`}</strong><small>{wins.length} / {closedPnlCycles.length}</small></span>
-              <span>Payoff Ratio<strong>{payoffRatio == null ? "—" : payoffRatio.toFixed(2)}</strong><small>Average win / average loss</small></span>
-              <span>Profit Factor<strong>{profitFactor == null ? "—" : profitFactor.toFixed(2)}</strong><small>Gross wins / gross losses</small></span>
-              <span>Median Hold<strong>{medianHoldingDays == null ? "—" : `${medianHoldingDays.toFixed(1)}d`}</strong><small>Closed eligible Cycles</small></span>
-            </div>
+            {partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? <div className="journal-remediation"><strong>Why confidence is partial</strong><ul>{partialFailures.map((failure) => <li key={failure}>{metricLabel(failure)} read failed; retry durable context before acting.</li>)}{transactionWindowLimited ? <li>Transaction history reached the 500-row local read boundary.</li> : null}{tradeCycleProjectionIncomplete ? <li>{incompleteCycleCount} Cycle(s) lack complete prices, fees, or reconstruction coverage.</li> : null}</ul><div className="page-actions"><ActionButton onClick={workbenchApi.refresh}>Retry Durable Reads</ActionButton><QuickLink href="/#data-quality">Open Data Quality Center</QuickLink></div></div> : null}
           </Card>
 
           <div className="journal-overview-grid">
             <Card title="Holding Patterns">
               <div className="journal-pattern-list">{holdingBuckets.map((bucket) => <div key={bucket.label}><span>{bucket.label}<small>{bucket.count} cycles</small></span><strong className={bucket.pnl < 0 ? "negative" : "positive"}>{formatMoney(bucket.pnl)}</strong></div>)}</div>
             </Card>
-            <Card title="Latest Changes" action={<button type="button" onClick={() => selectJournalTab("notes")}>Open Notes</button>}>
-              {filteredExternalNotes.length === 0 ? <Empty>No imported note revision matches the current filters.</Empty> : <div className="journal-change-list">{filteredExternalNotes.slice(0, 3).map((item) => { const identity = asDict(item.identity); const revision = asDict(item.revision); const interpretation = asDict(item.interpretation); const payload = asDict(interpretation.payload); return <button type="button" key={text(identity.note_id)} onClick={() => selectJournalTab("notes")}><span><strong>{text(identity.title, "Untitled Note")}</strong><small>{shortId(identity.primary_instrument_id)} · {formatDate(revision.observed_at)}</small></span><span><Badge value={text(interpretation.change_relation, text(interpretation.status, text(revision.coverage)))} /><small>{text(payload.material_change_summary, text(revision.summary, "Awaiting full-text analysis."))}</small></span></button>; })}</div>}
+            <Card title="Latest Changes" action={<LinkButton href="#notes">Open Notes</LinkButton>}>
+              {filteredExternalNotes.length === 0 ? <Empty>No imported note revision matches the current filters.</Empty> : <div className="journal-change-list">{filteredExternalNotes.slice(0, 3).map((item) => { const identity = asDict(item.identity); const revision = asDict(item.revision); const interpretation = asDict(item.interpretation); const payload = asDict(interpretation.payload); return <SelectableRow type="button" key={text(identity.note_id)} onClick={() => selectJournalTab("notes")}><span><strong>{text(identity.title, "Untitled Note")}</strong><small>{shortId(identity.primary_instrument_id)} · {formatDate(revision.observed_at)}</small></span><span><Badge value={text(interpretation.change_relation, text(interpretation.status, text(revision.coverage)))} /><small>{text(payload.material_change_summary, text(revision.summary, "Awaiting full-text analysis."))}</small></span></SelectableRow>; })}</div>}
             </Card>
           </div>
 
@@ -1842,7 +1890,7 @@ export default function DecisionWorkbenchPage() {
               <span><strong>{filteredInstrumentRows.length}</strong> of {tradedInstrumentRows.length} Instruments · <strong>{visibleInstrumentFillCount}</strong> fills</span>
             </div>
             {visibleInstrumentRows.length === 0 ? <Empty>No traded Instrument matches the current filters.</Empty> : <>
-              <div className="table-wrap journal-instrument-table"><table><thead><tr>
+              <div className="table-wrap journal-instrument-table"><Table><thead><tr>
                 <SortableTableHeader label="Instrument" column="instrument" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
                 <SortableTableHeader label="Fills" column="fills" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
                 <SortableTableHeader label="Bought" column="bought" activeColumn={instrumentTableSort.key} direction={instrumentTableSort.direction} onSort={changeInstrumentTableSort} />
@@ -1860,7 +1908,7 @@ export default function DecisionWorkbenchPage() {
                 <td>{row.closedCycles}</td>
                 <td><strong className={row.knownPnl < 0 ? "negative" : row.knownPnl > 0 ? "positive" : ""}>{row.pnlCycles ? formatMoney(row.knownPnl) : "—"}</strong><small className="table-sub">P/L available for {row.pnlCycles} / {row.closedCycles} closed Cycles</small></td>
                 <td>{formatDate(row.lastTradeAt)}<small className="table-sub">First {formatDate(row.firstTradeAt)}</small></td>
-              </tr>)}</tbody></table></div>
+              </tr>)}</tbody></Table></div>
               <Paginator step={INSTRUMENT_TABLE_PAGE_SIZE} offset={instrumentTableOffset} hasMore={instrumentTableOffset + INSTRUMENT_TABLE_PAGE_SIZE < filteredInstrumentRows.length} onOffsetChange={setInstrumentTableOffset} summary={<small>{instrumentTableOffset + 1}–{Math.min(instrumentTableOffset + INSTRUMENT_TABLE_PAGE_SIZE, filteredInstrumentRows.length)} of {filteredInstrumentRows.length}</small>} />
             </>}
           </Card>
@@ -1904,21 +1952,21 @@ export default function DecisionWorkbenchPage() {
           <section id="journal-panel-cycles" role="tabpanel" aria-labelledby="journal-tab-cycles" hidden={journalTab !== "cycles"} className="journal-panel-stack">
             <Card kicker="DETERMINISTIC · LONG-ONLY" title="Trade Cycles" action={<div className="cycle-header-actions"><div className={`cycle-quality-indicator ${overallCycleQuality === "COMPLETE" ? "complete" : "incomplete"}`}><span>Data Quality</span><strong>{overallCycleQuality === "COMPLETE" ? "Complete" : overallCycleQuality === "INCOMPLETE" ? "Incomplete" : "Unknown"}</strong><small>{overallCycleQuality === "COMPLETE" ? `${allTradeCycles.length} Cycles fully reconstructable` : `${incompleteCycleCount} incomplete · including ${unresolvedCycleCount} unresolved`}</small></div>{tradeCycleOverrides.length > 0 ? <Badge value={`${tradeCycleOverrides.length} OVERRIDES`} /> : null}<QuickLink href="/portfolio#activity">Open Portfolio</QuickLink></div>}>
               <p className="card-note">Cycles are rebuilt from durable transactions by account, Instrument, and native currency. Append-only split/merge/relink revisions change only the effective projection; the original algorithm Cycles remain retained.</p>
-              <div className="cycle-sort-toolbar"><span>Latest Activity uses the newest exact loaded activity in each Cycle; when that activity is outside the current transaction window, the Cycle close/open time is the explicit fallback.</span><label><span>Sort Cycles</span><select value={cycleSortMode} onChange={(event) => setCycleSortMode(event.target.value as CycleSortMode)}><option value="LATEST_DESC">Latest Activity · Newest First</option><option value="LATEST_ASC">Latest Activity · Oldest First</option><option value="OPENED_DESC">Opened · Newest First</option><option value="OPENED_ASC">Opened · Oldest First</option><option value="INSTRUMENT_ASC">Instrument · A to Z</option><option value="INSTRUMENT_DESC">Instrument · Z to A</option></select></label></div>
+              <div className="cycle-sort-toolbar"><span>Latest Activity uses the newest exact loaded activity in each Cycle; when that activity is outside the current transaction window, the Cycle close/open time is the explicit fallback.</span><label><span>Sort Cycles</span><Select value={cycleSortMode} onChange={(event) => setCycleSortMode(event.target.value as CycleSortMode)}><option value="LATEST_DESC">Latest Activity · Newest First</option><option value="LATEST_ASC">Latest Activity · Oldest First</option><option value="OPENED_DESC">Opened · Newest First</option><option value="OPENED_ASC">Opened · Oldest First</option><option value="INSTRUMENT_ASC">Instrument · A to Z</option><option value="INSTRUMENT_DESC">Instrument · Z to A</option></Select></label></div>
               <div className="cycle-status-guide" aria-label="Trade Cycle Status and Quality Guide"><span><Badge value="OPEN" tone="good" /><strong>{cycleStatusCounts.OPEN}</strong><small>Position quantity remains above zero.</small></span><span><Badge value="CLOSED" tone="neutral" /><strong>{cycleStatusCounts.CLOSED}</strong><small>Matched activity returned quantity to zero.</small></span><span><Badge value="UNRESOLVED" tone="bad" /><strong>{cycleStatusCounts.UNRESOLVED}</strong><small>Available history cannot reconstruct a valid long-only Cycle.</small></span><span><Badge value="INCOMPLETE" tone="warn" /><strong>{cycleIncompleteCount}</strong><small>Cycle exists, but fees, prices, or coverage are missing.</small></span></div>
               {tradeCycles.length === 0 ? <Empty>No resolvable Trade Cycle matches the current filters.</Empty> : <>
                 <div className={`journal-cycle-browser rows-${cyclePageSize}`}>
                   <div className="journal-cycle-browser-list" role="list" aria-label="Trade Cycles">
-                    {visibleTradeCycles.map((cycle) => { const pnl = cyclePnlPresentation(cycle); const latestActivityTime = cycleLatestActivityTime(cycle); return <button type="button" role="listitem" className={text(selectedCycle?.cycle_id) === text(cycle.cycle_id) ? "selected" : ""} key={text(cycle.cycle_id)} onClick={() => setSelectedCycleId(text(cycle.cycle_id))}>
-                      <span><strong>{shortId(cycle.instrument_id)}</strong><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small><small>Latest Activity {latestActivityTime > 0 ? formatDate(new Date(latestActivityTime).toISOString()) : "Unavailable"}</small></span>
+                    {visibleTradeCycles.map((cycle) => { const pnl = cyclePnlPresentation(cycle); const latestActivityTime = cycleLatestActivityTime(cycle); return <SelectableRow selected={text(selectedCycle?.cycle_id) === text(cycle.cycle_id)} type="button" role="listitem" className={text(selectedCycle?.cycle_id) === text(cycle.cycle_id) ? "selected" : ""} key={text(cycle.cycle_id)} onClick={() => setSelectedCycleId(text(cycle.cycle_id))}>
+                      <span><strong>{shortId(cycle.instrument_id)}</strong><small>{accountLabel(cycle)}</small><small>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}</small><small>Latest Activity {latestActivityTime > 0 ? formatDate(new Date(latestActivityTime).toISOString()) : "Unavailable"}</small></span>
                       <span><Badge value={text(cycle.status, "UNKNOWN")} tone={cycleStatusTone(cycle.status)} /><strong className={pnl.tone}>{pnl.label} {pnl.value}</strong>{pnl.detail ? <small>{pnl.detail}</small> : null}</span>
-                    </button>; })}
+                    </SelectableRow>; })}
                     <Paginator step={cyclePageSize} offset={cycleOffset} hasMore={cycleOffset + cyclePageSize < tradeCycles.length} onOffsetChange={(value) => { setCycleOffset(value); setSelectedCycleId(""); }} summary={<small>{cycleOffset + 1}–{Math.min(cycleOffset + cyclePageSize, tradeCycles.length)} of {tradeCycles.length}</small>} />
                   </div>
                   {selectedCycle ? <article className="journal-cycle-detail">
-                    <header><div><span>Trade Cycle</span><h3>{shortId(selectedCycle.instrument_id)}</h3><p>{formatDate(selectedCycle.opened_at)} → {selectedCycle.closed_at ? formatDate(selectedCycle.closed_at) : "Open"}</p></div><div className="page-actions"><Badge value={text(selectedCycle.classification, "UNCLASSIFIED")} tone={cycleClassificationTone(selectedCycle.classification)} /><Badge value={text(selectedCycle.status, "UNKNOWN")} tone={cycleStatusTone(selectedCycle.status)} /><Badge value={text(selectedCycle.quality, "UNKNOWN")} tone={cycleQualityTone(selectedCycle.quality)} /></div></header>
-                    <div className="journal-result-grid compact"><span>{selectedCyclePnl?.label ?? "P/L"}<strong className={selectedCyclePnl?.tone}>{selectedCyclePnl?.value ?? "Unavailable"}</strong>{selectedCyclePnl?.detail ? <small>{selectedCyclePnl.detail}</small> : null}</span><span>Maximum Deployed<strong>{selectedCycle.maximum_deployed_capital == null ? "Unavailable" : formatMoney(number(selectedCycle.maximum_deployed_capital), text(selectedCycle.currency, "USD"))}</strong></span><span>Ending Quantity<strong>{formatDecimal(selectedCycle.ending_quantity)}</strong></span><span>Adds / Reductions<strong>{text(selectedCycle.add_count, "0")} / {text(selectedCycle.reduce_count, "0")}</strong></span></div>
-                    <section><h4>Activity Path</h4>{selectedCycleTransactions.length === 0 ? <Empty>Exact activity details are unavailable in the current durable window.</Empty> : <div className="journal-timeline-list">{selectedCycleTransactions.map((transaction) => <article key={text(transaction.provider_transaction_id)}><Badge value={upper(transaction.side, upper(transaction.kind))} /><div><header><strong>{text(transaction.quantity)} @ {text(transaction.price)} {text(transaction.currency, "")}</strong><time>{formatDate(transaction.occurred_at)}</time></header><p>{shortId(transaction.account_ref)} · {text(transaction.provider)}</p></div></article>)}</div>}</section>
+                    <header><div><span>Trade Cycle</span><h3>{shortId(selectedCycle.instrument_id)}</h3><p>{accountLabel(selectedCycle)} · {formatDate(selectedCycle.opened_at)} → {selectedCycle.closed_at ? formatDate(selectedCycle.closed_at) : "Open"}</p></div><div className="page-actions"><Tag>{text(selectedCycle.classification, "UNCLASSIFIED")}</Tag><Badge value={text(selectedCycle.status, "UNKNOWN")} tone={cycleStatusTone(selectedCycle.status)} /><Badge value={text(selectedCycle.quality, "UNKNOWN")} tone={cycleQualityTone(selectedCycle.quality)} /></div></header>
+                    <div className="journal-result-grid compact cycle-metrics"><span>{selectedCyclePnl?.label ?? "P/L"}<strong className={selectedCyclePnl?.tone}>{selectedCyclePnl?.value ?? "Unavailable"}</strong>{selectedCyclePnl?.detail ? <small>{selectedCyclePnl.detail}</small> : null}</span><span>Maximum Deployed<strong>{selectedCycle.maximum_deployed_capital == null ? "—" : formatMoney(number(selectedCycle.maximum_deployed_capital), text(selectedCycle.currency, "USD"))}</strong></span><span>Current Average Cost<strong>{selectedCycle.current_average_cost == null ? "—" : `${formatDecimal(selectedCycle.current_average_cost, 4)} ${text(selectedCycle.currency, "")}`}</strong></span><span>Ending Quantity<strong>{formatDecimal(selectedCycle.ending_quantity)}</strong></span><span title={CYCLE_ACTIVITY_COUNTS_HELP}>Adds / Reductions<strong>{cycleActivityCounts(selectedCycle)}</strong><small>Trade Records</small></span></div><small className="muted">Current Average Cost: remaining FIFO lots · excludes trade fees.</small>
+                    <section><h4>Activity Path</h4>{selectedCycleTransactions.length === 0 ? <Empty>Exact activity details are unavailable in the current durable window.</Empty> : <div className="journal-timeline-list">{selectedCycleTransactions.map((transaction) => <article key={text(transaction.provider_transaction_id)}><Badge value={upper(transaction.side, upper(transaction.kind))} /><div><header><strong>{text(transaction.quantity)} @ {text(transaction.price)} {text(transaction.currency, "")}</strong><time>{formatDate(transaction.occurred_at)}</time></header><p>{accountLabel(transaction)}</p></div></article>)}</div>}</section>
                     <section><h4>Decision & Plan</h4><p className="card-note">{selected ? latestDecision ? `${text(latestDecision.title)} · ${planLinkReady ? `Trade Plan v${planVersion}` : "No exact Trade Plan link"}` : "No exact pre-fill Decision is linked in the selected Research Subject." : "Select a Research Subject to inspect exact Decision and Trade Plan context. Instrument and timing alone are not treated as proof of a link."}</p></section>
                     {listOf<string>(selectedCycle, "warning_codes").length > 0 ? <section><h4>Data Warnings</h4><div className="retro-code-list">{listOf<string>(selectedCycle, "warning_codes").map((warning) => <code key={warning}>{warning}</code>)}</div></section> : null}
                   </article> : null}
@@ -1930,7 +1978,7 @@ export default function DecisionWorkbenchPage() {
 
           <section id="journal-panel-behavior" role="tabpanel" aria-labelledby="journal-tab-behavior" hidden={journalTab !== "behavior"} className="journal-panel-stack">
             <Card title="Behavior" action={<Badge value={text(behaviorData.algorithm_version, "UNAVAILABLE")} />}>
-              <div className="journal-scope-notice"><strong>Cohort scope</strong><span>{subjectId ? shortId(subjectId) : "All Subjects"} · {accountFilters.length ? `${accountFilters.length} selected Account(s)` : "All Accounts"} · {instrumentFilters.length ? instrumentFilters.map(shortId).join(", ") : instrumentId ? shortId(instrumentId) : "All Instruments"} · {classificationFilters.length ? classificationFilters.join(", ") : "All Classifications"} · {asDict(behaviorData.cohort).start ? formatDate(asDict(behaviorData.cohort).start) : selectedPeriodStart ? formatDate(selectedPeriodStart) : "All Dates"} → {asDict(behaviorData.cohort).end ? formatDate(asDict(behaviorData.cohort).end) : selectedPeriodEnd ? formatDate(selectedPeriodEnd) : "Now"}</span></div>
+              <div className="journal-scope-notice"><strong>Cohort scope</strong><span>{subjectId ? shortId(subjectId) : "All Subjects"} · {accountFilters.length ? accountFilters.map((account_ref) => accountLabel({ account_ref })).join(", ") : "All Accounts"} · {instrumentFilters.length ? instrumentFilters.map(shortId).join(", ") : instrumentId ? shortId(instrumentId) : "All Instruments"} · {classificationFilters.length ? classificationFilters.join(", ") : "All Classifications"} · {asDict(behaviorData.cohort).start ? formatDate(asDict(behaviorData.cohort).start) : selectedPeriodStart ? formatDate(selectedPeriodStart) : "All Dates"} → {asDict(behaviorData.cohort).end ? formatDate(asDict(behaviorData.cohort).end) : selectedPeriodEnd ? formatDate(selectedPeriodEnd) : "Now"}</span></div>
               {!periodWindowValid ? <ErrorNote>Start Date must not be after End Date. Behavior remains unavailable until the range is corrected.</ErrorNote> : null}
               <p className="card-note">Each metric appears once. Ratios are recomputed from the returned numerator and denominator before display; inconsistent payloads fail closed. Exclusions and unsupported facts remain visible instead of becoming zero.</p>
               {periodWindowValid ? <BehaviorPanel value={behaviorData} /> : <Empty>Correct the custom date range to calculate Behavior.</Empty>}
@@ -1938,11 +1986,11 @@ export default function DecisionWorkbenchPage() {
           </section>
 
           <section id="journal-panel-notes" role="tabpanel" aria-labelledby="journal-tab-notes" hidden={journalTab !== "notes"} className="journal-panel-stack">
+            <ObservationRefreshStatus />
             <ObservationInbox
               items={filteredExternalNotes}
               sources={observationSources}
               activeSubjects={activeSubjects}
-              selectedInstrumentIds={activeInstrumentFilters}
               busy={noteSyncBusy}
               syncMessage={noteSyncMessage}
               syncError={noteSyncError}
@@ -2022,7 +2070,7 @@ export default function DecisionWorkbenchPage() {
         >
           <div className="journal-capture-form">
             <div className="confirmation-facts journal-capture-wide"><span>View Change<strong>{observationDefer?.title ?? "—"}</strong></span></div>
-            <FormField label="Review Date" required className="journal-capture-wide"><input type="date" required value={observationDefer?.dueDate ?? ""} onChange={(event) => setObservationDefer((current) => current ? { ...current, dueDate: event.target.value } : current)} /></FormField>
+            <FormField label="Review Date" required className="journal-capture-wide"><Input type="date" required value={observationDefer?.dueDate ?? ""} onChange={(event) => setObservationDefer((current) => current ? { ...current, dueDate: event.target.value } : current)} /></FormField>
           </div>
         </ConfirmationDialog>
         <ConfirmationDialog
@@ -2038,16 +2086,16 @@ export default function DecisionWorkbenchPage() {
             <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small>{upper(subject.status, "UNKNOWN")}</small></span><span>Trade Plan<strong>{planLinkReady ? `${shortId(plan?.instrument_id)} · v${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceNote || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
             {decisionSourceRevisionId ? <Disclosure className="journal-capture-wide" variant="code" title="Exact Durable Provenance"><pre>{JSON.stringify({ subject_id: subjectId, trade_plan_id: planLinkReady ? planId : null, trade_plan_version: planLinkReady ? planVersion : null, note_revision_id: decisionSourceRevisionId }, null, 2)}</pre></Disclosure> : null}
             {decisionReviewPackage ? <div className="journal-capture-wide notes-review-baseline"><span className="card-kicker">CONFIRMED BASELINE COMPARISON</span><div className="confirmation-facts"><span>What Changed<strong>{text(decisionReviewPackage.material_change_summary, "No change summary available")}</strong></span><span>Current Thesis<strong>{text(asDict(decisionReviewPackage.thesis).statement, "No live Thesis")}</strong></span><span>Prior Decision<strong>{text(asDict(decisionReviewPackage.latest_decision).title, "No prior Decision")}</strong></span><span>Deep Review<strong>{text(asDict(decisionReviewPackage.deep_review).status, "Not Configured")}</strong><small>{text(asDict(decisionReviewPackage.deep_review).model, "Flash draft remains available")}</small></span><span>Deterministic Checks<strong>{listOf<string>(decisionReviewPackage, "deterministic_flags").map((item) => item.replaceAll("_", " ")).join(" · ") || "No structural conflict detected"}</strong></span></div><small>Flash and Max text are drafts. Thesis, Plan, Position, Monitor, and coverage checks above come from durable local records.</small></div> : null}
-            <FormField label="Action" required><select required value={decisionAction} onChange={(event) => setDecisionAction(event.target.value as DecisionAction)}>{DECISION_ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></FormField>
-            <FormField label="Current Scenario" required><select required value={decisionScenario} onChange={(event) => setDecisionScenario(event.target.value as DecisionScenario)}>{DECISION_SCENARIOS.map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></FormField>
-            <FormField label="Reason" required className="journal-capture-wide"><textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>
+            <FormField label="Action" required><Select required value={decisionAction} onChange={(event) => setDecisionAction(event.target.value as DecisionAction)}>{DECISION_ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></FormField>
+            <FormField label="Current Scenario" required><Select required value={decisionScenario} onChange={(event) => setDecisionScenario(event.target.value as DecisionScenario)}>{DECISION_SCENARIOS.map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</Select></FormField>
+            <FormField label="Reason" required className="journal-capture-wide"><Textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>
             {decisionDraftScenarios.length ? <div className="notes-scenario-grid journal-capture-wide" aria-label="Imported Note Scenario Draft">{DECISION_SCENARIOS.map((scenario) => { const draft = decisionDraftScenarios.find((item) => upper(item.scenario) === scenario); return <article className="notes-scenario-card" key={scenario}><header><strong>{scenario}</strong><Badge value={upper(draft?.action, "REVIEW")} /></header><p>{text(draft?.condition, "No imported condition.")}</p></article>; })}</div> : null}
-            <FormField label="Review Date" className="journal-capture-wide"><input type="date" value={decisionReviewDate} onChange={(event) => setDecisionReviewDate(event.target.value)} /></FormField>
+            <FormField label="Review Date" className="journal-capture-wide"><Input type="date" value={decisionReviewDate} onChange={(event) => setDecisionReviewDate(event.target.value)} /></FormField>
             <p className="card-note journal-capture-wide">Strategy is recorded as strategy_v1{planLinkReady ? ` and linked to Trade Plan v${planVersion}` : ""}. The selected scenario records this action; the other scenarios remain REVIEW under the current confirmed Plan.{decisionSourceNote ? " This draft came from an exact imported Note revision; review and edit it before saving." : ""}</p>
             <ErrorNote role="alert">{decisionError}</ErrorNote>
           </div>
         </ConfirmationDialog>
-      </div>
-    </DataBoundary>
+      </DataBoundary>}
+    </div>
   </ConsoleShell>;
 }

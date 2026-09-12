@@ -877,3 +877,81 @@ async def test_opencode_go_monitor_supports_messages_models() -> None:
     assert result.conclusion == "WAIT"
     assert result.reasoning_effort_used == "max"
     await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_type", "model", "bounded"),
+    [
+        (OpenCodeGoModelProvider, "deepseek-flash", False),
+        (OpenCodeGoModelProvider, "grok-4.6", False),
+        (OpenCodeZenModelProvider, "deepseek-flash", True),
+        (OpenCodeZenModelProvider, "gpt-5.6-sol", True),
+    ],
+)
+async def test_go_omits_service_output_budgets_but_zen_retains_them(
+    provider_type: type[OpenCodeGoModelProvider], model: str, bounded: bool
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        token_keys = {"max_tokens", "max_completion_tokens", "max_output_tokens"}
+        assert bool(token_keys.intersection(payload)) is bounded
+        if "reasoning_effort" in payload:
+            assert payload["reasoning_effort"] == "max"
+        else:
+            assert payload["reasoning"]["effort"] == "max"
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(200, json={"model": model, "output_text": "完成"})
+        return httpx.Response(
+            200,
+            json={
+                "model": model,
+                "choices": [{"message": {"role": "assistant", "content": "完成"}}],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = provider_type(_config(model), client=client)
+        response = await provider.complete(
+            ModelRequest(
+                messages=(ModelMessage(role="user", content="合成测试"),),
+                session_id="synthetic-output-budget",
+                reasoning_mode="thinking",
+                reasoning_effort="max",
+                max_output_tokens=384,
+            )
+        )
+    assert response.text == "完成"
+
+
+@pytest.mark.asyncio
+async def test_go_stream_omits_output_budget() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"}.intersection(
+            payload
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                'data: {"model":"deepseek-flash","choices":'
+                '[{"delta":{"content":"完成"},"finish_reason":"stop"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config("deepseek-flash"), client=client)
+        chunks = [
+            item
+            async for item in provider.stream(
+                ModelRequest(
+                    messages=(ModelMessage(role="user", content="合成流式测试"),),
+                    session_id="synthetic-stream-budget",
+                    max_output_tokens=5000,
+                )
+            )
+        ]
+    assert "".join(item.text_delta for item in chunks) == "完成"

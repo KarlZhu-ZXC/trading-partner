@@ -1,5 +1,7 @@
 "use client";
 
+import { useAccountLabel } from "./components/account-aliases";
+
 import Link from "next/link";
 import { ConsoleShell } from "./components/console-shell";
 import {
@@ -14,6 +16,7 @@ import {
   formatDate,
   monitorAnchorId,
   shortId,
+  Table,
 } from "./components/ui";
 import { envelopeData, listOf, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
@@ -32,6 +35,7 @@ function durationLabel(value: unknown): string {
 }
 
 export default function OverviewPage() {
+  const accountLabel = useAccountLabel();
   const result = useApi<Dict>("/api/overview");
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
@@ -77,6 +81,7 @@ export default function OverviewPage() {
     + Number(reviewMetrics.acknowledged_count ?? 0);
   const otherReviewCount = Math.max(0, unresolvedReviewCount - observationReviewItems.length);
   const notices = buildConsoleNotices({
+    accountLabel,
     monitorItems,
     runs,
     researchAttention,
@@ -147,6 +152,7 @@ export default function OverviewPage() {
           <Card
             className="span-12"
             kicker="DATA QUALITY"
+            id="data-quality"
             title="Data Quality Center"
             subtitle="Freshness and completeness of persisted facts"
             action={<Badge value={String(quality?.status ?? "UNKNOWN")} />}
@@ -248,7 +254,7 @@ export default function OverviewPage() {
           <Card className="span-7" kicker="OBSERVATION HISTORY" title="Recent Monitor Runs" subtitle="Latest immutable evaluation batches">
             {runs.length === 0 ? <Empty>No run history yet.</Empty> : (
               <div className="table-wrap">
-                <table>
+                <Table>
                   <thead><tr><th>Target / Monitor</th><th>Completed</th><th>Cadence</th><th>Rules</th><th>Events</th><th>Status</th></tr></thead>
                   <tbody>
                     {runs.slice(0, 8).map((run) => {
@@ -265,7 +271,7 @@ export default function OverviewPage() {
                       );
                     })}
                   </tbody>
-                </table>
+                </Table>
               </div>
             )}
           </Card>

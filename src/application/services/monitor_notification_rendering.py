@@ -235,6 +235,22 @@ def _notification_messages(
     )
 
 
+def _operational_symbols(
+    monitor: MonitorDefinition,
+    observations: tuple[MonitorRunObservation, ...],
+) -> str:
+    rules = {item.rule_code: item for item in monitor.rules}
+    symbols = []
+    for item in observations:
+        rule = rules.get(item.rule_code)
+        instrument = item.instrument_id or (rule.instrument_id if rule else None)
+        instrument = instrument or monitor.primary_instrument_id
+        symbol = instrument.rsplit(":", 1)[-1] if instrument else "未指定标的"
+        if symbol not in symbols:
+            symbols.append(symbol)
+    return _notification_text("、".join(symbols) or "未指定标的", 100)
+
+
 def _data_interruption_message(
     *,
     monitor: MonitorDefinition,
@@ -249,7 +265,9 @@ def _data_interruption_message(
     affected = tuple(
         item for item in observations if item.state is MonitorRuleStateValue.NOT_EVALUATED
     )
-    context = _notification_price_context(monitor, observations, previous_states)
+    rules = {item.rule_code: item for item in monitor.rules}
+    symbol = _operational_symbols(monitor, affected)
+    partial = any(item.state is not MonitorRuleStateValue.NOT_EVALUATED for item in observations)
     error_codes = tuple(dict.fromkeys(code for item in affected for code in item.error_codes))
     diagnostics = tuple(
         dict.fromkeys(
@@ -260,26 +278,42 @@ def _data_interruption_message(
     )
     lines = [
         f"监控：{monitor.name}",
-        f"标的：{context.symbol}",
-        "数据状态：中断",
+        f"受影响标的：{symbol}",
+        "数据状态：部分中断" if partial else "数据状态：全部规则暂停计算",
         f"影响：{len(affected)} 条规则暂停计算；未改变原有触发结论",
     ]
-    if context.previous_price is not None:
-        lines.extend(
-            (
-                f"上一有效价格：{context.previous_price}",
-                "价格时间："
-                + (
-                    context.previous_price_time.isoformat()
-                    if context.previous_price_time
-                    else "不可用"
-                ),
-            )
+    if partial:
+        lines.append("其他规则仍正常计算。")
+    for item in affected[:8]:
+        rule = rules.get(item.rule_code)
+        label = _notification_text(
+            (rule.description if rule else None) or item.rule_code, 80
         )
+        stale = (
+            (
+                item.fact_age_seconds is not None
+                and rule is not None
+                and rule.max_fact_age_seconds is not None
+                and item.fact_age_seconds > rule.max_fact_age_seconds
+            )
+            or "TECHNICAL_DATA_NOT_FRESH" in item.warning_codes
+        )
+        cause = "数据过期" if stale else "所需数据不可用"
+        if stale and item.fact_age_seconds is not None:
+            cause += f"；数据年龄 {item.fact_age_seconds / 3600:g} 小时"
+            if rule is not None and rule.max_fact_age_seconds is not None:
+                cause += f"，上限 {rule.max_fact_age_seconds / 3600:g} 小时"
+        if item.fact_as_of is not None:
+            cause += f"；事实时间 {item.fact_as_of.isoformat()}"
+        lines.append(f"• {_operational_symbols(monitor, (item,))} / {label}：{cause}")
+    if len(affected) > 8:
+        lines.append(f"另有 {len(affected) - 8} 条规则受影响。")
     if diagnostics:
         lines.append(
             "诊断："
-            + "；".join(f"{provider} / {stage} / {code}" for provider, stage, code in diagnostics)
+            + "；".join(
+                f"{provider} / {stage} / {code}" for provider, stage, code in diagnostics[:8]
+            )
         )
     elif error_codes:
         lines.append("错误：" + ", ".join(error_codes))
@@ -292,7 +326,7 @@ def _data_interruption_message(
         source_type=NotificationSourceType.MONITOR_EVENT,
         source_id=source_id or first_event.event_id,
         channel=NotificationChannel.TELEGRAM,
-        title=f"⛔ {context.symbol} · 数据源中断",
+        title=f"⛔ {symbol} · 数据部分中断" if partial else f"⛔ {symbol} · 数据源中断",
         body="\n".join(lines),
         created_at=created_at or first_event.created_at,
     )
@@ -308,15 +342,18 @@ def _data_recovery_message(
     id_generator: IdGenerator,
     created_at: datetime,
 ) -> NotificationMessage:
-    context = _notification_price_context(monitor, observations, {})
+    context = _notification_price_context(monitor, recovered, {})
+    symbol = _operational_symbols(monitor, recovered)
     lines = [
         f"监控：{monitor.name}",
-        f"标的：{context.symbol}",
+        f"恢复标的：{symbol}",
         "数据状态：已恢复",
         f"结果：{len(recovered)} 条规则已重新计算，当前没有新的价格告警变化",
-        f"当前价格：{context.price}",
-        f"价格时间：{context.price_time}",
     ]
+    if context.symbol == symbol:
+        lines.extend((f"当前价格：{context.price}", f"价格时间：{context.price_time}"))
+    if any(item.state is MonitorRuleStateValue.NOT_EVALUATED for item in observations):
+        lines.append("其他规则仍有数据不可用；本次仅表示上述规则恢复。")
     if data_sources:
         lines.append(f"数据来源：{', '.join(data_sources)}")
     lines.append("说明：这里只表示数据源恢复，不代表价格上涨或行情转好。")
@@ -325,7 +362,7 @@ def _data_recovery_message(
         source_type=NotificationSourceType.MONITOR_RUN,
         source_id=run_id,
         channel=NotificationChannel.TELEGRAM,
-        title=f"🔵 {context.symbol} · 数据恢复",
+        title=f"🔵 {symbol} · 数据恢复",
         body="\n".join(lines),
         created_at=created_at,
     )
@@ -831,41 +868,6 @@ def _post_market_summary_message(
     )
 
 
-def _monitor_price_context(
-    monitor: MonitorDefinition,
-    observations: tuple[MonitorRunObservation, ...],
-    previous_states: dict[str, MonitorRuleState] | None = None,
-) -> tuple[str | None, str, str, str]:
-    context = _notification_price_context(monitor, observations, previous_states)
-    return context.instrument_id, context.symbol, context.price, context.price_time
-
-
-def _notification_rule_rows(
-    monitor: MonitorDefinition,
-    observations: tuple[MonitorRunObservation, ...],
-) -> tuple[tuple[str, ...], ...]:
-    rules_by_code = {item.rule_code: item for item in monitor.rules}
-    return tuple(
-        (
-            observation.rule_code,
-            _rule_condition(rules_by_code[observation.rule_code]),
-            (
-                str(observation.observed_value)
-                if observation.observed_value is not None
-                else "不可用"
-            ),
-            (
-                str(observation.distance_value)
-                if observation.distance_value is not None
-                else "不可用"
-            ),
-            observation.state.value,
-            observation.severity.value,
-        )
-        for observation in observations
-    )
-
-
 def _rule_condition(rule: MonitorRule) -> str:
     if rule.rule_type is MonitorRuleType.PRICE_ABOVE:
         return f"> {rule.price_threshold}"
@@ -913,17 +915,3 @@ def _rule_condition(rule: MonitorRule) -> str:
         else f"{metric_key} "
     )
     return f"{interval}{metric}{comparator} {threshold}{recovery}"
-
-
-def _format_rule_table(rows: tuple[tuple[str, ...], ...]) -> str:
-    headers = ("RULE", "COND", "VALUE", "DIST", "STATE", "LEVEL")
-    widths = tuple(
-        max(len(headers[index]), *(len(row[index]) for row in rows))
-        for index in range(len(headers))
-    )
-
-    def render(row: tuple[str, ...]) -> str:
-        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
-
-    separator = "  ".join("-" * width for width in widths)
-    return "\n".join((render(headers), separator, *(render(row) for row in rows)))

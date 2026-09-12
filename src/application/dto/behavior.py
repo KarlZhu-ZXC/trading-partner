@@ -8,7 +8,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from application.dto.market import DecimalWire
 from domain.behavior.enums import BehaviorMetricAvailability
-from domain.behavior.models import BehaviorCohort, BehaviorMetric, BehaviorSummary
+from domain.behavior.models import (
+    BEHAVIOR_RETURN_BASIS,
+    BehaviorCohort,
+    BehaviorMetric,
+    BehaviorSummary,
+)
 from domain.common.enums import VendorId
 from domain.portfolio.enums import TradeCycleClassification
 
@@ -48,8 +53,6 @@ class BehaviorMetricDTO(_DTO):
     decision_ids: tuple[str, ...] = ()
     eligible_decision_ids: tuple[str, ...] = ()
     excluded_decision_ids: tuple[str, ...] = ()
-    sample_sufficient: bool
-    minimum_sample_size: int
     native_currencies: tuple[str, ...] = ()
     note: str | None = None
     availability: BehaviorMetricAvailability = BehaviorMetricAvailability.AVAILABLE
@@ -69,6 +72,9 @@ class BehaviorSummaryDTO(_DTO):
     avg_win: BehaviorMetricDTO
     avg_loss: BehaviorMetricDTO
     payoff_ratio: BehaviorMetricDTO
+    avg_win_return: BehaviorMetricDTO
+    avg_loss_return: BehaviorMetricDTO
+    return_payoff_ratio: BehaviorMetricDTO
     average_holding_duration: BehaviorMetricDTO
     median_holding_duration: BehaviorMetricDTO
     turnover: BehaviorMetricDTO
@@ -90,6 +96,7 @@ class BehaviorSummaryDTO(_DTO):
     cohort_excluded_cycle_ids: tuple[str, ...] = ()
     cohort_exclusion_reasons: tuple[str, ...] = ()
     native_currencies: tuple[str, ...] = ()
+    return_basis: str = BEHAVIOR_RETURN_BASIS
     algorithm_version: str
     execution_effect: bool = False
 
@@ -106,6 +113,9 @@ class BehaviorSummaryDTO(_DTO):
             avg_win=BehaviorMetricDTO.from_domain(value.avg_win),
             avg_loss=BehaviorMetricDTO.from_domain(value.avg_loss),
             payoff_ratio=BehaviorMetricDTO.from_domain(value.payoff_ratio),
+            avg_win_return=BehaviorMetricDTO.from_domain(value.avg_win_return),
+            avg_loss_return=BehaviorMetricDTO.from_domain(value.avg_loss_return),
+            return_payoff_ratio=BehaviorMetricDTO.from_domain(value.return_payoff_ratio),
             average_holding_duration=BehaviorMetricDTO.from_domain(
                 value.average_holding_duration
             ),
@@ -150,6 +160,7 @@ class BehaviorSummaryDTO(_DTO):
             cohort_excluded_cycle_ids=value.cohort_excluded_cycle_ids,
             cohort_exclusion_reasons=value.cohort_exclusion_reasons,
             native_currencies=value.native_currencies,
+            return_basis=value.return_basis,
             algorithm_version=value.algorithm_version,
             execution_effect=value.execution_effect,
         )
@@ -165,6 +176,9 @@ class BehaviorSummaryDTO(_DTO):
             self.avg_win,
             self.avg_loss,
             self.payoff_ratio,
+            self.avg_win_return,
+            self.avg_loss_return,
+            self.return_payoff_ratio,
             self.average_holding_duration,
             self.median_holding_duration,
             self.turnover,
@@ -214,7 +228,6 @@ class BehaviorSummaryQueryInput(_DTO):
     horizon: str | None = Field(default=None, min_length=1, max_length=128)
     currency: str | None = Field(default=None, min_length=1, max_length=32)
     classifications: tuple[TradeCycleClassification, ...] = ()
-    minimum_sample_size: int = Field(default=3, ge=0, le=100)
     start: AwareDatetime | None = None
     end: AwareDatetime | None = None
 

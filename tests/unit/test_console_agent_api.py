@@ -268,8 +268,14 @@ class _RateLimitFailureModel(_Model):
 
 
 class _Gateway:
-    def search(self, query: str, limit: int = 3) -> tuple[AgentToolDescriptor, ...]:
-        _ = query, limit
+    def search(
+        self,
+        query: str,
+        limit: int = 3,
+        *,
+        mode: str = "read",
+    ) -> tuple[AgentToolDescriptor, ...]:
+        _ = query, limit, mode
         return ()
 
     async def read(
@@ -445,6 +451,27 @@ async def test_console_agent_post_requires_loopback_session_token() -> None:
         )
     assert response.status_code == 403
     assert "session token" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_handoff_route_is_removed_while_console_agent_remains_available() -> None:
+    _repository, conversation_id = _client_state(
+        enabled=True,
+        model=_Model([ModelResponse(text="unused")]),
+    )
+    headers = {"X-Trading-Partner-Console-Token": "test-token"}
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as client:
+        status = await client.get("/api/agent/status")
+        handoff = await client.post(
+            f"/api/agent/conversations/{conversation_id}/handoff/telegram",
+            headers=headers,
+            json={"ttl_seconds": 600},
+        )
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "READY"
+    assert handoff.status_code == 404
 
 
 def test_ephemeral_context_request_is_strictly_bounded_and_forbids_extra() -> None:

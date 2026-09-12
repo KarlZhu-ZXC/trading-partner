@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AliasChoices,
@@ -537,20 +537,6 @@ def candidate_payload_to_json(
 ) -> str:
     """Canonical JSON serialization for payload storage and idempotency compare."""
     return payload.model_dump_json()
-
-
-def candidate_payload_canonical_dict(
-    payload: (
-        ThesisRevisionCandidatePayload
-        | AssumptionCandidatePayload
-        | InvalidationCandidatePayload
-        | OpenQuestionCandidatePayload
-        | WatchlistCandidatePayload
-        | SubjectUpdateCandidatePayload
-        | TradePlanCandidatePayload
-    ),
-) -> dict[str, Any]:
-    return payload.model_dump(mode="json")
 
 
 def payloads_equal_json(left_json: str, right_json: str) -> bool:

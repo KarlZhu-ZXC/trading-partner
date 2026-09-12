@@ -29,8 +29,6 @@ class MaintenanceStatusDTO(_DTO):
     table_counts: tuple[TableCountDTO, ...]
     provider_cache_total: int = Field(ge=0)
     provider_cache_expired: int = Field(ge=0)
-    validation_artifact_files: int = Field(ge=0)
-    validation_artifact_bytes: int = Field(ge=0)
     backup_files: int = Field(ge=0)
     latest_backup_at: datetime | None
     retention_rules: tuple[RetentionRuleDTO, ...]

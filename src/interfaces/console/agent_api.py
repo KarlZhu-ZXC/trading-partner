@@ -44,7 +44,6 @@ from application.services.agent_attachment_validation import decode_image_data_u
 from application.services.agent_context_service import AgentContextService
 from application.services.agent_conversation_metrics import AgentConversationMetricsService
 from application.services.agent_failure_notice import agent_failure_notice
-from application.services.agent_handoff_service import AgentHandoffService
 from application.services.agent_pending_action_service import pending_action_wire
 from application.services.agent_preferences_service import AgentPreferencesService
 from application.services.agent_runtime_service import AgentRuntimeService
@@ -248,10 +247,6 @@ class PendingActionReissueRequest(_RequestModel):
     expected_version: int = Field(ge=1)
 
 
-class TelegramHandoffRequest(_RequestModel):
-    ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
-
-
 class UpdateAgentPreferencesRequest(_RequestModel):
     expected_version: int = Field(ge=0)
     idempotency_key: str = Field(min_length=1, max_length=128)
@@ -296,7 +291,6 @@ class AgentRuntimeState:
     model_providers: Mapping[str, AgentModelProvider] = field(default_factory=dict)
     attachment_store: AgentAttachmentStore | None = None
     action_gateway: AgentActionGateway | None = None
-    handoff_service: AgentHandoffService | None = None
     preferences_service: AgentPreferencesService | None = None
     metrics_service: AgentConversationMetricsService | None = None
 
@@ -369,7 +363,6 @@ def build_agent_runtime_state(
     context_service: AgentContextService | None = None
     runtime: AgentRuntimeService | None = None
     action_gateway: AgentActionGateway | None = None
-    handoff_service: AgentHandoffService | None = None
     preferences_service: AgentPreferencesService | None = None
     metrics_service = cast(
         AgentConversationMetricsService | None,
@@ -421,13 +414,6 @@ def build_agent_runtime_state(
                     clock=clock,
                     id_generator=id_generator,
                     review_item_service=review_item_service,
-                )
-            handoff_repository = cast(Any, getattr(operations, "agent_handoffs", None))
-            if handoff_repository is not None:
-                handoff_service = AgentHandoffService(
-                    repository=handoff_repository,
-                    clock=clock,
-                    id_generator=id_generator,
                 )
             preferences_repository = cast(Any, getattr(operations, "agent_preferences", None))
             if preferences_repository is not None:
@@ -620,7 +606,6 @@ def build_agent_runtime_state(
         model_providers=model_providers,
         attachment_store=attachment_store,
         action_gateway=action_gateway,
-        handoff_service=handoff_service,
         preferences_service=preferences_service,
         metrics_service=metrics_service,
         status=status,
@@ -636,7 +621,6 @@ def unavailable_agent_state(*, code: str, message: str) -> AgentRuntimeState:
         capability_gateway=None,
         runtime=None,
         action_gateway=None,
-        handoff_service=None,
         preferences_service=None,
         metrics_service=None,
         attachment_store=None,
@@ -1383,40 +1367,6 @@ def archive_agent_conversation(
     return {"conversation": _conversation_wire(conversation)}
 
 
-@router.post("/conversations/{conversation_id}/handoff/telegram")
-def create_telegram_handoff(
-    conversation_id: str,
-    request: Request,
-    payload: TelegramHandoffRequest,
-) -> dict[str, Any]:
-    state = _state(request)
-    _require_runtime(state)
-    conversation = _owned_conversation(request, conversation_id, active=True)
-    service = state.handoff_service
-    if service is None:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "AGENT_HANDOFF_UNAVAILABLE",
-                "message": "Telegram handoff is not configured.",
-            },
-        )
-    handoff, raw_token = service.create(
-        conversation_id=conversation.conversation_id,
-        owner_principal=AGENT_OWNER_PRINCIPAL,
-        target_channel=AgentChannel.TELEGRAM,
-        ttl_seconds=payload.ttl_seconds,
-    )
-    # The opaque token is returned exactly once.  Do not echo the source
-    # conversation ID as a human-facing code; Telegram resolves it durably.
-    return {
-        "handoff_id": handoff.handoff_id,
-        "target_channel": handoff.target_channel.value,
-        "expires_at": _time(handoff.expires_at),
-        "token": raw_token,
-    }
-
-
 @router.get("/conversations/{conversation_id}/receipts")
 def list_agent_receipts(
     conversation_id: str,
@@ -1944,7 +1894,6 @@ __all__ = [
     "EphemeralContextRequest",
     "PendingActionDecisionRequest",
     "PendingActionReissueRequest",
-    "TelegramHandoffRequest",
     "SendMessageRequest",
     "agent_status",
     "build_agent_runtime_state",

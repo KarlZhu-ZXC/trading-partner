@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -118,7 +119,11 @@ def _revision(
 
 
 def test_split_keeps_algorithm_cycle_and_invalidates_effective_metrics() -> None:
-    original = _cycle("cycle-1", ("a", "b", "c", "d"))
+    original = replace(
+        _cycle("cycle-1", ("a", "b", "c", "d")),
+        status=TradeCycleStatus.OPEN, closed_at=None,
+        ending_quantity=Decimal("2"), current_average_cost=Decimal("50"),
+    )
     revision = _revision(
         operation=TradeCycleOverrideOperation.SPLIT,
         root="cycle-1",
@@ -136,6 +141,7 @@ def test_split_keeps_algorithm_cycle_and_invalidates_effective_metrics() -> None
         ("c", "d"),
     }
     assert all(item.net_realized_pnl is None for item in result.effective_projection.cycles)
+    assert all(item.current_average_cost is None for item in result.effective_projection.cycles)
     assert result.effective_projection.status is TradeCycleQuality.INCOMPLETE
     assert result.impacts[0].recompute_required is True
 
@@ -192,7 +198,10 @@ def test_override_rejects_non_partitioned_split_and_missing_relink_activity() ->
         apply_trade_cycle_overrides(_projection(original, _cycle("cycle-2", ("c",))), (bad_relink,))
 
 
-def test_repository_and_service_are_versioned_idempotent_append_only() -> None:
+@pytest.mark.parametrize("with_projection", (False, True))
+def test_repository_and_service_are_versioned_idempotent_append_only(
+    with_projection: bool,
+) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     repository = SqlAlchemyTradeCycleOverrideRepository(engine)
@@ -207,8 +216,9 @@ def test_repository_and_service_are_versioned_idempotent_append_only() -> None:
         expected_version=0,
     )
 
-    first = service.append_revision(request)
-    duplicate = service.append_revision(request)
+    projection = _projection(_cycle("cycle-1", ("a", "b"))) if with_projection else None
+    first = service.append_revision(request, projection=projection)
+    duplicate = service.append_revision(request, projection=projection)
 
     assert first == duplicate
     assert first.version == 1
@@ -216,11 +226,13 @@ def test_repository_and_service_are_versioned_idempotent_append_only() -> None:
         service.append_revision(
             request.model_copy(
                 update={"idempotency_key": "override-1", "note": "different"}
-            )
+            ),
+            projection=projection,
         )
     with pytest.raises(TradeCycleOverrideVersionConflict):
         service.append_revision(
-            request.model_copy(update={"idempotency_key": "override-2", "expected_version": 0})
+            request.model_copy(update={"idempotency_key": "override-2", "expected_version": 0}),
+            projection=projection,
         )
     assert len(service.list_revisions(root_cycle_id="cycle-1")) == 1
     preview = service.preview(_projection(_cycle("cycle-1", ("a", "b"))))

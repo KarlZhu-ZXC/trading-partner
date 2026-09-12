@@ -20,3 +20,10 @@ legible in both light and dark console themes.
 - Do not recolor the symbol, crop the orbit, or place text inside the mark.
 - Pair with the `Trading Partner` wordmark in expanded navigation; use the mark
   alone when navigation is collapsed.
+
+## Console visual system
+
+Light slate surfaces are the default; navy surfaces are the optional dark theme.
+Cyan emphasis aligns both with the existing mark.
+`app/tokens.css` is the source of truth for both themes, typography and spacing.
+See `../docs/guide/console-design-system.md` for component ownership and migration.

@@ -1,6 +1,8 @@
+import { Button, LinkButton, Input, Textarea, IconButton, MenuItem, SortButton } from "./ui/controls";
+import patternStyles from "./ui/patterns.module.css";
+export { Button, LinkButton, IconButton, TextLink, Input, Select, Textarea, DateRange, FilterBar, FilterChip, Tag, Table, SelectableRow } from "./ui/controls";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ArrowUpRight, ChevronDown, ChevronsUpDown, EllipsisVertical } from "lucide-react";
-import Link from "next/link";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronsUpDown, EllipsisVertical } from "lucide-react";
 
 export type PageActionItem = {
   id: string;
@@ -20,7 +22,7 @@ export function QuickLink({
   children: ReactNode;
   className?: string;
 }) {
-  return <Link className={`quick-link ${className}`.trim()} href={href}><span>{children}</span><ArrowUpRight aria-hidden="true" /></Link>;
+  return <LinkButton className={`quick-link ${className}`.trim()} href={href}>{children}</LinkButton>;
 }
 
 export function SortableTableHeader<Key extends string>({
@@ -38,12 +40,12 @@ export function SortableTableHeader<Key extends string>({
 }) {
   const active = activeColumn === column;
   return <th aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}>
-    <button className="sort-header" type="button" onClick={() => onSort(column)}>
+    <SortButton active={active} className="sort-header" type="button" onClick={() => onSort(column)}>
       <span className="sort-label">{label}</span>
       <span className={`sort-indicator${active ? " active" : ""}`} aria-hidden="true">
         {active ? (direction === "asc" ? <ArrowUp /> : <ArrowDown />) : <ChevronsUpDown />}
       </span>
-    </button>
+    </SortButton>
   </th>;
 }
 
@@ -67,7 +69,7 @@ export function Disclosure({
   onToggle?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <details className={`disclosure disclosure-${variant} ${className}`.trim()} open={open} onToggle={(event) => { const next = event.currentTarget.open; setOpen(next); onToggle?.(next); }}>
+  return <details className={`${patternStyles.disclosure} disclosure disclosure-${variant} ${className}`.trim()} open={open} onToggle={(event) => { const next = event.currentTarget.open; setOpen(next); onToggle?.(next); }}>
     <summary><span className="disclosure-heading"><strong>{title}</strong>{description != null ? <small>{description}</small> : null}</span><span className="disclosure-meta">{meta}<ChevronDown aria-hidden="true" /></span></summary>
     <div className="disclosure-body">{children}</div>
   </details>;
@@ -102,13 +104,13 @@ export function PageActionMenu({
   }, [open]);
 
   return <div className="page-action-menu" ref={rootRef}>
-    <button className="page-action-trigger" type="button" aria-label={`Open ${ariaLabel}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+    <IconButton className="page-action-trigger" type="button" aria-label={`Open ${ariaLabel}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <EllipsisVertical aria-hidden="true" />
-    </button>
-    {open ? <div className="page-action-list" role="menu" aria-label={ariaLabel}>{items.map((item) => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { item.onSelect(); setOpen(false); }}>
+    </IconButton>
+    {open ? <div className="page-action-list" role="menu" aria-label={ariaLabel}>{items.map((item) => <MenuItem key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { item.onSelect(); setOpen(false); }}>
       {item.icon ?? <span aria-hidden="true" />}
       <span><strong>{item.label}</strong>{item.description != null && <small>{item.description}</small>}</span>
-    </button>)}</div> : null}
+    </MenuItem>)}</div> : null}
   </div>;
 }
 
@@ -135,7 +137,7 @@ export function FormField({
   className?: string;
 }) {
   return (
-    <label className={className}>
+    <label className={`${patternStyles.field} ${className ?? ""}`}>
       <span>{required && <RequiredMark />}{label}</span>
       {children}
     </label>
@@ -166,7 +168,7 @@ export function MetricTile({
   detail?: ReactNode;
   valueClassName?: string;
 }) {
-  return <div><span>{label}</span><strong className={valueClassName}>{value}</strong>{detail != null && <small>{detail}</small>}</div>;
+  return <div className={patternStyles.metric}><span>{label}</span><strong className={valueClassName}>{value}</strong>{detail != null && <small>{detail}</small>}</div>;
 }
 
 type DialogProps = {
@@ -244,7 +246,7 @@ export function ConfirmationDialog({
 
   if (!open) return null;
   return (
-    <div className="dialog-backdrop" role="presentation">
+    <div className={`${patternStyles.dialog} dialog-backdrop`} role="presentation">
       <div
         ref={dialogRef}
         className="dialog-panel"
@@ -256,13 +258,13 @@ export function ConfirmationDialog({
       >
         <header className="dialog-header">
           <h2 id={titleId}>{title}</h2>
-          <button className="dialog-close" type="button" onClick={onCancel} disabled={busy} aria-label="Close Dialog">×</button>
+          <IconButton onClick={onCancel} disabled={busy} aria-label="Close Dialog">×</IconButton>
         </header>
         {description && <p id={descriptionId} className="dialog-description">{description}</p>}
         {children}
         <div className="dialog-actions">
-          <button className="dialog-cancel" type="button" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
-          <button className={`action-button ${tone}`} type="button" onClick={onConfirm} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>
+          <Button onClick={onCancel} disabled={busy}>{cancelLabel}</Button>
+          <Button variant={tone === "warning" ? "danger" : "primary"} onClick={onConfirm} busy={busy}>{confirmLabel}</Button>
         </div>
       </div>
     </div>
@@ -337,7 +339,7 @@ export function TextInputDialog({
     >
       <form className="dialog-form" onSubmit={submit}>
         <label htmlFor={labelId}><span>{required && <b className="required-mark" aria-hidden="true">*</b>}{label}</span>
-          {multiline ? <textarea id={labelId} required={required} aria-required={required || undefined} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} rows={5} autoFocus /> : <input id={labelId} required={required} aria-required={required || undefined} type={inputType} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus />}
+          {multiline ? <Textarea id={labelId} required={required} aria-required={required || undefined} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} rows={5} autoFocus /> : <Input id={labelId} required={required} aria-required={required || undefined} type={inputType} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus />}
         </label>
         {helperText && <small className="dialog-helper">{helperText}</small>}
         <ErrorNote role="alert">{error ?? localError}</ErrorNote>
@@ -408,7 +410,11 @@ export function HorizontalTabs<T extends string>({
     document.getElementById(`${idPrefix}-${next.id}`)?.focus();
   }
 
-  return <nav className={`horizontal-tabs ${className}`.trim()} aria-label={ariaLabel} role="tablist">{items.map((item) => <button id={`${idPrefix}-${item.id}`} key={item.id} className={`${value === item.id ? "selected" : ""}${item.attention ? " attention" : ""}`} type="button" role="tab" aria-selected={value === item.id} aria-controls={`${panelIdPrefix}-${item.id}`} tabIndex={value === item.id ? 0 : -1} onKeyDown={(event) => move(event, item.id)} onClick={() => onChange(item.id)}><span>{item.label}</span>{item.suffix}</button>)}</nav>;
+  return <nav className={`${patternStyles.tabs} horizontal-tabs ${className}`.trim()} aria-label={ariaLabel} role="tablist">{items.map((item) => <button id={`${idPrefix}-${item.id}`} key={item.id} className={`${value === item.id ? "selected" : ""}${item.attention ? " attention" : ""}`} type="button" role="tab" aria-selected={value === item.id} aria-controls={`${panelIdPrefix}-${item.id}`} tabIndex={value === item.id ? 0 : -1} onKeyDown={(event) => move(event, item.id)} onClick={() => onChange(item.id)}><span>{item.label}</span>{item.suffix}</button>)}</nav>;
+}
+
+export function SectionHeader({ title, subtitle, kicker, action }: { title?: string; subtitle?: string; kicker?: string; action?: ReactNode }) {
+  return <header className={`${patternStyles.cardHead} card-head`}><div className="card-heading-copy">{kicker && <p className="card-kicker">{kicker}</p>}{title && <h2>{title}</h2>}{!kicker && subtitle && <p className="card-subtitle">{subtitle}</p>}</div>{action}</header>;
 }
 
 export function Card({
@@ -432,18 +438,11 @@ export function Card({
 }) {
   const bodyDescription = kicker ? (description ?? subtitle) : description;
   return (
-    <section className={`card ${className}`} id={id}>
+    <section className={`${patternStyles.card} card ${className}`} id={id}>
       {(title || subtitle || kicker || action) && (
-        <header className="card-head">
-          <div className="card-heading-copy">
-            {kicker && <p className="card-kicker">{kicker}</p>}
-            {title && <h2>{title}</h2>}
-            {!kicker && subtitle && <p className="card-subtitle">{subtitle}</p>}
-          </div>
-          {action}
-        </header>
+        <SectionHeader title={title} subtitle={subtitle} kicker={kicker} action={action} />
       )}
-      {bodyDescription && <p className="card-description">{bodyDescription}</p>}
+      {bodyDescription && <p className={`${patternStyles.cardDescription} card-description`}>{bodyDescription}</p>}
       {children}
     </section>
   );
@@ -458,7 +457,7 @@ export function DescriptionList({
   columns?: 2 | 3 | 4 | 6;
   className?: string;
 }) {
-  return <dl className={`description-list columns-${columns} ${className}`}>{items.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd>{item.detail != null && <small>{item.detail}</small>}</div>)}</dl>;
+  return <dl className={`${patternStyles.description} description-list columns-${columns} ${className}`}>{items.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd>{item.detail != null && <small>{item.detail}</small>}</div>)}</dl>;
 }
 
 export function Badge({
@@ -473,13 +472,13 @@ export function Badge({
     label.toUpperCase(),
   )
     ? "good"
-    : ["TRIGGERED", "EXPIRING", "DEGRADED", "LIMITED", "WARNING", "ACKNOWLEDGE", "REVIEW", "NOT_EVALUATED", "UNSUPPORTED", "MEDIUM"].includes(label.toUpperCase())
+    : ["TRIGGERED", "EXPIRING", "DEGRADED", "PARTIAL", "INCOMPLETE", "STALE", "LIMITED", "WARNING", "ACKNOWLEDGE", "REVIEW", "NOT_EVALUATED", "UNSUPPORTED", "MEDIUM"].includes(label.toUpperCase())
       ? "warn"
       : ["FAILED", "ERROR", "DEAD_LETTER", "HIGH"].includes(label.toUpperCase())
         ? "bad"
         : "neutral";
   const tone = toneOverride ?? inferredTone;
-  return <span className={`badge ${tone}`}>{label}</span>;
+  return <span className={`${patternStyles.badge} ${patternStyles[tone]} badge ${tone}`}>{label}</span>;
 }
 
 export function RefreshButton({
@@ -489,11 +488,7 @@ export function RefreshButton({
   onClick: () => void;
   loading: boolean;
 }) {
-  return (
-    <button className="refresh-button" onClick={onClick} disabled={loading} type="button">
-      {loading ? "Loading" : "Refresh"}
-    </button>
-  );
+  return <Button onClick={onClick} busy={loading} busyLabel="Loading…">Refresh</Button>;
 }
 
 export function ActionButton({
@@ -511,16 +506,7 @@ export function ActionButton({
   busyLabel?: string;
   tone?: "default" | "warning";
 }) {
-  return (
-    <button
-      className={`action-button ${tone}`}
-      onClick={onClick}
-      disabled={busy || disabled}
-      type="button"
-    >
-      {busy ? busyLabel : children}
-    </button>
-  );
+  return <Button variant={tone === "warning" ? "danger" : "secondary"} className="action-button" onClick={onClick} busy={busy} busyLabel={busyLabel} disabled={disabled}>{children}</Button>;
 }
 
 export function displayJson(value: unknown): string {
@@ -600,3 +586,5 @@ export function shortId(value: unknown): string {
 export function monitorAnchorId(value: unknown): string {
   return `monitor-${String(value ?? "unknown")}`;
 }
+
+export { MetricTile as Metric, HorizontalTabs as Tabs, ConfirmationDialog as Dialog };

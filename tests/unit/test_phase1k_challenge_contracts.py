@@ -32,7 +32,8 @@ from infrastructure.persistence.challenge_review_repository import (
 )
 from infrastructure.persistence.metadata import Base
 from infrastructure.system.redactor import DefaultSecretRedactor
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
+from mcp_helpers import routed_mcp_server
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 REVIEW_ID = "run_00000000-0000-7000-8000-000000000001"
@@ -335,7 +336,7 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
     container.services.challenge.resolve.return_value = start_envelope.model_copy(
         update={"request_id": "req_resolve", "data": review}
     )
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
 
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
     started = await manager.call_tool(
@@ -351,7 +352,7 @@ async def test_challenge_mcp_delegates_compact_read_and_manage_tools() -> None:
         },
     )
     await manager.call_tool(
-        "research_judgment_get",
+        "research_get",
         {"request": {"operation": "challenge_review", "review_id": REVIEW_ID}},
     )
     await manager.call_tool(

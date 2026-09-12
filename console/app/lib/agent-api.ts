@@ -216,12 +216,6 @@ export type AgentPendingAction = AgentRecord & {
   expires_at: string | null;
 };
 
-export type AgentTelegramHandoff = {
-  handoff_id: string;
-  token: string;
-  expires_at: string;
-};
-
 export type AgentStreamEvent = {
   event: string;
   id?: string;
@@ -767,25 +761,6 @@ export async function reissueAgentPendingAction(
   const token = text(source.confirmation_token);
   if (!parsed || !token) throw new Error("The Agent API returned no confirmation credential");
   return { action: parsed, token };
-}
-
-export async function createTelegramHandoff(
-  conversationId: string,
-  signal?: AbortSignal,
-): Promise<AgentTelegramHandoff> {
-  const raw = await sendJson(
-    `${AGENT_API_ROUTES.conversation(conversationId)}/handoff/telegram`,
-    { ttl_seconds: 600 },
-    signal,
-  );
-  const source = unwrap(raw);
-  const handoffId = text(source.handoff_id);
-  const token = text(source.token);
-  const expiresAt = text(source.expires_at);
-  if (!handoffId || !token || !expiresAt) {
-    throw new Error("The Agent API returned no Telegram handoff code");
-  }
-  return { handoff_id: handoffId, token, expires_at: expiresAt };
 }
 
 export async function fetchAgentMessages(

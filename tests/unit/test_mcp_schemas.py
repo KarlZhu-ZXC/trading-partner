@@ -76,7 +76,8 @@ def test_schema_rejects_naive_as_of_string() -> None:
 
 
 def test_public_tool_surface_excludes_forbidden_and_retired_names() -> None:
-    assert "view_get" in PUBLIC_TOOL_NAMES
+    assert "capability_read" in PUBLIC_TOOL_NAMES
+    assert "view_get" not in PUBLIC_TOOL_NAMES
     assert {
         "view_inbox",
         "view_review_get",

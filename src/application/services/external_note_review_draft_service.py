@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from pydantic import ValidationError
 
@@ -61,6 +62,50 @@ _ACTION_TERMS = {
     "REDUCE": ("REDUCE", "减仓", "降低仓位"),
     "EXIT": ("EXIT", "退出", "清仓", "卖出", "止损"),
 }
+_NUMBER_TOKEN = re.compile(
+    r"(?<![A-Za-z\d])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\d)"
+)
+_NUMERIC_SUFFIX_UNIT = re.compile(
+    r"^\s*(?P<unit>万亿美元|万美元|亿美元|万亿元|万元|万亿|千万|百万|十亿|千亿|"
+    r"人民币|港元|港币|日元|欧元|英镑|美金|美元|CNY|RMB|USD|HKD|JPY|"
+    r"元|万|亿|千|股|手|%|％|bps?|bp)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_NUMERIC_PREFIX_UNIT = re.compile(
+    r"(?P<unit>\$|€|£|¥|￥|USD|CNY|RMB|HKD|JPY)\s*$",
+    re.IGNORECASE,
+)
+_COMPOSITE_NUMERIC_UNITS = {
+    "万亿美元": frozenset({"USD", "万亿"}),
+    "万美元": frozenset({"USD", "万"}),
+    "亿美元": frozenset({"USD", "亿"}),
+    "万亿元": frozenset({"CNY", "万亿"}),
+    "万元": frozenset({"CNY", "万"}),
+}
+_NUMERIC_UNIT_ALIASES = {
+    "$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "CNY",
+    "￥": "CNY",
+    "usd": "USD",
+    "cny": "CNY",
+    "rmb": "CNY",
+    "hkd": "HKD",
+    "jpy": "JPY",
+    "人民币": "CNY",
+    "港元": "HKD",
+    "港币": "HKD",
+    "日元": "JPY",
+    "欧元": "EUR",
+    "英镑": "GBP",
+    "美金": "USD",
+    "美元": "USD",
+    "元": "CNY",
+    "％": "%",
+    "bps": "BPS",
+    "bp": "BP",
+}
 
 
 class _ReviewFidelityError(ValueError):
@@ -99,30 +144,111 @@ def _current_user_text(revision: object) -> str:
     )
 
 
+def _blocks_text(blocks: tuple[object, ...]) -> str:
+    return "\n".join(
+        f"{getattr(item, 'section_date', None) or ''} "
+        f"{getattr(item, 'body', '')}".strip()
+        for item in blocks
+    )
+
+
+def _revision_text(revision: object) -> str:
+    return _blocks_text(tuple(getattr(revision, "blocks", ())))
+
+
+def _cited_blocks_text(revision: object, ordinals: tuple[int, ...]) -> str:
+    blocks = {
+        getattr(item, "ordinal", None): item
+        for item in tuple(getattr(revision, "blocks", ()))
+    }
+    return _blocks_text(tuple(blocks[ordinal] for ordinal in ordinals if ordinal in blocks))
+
+
+def _number_key(value: str) -> str:
+    try:
+        normalized = Decimal(value.replace(",", "")).normalize()
+    except (InvalidOperation, ValueError):
+        return value
+    return format(normalized, "f")
+
+
+def _unit_parts(value: str) -> frozenset[str]:
+    normalized = value.casefold()
+    composite = _COMPOSITE_NUMERIC_UNITS.get(normalized)
+    if composite is not None:
+        return composite
+    return frozenset({_NUMERIC_UNIT_ALIASES.get(normalized, value.upper())})
+
+
+def _numeric_claims(text: str) -> set[tuple[str, frozenset[str]]]:
+    claims: set[tuple[str, frozenset[str]]] = set()
+    for match in _NUMBER_TOKEN.finditer(text):
+        units: set[str] = set()
+        prefix = _NUMERIC_PREFIX_UNIT.search(text[max(0, match.start() - 12) : match.start()])
+        if prefix is not None:
+            units.update(_unit_parts(prefix.group("unit")))
+        suffix = _NUMERIC_SUFFIX_UNIT.match(text[match.end() : match.end() + 16])
+        if suffix is not None:
+            units.update(_unit_parts(suffix.group("unit")))
+        claims.add((_number_key(match.group(0)), frozenset(units)))
+    return claims
+
+
+def _validate_text_fidelity(rendered: str, source: str) -> None:
+    for qualifier in _TIME_QUALIFIERS:
+        if qualifier in rendered and qualifier not in source:
+            raise _ReviewFidelityError("NOTE_REVIEW_UNGROUNDED_TIME_CONDITION")
+    source_claims = _numeric_claims(source)
+    source_numbers = {number for number, _units in source_claims}
+    for numeric, units in _numeric_claims(rendered):
+        if (numeric, units) not in source_claims and (
+            units or numeric not in source_numbers
+        ):
+            raise _ReviewFidelityError("NOTE_REVIEW_UNGROUNDED_NUMERIC_CONDITION")
+
+
 def _validate_fidelity(value: NoteInterpretationDraft, revision: object) -> None:
     current_text = _current_user_text(revision)
     if not current_text:
         raise _ReviewFidelityError("NOTE_REVIEW_CURRENT_USER_TEXT_MISSING")
-    rendered = "\n".join(
-        (
-            value.material_change_summary,
-            *(item.summary for item in value.viewpoints),
-            *(item.structure for item in value.viewpoints),
-            *(item.condition for item in value.user_scenarios),
-            *(item.confirmation for item in value.user_scenarios),
-            *(item.loss_boundary for item in value.user_scenarios),
-            *value.catalysts,
-            *value.key_levels,
-            *value.missing_evidence,
-            *value.contradictions,
+
+    # Viewpoints are allowed to describe a named speaker's evidence, but only
+    # when the cited blocks support that description. Comparing them with the
+    # latest USER section creates a false rejection when speakers use different
+    # conditions or levels.
+    for viewpoint in value.viewpoints:
+        _validate_text_fidelity(
+            "\n".join((viewpoint.summary, viewpoint.structure)),
+            _cited_blocks_text(revision, viewpoint.source_block_ordinals),
         )
+
+    # These fields aggregate the revision and may refer to any attributed
+    # speaker. Their evidence boundary is the complete observed revision.
+    _validate_text_fidelity(
+        "\n".join(
+            (
+                value.material_change_summary,
+                *value.catalysts,
+                *value.key_levels,
+                *value.missing_evidence,
+                *value.contradictions,
+            )
+        ),
+        _revision_text(revision),
     )
-    for qualifier in _TIME_QUALIFIERS:
-        if qualifier in rendered and qualifier not in current_text:
-            raise _ReviewFidelityError("NOTE_REVIEW_UNGROUNDED_TIME_CONDITION")
-    for numeric in set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", rendered)):
-        if numeric not in current_text:
-            raise _ReviewFidelityError("NOTE_REVIEW_UNGROUNDED_NUMERIC_CONDITION")
+
+    # USER scenarios are intentionally narrower: they represent the latest
+    # USER judgment, never a named speaker's conditions or actions.
+    _validate_text_fidelity(
+        "\n".join(
+            (
+                *(item.condition for item in value.user_scenarios),
+                *(item.confirmation for item in value.user_scenarios),
+                *(item.loss_boundary for item in value.user_scenarios),
+            )
+        ),
+        current_text,
+    )
     upper_source = current_text.upper()
     for scenario in value.user_scenarios:
         action = scenario.action
@@ -175,6 +301,25 @@ class ExternalNoteReviewDraftService:
         self._timeout_seconds = max(1.0, min(timeout_seconds, 120.0))
         self._max_output_tokens = max(512, min(max_output_tokens, 8000))
         self._reasoning_effort = reasoning_effort
+
+    @property
+    def review_enabled(self) -> bool:
+        """Whether the configured escalated-review provider is available."""
+
+        return self._provider is not None
+
+    def requires_deep_review(
+        self,
+        note_revision_id: str,
+        *,
+        explicit_review: bool = False,
+    ) -> bool:
+        """Return the deterministic package decision without contacting a provider."""
+
+        return self._view_reviews.get(
+            note_revision_id,
+            explicit_review=explicit_review,
+        ).requires_deep_review
 
     async def review(
         self,
@@ -291,6 +436,10 @@ class ExternalNoteReviewDraftService:
                     validate_note_interpretation_attribution(parsed, revision)
                     _validate_fidelity(parsed, revision)
                     break
+                except _ReviewFidelityError:
+                    # Semantic invention is not a formatting error. Preserve its
+                    # exact failure code without resending the private note.
+                    raise
                 except (ValidationError, TypeError, ValueError, json.JSONDecodeError) as error:
                     parsed = None
                     validation_error = error

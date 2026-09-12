@@ -151,14 +151,18 @@ class _Observations:
 
 
 class _Transactions:
-    def __init__(self, calls: list[str], *, ok: bool = True) -> None:
+    def __init__(
+        self, calls: list[str], *, ok: bool = True, warning_codes: tuple[str, ...] = ()
+    ) -> None:
         self.calls = calls
         self.ok = ok
+        self.warning_codes = warning_codes
 
     async def get_transactions(self, request: object) -> SimpleNamespace:
         self.calls.append("transactions")
         return SimpleNamespace(
             ok=self.ok,
+            warnings=tuple(SimpleNamespace(code=code) for code in self.warning_codes),
             errors=() if self.ok else (SimpleNamespace(code="TRANSACTION_READ_FAILED"),),
         )
 
@@ -377,6 +381,34 @@ async def test_success_syncs_transactions_without_materializing_unlinked_review_
         "daily-equity",
         "watchlist",
     ]
+
+
+async def test_transaction_warnings_survive_receipt_and_do_not_trigger_resync() -> None:
+    calls: list[str] = []
+    repository = _Repository()
+    service = PostMarketSyncService(
+        calendar=_Calendar(MarketSession(
+            date(2026, 7, 17), datetime(2026, 7, 17, 20, 0, tzinfo=UTC)
+        )),
+        repository=repository,
+        portfolio=_Portfolio(calls),
+        transactions=_Transactions(calls, warning_codes=("PROVIDER_RESULT_TRUNCATED",)),
+        watchlist=_Watchlist(calls),
+        clock=_Clock(datetime(2026, 7, 17, 20, 20, tzinfo=UTC)),
+        id_generator=_Ids(),
+    )
+    result = await service.run_if_due()
+    assert result.run_status is PostMarketSyncRunStatus.SUCCEEDED
+    assert result.warning_codes == ("PROVIDER_RESULT_TRUNCATED",)
+    assert repository.value is not None
+    assert repository.value.warning_codes == result.warning_codes
+    status = service.status()
+    assert status.health is PostMarketSyncHealth.RECEIPT_IMPERFECT
+    assert not status.healthy
+    repeated = await service.catch_up_latest_due()
+    assert repeated.disposition is PostMarketSyncDisposition.SKIPPED_ALREADY_COMPLETED
+    assert repeated.warning_codes == result.warning_codes
+    assert calls == ["portfolio", "transactions", "watchlist"]
 
 
 async def test_transaction_failure_is_visible_and_does_not_claim_complete_run() -> None:

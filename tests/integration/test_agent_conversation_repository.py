@@ -77,7 +77,7 @@ def test_append_sequence_external_dedupe_and_summary_cas(orm_sqlite_url: str) ->
         repo.update_summary(conversation.conversation_id, "stale", 2, 0)
 
 
-def test_binding_cursor_and_pending_action_exact_cas(orm_sqlite_url: str) -> None:
+def test_binding_and_pending_action_exact_cas(orm_sqlite_url: str) -> None:
     repo = SqlAlchemyAgentConversationRepository(create_engine_from_url(orm_sqlite_url))
     conversation, now = _conversation()
     repo.create_conversation(conversation)
@@ -111,11 +111,6 @@ def test_binding_cursor_and_pending_action_exact_cas(orm_sqlite_url: str) -> Non
         )
     )
     assert rebound.conversation_id == second_conversation.conversation_id
-    repo.advance_cursor(AgentChannel.TELEGRAM, "poller", 10)
-    assert repo.advance_cursor(AgentChannel.TELEGRAM, "poller", 11, 10).version == 2
-    with pytest.raises(PersistenceError):
-        repo.advance_cursor(AgentChannel.TELEGRAM, "poller", 12, 10)
-
     args = {"operation": "create", "title": "Bounded"}
     action = AgentPendingAction(
         "agent_pending_action_test",

@@ -140,7 +140,7 @@ def _attention_registry() -> CompactCapabilityRegistry:
     registry = _registry()
     _register_dispatch_tool(
         registry,
-        name="investment_case_read",
+        name="research_get",
         description="Read Research Subjects or the cross-domain decision inbox.",
         variants=(_spec("attention", _attention, ("case_id", "limit")),),
         policy=READ_DURABLE,
@@ -242,7 +242,7 @@ def test_attention_aliases_route_to_cross_domain_inbox(query: str) -> None:
     gateway = AgentCapabilityGateway(_attention_registry())
     descriptors = gateway.search(query, limit=8)
     assert [(item.capability, item.operation) for item in descriptors] == [
-        ("investment_case_read", "attention")
+        ("research_get", "attention")
     ]
 
 
@@ -389,16 +389,16 @@ def test_large_quote_batch_compaction_preserves_latest_price_and_baseline() -> N
     (
         ("monitor_read", "dashboard", "monitors"),
         ("monitor_read", "runs", "runs"),
-        ("portfolio_analyze", "exposure", "positions"),
-        ("research_memory_get", "timeline", "entries"),
-        ("research_memory_get", "search", "results"),
-        ("research_memory_get", "agenda", "items"),
-        ("us_company_get", "filings", "filings"),
-        ("us_company_get", "live_news", "items"),
-        ("us_company_get", "company_updates", "updates"),
+        ("portfolio_get", "exposure", "positions"),
+        ("research_get", "timeline", "entries"),
+        ("research_get", "search", "results"),
+        ("research_get", "agenda", "items"),
+        ("us_get_facts", "filings", "filings"),
+        ("us_get_facts", "live_news", "items"),
+        ("us_get_facts", "company_updates", "updates"),
         ("decision_workbench_review_queue", "open_items", "items"),
-        ("investment_case_read", "attention", "items"),
-        ("investment_case_read", "context", "entries"),
+        ("research_get", "attention", "items"),
+        ("research_get", "context", "entries"),
         ("research_workflow_run", "deep_dive", "sections"),
         ("a_share_get_facts", "financials", "statements"),
     ),

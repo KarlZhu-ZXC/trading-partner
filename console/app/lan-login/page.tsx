@@ -1,7 +1,10 @@
 "use client";
 
+import { loginScope } from "../styles/scopes";
+
 import { FormEvent, useState } from "react";
 import { ArrowRight, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Button, Input } from "../components/ui/controls";
 
 export default function LanLoginPage() {
   const [password, setPassword] = useState("");
@@ -28,7 +31,7 @@ export default function LanLoginPage() {
   }
 
   return (
-    <main className="lan-login-shell">
+    <main className={`${loginScope} lan-login-shell`}>
       <section className="lan-login-card" aria-labelledby="lan-login-title">
         <div className="lan-login-brand">
           <img alt="" height="44" src="/assets/trading-partner-brand/logo.png" width="44" />
@@ -46,7 +49,7 @@ export default function LanLoginPage() {
         </p>
         <form className="lan-login-form" onSubmit={submit}>
           <label htmlFor="lan-password"><b className="required-mark" aria-hidden="true">*</b>LAN Password</label>
-          <input
+          <Input
             autoComplete="current-password"
             autoFocus
             id="lan-password"
@@ -58,10 +61,10 @@ export default function LanLoginPage() {
             value={password}
           />
           {error ? <p className="lan-login-error" role="alert">{error}</p> : null}
-          <button disabled={submitting || password.length < 1} type="submit">
+          <Button disabled={submitting || password.length < 1} type="submit">
             {submitting ? "Unlocking…" : "Unlock Console"}
             <ArrowRight aria-hidden="true" />
-          </button>
+          </Button>
         </form>
         <div className="lan-login-note">
           <ShieldCheck aria-hidden="true" />

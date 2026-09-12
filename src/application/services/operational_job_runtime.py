@@ -77,6 +77,7 @@ class DurableOperationalJobRuntime:
         idempotency_key: str,
         operation: Callable[[], Awaitable[OperationalJobOutcome[T]]],
         lease_seconds: int = 90,
+        on_claim: Callable[[OperationalJobRun], None] | None = None,
     ) -> OperationalJobExecution[T]:
         if _SAFE_NAME.fullmatch(job_name) is None:
             raise ValueError("job_name is invalid")
@@ -98,6 +99,8 @@ class DurableOperationalJobRuntime:
             updated_at=now,
         )
         claim = await asyncio.to_thread(self._repository.claim, candidate, now=now)
+        if on_claim is not None:
+            on_claim(claim.run)
         if not claim.claimed:
             return OperationalJobExecution(run=claim.run, invoked=False)
 
@@ -120,6 +123,8 @@ class DurableOperationalJobRuntime:
         except asyncio.CancelledError as error:
             cancelled = error
             failure_code = "OPERATIONAL_JOB_CANCELLED"
+        except TimeoutError:
+            failure_code = "OPERATIONAL_JOB_TIMEOUT"
         except Exception as error:  # noqa: BLE001 - persist only safe type/code
             failure_code = (
                 error.code
@@ -142,6 +147,8 @@ class DurableOperationalJobRuntime:
                 status=(
                     outcome.status.value
                     if outcome is not None
+                    else OperationalJobStatus.INTERRUPTED.value
+                    if cancelled is not None
                     else OperationalJobStatus.FAILED.value
                 ),
                 result_code=outcome.result_code if outcome is not None else None,
@@ -182,6 +189,9 @@ class DurableOperationalJobRuntime:
                     heartbeat_at=now,
                     lease_expires_at=now + timedelta(seconds=lease_seconds),
                 )
+
+    async def get_by_key(self, job_name: str, idempotency_key: str) -> OperationalJobRun | None:
+        return await asyncio.to_thread(self._repository.get_by_key, job_name, idempotency_key)
 
     async def recover_expired(self, *, limit: int = 100) -> int:
         return await asyncio.to_thread(

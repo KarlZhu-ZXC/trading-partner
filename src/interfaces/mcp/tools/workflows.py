@@ -6,10 +6,6 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from application.dto.historical_validation import (
-    QuantConnectImportInput,
-    QuantConnectPrepareInput,
-)
 from application.dto.peer_comparison import PeerComparisonRunInput
 from application.dto.trade_retro import (
     TradeRetroFindingReviewInput,
@@ -208,74 +204,6 @@ def build_workflow_adapters(container: ApplicationContainer) -> SimpleNamespace:
         except Exception as exc:  # noqa: BLE001
             return unexpected_failure(container, exc)
 
-    async def historical_validation_prepare(
-        idempotency_key: str,
-        strategy_name: str,
-        hypothesis: str,
-        symbols: list[str],
-        start_date: date,
-        end_date: date,
-        strategy_code: str,
-        resolution: Literal["hour", "daily"] = "hour",
-        normalization_mode: Literal[
-            "raw", "split_adjusted", "adjusted", "total_return"
-        ] = "split_adjusted",
-        initial_cash: str = "100000",
-        benchmark: str = "SPY",
-        parameters: dict[str, str] | None = None,
-        case_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Prepare an auditable LEAN package for a manual QuantConnect Free run."""
-        try:
-            request = QuantConnectPrepareInput.model_validate(
-                {
-                    "idempotency_key": idempotency_key,
-                    "strategy_name": strategy_name,
-                    "hypothesis": hypothesis,
-                    "symbols": tuple(symbols),
-                    "start_date": start_date,
-                    "end_date": end_date,
-                    "resolution": resolution,
-                    "normalization_mode": normalization_mode,
-                    "initial_cash": initial_cash,
-                    "benchmark": benchmark,
-                    "parameters": parameters or {},
-                    "strategy_code": strategy_code,
-                    "subject_id": case_id,
-                }
-            )
-            envelope = container.services.historical_validation.prepare_quantconnect(request)
-            return envelope.model_dump(mode="json")
-        except ValidationError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            return unexpected_failure(container, exc)
-
-    async def historical_validation_import(
-        idempotency_key: str,
-        validation_id: str,
-        results_path: str,
-        backtest_url: str | None = None,
-        notes: str | None = None,
-    ) -> dict[str, Any]:
-        """Import a user-downloaded QuantConnect result JSON without remote API access."""
-        try:
-            request = QuantConnectImportInput.model_validate(
-                {
-                    "idempotency_key": idempotency_key,
-                    "validation_id": validation_id,
-                    "results_path": results_path,
-                    "backtest_url": backtest_url,
-                    "notes": notes,
-                }
-            )
-            envelope = container.services.historical_validation.import_quantconnect(request)
-            return envelope.model_dump(mode="json")
-        except ValidationError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            return unexpected_failure(container, exc)
-
     async def trade_retro(
         action: Literal["prepare", "run", "review", "export"],
         idempotency_key: str,
@@ -378,8 +306,6 @@ def build_workflow_adapters(container: ApplicationContainer) -> SimpleNamespace:
         us_run_market_review=us_run_market_review,
         portfolio_run_review=portfolio_run_review,
         research_run_peer_comparison=research_run_peer_comparison,
-        historical_validation_prepare=historical_validation_prepare,
-        historical_validation_import=historical_validation_import,
         trade_retro=trade_retro,
         judgment_scorecard=judgment_scorecard,
     )

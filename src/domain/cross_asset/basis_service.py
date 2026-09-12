@@ -16,7 +16,6 @@ from domain.common.time import require_aware_datetime
 from domain.common.values import parse_instrument_id
 from domain.cross_asset.enums import BasisComparability, CurveShape, PriceBasis
 from domain.cross_asset.futures_models import FuturesCurveContractPoint
-from domain.cross_asset.spot_models import SpotObservation
 
 BASIS_FORMULA_VERSION = "tp_basis_v1"
 
@@ -174,40 +173,6 @@ def classify_curve_shape(
     return CurveShape.MIXED
 
 
-def _leg_from_spot(observation: SpotObservation, *, price_basis: PriceBasis) -> BasisLeg:
-    if observation.quote_at is None:
-        raise DataContractError(
-            "spot observation requires quote_at for basis",
-            details={"field": "quote_at", "code": "BASIS_NOT_COMPARABLE"},
-        )
-    price: Decimal | None
-    if price_basis is PriceBasis.MID:
-        price = observation.mid
-        if price is None and observation.bid is not None and observation.ask is not None:
-            price = (observation.bid + observation.ask) / Decimal("2")
-    elif price_basis is PriceBasis.LAST:
-        price = observation.last
-    else:
-        raise DataContractError(
-            "spot basis supports last or mid price_basis only",
-            details={"price_basis": price_basis.value},
-        )
-    if price is None:
-        raise DataContractError(
-            "spot observation lacks the requested price basis",
-            details={"price_basis": price_basis.value},
-        )
-    return BasisLeg(
-        instrument_id=observation.instrument_id,
-        price=price,
-        currency=observation.currency,
-        unit=observation.unit,
-        observed_at=observation.quote_at,
-        price_basis=price_basis,
-        delivery_location=observation.delivery_location,
-    )
-
-
 def evaluate_basis_comparability(
     left: BasisLeg,
     right: BasisLeg,
@@ -284,22 +249,4 @@ def build_basis_snapshot(
         comparability=comparability,
         formula_version=BASIS_FORMULA_VERSION,
         reason_codes=reason_tuple,
-    )
-
-
-def build_basis_snapshot_from_spot_and_leg(
-    spot: SpotObservation,
-    right: BasisLeg,
-    *,
-    spot_price_basis: PriceBasis,
-    max_observation_lag_seconds: int,
-    indicative_only: bool = False,
-) -> BasisSnapshot:
-    """Convenience path for spot vs futures-style right leg."""
-    left = _leg_from_spot(spot, price_basis=spot_price_basis)
-    return build_basis_snapshot(
-        left,
-        right,
-        max_observation_lag_seconds=max_observation_lag_seconds,
-        indicative_only=indicative_only,
     )

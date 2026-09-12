@@ -146,7 +146,13 @@ ToolReadResult = AgentToolResult
 class AgentToolGateway(Protocol):
     """Minimal capability search/read API consumed by the shared Agent loop."""
 
-    def search(self, query: str, limit: int = 3) -> tuple[AgentToolDescriptor, ...]:
+    def search(
+        self,
+        query: str,
+        limit: int = 3,
+        *,
+        mode: str = "read",
+    ) -> tuple[AgentToolDescriptor, ...]:
         """Return a deterministic, bounded set of exact operation descriptors."""
 
     async def read(

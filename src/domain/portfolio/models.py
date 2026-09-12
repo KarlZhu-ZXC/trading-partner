@@ -621,6 +621,7 @@ class TradeCycle:
     reentry_of_cycle_id: str | None
     quality: TradeCycleQuality
     warning_codes: tuple[str, ...]
+    current_average_cost: Decimal | None = None
     algorithm_version: str = "trade_cycle_v1"
 
     def __post_init__(self) -> None:
@@ -655,6 +656,7 @@ class TradeCycle:
             value = getattr(self, field_name)
             if type(value) is not int or value < 0:
                 raise DataContractError(f"{field_name} must be a nonnegative int")
+        _decimal(self.current_average_cost, "current_average_cost", nonnegative=True)
         _decimal(self.ending_quantity, "ending_quantity", nonnegative=True)
         _decimal(self.gross_realized_pnl, "gross_realized_pnl")
         _decimal(self.net_realized_pnl, "net_realized_pnl")

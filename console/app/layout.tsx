@@ -1,4 +1,7 @@
+import { DesignPreviewNotice } from "./components/design-preview-notice";
+import { commonScope } from "./styles/scopes";
 import type { Metadata } from "next";
+import { AccountAliasesProvider } from "./components/account-aliases";
 import {
   AGENT_RAIL_MAX_WIDTH,
   AGENT_RAIL_MIN_WIDTH,
@@ -53,7 +56,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: appearanceInitScript }} />
       </head>
-      <body>{children}</body>
+      <body className={commonScope}><AccountAliasesProvider><DesignPreviewNotice />{children}</AccountAliasesProvider></body>
     </html>
   );
 }

@@ -9,31 +9,34 @@ if TYPE_CHECKING:
     from .compact import CapabilityRegistrar
 
 
-def _register_portfolio_challenge_workflows(
+def _register_portfolio_get(
     registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
-    workflows: SimpleNamespace,
-    view_review: SimpleNamespace,
 ) -> None:
-    """Register portfolio analysis and durable workflow operations in order."""
+    """Register durable account and portfolio reads as one grouped capability."""
 
-    from .compact import (
-        APPEND_OPEN_WORLD,
-        READ_DURABLE,
-        _all_fields,
-        _register_flat_dispatch_tool,
-        _spec,
-    )
+    from .compact import READ_DURABLE, _all_fields, _register_flat_dispatch_tool, _spec
 
     _register_flat_dispatch_tool(
         registry,
-        name="portfolio_analyze",
+        name="portfolio_get",
         description=(
-            "Analyze durable portfolio exposure, activity coverage, native-currency "
-            "performance attribution, deterministic long-only Trade Cycles, Trade Retro "
-            "Run/review history, or one calculation-only hypothetical addition."
+            "Read durable account positions or transactions, portfolio exposure, "
+            "activity coverage, performance attribution, deterministic Trade Cycles, "
+            "Trade Retro history, or calculation-only portfolio views."
         ),
         variants=(
+            _spec(
+                "positions",
+                portfolio.account_get,
+                ("snapshot_id",),
+                adapter_operation="positions",
+            ),
+            _spec(
+                "transactions",
+                portfolio.account_list_transactions,
+                _all_fields(portfolio.account_list_transactions),
+            ),
             _spec(
                 "exposure",
                 portfolio.portfolio_analyze,
@@ -72,7 +75,13 @@ def _register_portfolio_challenge_workflows(
             _spec(
                 "trade_cycle_override_preview",
                 portfolio.portfolio_preview_trade_cycle_override,
-                _all_fields(portfolio.portfolio_preview_trade_cycle_override),
+                tuple(
+                    field
+                    for field in _all_fields(portfolio.portfolio_preview_trade_cycle_override)
+                    if field != "operation"
+                ),
+                extra_fields={"override_operation": (str, ...)},
+                adapter_operation_field="override_operation",
             ),
             _spec(
                 "behavior_review_history",
@@ -102,12 +111,28 @@ def _register_portfolio_challenge_workflows(
         ),
         policy=READ_DURABLE,
     )
+
+
+def _register_portfolio_challenge_workflows(
+    registry: CapabilityRegistrar,
+    workflows: SimpleNamespace,
+    view_review: SimpleNamespace,
+) -> None:
+    """Register durable workflow operations in order."""
+
+    from .compact import (
+        APPEND_OPEN_WORLD,
+        _all_fields,
+        _register_flat_dispatch_tool,
+        _spec,
+    )
+
     _register_flat_dispatch_tool(
         registry,
         name="research_workflow_run",
         description=(
-            "Run one closed research, market, portfolio, peer-comparison, or manual "
-            "historical-validation workflow, one durable Trade Retro, one deterministic "
+            "Run one closed research, market, portfolio, or peer-comparison workflow, "
+            "one durable Trade Retro, one deterministic "
             "Judgment Scorecard, or one explicitly requested escalated View review."
         ),
         variants=(
@@ -158,16 +183,6 @@ def _register_portfolio_challenge_workflows(
                 "peer_comparison",
                 workflows.research_run_peer_comparison,
                 _all_fields(workflows.research_run_peer_comparison),
-            ),
-            _spec(
-                "historical_validation_prepare",
-                workflows.historical_validation_prepare,
-                _all_fields(workflows.historical_validation_prepare),
-            ),
-            _spec(
-                "historical_validation_import",
-                workflows.historical_validation_import,
-                _all_fields(workflows.historical_validation_import),
             ),
             _spec(
                 "trade_retro",

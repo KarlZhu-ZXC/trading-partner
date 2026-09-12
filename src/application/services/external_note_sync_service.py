@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -108,6 +110,10 @@ class ExternalNoteSyncService:
         if len(self._credential_stores) != len(credential_stores):
             raise DataContractError("observation credential source codes must be unique")
 
+    @property
+    def interpretation_enabled(self) -> bool:
+        return self._interpretation is not None
+
     def source_capabilities(self) -> tuple[ObservationSourceCapability, ...]:
         return tuple(item.capability for item in self._providers.values())
 
@@ -166,11 +172,27 @@ class ExternalNoteSyncService:
         analyze: bool = False,
         source_code: str | None = None,
     ) -> ExternalNoteSyncReceipt:
+        async with self.exclusive_session():
+            return await self._sync_locked(analyze=analyze, source_code=source_code)
+
+    @asynccontextmanager
+    async def exclusive_session(self) -> AsyncIterator[None]:
+        """Serialize capture and model work across Console/CLI processes."""
         async with self._sync_lock:
             if self._process_lock is None:
-                return await self._sync_locked(analyze=analyze, source_code=source_code)
+                yield
+                return
             deadline = asyncio.get_running_loop().time() + self._process_lock_wait_seconds
-            while not await asyncio.to_thread(self._process_lock.acquire):
+            while True:
+                acquisition = asyncio.create_task(asyncio.to_thread(self._process_lock.acquire))
+                try:
+                    acquired = await asyncio.shield(acquisition)
+                except asyncio.CancelledError:
+                    if await acquisition:
+                        await asyncio.to_thread(self._process_lock.release)
+                    raise
+                if acquired:
+                    break
                 if asyncio.get_running_loop().time() >= deadline:
                     raise DataContractError(
                         "observation sync is already running",
@@ -179,7 +201,7 @@ class ExternalNoteSyncService:
                     )
                 await asyncio.sleep(0.05)
             try:
-                return await self._sync_locked(analyze=analyze, source_code=source_code)
+                yield
             finally:
                 await asyncio.to_thread(self._process_lock.release)
 
@@ -193,10 +215,17 @@ class ExternalNoteSyncService:
         warning_codes: list[str] = []
         error_codes: list[str] = []
         selected = self._selected_providers(source_code)
-        scans = await asyncio.gather(
+        scan_task = asyncio.gather(
             *(asyncio.to_thread(item.scan) for item in selected),
             return_exceptions=True,
         )
+        try:
+            scans = await asyncio.shield(scan_task)
+        except asyncio.CancelledError:
+            # A worker thread cannot be cancelled. Keep the cross-process lock
+            # until scans stop, including during Console shutdown.
+            await scan_task
+            raise
         successful_scans: list[ExternalNoteScanResult] = []
         for provider, scan_value in zip(selected, scans, strict=True):
             if isinstance(scan_value, BaseException):
@@ -265,9 +294,7 @@ class ExternalNoteSyncService:
             )
             self._repository.update_identity(updated_identity)
             if (
-                self._repository.revision_by_source_key(
-                    identity.note_id, source_revision_key
-                )
+                self._repository.revision_by_source_key(identity.note_id, source_revision_key)
                 is not None
             ):
                 unchanged_count += 1
@@ -335,11 +362,12 @@ class ExternalNoteSyncService:
                 value: tuple[ExternalNoteRevision, str | None],
             ) -> ExternalNoteInterpretation:
                 async with semaphore:
-                    return await interpretation_service.analyze(*value)
+                    result = await interpretation_service.analyze(*value)
+                    self._repository.append_interpretation(result)
+                    return result
 
             interpretations = await asyncio.gather(*(analyze_one(item) for item in pending))
             for interpretation_value in interpretations:
-                self._repository.append_interpretation(interpretation_value)
                 interpretations_created += 1
                 if interpretation_value.status == "FAILED":
                     warning_codes.append("MOOMOO_NOTE_INTERPRETATION_UNAVAILABLE")
@@ -347,8 +375,7 @@ class ExternalNoteSyncService:
                     revision_value = next(
                         item[0]
                         for item in pending
-                        if item[0].note_revision_id
-                        == interpretation_value.note_revision_id
+                        if item[0].note_revision_id == interpretation_value.note_revision_id
                     )
                     materialized = self._materialize_review_if_eligible(
                         revision_value,
@@ -385,9 +412,7 @@ class ExternalNoteSyncService:
         self._repository.append_sync_receipt(receipt)
         return receipt
 
-    def _selected_providers(
-        self, source_code: str | None
-    ) -> tuple[ExternalNoteProvider, ...]:
+    def _selected_providers(self, source_code: str | None) -> tuple[ExternalNoteProvider, ...]:
         if source_code is None:
             return tuple(self._providers.values())
         provider = self._providers.get(source_code)
@@ -404,15 +429,41 @@ class ExternalNoteSyncService:
                     identity=identity,
                     revision=effective,
                     interpretation=(
-                        self._repository.interpretation_for_revision(
-                            effective.note_revision_id
-                        )
+                        self._repository.interpretation_for_revision(effective.note_revision_id)
                         if effective.coverage is NoteCoverage.FULL
                         else None
                     ),
                 )
             )
         return tuple(result)
+
+    def read_revision(self, note_revision_id: str) -> ExternalNoteInboxItem | None:
+        """Read one exact durable revision and its successful first-pass draft.
+
+        This path is intentionally durable-only.  It does not scan a Provider,
+        materialize a review, or invoke interpretation. Proven FULL recovery is
+        allowed only for this same revision; an older revision is never substituted.
+        """
+
+        revision = self._repository.revision_by_id(note_revision_id.strip())
+        if revision is None:
+            return None
+        identity = self._repository.get(revision.note_id)
+        if identity is None or identity.note_id != revision.note_id:
+            return None
+        effective = self._effective_revision(revision)
+        if effective.note_revision_id != revision.note_revision_id:
+            effective = revision
+        interpretation = (
+            self._repository.interpretation_for_revision(effective.note_revision_id)
+            if effective.coverage is NoteCoverage.FULL
+            else None
+        )
+        return ExternalNoteInboxItem(
+            identity=identity,
+            revision=effective,
+            interpretation=interpretation,
+        )
 
     def _effective_revision(self, revision: ExternalNoteRevision) -> ExternalNoteRevision:
         if revision.coverage is NoteCoverage.FULL:
@@ -437,6 +488,18 @@ class ExternalNoteSyncService:
         return revision
 
     async def analyze_pending(
+        self,
+        *,
+        limit: int = 20,
+        retry_failed: bool = False,
+        reanalyze_succeeded: bool = False,
+    ) -> tuple[ExternalNoteInterpretation, ...]:
+        async with self.exclusive_session():
+            return await self._analyze_pending_locked(
+                limit=limit, retry_failed=retry_failed, reanalyze_succeeded=reanalyze_succeeded
+            )
+
+    async def _analyze_pending_locked(
         self,
         *,
         limit: int = 20,
@@ -472,14 +535,12 @@ class ExternalNoteSyncService:
                 revision.note_id, revision.version
             )
             previous_interpretation = (
-                self._repository.interpretation_for_revision(
-                    previous_revision.note_revision_id
-                )
+                self._repository.interpretation_for_revision(previous_revision.note_revision_id)
                 if previous_revision is not None
                 else None
             )
             async with semaphore:
-                return await interpretation_service.analyze(
+                result = await interpretation_service.analyze(
                     revision,
                     (
                         previous_interpretation.payload_json
@@ -489,11 +550,16 @@ class ExternalNoteSyncService:
                     ),
                 )
 
+                if not (
+                    result.status == "FAILED" and revision.note_revision_id in preserve_success_for
+                ):
+                    self._repository.append_interpretation(result)
+                return result
+
         results = tuple(await asyncio.gather(*(analyze_one(item) for item in candidates)))
         for value in results:
             if value.status == "FAILED" and value.note_revision_id in preserve_success_for:
                 continue
-            self._repository.append_interpretation(value)
             revision = next(
                 item for item in candidates if item.note_revision_id == value.note_revision_id
             )
@@ -507,6 +573,19 @@ class ExternalNoteSyncService:
         note_revision_id: str,
         *,
         retry_failed: bool = True,
+        deep_review: bool = True,
+    ) -> ExternalNoteInterpretation:
+        async with self.exclusive_session():
+            return await self._analyze_revision_locked(
+                note_revision_id, retry_failed=retry_failed, deep_review=deep_review
+            )
+
+    async def _analyze_revision_locked(
+        self,
+        note_revision_id: str,
+        *,
+        retry_failed: bool = True,
+        deep_review: bool = True,
     ) -> ExternalNoteInterpretation:
         if self._interpretation is None:
             raise DataContractError("observation interpretation is unavailable")
@@ -519,16 +598,12 @@ class ExternalNoteSyncService:
         existing = self._repository.interpretation_for_revision(effective.note_revision_id)
         if existing is not None and (existing.status == "SUCCEEDED" or not retry_failed):
             materialized = self._materialize_review_if_eligible(effective, existing)
-            if materialized:
+            if materialized and deep_review:
                 await self._run_deep_review(effective.note_revision_id)
             return existing
-        previous_revision = self._repository.previous_revision(
-            effective.note_id, effective.version
-        )
+        previous_revision = self._repository.previous_revision(effective.note_id, effective.version)
         previous_interpretation = (
-            self._repository.interpretation_for_revision(
-                previous_revision.note_revision_id
-            )
+            self._repository.interpretation_for_revision(previous_revision.note_revision_id)
             if previous_revision is not None
             else None
         )
@@ -543,9 +618,17 @@ class ExternalNoteSyncService:
         )
         self._repository.append_interpretation(result)
         materialized = self._materialize_review_if_eligible(effective, result)
-        if materialized:
+        if materialized and deep_review:
             await self._run_deep_review(effective.note_revision_id)
         return result
+
+    def materialize_existing_review(self, note_revision_id: str) -> bool:
+        """Repair a missing review projection without re-sending a successful draft."""
+        revision = self._repository.revision_by_id(note_revision_id)
+        interpretation = self._repository.interpretation_for_revision(note_revision_id)
+        if revision is None or interpretation is None:
+            return False
+        return self._materialize_review_if_eligible(revision, interpretation)
 
     async def _run_deep_review(self, note_revision_id: str) -> None:
         if self._deep_reviewer is None:
@@ -580,9 +663,7 @@ class ExternalNoteSyncService:
             return False
         if not current_user and not previous_user:
             return False
-        self._review_materializer.ensure_pending(
-            note_revision_id=revision.note_revision_id
-        )
+        self._review_materializer.ensure_pending(note_revision_id=revision.note_revision_id)
         return True
 
     def interpretation_for_revision(
@@ -590,9 +671,7 @@ class ExternalNoteSyncService:
     ) -> ExternalNoteInterpretation | None:
         return self._repository.interpretation_for_revision(note_revision_id)
 
-    def history(
-        self, note_id: str, limit: int = 50
-    ) -> tuple[ExternalNoteHistoryItem, ...]:
+    def history(self, note_id: str, limit: int = 50) -> tuple[ExternalNoteHistoryItem, ...]:
         result: list[ExternalNoteHistoryItem] = []
         for revision in self._repository.list_revisions(note_id, limit):
             effective = self._effective_revision(revision)
@@ -600,9 +679,7 @@ class ExternalNoteSyncService:
                 ExternalNoteHistoryItem(
                     revision=effective,
                     interpretation=(
-                        self._repository.interpretation_for_revision(
-                            effective.note_revision_id
-                        )
+                        self._repository.interpretation_for_revision(effective.note_revision_id)
                         if effective.coverage is NoteCoverage.FULL
                         else None
                     ),

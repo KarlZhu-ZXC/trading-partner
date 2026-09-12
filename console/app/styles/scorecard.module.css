@@ -1,0 +1,35 @@
+
+
+.root :global(.scorecard-run-grid) { display: grid; gap: 12px; }
+.root :global(.scorecard-card) { border: 1px solid var(--line); background: var(--panel); padding: 14px; }
+.root :global(.scorecard-run-header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.root :global(.scorecard-run-header strong) { font-size: 12px; }
+.root :global(.scorecard-run-header small) { display: block; color: var(--dim); font-size: var(--text-label); margin-top: 4px; overflow-wrap: anywhere; }
+.root :global(.scorecard-run-meta) { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.root :global(.scorecard-run-meta > span) { color: var(--muted); display: block; font-size: var(--text-label); }
+.root :global(.scorecard-run-meta strong) { color: var(--ink); display: block; font: 500 var(--text-label) var(--font-geist-mono); margin: 5px 0 0; overflow-wrap: anywhere; }
+.root :global(.scorecard-run-note) { margin: 10px 0 0; padding: 8px 10px; background: var(--surface-subtle); border-left: 2px solid var(--amber); }
+.root :global(.scorecard-run-note > span) { color: var(--amber); font-size: var(--text-label); letter-spacing: .08em; margin-right: 8px; }
+.root :global(.scorecard-run-note code) { margin-right: 6px; }
+
+.root :global(.scorecard-card > details) { margin-top: 10px; color: var(--muted); font-size: var(--text-label); }
+.root :global(.scorecard-card > details summary) { color: var(--green); cursor: pointer; font: 600 var(--text-label) var(--font-geist-mono); }
+
+.root :global(.scorecard-dimensions) { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 8px; }
+.root :global(.scorecard-dimension) { border: 1px solid var(--line); background: var(--surface-subtle); padding: 10px 11px; }
+.root :global(.scorecard-dimension > header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.root :global(.scorecard-dimension > header strong) { font-size: var(--text-label); }
+.root :global(.scorecard-dimension > header span) { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.root :global(.scorecard-dimension p) { margin: 7px 0 9px; color: var(--ink-soft); font-size: var(--text-label); line-height: 1.46; white-space: pre-wrap; }
+.root :global(.scorecard-dimension dl) { display: grid; gap: 6px; margin: 0; }
+.root :global(.scorecard-dimension dt) { color: var(--muted); font-size: var(--text-label); margin: 0; }
+.root :global(.scorecard-dimension dd) { margin: 0; display: grid; gap: 4px; color: var(--ink-soft); font-size: var(--text-label); line-height: 1.4; }
+.root :global(.scorecard-dimension dd span) { display: block; overflow-wrap: anywhere; }
+.root :global(.scorecard-dimension dd code) { display: block; overflow-wrap: anywhere; }
+.root :global(.scorecard-dimension dd code) { font-size: var(--text-label); color: var(--dim); }
+@media (max-width: 700px) {
+  .root :global(.scorecard-run-meta) { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.scorecard-dimensions) { grid-template-columns: 1fr; }
+}

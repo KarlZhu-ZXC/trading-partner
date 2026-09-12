@@ -1,5 +1,115 @@
 # Unreleased
 
+- Set the OpenCode Go model and both Observation model defaults to `deepseek-flash`
+  (DeepSeek V4.1 Flash). The owner runtime uses it at `max` for Console Agent,
+  Monitor/event analysis, Trade Retro and both note layers. Go Chat Completions
+  and Responses omit client output-token caps for complete, stream and retries;
+  protocol-required Messages budgets and independent provider/fallback settings remain.
+
+- Reduced the initial MCP surface to nine v11 entry tools over the existing 24
+  capabilities and 106 operations. Discovery returns catalog/operation metadata
+  only on demand. Separate read/write gateways preserve exact Registry validation
+  and compaction; the six dedicated identity/proposal/confirmation/sync/order/chart
+  tools cannot be called through either gateway. Removed MCP names remain durable
+  capability identities, not aliases. Console keeps full schemas and local results.
+  Reconnect clients to receive the new entry surface.
+
+- Connected exact Observation reviews to editable Research drafts. Console now
+  reuses the saved successful deep-review or first-pass payload instead of passing
+  only an Instrument and title. USER judgment, scenario text, level references,
+  and provenance carry into Thesis/Trade Plan drafts; Subject metadata remains
+  stable research scope. No model rerun, automatic confirmation, Observation
+  adoption, or numerical stop/entry inference occurs. Private content stays out
+  of URLs/storage, and existing/unsaved work is preserved.
+
+- Fixed Journal Cycle Adds / Reductions rendering: numeric counts no longer fall
+  through string-only coercion to zero. Journal and Portfolio share strict count
+  formatting; missing and manual-recompute values show dashes. The Journal Cycle
+  detail now places its five metrics on one desktop row, with mobile wrapping.
+
+- Removed Behavior's minimum-sample policy under `behavior_summary_v3` and MCP
+  schema v9. The request parameter, calculator plumbing, sufficiency flags, and
+  Console threshold labels are gone. Nonempty eligible samples produce descriptive
+  values immediately; payoff still requires both winning and losing samples and
+  a nonzero loss denominator. Counts, exclusions, and data-quality restrictions
+  remain visible, without rewriting historical results.
+
+- Added separate amount and return-based Payoff Ratios to Behavior summary v2.
+  Existing `payoff_ratio` retains its monetary formula; `return_payoff_ratio`
+  compares equal-weight mean winning/losing Cycle returns, each using net trading
+  P/L over peak held purchase-cost capital. Average returns, basis, exact sample
+  exclusions, and the minimum on each side are exposed. Console shows both ratios
+  and their corresponding amount/percentage formulas. Missing basis stays
+  unavailable, and historical v1 results remain unchanged.
+
+- Fixed the Cycle override MCP write under `mcp-vnext-shadow-v8` without adding
+  tools or operations. `research_memory_append/trade_cycle_override` now takes
+  `override_operation` for the business action, matching the read-only preview.
+  Group registration rejects routing-field collisions before startup completes.
+  Explicit confirmation, actor checks, idempotency, version conflicts, and the
+  Agent action allowlist remain unchanged; persisted actions are not rewritten.
+- Fixed Cycle override replay validation: an existing idempotency key is checked
+  through the repository before reapplying a persisted correction to a projection.
+  Stale expected versions fail before projection validation, with the repository
+  retaining its transactional payload and version checks.
+- Removed the deferred confirmation-identity issue from the active issue list at
+  the owner's request. Korean-market expansion is no longer in the current backlog;
+  existing KR functionality remains supported.
+
+- Repaired the existing read-only Cycle override preview's conflicting `operation`
+  field. `portfolio_get/trade_cycle_override_preview` now accepts the business
+  action as `override_operation`; the grouped MCP `operation` remains required and
+  closed. Other operation inputs and all write tools retain their prior contracts.
+- Consolidated the public MCP surface from 28 to 24 tools under
+  `mcp-vnext-shadow-v7`, preserving all 106 operations. `research_get` replaces
+  the three Subject/judgment/memory read tools; `portfolio_get` combines durable
+  account reads and portfolio analysis; `us_get_facts` combines US company/context
+  facts. The seven old read-tool names are no longer registered. Console callers,
+  Agent discovery, Attention next-read hints, result compaction, and the capability
+  catalog use the new names. Write tools, explicit sync, chart handling, operation
+  defaults, and stored history remain unchanged.
+
+- Removed QuantConnect/LEAN historical-validation preparation, result import,
+  artifact statistics, examples, and current usage instructions. Public MCP remains
+  28 tools under `mcp-vnext-shadow-v6`; the two former `research_workflow_run`
+  operations are no longer callable.
+- Retired the Telegram Agent poller, CLI/supervisor controls, channel handoff,
+  and polling cursor runtime. Console Agent and ordinary Telegram notifications
+  remain supported. Old channel values, migration tables, conversations, and
+  existing private backtest artifacts are retained as historical data; no database
+  migration or automatic data deletion is required. Schwab orders, the SGOV sweep,
+  technical facts, portfolio performance, and Trade Retro are unchanged.
+
+- Removed unused internal notification renderers, Provider helpers, and duplicate
+  basis/payload conversion paths. Agent capability discovery and Telegram turns
+  now follow explicit mode/event-sink contracts instead of probing signatures to
+  accommodate obsolete test adapters. Public capabilities, confirmation gates,
+  persisted records, and active calculation paths are unchanged.
+
+- Removed implicit background batch analysis from Console capture/sync requests with
+  `analyze=false`; the durable Refresh Sources and explicit revision Analyze/Retry
+  flows remain. Consolidated the Moomoo sync CLI into the provider-neutral command
+  implementation while retaining its source-pinned compatibility entry. Removed an
+  unused telemetry identity hash and a state wrapper carrying an unread flag; tracing
+  export filtering and disabled-by-default behavior remain unchanged.
+
+## 2026-09-08 — 可信度与使用闭环改进
+
+原 23 项设想收敛为六项必要工作，六项均完成约定的最小交付：
+
+1. 解释忠实度：完整数字和显式单位匹配，按说话人分别验证引用与最新 USER 判断，补充误放行/误拒绝合成回归。
+2. 历史查询：完整本地历史重建后筛选，保留开仓成本链，统一 Cycles/Behavior 日期与账户口径；以 1,604 条成交、802 个 Cycle 的双账户跨年样本验证。
+3. 运行一致性：启动校验实际 schema，状态与锁跟随 RUNTIME_ROOT，Operations 展示源码、构建和 schema 身份；隔离验证备份恢复。
+4. Observation 刷新：复用持久化 Operational Job 展示阶段、恢复同一任务、精确重试失败项，逐条保存成功解释，限制模型调用与等待预算。
+5. 复核追查：Notes 链接精确 Observation/Thesis/Plan/Decision 引用，展示当前覆盖与深审状态，数据缺口链接至已有修复入口。
+6. Console 收尾：统一控件与样式所有权，完成主题、响应式、Agent 侧栏、筛选及确认交互回归。
+
+原实施记录报告后端全量 2,748 项、后续聚焦 109 项及契约/调度 73 项通过；Mypy、Ruff、Console 51 项单测、12 项浏览器测试、lint、类型检查与构建通过。这些是该轮验收记录，文档整理没有重新运行测试。代码仍有未提交改动，不能将完成记录视为已发布的不可变版本。
+
+本次重新验证：当前工作区后端 `2,753 passed`（72.07 秒）、Console 单测 `51 passed`、Playwright `12 passed`（18.6 秒），Ruff、Mypy（847 个源文件）、前端隔离生产构建（含类型检查）、ESLint 和生成契约一致性均通过。浏览器测试覆盖刷新重载不重复提交、精确版本只读追查、Decision/Cycle/Review、候选确认及深浅主题 390/1440/1920px 布局。当前生产 Journal 和 OpenAPI 返回 HTTP 200，刷新路由已加载，Operations 报告实际/预期 schema 均为 `0072_external_note_review_drafts`、兼容且源码 dirty。运行身份仍是磁盘身份，不能证明进程已加载全部未提交修改；未触发真实私人笔记模型刷新，未完成 VoiceOver 验证。
+
+运行边界由 [维护指南](../operations/local-console-and-maintenance.md) 和 [Console 设计系统](../guide/console-design-system.md) 维护：刷新最多考察 200 条笔记，解释/深审各最多 100 个候选调用、各十分钟；复核对照是当前持久化上下文，不是历史时点重建。没有执行真实私人笔记模型刷新或订单来验收本轮。新的估值平台、模型角色、信息包和泛化工作流不属于待办。
+
 - Fixed OpenCode Go request correlation before the upstream header enforcement date.
   Chat Completions, Responses, Messages, streaming calls, and model-directory reads now
   send `x-opencode-session`. Agent conversations and bounded note, Monitor, and Trade

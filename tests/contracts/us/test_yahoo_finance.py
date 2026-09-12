@@ -1039,3 +1039,37 @@ async def test_yahoo_korean_quote_uses_seoul_day_and_provider_symbol() -> None:
     assert result.value.previous_close == Decimal("68500")
     assert result.value.last == Decimal("70000")
     assert "YAHOO_KR_DELAYED_QUOTE" in result.meta.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovered_price", [125.0, 115.0])
+async def test_regular_intraday_recovery_does_not_mix_old_session_range(
+    recovered_price: float,
+) -> None:
+    as_of = datetime(2026, 7, 24, 10, 35, tzinfo=NY)
+    daily = _chart_payload(
+        days=[date(2026, 7, 23), date(2026, 7, 24)],
+        opens=[120.0, 121.0], highs=[123.0, 123.0], lows=[119.0, 120.0],
+        closes=[122.0, 122.5], volumes=[1000, 500],
+        regular_market_time=datetime(2026, 7, 24, 10, 0, tzinfo=NY),
+        regular_market_price=122.5, trading_period_at=as_of,
+    )
+    recovered_at = datetime(2026, 7, 24, 10, 34, tzinfo=NY)
+    intraday = _intraday_body(
+        timestamps=[recovered_at], closes=[recovered_price],
+        regular_market_time=recovered_at,
+        regular_market_price=recovered_price, trading_period_at=as_of,
+    )
+    transport = SequenceTransport([json.dumps(daily).encode(), intraday])
+    adapter = YahooFinanceAdapter(transport, clock=FixedClock(as_of))
+    result = await adapter.get_quote(_instrument(), as_of)
+    assert result.value.last == Decimal(str(recovered_price))
+    assert result.value.quote_at == recovered_at
+    assert result.value.session is TradingSession.REGULAR
+    assert result.value.previous_close == Decimal("122.0")
+    assert result.value.open is None
+    assert result.value.high is None
+    assert result.value.low is None
+    assert result.value.volume is None
+    assert "INTRADAY_QUOTE_SESSION_RANGE_UNAVAILABLE" in result.meta.warnings
+    assert len(transport.requests) == 2

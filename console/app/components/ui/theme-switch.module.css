@@ -1,0 +1,3 @@
+.root { display:inline-flex; width:fit-content; align-items:center; gap:var(--space-1); padding:var(--space-1); border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface-subtle); }
+.icon { width:16px; height:16px; }.label { font-size:var(--text-label); }
+@media(max-width:700px) { .label { display:none; } }

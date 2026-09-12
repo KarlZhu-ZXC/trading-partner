@@ -80,12 +80,6 @@ def _require_int(value: object, *, field: str) -> int:
     return value
 
 
-def _require_optional_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _require_int(value, field=field)
-
-
 def _require_nonnegative_int(value: object, *, field: str) -> int:
     number = _require_int(value, field=field)
     if number < 0:

@@ -39,7 +39,8 @@ def _cycle(
     closed_at: datetime | None = T0 + timedelta(days=1),
     attempts: int = 1,
     reentry_of_cycle_id: str | None = None,
-    currency: str = "USD",
+    currency: str | None = "USD",
+    capital: str | None = "100",
 ) -> TradeCycle:
     return TradeCycle(
         cycle_id=cycle_id,
@@ -58,7 +59,9 @@ def _cycle(
         ending_quantity=Decimal(0),
         gross_realized_pnl=Decimal(pnl) if pnl is not None else None,
         net_realized_pnl=Decimal(pnl) if pnl is not None else None,
-        maximum_deployed_capital=Decimal("100"),
+        maximum_deployed_capital=(
+            Decimal(capital) if capital is not None else None
+        ),
         holding_duration_seconds=(
             int((closed_at - opened_at).total_seconds())
             if closed_at is not None
@@ -130,7 +133,7 @@ def test_win_denominator_excludes_open_unresolved_missing_pnl_and_sgov() -> None
 
     result = BehaviorSummaryCalculator().calculate(cycles, ())
 
-    assert result.algorithm_version == "behavior_summary_v1"
+    assert result.algorithm_version == "behavior_summary_v3"
     assert result.closed_active_trade_cycles.numerator == 4
     assert result.closed_active_trade_cycles.denominator == 7
     assert result.wins.numerator == 1
@@ -147,6 +150,10 @@ def test_win_denominator_excludes_open_unresolved_missing_pnl_and_sgov() -> None
     assert result.avg_win.value == Decimal("5")
     assert result.avg_loss.value == Decimal("-2")
     assert result.payoff_ratio.value == Decimal("2.5")
+    assert result.avg_win_return.value == Decimal("0.05")
+    assert result.avg_loss_return.value == Decimal("-0.02")
+    assert result.return_payoff_ratio.value == Decimal("2.5")
+    assert result.return_basis == "NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL"
     assert result.average_holding_duration.value == Decimal(86400)
     assert result.median_holding_duration.value == Decimal(86400)
     assert result.entry_attempt_count.value == Decimal(1)
@@ -163,11 +170,7 @@ def test_payoff_ratio_uses_average_win_and_average_loss() -> None:
         _cycle("loss", "-2"),
     )
 
-    result = BehaviorSummaryCalculator().calculate(
-        cycles,
-        (),
-        minimum_sample_size=1,
-    )
+    result = BehaviorSummaryCalculator().calculate(cycles, ())
 
     assert result.avg_win.value == Decimal("6")
     assert result.avg_loss.value == Decimal("-2")
@@ -176,6 +179,9 @@ def test_payoff_ratio_uses_average_win_and_average_loss() -> None:
         "Payoff ratio is average winning-cycle P/L divided by absolute average "
         "losing-cycle P/L."
     )
+    assert result.avg_win_return.value == Decimal("0.06")
+    assert result.avg_loss_return.value == Decimal("-0.02")
+    assert result.return_payoff_ratio.value == Decimal("3")
 
 
 def test_plan_decision_invalidation_proxy_and_scenario_distribution() -> None:
@@ -258,7 +264,7 @@ def test_reentry_third_attempt_no_new_plan_and_no_action_review() -> None:
 
 
 def test_empty_sample_is_factful_and_derived_values_are_null_and_deterministic() -> None:
-    calculator = BehaviorSummaryCalculator(minimum_sample_size=2)
+    calculator = BehaviorSummaryCalculator()
     first = calculator.calculate((), ())
     second = calculator.calculate((), ())
 
@@ -268,10 +274,138 @@ def test_empty_sample_is_factful_and_derived_values_are_null_and_deterministic()
     assert first.win_rate.value is None
     assert first.avg_win.value is None
     assert first.payoff_ratio.value is None
+    assert first.avg_win_return.value is None
+    assert first.avg_loss_return.value is None
+    assert first.return_payoff_ratio.value is None
     assert first.no_action_count.value == 0
     dto = BehaviorSummaryDTO.from_domain(first)
-    assert dto.algorithm_version == "behavior_summary_v1"
+    assert dto.algorithm_version == "behavior_summary_v3"
+    assert dto.return_basis == "NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL"
+    assert dto.avg_win_return.value is None
     assert dto.execution_effect is False
+
+
+def test_return_payoff_uses_equal_weight_cycle_returns_not_money_weighting() -> None:
+    result = BehaviorSummaryCalculator().calculate(
+        (
+            _cycle("win-small", "20", capital="100"),
+            _cycle("win-large", "40", capital="1000"),
+            _cycle("loss", "-10", capital="100"),
+        ),
+        (),
+    )
+
+    assert result.avg_win.value == Decimal("30")
+    assert result.payoff_ratio.value == Decimal("3")
+    assert result.avg_win_return.numerator == Decimal("0.24")
+    assert result.avg_win_return.denominator == 2
+    assert result.avg_win_return.value == Decimal("0.12")
+    assert result.avg_loss_return.value == Decimal("-0.1")
+    assert result.return_payoff_ratio.value == Decimal("1.2")
+
+
+def test_one_win_and_one_loss_make_both_payoff_metrics_available() -> None:
+    result = BehaviorSummaryCalculator().calculate(
+        (
+            _cycle("win-one", "10"),
+            _cycle("loss", "-5"),
+        ),
+        (),
+    )
+
+    assert result.avg_win.value == Decimal("10")
+    assert result.avg_loss.value == Decimal("-5")
+    assert result.payoff_ratio.value == Decimal("2")
+    assert result.avg_win_return.value == Decimal("0.1")
+    assert result.avg_loss_return.value == Decimal("-0.05")
+    assert result.return_payoff_ratio.value == Decimal("2")
+
+
+def test_one_of_two_cycles_has_a_fifty_percent_win_rate() -> None:
+    result = BehaviorSummaryCalculator().calculate(
+        (_cycle("win", "10"), _cycle("loss", "-5")),
+        (),
+    )
+
+    assert result.win_rate.numerator == 1
+    assert result.win_rate.denominator == 2
+    assert result.win_rate.value == Decimal("0.5")
+
+
+def test_single_side_payoff_is_null_without_division_by_zero() -> None:
+    result = BehaviorSummaryCalculator().calculate((_cycle("win", "10"),), ())
+
+    assert result.payoff_ratio.value is None
+    assert result.return_payoff_ratio.value is None
+
+
+def test_return_metrics_exclude_missing_pnl_capital_currency_flat_and_inactive_cycles() -> None:
+    cycles = (
+        _cycle("valid-win", "5"),
+        _cycle("valid-loss", "-2"),
+        _cycle("flat", "0"),
+        _cycle("missing-pnl", None),
+        _cycle("missing-capital", "5", capital=None),
+        _cycle("zero-capital", "5", capital="0"),
+        _cycle("missing-currency", "5", currency=None),
+        _cycle("open", "5", status=TradeCycleStatus.OPEN, closed_at=None),
+        _cycle(
+            "cash",
+            "5",
+            classification=TradeCycleClassification.CASH_MANAGEMENT,
+        ),
+    )
+
+    result = BehaviorSummaryCalculator().calculate(cycles, ())
+
+    assert result.avg_win_return.eligible_cycle_ids == ("valid-win",)
+    assert {
+        "flat",
+        "missing-pnl",
+        "missing-capital",
+        "zero-capital",
+        "missing-currency",
+        "open",
+        "cash",
+        "valid-loss",
+    }.issubset(set(result.avg_win_return.excluded_cycle_ids))
+    assert "NET_PNL_UNAVAILABLE" in result.avg_win_return.exclusion_reasons
+    assert "MAXIMUM_DEPLOYED_CAPITAL_UNAVAILABLE" in result.avg_win_return.exclusion_reasons
+    assert "NATIVE_CURRENCY_UNAVAILABLE" in result.avg_win_return.exclusion_reasons
+    assert "FLAT_OR_NON_RETURN" in result.avg_win_return.exclusion_reasons
+
+
+def test_mixed_currency_returns_remain_available_while_money_payoff_is_unavailable() -> None:
+    result = BehaviorSummaryCalculator().calculate(
+        (
+            _cycle("usd-win", "20", currency="USD"),
+            _cycle("eur-loss", "-10", currency="EUR"),
+        ),
+        (),
+    )
+
+    assert result.payoff_ratio.value is None
+    assert "MULTIPLE_NATIVE_CURRENCIES" in result.payoff_ratio.exclusion_reasons
+    assert result.avg_win_return.value == Decimal("0.2")
+    assert result.avg_loss_return.value == Decimal("-0.1")
+    assert result.return_payoff_ratio.value == Decimal("2")
+    assert result.return_payoff_ratio.native_currencies == ("EUR", "USD")
+
+
+def test_return_metrics_are_serialized_as_fraction_strings_with_basis_metadata() -> None:
+    result = BehaviorSummaryDTO.from_domain(
+        BehaviorSummaryCalculator().calculate(
+            (_cycle("win", "20"), _cycle("loss", "-10")),
+            (),
+        )
+    )
+    payload = result.model_dump(mode="json")
+
+    assert payload["algorithm_version"] == "behavior_summary_v3"
+    assert payload["return_basis"] == "NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL"
+    assert payload["avg_win_return"]["value"] == "0.2"
+    assert payload["avg_loss_return"]["value"] == "-0.1"
+    assert payload["return_payoff_ratio"]["value"] == "2"
 
 
 def test_strategy_and_instrument_cohort_filters_are_explicit() -> None:

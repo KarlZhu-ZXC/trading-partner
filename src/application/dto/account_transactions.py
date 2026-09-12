@@ -191,6 +191,7 @@ class TradeCycleDTO(_DTO):
     ending_quantity: DecimalWire | None
     gross_realized_pnl: DecimalWire | None
     net_realized_pnl: DecimalWire | None
+    current_average_cost: DecimalWire | None = None
     maximum_deployed_capital: DecimalWire | None
     holding_duration_seconds: int | None
     reentry_of_cycle_id: str | None

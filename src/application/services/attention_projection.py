@@ -122,17 +122,17 @@ def next_read_for(
 ) -> AttentionNextReadDTO | None:
     if source_type is AttentionSourceType.RESEARCH_CANDIDATE and subject_id:
         return AttentionNextReadDTO(
-            tool="research_judgment_get",
+            tool="research_get",
             request={"operation": "state", "case_id": subject_id},
         )
     if source_type is AttentionSourceType.CATALYST_AGENDA:
         return AttentionNextReadDTO(
-            tool="research_memory_get",
+            tool="research_get",
             request={"operation": "agenda", "agenda_item_id": source_ref},
         )
     if source_type is AttentionSourceType.TRADE_RETRO:
         return AttentionNextReadDTO(
-            tool="portfolio_analyze",
+            tool="portfolio_get",
             request={"operation": "retro_history", "run_id": source_ref},
         )
     if source_type is AttentionSourceType.SCORECARD_GAP:
@@ -141,7 +141,7 @@ def next_read_for(
             request["case_id"] = subject_id
         if source_ref.startswith("thesis_"):
             request["thesis_id"] = source_ref
-        return AttentionNextReadDTO(tool="research_judgment_get", request=request)
+        return AttentionNextReadDTO(tool="research_get", request=request)
     if source_type is AttentionSourceType.MONITOR_BLIND_SPOT:
         return AttentionNextReadDTO(
             tool="monitor_read",
@@ -162,7 +162,7 @@ def next_read_for(
         }
         if subject_id:
             timeline_request["case_id"] = subject_id
-        return AttentionNextReadDTO(tool="research_memory_get", request=timeline_request)
+        return AttentionNextReadDTO(tool="research_get", request=timeline_request)
     if source_type is AttentionSourceType.OBSERVATION_REVIEW_DUE:
         return AttentionNextReadDTO(
             tool="view_get",
@@ -170,7 +170,7 @@ def next_read_for(
         )
     if source_type is AttentionSourceType.UNLINKED_ACTIVITY:
         return AttentionNextReadDTO(
-            tool="portfolio_analyze",
+            tool="portfolio_get",
             request={"operation": "trade_cycles"},
         )
     return None

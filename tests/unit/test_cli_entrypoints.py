@@ -319,127 +319,64 @@ async def test_catalyst_sync_returns_typed_error_without_notification(
     assert container.closed
 
 
-def test_agent_launchd_install_status_and_uninstall(
+def test_console_supervisor_install_status_and_uninstall(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    plist_path = tmp_path / "LaunchAgents" / "agent.plist"
+    api_plist_path = tmp_path / "LaunchAgents" / "console-api.plist"
+    web_plist_path = tmp_path / "LaunchAgents" / "console-web.plist"
     calls: list[tuple[str, ...]] = []
 
     def launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         calls.append(args)
         return subprocess.CompletedProcess(args, 0, "", "")
 
-    settings = SimpleNamespace(
-        telegram_bot_token=None,
-        telegram_chat_id=None,
-        telegram_agent_user_id=None,
-        telegram_agent_enabled=False,
-        resolved_llm_config=None,
-    )
-    monkeypatch.setattr(agent, "PLIST_PATH", plist_path)
+    monkeypatch.setattr(agent, "CONSOLE_API_PLIST_PATH", api_plist_path)
+    monkeypatch.setattr(agent, "CONSOLE_WEB_PLIST_PATH", web_plist_path)
     monkeypatch.setattr(agent, "_project_root", lambda: tmp_path)
-    monkeypatch.setattr(agent.shutil, "which", lambda _name: "/opt/homebrew/bin/uv")
+    monkeypatch.setattr(agent, "_ensure_console_build", lambda _root: None)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
     monkeypatch.setattr(agent, "_run_launchctl", launchctl)
-    monkeypatch.setattr(agent, "load_settings", lambda: settings)
 
-    assert agent.install() == 0
-    assert plist_path.exists()
-    assert agent.status() == 0
-    assert agent.uninstall() == 0
-    assert not plist_path.exists()
+    assert agent.console_install() == 0
+    assert api_plist_path.exists()
+    assert web_plist_path.exists()
+    assert agent.console_status() == 0
+    assert agent.console_uninstall() == 0
+    assert not api_plist_path.exists()
+    assert not web_plist_path.exists()
     assert any(call[0] == "bootstrap" for call in calls)
-    assert "DISABLED" in capsys.readouterr().out
-
-
-@pytest.mark.asyncio
-async def test_agent_poller_disabled_exits_without_building_container(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    settings = SimpleNamespace(
-        telegram_bot_token=None,
-        telegram_chat_id=None,
-        telegram_agent_user_id=None,
-        telegram_agent_enabled=False,
-        resolved_llm_config=None,
-    )
-    monkeypatch.setattr(agent, "load_settings", lambda: settings)
-    monkeypatch.setattr(
-        agent,
-        "build_default_application",
-        lambda: pytest.fail("disabled poller must not build the application"),
-    )
-
-    assert await agent._run_poller() == 0
-    assert json.loads(capsys.readouterr().out)["state"] == "DISABLED"
-
-
-@pytest.mark.asyncio
-async def test_agent_poller_rejects_second_process_before_building_poller(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    settings = SimpleNamespace(
-        telegram_bot_token="token",
-        telegram_chat_id="42",
-        telegram_agent_user_id=None,
-        telegram_agent_enabled=True,
-        resolved_llm_config=object(),
-        telegram_agent_lock_path=Path("/tmp/agent-test.lock"),
-    )
-    container = _Container(SimpleNamespace())
-    container.settings = settings
-    lock = SimpleNamespace(acquire=lambda: False)
-    monkeypatch.setattr(agent, "load_settings", lambda: settings)
-    monkeypatch.setattr(agent, "build_default_application", lambda: container)
-    monkeypatch.setattr(agent, "build_telegram_agent_lock", lambda _path: lock)
-
-    assert await agent._run_poller() == 1
-    assert json.loads(capsys.readouterr().out)["error_codes"] == [
-        "TELEGRAM_AGENT_ALREADY_RUNNING"
-    ]
-    assert container.closed
-
-
-def test_agent_configuration_handles_invalid_model_configuration() -> None:
-    class Settings:
-        telegram_bot_token = "token"
-        telegram_chat_id = "42"
-        telegram_agent_user_id = None
-        telegram_agent_enabled = True
-
-        @property
-        def resolved_llm_config(self) -> object:
-            raise ConfigurationError("invalid model")
-
-    payload = agent._configuration_status(Settings())
-
-    assert payload["state"] == "UNAVAILABLE"
-    assert payload["diagnostics"] == [
-        {
-            "code": "AGENT_CONFIGURATION_UNAVAILABLE",
-            "message": "Telegram Agent model endpoint is not configured.",
-        }
-    ]
+    output = capsys.readouterr().out
+    assert '"telegram"' not in output
 
 
 def test_agent_main_dispatches_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(agent, "status", lambda: 3)
+    monkeypatch.setattr(agent, "console_status", lambda: 3)
 
     with pytest.raises(SystemExit) as caught:
-        agent.main(["telegram", "status"])
+        agent.main(["console", "status"])
 
     assert caught.value.code == 3
 
 
-def test_agent_install_requires_uv(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(agent, "_project_root", lambda: Path("/tmp/trading-partner-test"))
-    monkeypatch.setattr(agent.shutil, "which", lambda _name: None)
+@pytest.mark.parametrize("channel", ("telegram", "all"))
+def test_retired_agent_channels_are_not_cli_aliases(channel: str) -> None:
+    with pytest.raises(SystemExit) as caught:
+        agent.main([channel, "status"])
+    assert caught.value.code == 2
 
-    with pytest.raises(SystemExit, match="uv is required"):
-        agent.install()
+
+def test_console_install_requires_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent, "_project_root", lambda: Path("/tmp/trading-partner-test"))
+    monkeypatch.setattr(
+        agent.shutil,
+        "which",
+        lambda name: None if name == "uv" else "/usr/bin/tool",
+    )
+
+    with pytest.raises(SystemExit, match="uv, npm, and node are required"):
+        agent.console_install()
 
 
 def test_agent_project_root_falls_back_outside_checkout(

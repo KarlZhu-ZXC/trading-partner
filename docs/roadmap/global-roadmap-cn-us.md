@@ -26,7 +26,7 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
    Plan, risk-policy, Watchlist, journal, decision, and Monitor writes retain actor,
    confirmation, version, and idempotency gates.
 5. **The MCP surface follows user intent.** The current public profile is
-   `mcp_vnext_shadow` with 28 tools, but tool count may change through an explicit
+   `mcp_vnext_shadow` with 24 tools, but tool count may change through an explicit
    compatibility migration. Closed schemas, authority gates, and discoverability are
    invariants; an arbitrary count is not.
 6. **LLMs do interpretation, not data ownership.** Ordinary facts, rule evaluation,
@@ -84,11 +84,24 @@ as a generic market chatbot, broker terminal, or autonomous trading agent.
   Agent Runtime uses five private capability tools and does not change the public
   MCP snapshot count; an explicit Monitor run may separately call the configured server-side
   model only for an enabled composite judgment policy.
-- Manual QuantConnect Free bridge: prepare hashed LEAN code, user runs it on the
-  web, then import the downloaded result JSON.
 
 The authoritative detail is the
 [MCP capability boundary](../guide/mcp-capability-boundary.md), not this summary.
+
+## Scope discipline
+
+Every retained capability must support capturing observations, checking a judgment
+against evidence/account context, explicit review, or tracing its later outcome.
+Market/account/Monitor capabilities have these existing uses; being outside the
+primary intake path alone is not a reason to remove them. Confirmation, immutable
+revisions, provenance, and bounded recovery protect this core loop rather than add
+optional workflow steps.
+
+Do not infer permission for model processing merely from a capture/import request.
+Use the existing explicit refresh or revision analysis flow. Source-specific commands
+may remain compatibility aliases, but must not own duplicate orchestration. Remove
+unused helpers and redundant state before adding generic frameworks, caches, model
+roles, or automation. File length and feature count alone do not establish a need.
 
 ## Current maintenance roadmap
 
@@ -99,7 +112,6 @@ re-centered on the Moomoo-first judgment intake and review loop, stability, usab
 data quality, and cross-feature closure. The implemented judgment-intake contract is
 owned by [Phase 4](../phases/phase4.md); completed implementation ledgers remain only
 in Git history rather than as a parallel specification.
-Completed implementation plans are not retained as parallel specifications.
 
 Continuous requirements remain:
 
@@ -122,13 +134,6 @@ creating an opaque aggregate score.
 The authoritative contracts now live in
 [Phase 4](../phases/phase4.md) and the
 [MCP capability boundary](../guide/mcp-capability-boundary.md).
-
-### R3 — Historical validation only when value is proven
-
-The current QuantConnect Free bridge remains manual. Paid API automation, local
-historical databases, experiment orchestration, walk-forward testing, and bias
-analysis are optional future investments—not assumed next steps. They should be
-added only after repeated manual validations demonstrate real product value.
 
 ### R4 — Operate the completed Phase 4 Journal loop
 
@@ -156,12 +161,15 @@ annotation、确定性 Trade Cycle、日频账户估值、可信收益率和行�
 
 ## Deferred integrations
 
+Korean-market expansion is outside the current backlog. Existing KR quote,
+technical, Watchlist, and Monitoring support is retained; no DART, KR account,
+news, sentiment, sizing, or catalyst integration work is planned.
+
 - Additional brokers and A-share account execution feeds.
 - Cross-currency consolidated performance until timestamped FX coverage is defined.
-- DART fundamentals, KR news/sentiment/breadth, KR broker sync, and KR position sizing.
 - Licensed LBMA/LME benchmarks, complete expired-futures history, and research-grade
   back-adjusted continuous futures.
-- Stable future-event providers for A-share and KR markets.
+- Stable future-event providers for the A-share market.
 - StockTwits runtime access; historical stored values remain readable only.
 
 Deferred means unsupported, not “silently approximated through another Provider.”

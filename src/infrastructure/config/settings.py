@@ -288,7 +288,6 @@ class AppSettings(BaseSettings):
     manual_watchlist_csv_path: Path | None = None
     post_market_sync_delay_minutes: int = Field(default=10, ge=0, le=120)
     post_market_sync_lock_path: Path = Path("data/locks/post_market_sync.lock")
-    telegram_agent_lock_path: Path = Path("data/locks/telegram_agent.lock")
 
     # Scheduled Schwab SGOV Shadow plan. Installing the dedicated launchd job is
     # the enablement gate; these values only define its calculation policy.
@@ -310,7 +309,6 @@ class AppSettings(BaseSettings):
     )
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
-    telegram_agent_user_id: str | None = None
     telegram_message_thread_id: int | None = Field(default=None, ge=1)
     notification_max_attempts: int = Field(
         default=5,
@@ -340,7 +338,6 @@ class AppSettings(BaseSettings):
     # LLM_* fields below; legacy provider fields remain readable for one
     # compatibility cycle and are normalized at ``resolved_llm_config``.
     agent_enabled: bool = False
-    telegram_agent_enabled: bool = False
     llm_api_style: Literal["chat_completions", "responses"] = "chat_completions"
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -430,7 +427,7 @@ class AppSettings(BaseSettings):
         ),
     )
     opencode_go_model: str = Field(
-        default="deepseek-v4-flash",
+        default="deepseek-flash",
         validation_alias=AliasChoices(
             "opencode_go_model",
             "OPENCODE_GO_MODEL",
@@ -438,7 +435,7 @@ class AppSettings(BaseSettings):
     )
     external_note_analysis_enabled: bool = True
     external_note_analysis_model: str = Field(
-        default="qwen3.8-flash",
+        default="deepseek-flash",
         validation_alias=AliasChoices(
             "external_note_analysis_model",
             "EXTERNAL_NOTE_ANALYSIS_MODEL",
@@ -447,7 +444,7 @@ class AppSettings(BaseSettings):
     external_note_analysis_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
     external_note_analysis_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
     external_note_review_model: str = Field(
-        default="qwen3.8-max",
+        default="deepseek-flash",
         validation_alias=AliasChoices(
             "external_note_review_model",
             "EXTERNAL_NOTE_REVIEW_MODEL",
@@ -703,28 +700,6 @@ class AppSettings(BaseSettings):
         if value is None:
             raise ValueError("post_market_sync_lock_path must not be blank")
         return value
-
-    @field_validator("telegram_agent_lock_path", mode="before")
-    @classmethod
-    def _normalize_telegram_agent_lock_path(cls, value: object) -> object:
-        if isinstance(value, str):
-            value = value.strip()
-            if not value:
-                raise ValueError("telegram_agent_lock_path must not be blank")
-            return Path(value)
-        if value is None:
-            raise ValueError("telegram_agent_lock_path must not be blank")
-        return value
-
-    @field_validator("telegram_agent_user_id", mode="before")
-    @classmethod
-    def _normalize_telegram_agent_user_id(cls, value: object) -> object:
-        if value is None:
-            return None
-        normalized = str(value).strip()
-        if re.fullmatch(r"[0-9]+", normalized) is None:
-            raise ValueError("telegram_agent_user_id must be numeric")
-        return normalized
 
     @field_validator("moomoo_host")
     @classmethod
@@ -1259,7 +1234,7 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_agent_llm_configuration(self) -> Self:
-        if self.agent_enabled or self.telegram_agent_enabled:
+        if self.agent_enabled:
             try:
                 _ = self.resolved_llm_config
             except ConfigurationError as exc:
@@ -1385,12 +1360,6 @@ class AppSettings(BaseSettings):
             raise ValueError("post_market_sync_lock_path must be under project data")
         object.__setattr__(self, "post_market_sync_lock_path", lock_path)
 
-        telegram_agent_lock_path = self.telegram_agent_lock_path
-        if not telegram_agent_lock_path.is_absolute():
-            telegram_agent_lock_path = (runtime_root / telegram_agent_lock_path).resolve()
-        if not telegram_agent_lock_path.is_relative_to(data_root):
-            raise ValueError("telegram_agent_lock_path must be under project data")
-        object.__setattr__(self, "telegram_agent_lock_path", telegram_agent_lock_path)
         return self
 
     @model_validator(mode="after")

@@ -142,6 +142,9 @@ class PostMarketSyncService:
         health = (
             PostMarketSyncHealth.HEALTHY
             if receipt.status is PostMarketSyncRunStatus.SUCCEEDED
+            and not receipt.warning_codes
+            and not receipt.error_codes
+            and not oauth_warnings
             else PostMarketSyncHealth.RECEIPT_IMPERFECT
         )
         return PostMarketSyncStatusDTO(
@@ -211,12 +214,14 @@ class PostMarketSyncService:
         portfolio = await self._portfolio.get_account_snapshot(AccountGetSnapshotInput())
         transactions_ok = True
         transaction_error_codes: list[str] = []
+        transaction_warning_codes: list[str] = []
         if self._transactions is not None:
             transaction_result = await self._transactions.get_transactions(
                 AccountGetTransactionsInput(end=self._clock.now(), limit=1_000)
             )
             transactions_ok = transaction_result.ok
             transaction_error_codes.extend(item.code for item in transaction_result.errors)
+            transaction_warning_codes.extend(item.code for item in transaction_result.warnings)
         if (
             portfolio.ok
             and portfolio.data is not None
@@ -293,6 +298,7 @@ class PostMarketSyncService:
         warnings = tuple(
             dict.fromkeys(
                 [item.code for item in portfolio.warnings]
+                + transaction_warning_codes
                 + [item.code for item in watchlist.warnings]
                 + (
                     list(observation_receipt.warning_codes)

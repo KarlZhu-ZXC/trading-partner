@@ -88,7 +88,7 @@ async def test_observation_sync_clis_report_bounded_analysis(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     service = _ExternalNotes()
-    monkeypatch.setattr(module, "application_container", _container(service))
+    monkeypatch.setattr(observation_sync, "application_container", _container(service))
     args = Namespace(
         source=source,
         analyze=True,
@@ -130,9 +130,27 @@ def test_observation_sync_cli_parsers_keep_source_boundaries() -> None:
     observation_args = observation_sync._parser().parse_args(
         ["--source", "LOCAL_OBSERVATION_BRIDGE", "--retry-failed"]
     )
-    moomoo_args = moomoo_notes_sync._parser().parse_args(["--analyze"])
+    moomoo_args = observation_sync._parser(moomoo_only=True).parse_args(["--analyze"])
 
     assert observation_args.source == "LOCAL_OBSERVATION_BRIDGE"
     assert observation_args.retry_failed is True
     assert moomoo_args.analyze is True
-    assert not hasattr(moomoo_args, "source")
+    assert moomoo_args.source == "MOOMOO_NOTE"
+    with pytest.raises(SystemExit):
+        observation_sync._parser(moomoo_only=True).parse_args(["--source", "OTHER"])
+
+
+def test_moomoo_compatibility_command_fixes_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    received = []
+
+    async def run(args: Namespace) -> int:
+        received.append(args)
+        return 0
+
+    monkeypatch.setattr(moomoo_notes_sync, "_run", run)
+    with pytest.raises(SystemExit) as exited:
+        moomoo_notes_sync.main(["--analyze", "--analysis-limit", "7"])
+    assert exited.value.code == 0
+    assert received[0].source == "MOOMOO_NOTE"
+    assert received[0].analyze is True
+    assert received[0].analysis_limit == 7

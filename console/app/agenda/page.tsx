@@ -17,6 +17,9 @@ import {
   RequiredMark,
   formatDate,
   shortId,
+  Input,
+  Select,
+  Textarea,
 } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { authenticatedFetch, envelopeData, listOf, postApi, useApi } from "../lib/api";
@@ -845,7 +848,7 @@ export default function CatalystAgendaPage() {
           <div className="agenda-sync-grid">
             <label>
               <FieldLabel required>Window Days</FieldLabel>
-              <input
+              <Input
                 required
                 type="number"
                 min={1}
@@ -858,7 +861,7 @@ export default function CatalystAgendaPage() {
             </label>
             <label>
               <span>Instrument IDs (Comma/New-Line Separated)</span>
-              <textarea
+              <Textarea
                 rows={2}
                 value={syncPayload.instrumentIds}
                 onChange={(event) =>
@@ -868,7 +871,7 @@ export default function CatalystAgendaPage() {
             </label>
             <label>
               <span>FRED Release IDs (Repeatable, Comma/New-Line Separated)</span>
-              <textarea
+              <Textarea
                 rows={2}
                 value={syncPayload.fredReleaseIds}
                 onChange={(event) =>
@@ -937,27 +940,27 @@ export default function CatalystAgendaPage() {
           <div className="workspace-controls agenda-toolbar">
             <label>
               <span>Time Bucket</span>
-              <select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value as (typeof TIME_FILTERS)[number])}>
+              <Select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value as (typeof TIME_FILTERS)[number])}>
                 {TIME_FILTERS.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Kind</span>
-              <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
+              <Select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
                 {kindOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Scope</span>
-              <select value={scopeFilter} onChange={(event) => setScopeFilter(event.target.value as (typeof SCOPE_OPTIONS)[number])}>
+              <Select value={scopeFilter} onChange={(event) => setScopeFilter(event.target.value as (typeof SCOPE_OPTIONS)[number])}>
                 {scopeOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Status</span>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 {statusOptions.map((item) => <option key={item} value={item}>{optionLabel(item)}</option>)}
-              </select>
+              </Select>
             </label>
           </div>
 
@@ -973,7 +976,7 @@ export default function CatalystAgendaPage() {
                   <>
                     <label>
                       <FieldLabel required={action === "CREATE"}>Title</FieldLabel>
-                      <input
+                      <Input
                         required={action === "CREATE"}
                         value={form.title}
                         onChange={(event) => setForm((value) => ({ ...value, title: event.target.value }))}
@@ -982,30 +985,30 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <FieldLabel required>Kind</FieldLabel>
-                      <select required value={form.kind} onChange={(event) => setForm((value) => ({ ...value, kind: event.target.value }))}>
+                      <Select required value={form.kind} onChange={(event) => setForm((value) => ({ ...value, kind: event.target.value }))}>
                         {KIND_OPTIONS.map((item) => <option key={item}>{item}</option>)}
-                      </select>
+                      </Select>
                     </label>
                     <label>
                       <FieldLabel required>Date Certainty</FieldLabel>
-                      <select required value={form.date_certainty} onChange={(event) => setForm((value) => ({ ...value, date_certainty: event.target.value }))}>
+                      <Select required value={form.date_certainty} onChange={(event) => setForm((value) => ({ ...value, date_certainty: event.target.value }))}>
                         {DATE_CERTAINTY_OPTIONS.map((item) => <option key={item}>{item}</option>)}
-                      </select>
+                      </Select>
                     </label>
                     <label>
                       <FieldLabel required>Timezone</FieldLabel>
-                      <select required value={form.timezone} onChange={(event) => setForm((value) => ({ ...value, timezone: event.target.value }))}>
+                      <Select required value={form.timezone} onChange={(event) => setForm((value) => ({ ...value, timezone: event.target.value }))}>
                         {TIMEZONE_OPTIONS.map((item) => <option key={item}>{item}</option>)}
-                      </select>
+                      </Select>
                     </label>
                     {!(["MACRO_RELEASE", "POLICY"].includes(form.kind)) && <p className="agenda-field-requirement"><RequiredMark />Research Subject ID or Instrument ID</p>}
                     <label>
                       <span>Fiscal Period</span>
-                      <input value={form.fiscal_period} onChange={(event) => setForm((value) => ({ ...value, fiscal_period: event.target.value }))} />
+                      <Input value={form.fiscal_period} onChange={(event) => setForm((value) => ({ ...value, fiscal_period: event.target.value }))} />
                     </label>
                     <label>
                       <span>Research Subject ID</span>
-                      <input
+                      <Input
                         value={form.subject_id}
                         onChange={(event) => setForm((value) => ({ ...value, subject_id: event.target.value }))}
                         list="agenda-subject-list"
@@ -1014,7 +1017,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <span>Instrument ID</span>
-                      <input
+                      <Input
                         value={form.instrument_id}
                         onChange={(event) => setForm((value) => ({ ...value, instrument_id: event.target.value }))}
                         placeholder="equity:US:AAPL"
@@ -1022,7 +1025,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <FieldLabel required={form.date_certainty !== "UNKNOWN"}>Window Start</FieldLabel>
-                      <input
+                      <Input
                         required={form.date_certainty !== "UNKNOWN"}
                         type="datetime-local"
                         value={form.window_start}
@@ -1032,7 +1035,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <FieldLabel required={form.date_certainty !== "UNKNOWN"}>Window End</FieldLabel>
-                      <input
+                      <Input
                         required={form.date_certainty !== "UNKNOWN"}
                         type="datetime-local"
                         value={form.window_end}
@@ -1042,26 +1045,26 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <span>Source Reference</span>
-                      <input
+                      <Input
                         value={form.source_reference}
                         onChange={(event) => setForm((value) => ({ ...value, source_reference: event.target.value }))}
                       />
                     </label>
                     <label className="agenda-textarea-field">
                       <span>Expected Question</span>
-                      <textarea rows={2} value={form.expected_question} onChange={(event) => setForm((value) => ({ ...value, expected_question: event.target.value }))} />
+                      <Textarea rows={2} value={form.expected_question} onChange={(event) => setForm((value) => ({ ...value, expected_question: event.target.value }))} />
                     </label>
                     <label className="agenda-textarea-field">
                       <span>Revision Note</span>
-                      <textarea rows={2} value={form.revision_note} onChange={(event) => setForm((value) => ({ ...value, revision_note: event.target.value }))} />
+                      <Textarea rows={2} value={form.revision_note} onChange={(event) => setForm((value) => ({ ...value, revision_note: event.target.value }))} />
                     </label>
                     <label>
                       <span>Source</span>
-                      <input value="USER_CONFIRMED" disabled />
+                      <Input value="USER_CONFIRMED" disabled />
                     </label>
                     <label>
                       <span>Status</span>
-                      <input value="UPCOMING" disabled />
+                      <Input value="UPCOMING" disabled />
                     </label>
                   </>
                 ) : action === "LINK_OUTCOME" ? (
@@ -1069,15 +1072,15 @@ export default function CatalystAgendaPage() {
                     <p className="agenda-field-requirement"><RequiredMark />One Durable Research Fact</p>
                     <label>
                       <span>Agenda Item ID</span>
-                      <input value={form.agenda_item_id} disabled />
+                      <Input value={form.agenda_item_id} disabled />
                     </label>
                     <label>
                       <span>Expected Version</span>
-                      <input value={form.expected_version} disabled />
+                      <Input value={form.expected_version} disabled />
                     </label>
                     <label className="agenda-textarea-field">
                       <span>Choose Durable Research Fact</span>
-                      <select
+                      <Select
                         defaultValue=""
                         onChange={(event) => applyOutcomeCandidate(event.target.value)}
                         disabled={candidateApi.loading || outcomeCandidates.length === 0}
@@ -1094,12 +1097,12 @@ export default function CatalystAgendaPage() {
                             </option>
                           );
                         })}
-                      </select>
+                      </Select>
                       {candidateApi.error ? <small>Candidate lookup unavailable: {candidateApi.error}</small> : null}
                     </label>
                     <label>
                       <span>Linked Event ID</span>
-                      <input
+                      <Input
                         value={form.event_id}
                         onChange={(event) => setForm((value) => ({ ...value, event_id: event.target.value }))}
                         placeholder="event_..."
@@ -1107,7 +1110,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <span>Linked Report ID</span>
-                      <input
+                      <Input
                         value={form.report_id}
                         onChange={(event) => setForm((value) => ({ ...value, report_id: event.target.value }))}
                         placeholder="report_..."
@@ -1115,7 +1118,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <span>Linked Evidence ID</span>
-                      <input
+                      <Input
                         value={form.evidence_id}
                         onChange={(event) => setForm((value) => ({ ...value, evidence_id: event.target.value }))}
                         placeholder="evidence_..."
@@ -1123,7 +1126,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label>
                       <FieldLabel required={!form.event_id.trim()}>Outcome Occurred At</FieldLabel>
-                      <input
+                      <Input
                         type="datetime-local"
                         value={form.outcome_occurred_at}
                         onChange={(event) => setForm((value) => ({ ...value, outcome_occurred_at: event.target.value }))}
@@ -1132,7 +1135,7 @@ export default function CatalystAgendaPage() {
                     </label>
                     <label className="agenda-textarea-field">
                       <FieldLabel required>Outcome Note</FieldLabel>
-                      <textarea
+                      <Textarea
                         rows={3}
                         value={form.outcome_note}
                         onChange={(event) => setForm((value) => ({ ...value, outcome_note: event.target.value }))}
@@ -1145,15 +1148,15 @@ export default function CatalystAgendaPage() {
                   <>
                     <label>
                       <span>Agenda Item ID</span>
-                      <input value={form.agenda_item_id} disabled />
+                      <Input value={form.agenda_item_id} disabled />
                     </label>
                     <label>
                       <span>Expected Version</span>
-                      <input value={form.expected_version} disabled />
+                      <Input value={form.expected_version} disabled />
                     </label>
                     <label className="agenda-textarea-field">
                       <FieldLabel required>Cancellation Reason</FieldLabel>
-                      <textarea
+                      <Textarea
                         required
                         rows={3}
                         value={form.cancellation_reason}

@@ -64,7 +64,7 @@ MCP 进程。
 
 在新会话中输入：
 
-> 调用 Trading Partner 的 `system_health`，告诉我 MCP surface profile、公开
+> 调用 `capability_read(tool="system_health", arguments={})`，告诉我 MCP surface profile、公开
 > 工具数量、schema 版本、运行健康状态和 Data Quality 摘要。不要刷新任何
 > Provider 或券商。
 

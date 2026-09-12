@@ -11,7 +11,10 @@ function envelope(data: Record<string, unknown>) {
   return { ok: true, data, warnings: [], errors: [], degraded: false };
 }
 
-function workbench() {
+function workbench(includeReturnMetrics = true, legacySampleGate = false) {
+  const staleSampleGate = legacySampleGate
+    ? { sample_sufficient: false, minimum_sample_size: 3 }
+    : {};
   return {
     selected_subject_id: SUBJECT,
     subjects: [{
@@ -127,18 +130,24 @@ function workbench() {
       items: [{ quality_status: "COMPLETE" }, { quality_status: "COMPLETE" }],
     }),
     behavior: envelope({
-      algorithm_version: "behavior_summary_v1",
-      closed_active_trade_cycles: { numerator: 3, denominator: 10, value: 3, excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      wins: { numerator: 2, denominator: 3, value: 2, excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      losses: { numerator: 1, denominator: 3, value: 1, excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      flat: { numerator: 0, denominator: 3, value: 0, excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      win_rate: { numerator: 2, denominator: 3, value: "0.6666666667", excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      avg_win: { numerator: "200", denominator: 2, value: "100", excluded_count: 8, sample_sufficient: true, availability: "AVAILABLE", native_currencies: ["USD"] },
-      avg_loss: { numerator: "-50", denominator: 1, value: "-50", excluded_count: 9, sample_sufficient: true, availability: "AVAILABLE", native_currencies: ["USD"] },
-      payoff_ratio: { numerator: "200", denominator: 1, value: "2", excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE", native_currencies: ["USD"] },
-      plan_coverage: { numerator: 1, denominator: 3, value: "0.3333333333", excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      pre_fill_decision_coverage: { numerator: 2, denominator: 3, value: "0.6666666667", excluded_count: 7, sample_sufficient: true, availability: "AVAILABLE" },
-      no_action_review_completion: { numerator: 0, denominator: 0, value: null, excluded_count: 0, sample_sufficient: false, availability: "UNAVAILABLE", unavailable_reason: "NO_ACTION_SAMPLE_EMPTY" },
+      algorithm_version: "behavior_summary_v3",
+      closed_active_trade_cycles: { numerator: 2, denominator: 2, value: 2, excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      wins: { numerator: 1, denominator: 2, value: 1, excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      losses: { numerator: 1, denominator: 2, value: 1, excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      flat: { numerator: 0, denominator: 2, value: 0, excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      win_rate: { numerator: 1, denominator: 2, value: "0.5", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      avg_win: { numerator: "100", denominator: 1, value: "100", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE", native_currencies: ["USD"] },
+      avg_loss: { numerator: "-50", denominator: 1, value: "-50", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE", native_currencies: ["USD"] },
+      payoff_ratio: { numerator: "100", denominator: 1, value: "2", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE", native_currencies: ["USD"] },
+      ...(includeReturnMetrics ? {
+        avg_win_return: { numerator: "0.20", denominator: 1, value: "0.20", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+        avg_loss_return: { numerator: "-0.05", denominator: 1, value: "-0.05", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+        return_payoff_ratio: { numerator: "0.20", denominator: 1, value: "4", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+        return_basis: "NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL",
+      } : {}),
+      plan_coverage: { numerator: 1, denominator: 2, value: "0.5", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      pre_fill_decision_coverage: { numerator: 1, denominator: 2, value: "0.5", excluded_count: 0, ...staleSampleGate, availability: "AVAILABLE" },
+      no_action_review_completion: { numerator: 0, denominator: 0, value: null, excluded_count: 0, availability: "UNAVAILABLE", unavailable_reason: "NO_ACTION_SAMPLE_EMPTY" },
     }),
     retro: envelope({ runs: [] }),
     scorecards: envelope({ runs: [] }),
@@ -220,21 +229,21 @@ function workbench() {
   };
 }
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, includeReturnMetrics = true, legacySampleGate = false) {
   const writes: Array<{ path: string; body: unknown }> = [];
   let deepReviewed = false;
-  await page.route("**/api/console/api/**", async (route: Route) => {
+  await page.route("**/api/{console,design-preview}/api/**", async (route: Route) => {
     const request = route.request();
-    const path = new URL(request.url()).pathname.replace("/api/console", "");
+    const path = new URL(request.url()).pathname.replace(/^\/api\/(?:console|design-preview)/, "");
     const json = (value: unknown) => route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(value),
     });
     if (path === "/api/session") return json({ token: "e2e-session-token-0000000000000000" });
-    if (path.startsWith("/api/decision-workbench")) return json(workbench());
+    if (path.startsWith("/api/decision-workbench")) return json(workbench(includeReturnMetrics, legacySampleGate));
     if (path === "/api/observations") {
-      const value = workbench();
+      const value = workbench(includeReturnMetrics, legacySampleGate);
       return json({ data: {
         external_notes: value.external_notes,
         observation_sources: value.observation_sources,
@@ -281,13 +290,72 @@ async function mockApi(page: Page) {
   return writes;
 }
 
+test("Journal filters preserve controls and scope Behavior by account and custom dates", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/{console,design-preview}/account-aliases", (route) => route.fulfill({ json: {
+    aliases: { account_1: "Schwab IRA", account_2: "Schwab Brokerage" },
+  } }));
+  const queries: URLSearchParams[] = [];
+  let holdResponse = false;
+  let releaseResponse: (() => void) | undefined;
+  await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    queries.push(query);
+    if (holdResponse) await new Promise<void>((resolve) => { releaseResponse = resolve; });
+    const payload = workbench();
+    payload.accounts = envelope({ accounts: [
+      { account_ref: "account_1", provider: "schwab", positions: [] },
+      { account_ref: "account_2", provider: "schwab", positions: [] },
+    ] });
+    const numerator = query.has("account_refs") ? 1 : 2;
+    const denominator = query.has("behavior_end") ? 4 : 3;
+    payload.behavior.data.win_rate = { numerator, denominator, value: numerator / denominator, availability: "AVAILABLE", excluded_count: 0 };
+    await route.fulfill({ json: payload });
+  });
+  await page.goto("/decision-workbench#behavior");
+  const winRate = page.getByRole("article").filter({ hasText: "Win Rate" });
+  await expect(winRate.getByText("2 ÷ 3 = 66.7%", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Account", exact: true }).click();
+  holdResponse = true;
+  await page.getByRole("option", { name: /Schwab IRA/ }).click();
+  await expect.poll(() => releaseResponse !== undefined).toBe(true);
+  await expect(page.getByRole("combobox", { name: "Period", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove Schwab IRA" })).toBeVisible();
+  holdResponse = false;
+  releaseResponse?.();
+  await expect(winRate.getByText("1 ÷ 3 = 33.3%", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("CUSTOM");
+  await page.getByLabel("Start Date").fill("2026-08-01");
+  await page.getByLabel("End Date").fill("2026-08-31");
+  await expect(winRate.getByText("1 ÷ 4 = 25.0%", { exact: true })).toBeVisible();
+  const applied = queries.at(-1)!;
+  expect(applied.getAll("account_refs")).toEqual(["account_1"]);
+  expect(Date.parse(applied.get("behavior_start")!)).toBeGreaterThan(0);
+  expect(Date.parse(applied.get("behavior_end")!)).toBeGreaterThan(Date.parse(applied.get("behavior_start")!));
+  const requestCount = queries.length;
+  await page.getByLabel("Start Date").fill("2026-10-01");
+  await expect(page.getByRole("alert").filter({ hasText: "Enter both dates." })).toContainText("Start Date must not be after End Date");
+  expect(queries).toHaveLength(requestCount);
+  await expect(winRate.getByText("1 ÷ 4 = 25.0%", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear Filters", exact: true }).click();
+  await expect(winRate.getByText("2 ÷ 3 = 66.7%", { exact: true })).toBeVisible();
+  expect(queries.at(-1)!.has("account_refs")).toBe(false);
+  expect(queries.at(-1)!.has("behavior_start")).toBe(false);
+  await page.getByRole("tab", { name: /Overview/ }).click();
+  await expect(page.getByRole("heading", { name: "Results", exact: true })).toHaveCount(0);
+});
+
 test("Journal Console connects Decision, Timeline, Cycle preview, and Review", async ({ page }) => {
   const writes = await mockApi(page);
   await page.goto(`/decision-workbench?subject_id=${SUBJECT}`);
   await expect(page.getByRole("heading", { name: "Phase 4 Console E2E" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Data Confidence" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Results", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Current Confirmed View" })).toBeVisible();
+  await page.getByRole("link", { name: "Open Notes", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /View Inbox/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Clear Filters", exact: true }).click();
   const tradedInstruments = page.locator(".journal-instrument-card");
   await expect(tradedInstruments.getByRole("heading", { name: "Traded Instruments" })).toBeVisible();
   await expect(tradedInstruments.locator("tbody tr")).toHaveCount(2);
@@ -322,13 +390,29 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   await expect(page.getByLabel("End Date")).toHaveValue("2026-08-20");
   await expect(page.getByText("Win Rate", { exact: true })).toHaveCount(1);
   const winRateCard = page.getByRole("article").filter({ hasText: "Win Rate" });
-  await expect(winRateCard.getByText("2 ÷ 3 = 66.7%", { exact: true })).toBeVisible();
-  await expect(page.getByText("$100.00 avg win ÷ $50.00 avg loss = 2.00", { exact: true })).toBeVisible();
+  await expect(winRateCard.getByText("1 ÷ 2 = 50.0%", { exact: true })).toBeVisible();
+  const amountPayoffCard = page.getByRole("article").filter({ hasText: "Payoff Ratio · Amount" });
+  await expect(amountPayoffCard.getByText("2.00x", { exact: true })).toBeVisible();
+  await expect(amountPayoffCard.getByText(/Amount: \$100\.00 avg win \(1 win\) ÷ \$50\.00 abs avg loss \(1 loss\) = 2\.00x/)).toBeVisible();
+  const returnPayoffCard = page.getByRole("article").filter({ hasText: "Payoff Ratio · Return %" });
+  await expect(returnPayoffCard.getByText("4.00x", { exact: true })).toBeVisible();
+  await expect(returnPayoffCard.getByText(/Return %: 20\.0% avg win return \(1 win\) ÷ 5\.0% abs avg loss return \(1 loss\) = 4\.00x/)).toBeVisible();
+  await page.getByText("Other Metrics & Audit Details", { exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Avg Win Return" })).toContainText("20.0%");
+  await expect(page.getByRole("row").filter({ hasText: "Avg Loss Return" })).toContainText("-5.0%");
 
   await page.getByRole("tab", { name: /View Inbox/ }).click();
   await expect(page.getByRole("heading", { name: "Latest Thinking" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "AAPL Living Note" })).toBeVisible();
   await expect(page.getByText("2 SOURCES")).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Account", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Period", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Note Scope", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Filter Notes", exact: true })).toHaveCount(0);
+  const notesSearch = page.getByRole("textbox", { name: "Search Notes", exact: true });
+  await notesSearch.fill("does not match any synthetic note");
+  await expect(page.getByRole("listbox", { name: "Filtered Notes" })).toHaveCount(0);
+  await notesSearch.fill("");
   const attribution = page.locator(".notes-attribution-sections");
   await expect(attribution.getByText("08/28", { exact: true })).toBeVisible();
   await expect(attribution.getByText("USER", { exact: true })).toHaveCount(1);
@@ -400,4 +484,64 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
     "/api/trade-cycle-overrides",
     "/api/behavior-reviews",
   ]));
+});
+
+test("Behavior marks the return payoff unavailable when percent facts are absent", async ({ page }) => {
+  await mockApi(page, false);
+  await page.goto("/decision-workbench#behavior");
+  const returnPayoffCard = page.getByRole("article").filter({ hasText: "Payoff Ratio · Return %" });
+  await expect(returnPayoffCard).toContainText("UNAVAILABLE");
+  await expect(returnPayoffCard.getByText("—", { exact: true })).toBeVisible();
+  await expect(returnPayoffCard).toContainText("Return %: — avg win return");
+  await page.getByText("Other Metrics & Audit Details", { exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Avg Win Return" })).toContainText("—");
+  await expect(page.getByRole("row").filter({ hasText: "Avg Loss Return" })).toContainText("—");
+});
+
+test("Behavior keeps valid legacy values despite a stale sample gate", async ({ page }) => {
+  await mockApi(page, true, true);
+  await page.goto("/decision-workbench#behavior");
+  const amountPayoffCard = page.getByRole("article").filter({ hasText: "Payoff Ratio · Amount" });
+  const returnPayoffCard = page.getByRole("article").filter({ hasText: "Payoff Ratio · Return %" });
+  await expect(amountPayoffCard.getByText("2.00x", { exact: true })).toBeVisible();
+  await expect(returnPayoffCard.getByText("4.00x", { exact: true })).toBeVisible();
+  await expect(amountPayoffCard).toContainText("AVAILABLE");
+  await expect(returnPayoffCard).toContainText("AVAILABLE");
+});
+
+test("Trade Cycle numeric counts align with P/L and preserve unavailable data", async ({ page }, testInfo) => {
+  await mockApi(page);
+  let overrides: Record<string, unknown> = { add_count: 2, reduce_count: 3 };
+  await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+    const payload = workbench();
+    const cycles = payload.trade_cycles.data.cycles as Record<string, unknown>[];
+    const cycle = { ...cycles[0], ...overrides };
+    await route.fulfill({ json: {
+      ...payload,
+      trade_cycles: envelope({ status: "COMPLETE", cycles: [cycle] }),
+    } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/decision-workbench#cycles");
+  const metrics = page.locator(".journal-cycle-detail .cycle-metrics");
+  const counts = metrics.locator(":scope > span").filter({ hasText: "Adds / Reductions" });
+  await expect(counts.locator("strong")).toHaveText("2 / 3");
+  await expect(metrics.locator(":scope > span")).toHaveCount(5);
+  const tops = await metrics.locator(":scope > span").evaluateAll((items) => items.map((item) => item.getBoundingClientRect().top));
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+  await metrics.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("cycle-metrics.png") });
+
+  overrides = { add_count: 0, reduce_count: 0, status: "OPEN", closed_at: null, ending_quantity: "10" };
+  await page.reload();
+  await expect(counts.locator("strong")).toHaveText("0 / 0");
+  overrides = { add_count: null, reduce_count: null };
+  await page.reload();
+  await expect(counts.locator("strong")).toHaveText("— / —");
+  overrides = { add_count: 0, reduce_count: 0, status: "UNRESOLVED", warning_codes: ["MANUAL_RECOMPUTE_REQUIRED"] };
+  await page.reload();
+  await expect(counts.locator("strong")).toHaveText("— / —");
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await expect(counts).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });

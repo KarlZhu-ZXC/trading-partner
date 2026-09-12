@@ -424,7 +424,6 @@ async def test_decision_order_fill_cycle_performance_and_review_close_the_loop()
             instrument_ids=(INSTRUMENT_ID,),
             strategy_code="strategy_v1",
             classifications=(TradeCycleClassification.ACTIVE_TRADE,),
-            minimum_sample_size=1,
         )
     )
     assert behavior.ok and behavior.data is not None

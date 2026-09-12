@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { Table, TextLink } from "./ui/controls";
 
 type AgentMessageContentProps = {
   content: string;
@@ -47,14 +48,14 @@ function inlineContent(value: string, keyPrefix: string): ReactNode[] {
       const linkMatch = token.match(/^\[([^\]]+)\]\((.+)\)$/);
       const href = linkMatch ? safeExternalUrl(linkMatch[2]) : null;
       parts.push(href
-        ? <a href={href} key={key} rel="noopener noreferrer" target="_blank">{linkMatch?.[1]}</a>
+        ? <TextLink href={href} key={key} rel="noopener noreferrer" target="_blank">{linkMatch?.[1]}</TextLink>
         : token);
     } else if (token.startsWith("http://") || token.startsWith("https://")) {
       const punctuation = token.match(/[.,;:!?]+$/)?.[0] ?? "";
       const rawUrl = punctuation ? token.slice(0, -punctuation.length) : token;
       const href = safeExternalUrl(rawUrl);
       parts.push(href
-        ? <a href={href} key={key} rel="noopener noreferrer" target="_blank">{rawUrl}</a>
+        ? <TextLink href={href} key={key} rel="noopener noreferrer" target="_blank">{rawUrl}</TextLink>
         : rawUrl);
       if (punctuation) parts.push(punctuation);
     } else {
@@ -102,8 +103,8 @@ export function AgentMessageContent({ content }: AgentMessageContentProps) {
       while (index < lines.length && lines[index].includes("|") && lines[index].trim()) rows.push(tableCells(lines[index++]));
       blocks.push(
         <div className="agent-message-table-wrap" key={`table-${index}`}>
-          <table><thead><tr>{header.map((cell, cellIndex) => <th key={cellIndex}>{inlineContent(cell, `th-${index}-${cellIndex}`)}</th>)}</tr></thead>
-          <tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{header.map((_, cellIndex) => <td key={cellIndex}>{inlineContent(row[cellIndex] ?? "", `td-${index}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></table>
+          <Table><thead><tr>{header.map((cell, cellIndex) => <th key={cellIndex}>{inlineContent(cell, `th-${index}-${cellIndex}`)}</th>)}</tr></thead>
+          <tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{header.map((_, cellIndex) => <td key={cellIndex}>{inlineContent(row[cellIndex] ?? "", `td-${index}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></Table>
         </div>,
       );
       continue;

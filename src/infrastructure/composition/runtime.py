@@ -43,7 +43,7 @@ from infrastructure.system.process_file_lock import ProcessFileLock
 
 
 def build_agent_attachment_store(settings: AppSettings) -> AgentAttachmentStore | None:
-    if not settings.agent_enabled and not settings.telegram_agent_enabled:
+    if not settings.agent_enabled:
         return None
     return FileAgentAttachmentStore(settings.paths.agent_attachments)
 
@@ -255,7 +255,7 @@ def build_trade_retro_narrative_provider(
 def build_agent_model_provider(settings: AppSettings) -> AgentModelProvider | None:
     """Build the shared provider-neutral Agent model adapter when enabled."""
 
-    if not settings.agent_enabled and not settings.telegram_agent_enabled:
+    if not settings.agent_enabled:
         return None
     config = settings.resolved_llm_config
     if config is None:
@@ -278,7 +278,7 @@ def build_agent_model_providers(
 ) -> dict[str, AgentModelProvider]:
     """Build every configured Console-selectable Agent endpoint."""
 
-    if not settings.agent_enabled and not settings.telegram_agent_enabled:
+    if not settings.agent_enabled:
         return {}
     result: dict[str, AgentModelProvider] = {}
     for model_id, config in settings.resolved_agent_llm_configs.items():
@@ -314,7 +314,7 @@ def build_agent_web_search_provider(
     if (
         not settings.tavily_web_search_enabled
         or not settings.tavily_api_key
-        or (not settings.agent_enabled and not settings.telegram_agent_enabled)
+        or (not settings.agent_enabled)
     ):
         return None
     return TavilyAgentWebSearchProvider(

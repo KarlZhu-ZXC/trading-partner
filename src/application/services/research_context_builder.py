@@ -36,8 +36,8 @@ from domain.research.models import ResearchSubject
 _LIVE_TOOLS = (
     "market_data_get/quote",
     "a_share_get_facts/snapshot",
-    "us_company_get/fundamentals_snapshot",
-    "us_company_get/company_updates",
+    "us_get_facts/fundamentals_snapshot",
+    "us_get_facts/company_updates",
 )
 
 

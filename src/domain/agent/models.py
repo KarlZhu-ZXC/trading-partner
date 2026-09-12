@@ -415,65 +415,9 @@ class AgentPendingAction:
         return self.arguments_sha256
 
 
-@dataclass(frozen=True, slots=True)
-class AgentChannelCursor:
-    cursor_id: str
-    channel: AgentChannel
-    cursor_key: str
-    last_update_id: int
-    updated_at: datetime
-    version: int = 1
-
-    def __post_init__(self) -> None:
-        _text(self.cursor_id, "cursor_id", 160)
-        _enum(self.channel, AgentChannel, "channel")
-        _text(self.cursor_key, "cursor_key", 256)
-        if type(self.last_update_id) is not int or self.last_update_id < -1:
-            raise DataContractError("last_update_id must be an integer >= -1")
-        _sequence(self.version, "version", minimum=1)
-        _time(self.updated_at, "updated_at")
-
-    @property
-    def update_id(self) -> int:
-        return self.last_update_id
-
-
-@dataclass(frozen=True, slots=True)
-class AgentChannelHandoff:
-    """One-time, cross-channel conversation handoff without stored token text."""
-
-    handoff_id: str
-    conversation_id: str
-    owner_principal: str
-    target_channel: AgentChannel
-    token_sha256: str
-    expires_at: datetime
-    created_at: datetime
-    consumed_at: datetime | None = None
-    version: int = 1
-
-    def __post_init__(self) -> None:
-        _text(self.handoff_id, "handoff_id", 160)
-        _text(self.conversation_id, "conversation_id", 160)
-        _text(self.owner_principal, "owner_principal", 256)
-        _enum(self.target_channel, AgentChannel, "target_channel")
-        _sha256(self.token_sha256, "token_sha256")
-        _sequence(self.version, "version", minimum=1)
-        _time(self.expires_at, "expires_at")
-        _time(self.created_at, "created_at")
-        if self.expires_at <= self.created_at:
-            raise DataContractError("handoff expires_at must follow created_at")
-        if self.consumed_at is not None:
-            _time(self.consumed_at, "consumed_at")
-
-
-Handoff = AgentChannelHandoff
-
-
 # Compatibility aliases for callers that use the shorter entity names.
 Conversation = AgentConversation
 ChannelBinding = AgentChannelBinding
 Message = AgentMessage
 ToolReceipt = AgentToolReceipt
 PendingAction = AgentPendingAction
-ChannelCursor = AgentChannelCursor

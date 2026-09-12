@@ -18,7 +18,8 @@ from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
 from domain.portfolio.enums import TradeCycleClassification
 
-BEHAVIOR_SUMMARY_ALGORITHM_VERSION = "behavior_summary_v1"
+BEHAVIOR_SUMMARY_ALGORITHM_VERSION = "behavior_summary_v3"
+BEHAVIOR_RETURN_BASIS = "NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL"
 type BehaviorScalar = int | Decimal | None
 
 
@@ -126,8 +127,6 @@ class BehaviorMetric:
     decision_ids: tuple[str, ...] = ()
     eligible_decision_ids: tuple[str, ...] = ()
     excluded_decision_ids: tuple[str, ...] = ()
-    sample_sufficient: bool = True
-    minimum_sample_size: int = 1
     native_currencies: tuple[str, ...] = ()
     note: str | None = None
     availability: BehaviorMetricAvailability = BehaviorMetricAvailability.AVAILABLE
@@ -143,10 +142,6 @@ class BehaviorMetric:
             raise DataContractError("denominator must be a nonnegative int or None")
         if type(self.excluded_count) is not int or self.excluded_count < 0:
             raise DataContractError("excluded_count must be a nonnegative int")
-        if type(self.minimum_sample_size) is not int or self.minimum_sample_size < 0:
-            raise DataContractError("minimum_sample_size must be a nonnegative int")
-        if type(self.sample_sufficient) is not bool:
-            raise DataContractError("sample_sufficient must be bool")
         _unique_texts(self.exclusion_reasons, "exclusion_reasons", maximum=160)
         _unique_texts(self.cycle_ids, "cycle_ids")
         _unique_texts(self.eligible_cycle_ids, "eligible_cycle_ids")
@@ -197,6 +192,9 @@ class BehaviorSummary:
     avg_win: BehaviorMetric
     avg_loss: BehaviorMetric
     payoff_ratio: BehaviorMetric
+    avg_win_return: BehaviorMetric
+    avg_loss_return: BehaviorMetric
+    return_payoff_ratio: BehaviorMetric
     average_holding_duration: BehaviorMetric
     median_holding_duration: BehaviorMetric
     turnover: BehaviorMetric
@@ -218,6 +216,7 @@ class BehaviorSummary:
     cohort_excluded_cycle_ids: tuple[str, ...] = ()
     cohort_exclusion_reasons: tuple[str, ...] = ()
     native_currencies: tuple[str, ...] = ()
+    return_basis: str = BEHAVIOR_RETURN_BASIS
     algorithm_version: str = BEHAVIOR_SUMMARY_ALGORITHM_VERSION
     execution_effect: bool = False
 
@@ -231,6 +230,7 @@ class BehaviorSummary:
         if set(self.cohort_cycle_ids) & set(self.cohort_excluded_cycle_ids):
             raise DataContractError("cohort cycle IDs must be disjoint")
         _unique_texts(self.native_currencies, "native_currencies", maximum=32)
+        _bounded_text(self.return_basis, "return_basis", maximum=128)
         _bounded_text(self.algorithm_version, "algorithm_version", maximum=64)
         if self.execution_effect is not False:
             raise DataContractError("behavior summary must not have execution effect")
@@ -246,6 +246,9 @@ class BehaviorSummary:
             self.avg_win,
             self.avg_loss,
             self.payoff_ratio,
+            self.avg_win_return,
+            self.avg_loss_return,
+            self.return_payoff_ratio,
             self.average_holding_duration,
             self.median_holding_duration,
             self.turnover,
@@ -308,6 +311,7 @@ class BehaviorSummary:
 
 
 __all__ = [
+    "BEHAVIOR_RETURN_BASIS",
     "BEHAVIOR_SUMMARY_ALGORITHM_VERSION",
     "BehaviorCohort",
     "BehaviorCohortFilter",

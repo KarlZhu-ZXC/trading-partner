@@ -1673,21 +1673,9 @@ class AgentRuntimeService:
         limit: int,
         mode: str,
     ) -> tuple[AgentToolDescriptor, ...]:
-        """Call new mode-aware gateways while retaining legacy read adapters."""
+        """Return descriptors for the requested capability search mode."""
 
-        search = self._gateway.search
-        try:
-            parameters = inspect.signature(search).parameters
-            accepts_mode = "mode" in parameters or any(
-                item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
-            )
-        except (TypeError, ValueError):
-            accepts_mode = False
-        if accepts_mode:
-            return search(query, limit, mode=mode)  # type: ignore[call-arg]
-        if mode == "read":
-            return search(query, limit)
-        return ()
+        return self._gateway.search(query, limit, mode=mode)
 
     def _validation_hint(
         self,

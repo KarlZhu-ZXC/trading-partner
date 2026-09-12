@@ -12,8 +12,8 @@ are folded into `AGENTS.md`, a Phase specification, or an operator guide.
 | [../README.md](../README.md) | Product overview, installation, architecture, and common commands |
 | [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文安装、MCP 接入、首次验证与安全边界 |
 | [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Claude Desktop, Cursor, generic stdio, upgrade, and uninstall recipes |
-| [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Complete public MCP contract, trust model, provider boundaries, and host usage |
-| [guide/console-layout.md](guide/console-layout.md) | Current Console hierarchy, shared controls, density, and interaction standard |
+| [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Progressive MCP discovery, exact call contracts, trust model and host usage |
+| [guide/console-design-system.md](guide/console-design-system.md) | Current Console hierarchy, shared controls, density, and interaction standard |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |
 | [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Current direction and genuinely deferred integrations |
@@ -24,14 +24,13 @@ are folded into `AGENTS.md`, a Phase specification, or an operator guide.
 |---|---|
 | [phases/phase1.md](phases/phase1.md) | Research memory, market/company facts, accounts, workflows, and compact MCP foundation |
 | [phases/phase2.md](phases/phase2.md) | Watchlist Hub, Risk Engine, Monitoring Hub, notifications, and Technical Engine |
-| [phases/phase3.md](phases/phase3.md) | Cross-asset facts, company operating data, QuantConnect bridge, and plan controls |
+| [phases/phase3.md](phases/phase3.md) | Cross-asset facts, company operating data, and plan controls |
 | [phases/phase4.md](phases/phase4.md) | Journal, Observations, Trade Cycles, performance, and behavior review |
 
 ## User and operator guides
 
 | Document | Scope |
 |---|---|
-| [guide/quantconnect-free-bridge.md](guide/quantconnect-free-bridge.md) | Prepare LEAN code, run it manually in QuantConnect Free, and import result JSON |
 | [operations/moomoo-opend-macos.md](operations/moomoo-opend-macos.md) | Command-line OpenD lifecycle on macOS |
 | [operations/phase3a-live-smoke.md](operations/phase3a-live-smoke.md) | Current cross-asset free-provider smoke runbook and typed degradation |
 | [contracts/observation-source-v1.schema.json](contracts/observation-source-v1.schema.json) | Closed full-text Local Observation Bridge contract |
@@ -52,7 +51,10 @@ when those releases shipped. They are not current usage instructions.
 
 ## Documentation lifecycle
 
-- `AGENTS.md` owns agent-facing invariants, safety gates, architecture, and verification.
+- [Root agent guide](../AGENTS.md) owns cross-cutting invariants, architecture, and verification.
+  Its task-specific details live in [product contracts](../.agents/references/product-contracts.md),
+  [Agent runtime](../.agents/references/agent-runtime.md), and
+  [Console rules](../.agents/references/console.md); load them only for affected work.
 - `phases/` owns implemented contracts; it does not act as a progress diary.
 - `guide/` and `operations/` own current user/operator instructions only.
 - `roadmap/` owns genuinely deferred directions.

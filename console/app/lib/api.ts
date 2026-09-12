@@ -29,7 +29,12 @@ async function readJsonWithRetry<T>(route: string, signal: AbortSignal): Promise
   for (let attempt = 0; attempt < READ_RETRY_DELAYS_MS.length; attempt += 1) {
     await abortableDelay(READ_RETRY_DELAYS_MS[attempt], signal);
     try {
-      const response = await fetch(`${API_BASE}${route}`, { signal });
+      const url = new URL(`${API_BASE}${route}`, window.location.origin);
+      if (process.env.NEXT_PUBLIC_CONSOLE_DESIGN_PREVIEW === "1") {
+        const previewState = new URLSearchParams(window.location.search).get("preview_state");
+        if (previewState) url.searchParams.set("preview_state", previewState);
+      }
+      const response = await fetch(url, { signal });
       if (response.ok) return (await response.json()) as T;
       latestError = new Error(await responseErrorMessage(response));
       if (!TRANSIENT_READ_STATUSES.has(response.status)) {
@@ -93,14 +98,15 @@ export function useApi<T>(
     setError(null);
     readJsonWithRetry<T>(route, controller.signal)
       .then((value) => {
+        if (controller.signal.aborted) return;
         setData(value);
         setRefreshedAt(new Date());
       })
       .catch((cause: unknown) => {
-        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        if (controller.signal.aborted || (cause instanceof DOMException && cause.name === "AbortError")) return;
         setError(cause instanceof Error ? cause.message : "Unable to connect to the local API");
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [enabled, route, nonce]);
 

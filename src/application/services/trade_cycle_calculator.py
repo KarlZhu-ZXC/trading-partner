@@ -78,7 +78,7 @@ class TradeCycleCalculator:
         as_of: datetime,
         coverage_status: AccountActivityCoverageStatus,
         start: datetime | None = None,
-        limit: int = 200,
+        limit: int | None = 200,
         coverage_warning_codes: tuple[str, ...] = (),
     ) -> TradeCycleProjection:
         groups: dict[tuple[str, str, str], _Cycle] = {}
@@ -240,7 +240,7 @@ class TradeCycleCalculator:
         warning_codes = set(coverage_warning_codes)
         if not completed:
             warning_codes.add("TRADE_CYCLE_INPUTS_UNAVAILABLE")
-        if len(completed) > limit:
+        if limit is not None and len(completed) > limit:
             warning_codes.add("TRADE_CYCLE_RESULTS_TRUNCATED")
             completed = completed[:limit]
         warning_codes.update(code for item in completed for code in item.warning_codes)
@@ -381,6 +381,14 @@ class TradeCycleCalculator:
             if current.opened_at is not None
             else None
         )
+        deployed = current.current_deployed()
+        current_average_cost = (
+            deployed / current.quantity
+            if status is TradeCycleStatus.OPEN
+            and current.quantity > 0
+            and deployed is not None
+            else None
+        )
         return TradeCycle(
             cycle_id=current.cycle_id,
             account_ref=current.account_ref,
@@ -400,6 +408,7 @@ class TradeCycleCalculator:
             add_count=current.add_count,
             reduce_count=current.reduce_count,
             ending_quantity=current.quantity,
+            current_average_cost=current_average_cost,
             gross_realized_pnl=(
                 current.gross_realized if current.gross_complete else None
             ),

@@ -125,7 +125,7 @@ in a terminal: two processes cannot share one host stdio stream.
 
 Ask the host:
 
-> Call Trading Partner `system_health`. Report `mcp_surface_profile`,
+> Call Trading Partner `capability_read(tool="system_health", arguments={})`. Report `mcp_surface_profile`,
 > `public_tool_count`, `surface_schema_version`, operational health, and the Data
 > Quality summary. Do not refresh any Provider or broker.
 

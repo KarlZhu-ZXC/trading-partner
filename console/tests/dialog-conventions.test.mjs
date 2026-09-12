@@ -1,3 +1,4 @@
+import { consoleStyles } from "./style-sources.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -26,7 +27,7 @@ test("owned Console actions use semantic dialogs instead of native browser promp
   assert.match(ui, /previous\?\.focus\?\.\(\)/);
   assert.match(ui, /export function TextInputDialog/);
   assert.match(ui, /aria-required=\{required \|\| undefined\}/);
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(styles, /\.dialog-backdrop/);
+  const styles = await consoleStyles();
+  assert.match(styles, /\.dialog \{/);
   assert.match(styles, /\.dialog-panel/);
 });

@@ -12,22 +12,18 @@ from interfaces.mcp.tools.compact import CapabilityPolicy
 _GROUPS = {
     "system_health": "System",
     "instrument_resolve": "Instruments",
-    "investment_case_read": "Research",
+    "research_get": "Research",
     "investment_case_manage": "Research",
-    "research_judgment_get": "Judgment",
     "research_judgment_propose": "Judgment",
     "research_judgment_confirm": "Judgment",
-    "research_memory_get": "Memory",
     "research_memory_append": "Memory",
     "a_share_get_facts": "A-share facts",
     "market_data_get": "Market facts",
     "technical_get_snapshot": "Technical",
     "technical_render_chart": "Technical",
-    "us_company_get": "US research",
-    "us_context_get": "US research",
-    "account_get": "Accounts",
+    "us_get_facts": "US facts",
     "external_state_sync": "Accounts",
-    "portfolio_analyze": "Portfolio",
+    "portfolio_get": "Portfolio",
     "broker_order_manage": "Broker orders",
     "research_workflow_run": "Workflows",
     "watchlist_get": "Watchlist",
@@ -42,17 +38,30 @@ _GROUPS = {
 
 def _operations(schema: Mapping[str, Any]) -> tuple[str, ...]:
     values: set[str] = set()
-    definitions = schema.get("$defs")
-    if isinstance(definitions, Mapping):
-        for definition in definitions.values():
-            if not isinstance(definition, Mapping):
-                continue
-            properties = definition.get("properties")
-            if not isinstance(properties, Mapping):
-                continue
-            operation = properties.get("operation")
-            if isinstance(operation, Mapping) and isinstance(operation.get("const"), str):
-                values.add(operation["const"])
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            properties = node.get("properties")
+            operation = properties.get("operation") if isinstance(properties, Mapping) else None
+            if isinstance(operation, Mapping) and isinstance(operation.get("$ref"), str):
+                reference = operation["$ref"]
+                definitions = schema.get("$defs")
+                if reference.startswith("#/$defs/") and isinstance(definitions, Mapping):
+                    operation = definitions.get(reference.rsplit("/", 1)[-1])
+            if isinstance(operation, Mapping):
+                constant = operation.get("const")
+                if isinstance(constant, str):
+                    values.add(constant)
+                choices = operation.get("enum")
+                if isinstance(choices, list):
+                    values.update(item for item in choices if isinstance(item, str))
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(schema)
     return tuple(sorted(values))
 
 

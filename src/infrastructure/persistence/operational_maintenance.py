@@ -29,7 +29,6 @@ _RETENTION_RULES = (
     RetentionRuleDTO(area="monitor_runs", policy="keep_forever"),
     RetentionRuleDTO(area="monitor_events", policy="keep_forever"),
     RetentionRuleDTO(area="research_memory", policy="keep_forever"),
-    RetentionRuleDTO(area="historical_validation_artifacts", policy="keep_forever"),
     RetentionRuleDTO(area="database_backups", policy="operator_managed"),
 )
 
@@ -40,14 +39,12 @@ class SqliteOperationalMaintenance:
         *,
         engine: Engine,
         database_url: str,
-        artifact_root: Path,
         backup_root: Path,
         clock: Clock,
     ) -> None:
         self._engine = engine
         self._database_url = database_url
         self._database_path = self._sqlite_path(database_url)
-        self._artifact_root = artifact_root.resolve()
         self._backup_root = backup_root.resolve()
         self._clock = clock
 
@@ -89,7 +86,6 @@ class SqliteOperationalMaintenance:
                 "provider_cache",
                 ("expires_at < :cutoff", {"cutoff": now.isoformat()}),
             )
-        artifact_files, artifact_bytes, _ = self._files(self._artifact_root, "*")
         backup_files, _, latest_backup = self._files(self._backup_root, "*.db")
         scheduler_plist = (
             Path.home() / "Library" / "LaunchAgents" / "com.trading-partner.monitor-hourly.plist"
@@ -104,8 +100,6 @@ class SqliteOperationalMaintenance:
             table_counts=tuple(counts),
             provider_cache_total=cache_total,
             provider_cache_expired=cache_expired,
-            validation_artifact_files=artifact_files,
-            validation_artifact_bytes=artifact_bytes,
             backup_files=backup_files,
             latest_backup_at=latest_backup,
             retention_rules=_RETENTION_RULES,

@@ -317,6 +317,7 @@ test("legacy Chat opens the shared Rail and preserves Provider-scoped choices", 
   await expect(page).toHaveURL(/\/\?agent=open$/);
   await expect(page.getByRole("complementary", { name: "Agent" })).toBeVisible();
   await expect(page.getByText("READY", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Telegram" })).toHaveCount(0);
 
   const provider = page.getByLabel("Agent Provider");
   const model = page.getByLabel("Agent Model");

@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  distDir: process.env.CONSOLE_BUILD_DIR ?? ".next",
 };
 
 export default nextConfig;

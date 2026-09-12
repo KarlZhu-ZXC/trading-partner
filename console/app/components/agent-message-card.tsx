@@ -12,6 +12,7 @@ import { authenticatedFetch } from "../lib/api";
 import type { AgentImageAttachment, AgentMessage, AgentReceipt } from "../lib/agent-api";
 import { AgentMessageContent } from "./agent-message-content";
 import { Disclosure } from "./ui";
+import { IconButton, TextLink } from "./ui/controls";
 
 type Dict = Record<string, unknown>;
 
@@ -104,10 +105,11 @@ function AgentArtifactPreview({ url }: { url: string }) {
   }, [url]);
 
   return (
-    <a
+    <TextLink
       aria-label="Open Generated Chart in a New Tab"
       className={`agent-message-artifact${failed ? " failed" : ""}`}
-      href={objectUrl ?? undefined}
+      href={objectUrl ?? "#"}
+      onClick={(event) => { if (!objectUrl) event.preventDefault(); }}
       rel="noopener noreferrer"
       target="_blank"
     >
@@ -121,7 +123,7 @@ function AgentArtifactPreview({ url }: { url: string }) {
       ) : (
         <span>{failed ? "Chart preview unavailable" : "Loading chart preview…"}</span>
       )}
-    </a>
+    </TextLink>
   );
 }
 
@@ -227,35 +229,38 @@ export function AgentMessageCard({
         <div className="agent-message-meta">
           <time>{displayDate(message.created_at)}</time>
           <div className="agent-message-actions" aria-label={`${isUser ? "User" : "Agent"} message actions`}>
-            <button
+            <IconButton
               aria-label={copied ? "Message Copied" : "Copy Message"}
               className={copied ? "success" : ""}
               onClick={() => onCopy(message)}
+              size="sm"
               title={copied ? "Copied" : "Copy"}
               type="button"
             >
               {copied ? <Check aria-hidden="true" size={11} /> : <Copy aria-hidden="true" size={11} />}
-            </button>
+            </IconButton>
             {isUser ? (
-              <button
+              <IconButton
                 aria-label="Edit This Prompt and Resend"
                 disabled={disabled}
                 onClick={() => onEdit(message)}
+                size="sm"
                 title="Edit and Resend as a New Turn"
                 type="button"
               >
                 <PencilLine aria-hidden="true" size={11} />
-              </button>
+              </IconButton>
             ) : (
-              <button
+              <IconButton
                 aria-label="Retry the Prompt for This Response"
                 disabled={disabled}
                 onClick={() => onRetry(message)}
+                size="sm"
                 title="Retry as a New Turn"
                 type="button"
               >
                 <RefreshCw aria-hidden="true" size={11} />
-              </button>
+              </IconButton>
             )}
           </div>
         </div>
@@ -267,9 +272,9 @@ export function AgentMessageCard({
         <div className="agent-rail-source-block" aria-label="Web Sources">
           <span>Web Context · {sourceUrls.length}</span>
           {sourceUrls.map((url, index) => (
-            <a href={url} key={url} rel="noopener noreferrer" target="_blank">
+            <TextLink href={url} key={url} rel="noopener noreferrer" target="_blank">
               <ExternalLink aria-hidden="true" size={10} /> {index + 1}. {sourceHostname(url)}
-            </a>
+            </TextLink>
           ))}
         </div>
       )}

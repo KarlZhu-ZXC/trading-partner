@@ -21,7 +21,11 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from bootstrap import ApplicationContainer
-from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
+from interfaces.mcp.tool_inventory import (
+    DIRECT_PUBLIC_TOOL_NAMES,
+    MCP_VNEXT_TOOL_NAMES,
+    PUBLIC_TOOL_NAMES,
+)
 from interfaces.mcp.tools.a_share import build_a_share_adapters
 from interfaces.mcp.tools.challenge import build_challenge_adapters
 from interfaces.mcp.tools.execution import build_execution_adapters
@@ -592,10 +596,12 @@ class CompactCapabilityRegistry:
             raise CapabilityConfirmationRequiredError(name)
         return await capability.tool.run(arguments)
 
-    def bind_mcp(self, server: FastMCP) -> None:
+    def bind_mcp(self, server: FastMCP, *, names: frozenset[str] | None = None) -> None:
         """Render the same registry as FastMCP transport tools."""
         for capability in self._capabilities.values():
             tool = capability.tool
+            if names is not None and tool.name not in names:
+                continue
             server.add_tool(
                 _mcp_result_wrapper(tool),
                 name=tool.name,
@@ -628,6 +634,8 @@ def _spec(
     extra_fields: dict[str, tuple[object, object]] | None = None,
     adapter_operation_field: str | None = None,
 ) -> VariantSpec:
+    if "operation" in fields or "operation" in (extra_fields or {}):
+        raise ValueError("operation is reserved for the compact operation discriminator")
     return VariantSpec(
         operation=operation,
         adapter=adapter,
@@ -1338,11 +1346,22 @@ class CompactFastMCP(FastMCP):
     """FastMCP surface that minimizes schemas only at the public protocol boundary."""
 
     async def list_tools(self) -> list[MCPTool]:
+        from interfaces.mcp.progressive import SHORT_DESCRIPTIONS, public_input_schema
+
         tools = await super().list_tools()
         for tool in tools:
-            tool.inputSchema = _minimize_public_schema(tool.inputSchema)
-            if isinstance(tool.outputSchema, dict):
-                tool.outputSchema = _minimize_public_schema(tool.outputSchema)
+            if tool.name in SHORT_DESCRIPTIONS:
+                tool.description = SHORT_DESCRIPTIONS[tool.name]
+                tool.inputSchema = (
+                    _minimize_public_schema(tool.inputSchema)
+                    if tool.name == "instrument_resolve"
+                    else public_input_schema(tool)
+                )
+            else:
+                tool.inputSchema = _minimize_public_schema(tool.inputSchema)
+            # Exact output schemas remain owned by the registry. Publishing them
+            # eagerly here would undo progressive input-schema discovery.
+            tool.outputSchema = None
         return tools
 
 
@@ -1357,6 +1376,7 @@ def create_compact_capability_registry(
     from interfaces.mcp.tools.compact_registration_market_us import _register_market_and_us
     from interfaces.mcp.tools.compact_registration_portfolio_challenge import (
         _register_portfolio_challenge_workflows,
+        _register_portfolio_get,
     )
     from interfaces.mcp.tools.compact_registration_watchlist_risk_monitoring import (
         _register_watchlist_risk_monitoring,
@@ -1366,8 +1386,8 @@ def create_compact_capability_registry(
         system=build_system_adapters(
             container,
             surface_profile="mcp_vnext_shadow",
-            public_tool_count=len(MCP_VNEXT_TOOL_NAMES),
-            surface_schema_version="mcp-vnext-shadow-v5",
+            public_tool_count=len(PUBLIC_TOOL_NAMES),
+            surface_schema_version="mcp-vnext-shadow-v11",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -1425,14 +1445,14 @@ def create_compact_capability_registry(
         policy=READ_DURABLE,
     )
 
-    _register_dispatch_tool(
+    _register_flat_dispatch_tool(
         registry,
-        name="investment_case_read",
+        name="research_get",
         description=(
             "Read durable Research Subjects (标的), build one bounded current research "
-            "context, or read the cross-domain durable-only decision inbox. Legacy "
-            "transport keeps investment_case_read plus case_id/case_type. "
-            "operation=attention is read-only and never reconciles ReviewItems."
+            "context, read research state and history, search research memory, restore a "
+            "timeline or Catalyst Agenda, or read the cross-domain decision inbox. Legacy "
+            "transport keeps case_id/case_type; operation=attention is read-only."
         ),
         variants=(
             _spec(
@@ -1449,6 +1469,46 @@ def create_compact_capability_registry(
                 "attention",
                 adapters.research.attention_read,
                 _all_fields(adapters.research.attention_read),
+            ),
+            _spec(
+                "state",
+                adapters.research.research_state_get,
+                _all_fields(adapters.research.research_state_get),
+            ),
+            _spec(
+                "thesis_history",
+                adapters.research.thesis_history_get,
+                _all_fields(adapters.research.thesis_history_get),
+            ),
+            _spec(
+                "scorecard_history",
+                adapters.research.judgment_scorecard_history,
+                _all_fields(adapters.research.judgment_scorecard_history),
+            ),
+            _spec(
+                "challenge_review",
+                adapters.challenge.challenge_review_get,
+                _all_fields(adapters.challenge.challenge_review_get),
+            ),
+            _spec(
+                "search",
+                adapters.research_memory.research_search,
+                _all_fields(adapters.research_memory.research_search),
+            ),
+            _spec(
+                "report",
+                adapters.research_memory.research_report_get,
+                _all_fields(adapters.research_memory.research_report_get),
+            ),
+            _spec(
+                "timeline",
+                adapters.research_memory.research_timeline_get,
+                _all_fields(adapters.research_memory.research_timeline_get),
+            ),
+            _spec(
+                "agenda",
+                adapters.research_memory.catalyst_agenda_get,
+                _all_fields(adapters.research_memory.catalyst_agenda_get),
             ),
         ),
         policy=READ_DURABLE,
@@ -1481,37 +1541,6 @@ def create_compact_capability_registry(
             ),
         ),
         policy=MANAGE,
-    )
-    _register_dispatch_tool(
-        registry,
-        name="research_judgment_get",
-        description=(
-            "Read current research state, one Thesis history, or immutable deterministic "
-            "Judgment Scorecard history."
-        ),
-        variants=(
-            _spec(
-                "state",
-                adapters.research.research_state_get,
-                _all_fields(adapters.research.research_state_get),
-            ),
-            _spec(
-                "thesis_history",
-                adapters.research.thesis_history_get,
-                _all_fields(adapters.research.thesis_history_get),
-            ),
-            _spec(
-                "scorecard_history",
-                adapters.research.judgment_scorecard_history,
-                _all_fields(adapters.research.judgment_scorecard_history),
-            ),
-            _spec(
-                "challenge_review",
-                adapters.challenge.challenge_review_get,
-                _all_fields(adapters.challenge.challenge_review_get),
-            ),
-        ),
-        policy=READ_DURABLE,
     )
     _register_flat_dispatch_tool(
         registry,
@@ -1563,37 +1592,6 @@ def create_compact_capability_registry(
 
     _register_flat_dispatch_tool(
         registry,
-        name="research_memory_get",
-        description=(
-            "Search durable research memory, read one report, restore a Research Subject "
-            "(标的) timeline, or read its user-confirmed Catalyst Agenda."
-        ),
-        variants=(
-            _spec(
-                "search",
-                adapters.research_memory.research_search,
-                _all_fields(adapters.research_memory.research_search),
-            ),
-            _spec(
-                "report",
-                adapters.research_memory.research_report_get,
-                _all_fields(adapters.research_memory.research_report_get),
-            ),
-            _spec(
-                "timeline",
-                adapters.research_memory.research_timeline_get,
-                _all_fields(adapters.research_memory.research_timeline_get),
-            ),
-            _spec(
-                "agenda",
-                adapters.research_memory.catalyst_agenda_get,
-                _all_fields(adapters.research_memory.catalyst_agenda_get),
-            ),
-        ),
-        policy=READ_DURABLE,
-    )
-    _register_flat_dispatch_tool(
-        registry,
         name="research_memory_append",
         description=(
             "Append a confirmed Journal, Decision intent, Broker-activity annotation, "
@@ -1623,7 +1621,13 @@ def create_compact_capability_registry(
             _spec(
                 "trade_cycle_override",
                 adapters.research_memory.trade_cycle_override_append,
-                _all_fields(adapters.research_memory.trade_cycle_override_append),
+                tuple(
+                    field
+                    for field in _all_fields(adapters.research_memory.trade_cycle_override_append)
+                    if field != "operation"
+                ),
+                extra_fields={"override_operation": (str, ...)},
+                adapter_operation_field="override_operation",
             ),
             _spec(
                 "behavior_review",
@@ -1642,25 +1646,7 @@ def create_compact_capability_registry(
         adapters.us_context,
     )
 
-    _register_dispatch_tool(
-        registry,
-        name="account_get",
-        description="Read durable positions or transactions without contacting a broker.",
-        variants=(
-            _spec(
-                "positions",
-                adapters.portfolio.account_get,
-                ("snapshot_id",),
-                adapter_operation="positions",
-            ),
-            _spec(
-                "transactions",
-                adapters.portfolio.account_list_transactions,
-                _all_fields(adapters.portfolio.account_list_transactions),
-            ),
-        ),
-        policy=READ_DURABLE,
-    )
+    _register_portfolio_get(registry, adapters.portfolio)
     _register_external_sync(registry, adapters.portfolio, adapters.watchlist)
     _register_dispatch_tool(
         registry,
@@ -1701,7 +1687,6 @@ def create_compact_capability_registry(
     )
     _register_portfolio_challenge_workflows(
         registry,
-        adapters.portfolio,
         adapters.workflows,
         adapters.view_review,
     )
@@ -1726,6 +1711,21 @@ def create_compact_mcp_server(
         container,
         chart_persister=chart_persister,
     )
-    server = CompactFastMCP(container.settings.mcp_server_name)
-    registry.bind_mcp(server)
+    from interfaces.mcp.progressive import register_discovery, register_gateways
+
+    server = CompactFastMCP(
+        container.settings.mcp_server_name,
+        instructions=(
+            "Investment views, portfolio, market facts, risk and monitoring. "
+            "Discover available capabilities with capability_discover(); pass tool and "
+            "operation for exact inputs. Reuse known schemas. Discovery returns call_tool "
+            "and the original inputSchema. For capability_read/write pass the original "
+            "tool name and full inputs as arguments; other call_tools take inputs directly. "
+            "Writes require explicit user authorization and confirmation=original tool name. "
+            "Discovery never authorizes actions. Preserve sources, time and missing data."
+        ),
+    )
+    registry.bind_mcp(server, names=DIRECT_PUBLIC_TOOL_NAMES)
+    register_discovery(server, registry)
+    register_gateways(server, registry)
     return server

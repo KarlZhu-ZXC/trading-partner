@@ -13,7 +13,6 @@ class RuntimePaths:
     secrets: Path
     observations: Path
     agent_attachments: Path
-    historical_validation: Path
     reconciliation: Path
     backups: Path
 
@@ -28,7 +27,6 @@ class RuntimePaths:
             secrets=data / "secrets",
             observations=data / "observations",
             agent_attachments=data / "agent" / "attachments",
-            historical_validation=artifacts / "historical_validation",
             reconciliation=artifacts / "reconciliation",
             backups=data / "backups",
         )

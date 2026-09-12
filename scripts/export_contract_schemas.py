@@ -15,7 +15,6 @@ from interfaces.console.agent_api import (
     PendingActionReissueRequest,
     ResetAgentPreferencesRequest,
     SendMessageRequest,
-    TelegramHandoffRequest,
     UpdateAgentPreferencesRequest,
 )
 
@@ -28,7 +27,6 @@ MODELS = {
     "AgentPendingActionReissueRequest": PendingActionReissueRequest,
     "AgentResetPreferencesRequest": ResetAgentPreferencesRequest,
     "AgentSendMessageRequest": SendMessageRequest,
-    "AgentTelegramHandoffRequest": TelegramHandoffRequest,
     "AgentUpdatePreferencesRequest": UpdateAgentPreferencesRequest,
     "AttentionDigestContract": AttentionDigestDTO,
     "AttentionHealthSummaryContract": AttentionHealthSummaryDTO,

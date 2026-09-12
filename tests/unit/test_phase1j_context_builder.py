@@ -19,7 +19,8 @@ from domain.common.enums import (
 )
 from domain.research.models import RESEARCH_SCHEMA_VERSION, ResearchSubject
 from infrastructure.system.redactor import DefaultSecretRedactor
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
+from mcp_helpers import routed_mcp_server
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 CASE_ID = "case_00000000-0000-7000-8000-000000000001"
@@ -149,8 +150,8 @@ def test_context_is_contrary_first_and_budget_trims_journal_not_evidence() -> No
     assert result.data.live_fact_tools_required == (
         "market_data_get/quote",
         "a_share_get_facts/snapshot",
-        "us_company_get/fundamentals_snapshot",
-        "us_company_get/company_updates",
+        "us_get_facts/fundamentals_snapshot",
+        "us_get_facts/company_updates",
     )
 
 
@@ -182,12 +183,12 @@ async def test_context_mcp_is_compact_read_operation() -> None:
         data=None,
     )
     container.services.research_context.build.return_value = envelope
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
     listed = {tool.name: tool for tool in manager.list_tools()}
 
     assert set(listed) == set(PUBLIC_TOOL_NAMES)
     result = await manager.call_tool(
-        "investment_case_read",
+        "research_get",
         {"request": {"operation": "context", "case_id": CASE_ID}},
     )
     assert result["request_id"] == "req_context"

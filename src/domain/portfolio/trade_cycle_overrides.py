@@ -362,6 +362,7 @@ def _invalidated_cycle(
         add_count=0,
         reduce_count=0,
         ending_quantity=None,
+        current_average_cost=None,
         gross_realized_pnl=None,
         net_realized_pnl=None,
         maximum_deployed_capital=None,

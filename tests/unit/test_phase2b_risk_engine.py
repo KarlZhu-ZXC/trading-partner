@@ -18,7 +18,8 @@ from domain.portfolio.enums import AccountEnvironment, AccountPositionSide
 from domain.portfolio.models import AccountPosition, AccountSnapshot
 from domain.risk.enums import RiskCheckStatus, RiskConfirmer, RiskOverallStatus
 from domain.risk.models import RiskPolicy
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
+from mcp_helpers import routed_mcp_server
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
@@ -228,7 +229,7 @@ async def test_compact_risk_handlers_validate_and_delegate() -> None:
     coordinator.update_policy.return_value = envelope
     coordinator.check = AsyncMock(return_value=envelope)
     container.services.risk = coordinator
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
 
     assert {tool.name for tool in manager.list_tools()} == set(PUBLIC_TOOL_NAMES)
     await manager.call_tool("portfolio_risk_get", {"request": {"operation": "policy"}})

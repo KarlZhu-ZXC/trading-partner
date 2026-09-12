@@ -38,7 +38,8 @@ from domain.monitoring.enums import (
 from domain.monitoring.models import MonitorDefinition
 from infrastructure.persistence.metadata import Base
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES
+from mcp_helpers import routed_mcp_server
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
@@ -404,7 +405,7 @@ async def test_compact_monitoring_handlers_are_registered_and_delegate() -> None
         getattr(coordinator, name).return_value = failure
     coordinator.evaluate = AsyncMock(return_value=failure)
     container.services.monitoring = coordinator
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
 
     tools = manager.list_tools()
     assert {tool.name for tool in tools} == set(PUBLIC_TOOL_NAMES)

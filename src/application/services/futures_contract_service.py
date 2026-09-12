@@ -31,7 +31,6 @@ from domain.common.time import require_aware_datetime
 from domain.cross_asset.cme_identity import require_not_legacy_us_proxy
 from domain.cross_asset.futures_models import (
     FuturesContractDefinition,
-    FuturesContractStatistics,
     FuturesProductDefinition,
 )
 
@@ -426,7 +425,3 @@ class FuturesContractService:
             WarningInfo(code=code, message=messages.get(code, code))
             for code in success.meta.warnings
         )
-
-
-# Silence unused import for type checkers that only see statistics in annotations.
-_ = FuturesContractStatistics

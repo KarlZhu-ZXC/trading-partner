@@ -1,0 +1,54 @@
+.button { min-height:var(--control-height); display:inline-flex; align-items:center; justify-content:center; gap:var(--space-2); padding:var(--space-2) var(--space-3); border:1px solid var(--line-strong); border-radius:var(--radius-control); font:600 var(--text-label)/1.3 var(--font-ui); color:var(--ink); background:var(--panel-solid); cursor:pointer; text-decoration:none; transition:background var(--motion-fast),border-color var(--motion-fast),box-shadow var(--motion-fast); white-space:nowrap; }
+.button svg { width:16px; height:16px; flex-shrink:0; }
+.button:hover { border-color:var(--accent); background:var(--hover); }
+.button:focus-visible,.input:focus-visible,.row:focus-visible,.textLink:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); box-shadow:var(--shadow-control); }
+.primary:hover { background:var(--accent-hover); color:var(--on-accent); }
+.secondary { background:var(--surface-subtle); }
+.danger { color:var(--red); border-color:var(--danger-border); background:var(--danger-bg); }
+.button:disabled { opacity:.48; cursor:not-allowed; box-shadow:none; }
+.button[aria-busy="true"] { cursor:progress; }
+.sm { min-height:32px; padding:6px 10px; }
+.md { min-height:var(--control-height); }
+.iconButton { width:var(--control-height); padding:var(--space-2); flex-shrink:0; }
+.iconButton.sm { min-height:28px; width:28px; padding:4px; }
+.textLink { color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
+.input { display:block; width:100%; min-width:0; min-height:var(--control-height); padding:var(--space-2) var(--space-3); color:var(--ink); background:var(--input-bg); border:1px solid var(--line-strong); border-radius:var(--radius-control); font:400 var(--text-body)/1.45 var(--font-ui); transition:border-color var(--motion-fast),box-shadow var(--motion-fast); }
+.input::placeholder { color:var(--muted); opacity:1; }
+.input:hover { border-color:var(--dim); }
+.input:disabled { background:var(--disabled-bg); opacity:.65; cursor:not-allowed; }
+.input[aria-invalid="true"] { border-color:var(--red); }
+.input[type="checkbox"],.input[type="radio"] { display:inline-block; width:16px; min-height:16px; height:16px; accent-color:var(--accent); }
+.input[type="file"] { padding:var(--space-2); }
+.select { padding-right:var(--space-3); cursor:pointer; }
+.textarea { resize:vertical; min-height:100px; }
+.field { display:grid; gap:var(--space-2); min-width:0; }
+.field > span { font-size:var(--text-label); color:var(--muted); }
+.filterBar { position:relative; z-index:2; display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:var(--space-3); align-items:end; padding:var(--space-4); background:var(--panel-solid); border:1px solid var(--line); border-radius:var(--radius-panel); }
+.row { display:block; width:100%; min-width:0; text-align:left; padding:var(--space-3); border:1px solid var(--line); border-radius:var(--radius-control); color:var(--ink); background:var(--panel-solid); cursor:pointer; transition:background var(--motion-fast),border-color var(--motion-fast); }
+.row:hover { background:var(--hover); border-color:var(--line-strong); }
+.row.selected { background:var(--active-bg); border-color:var(--accent); }
+.tag { display:inline-flex; align-items:center; padding:3px 8px; border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface-subtle); color:var(--muted); font:500 var(--text-label)/1.4 var(--font-ui); }
+.chip { display:inline-flex; align-items:center; gap:4px; padding-left:8px; border-radius:var(--radius-control); background:var(--active-bg); color:var(--accent); font-size:var(--text-label); }
+.table { width:100%; border-collapse:collapse; font-size:var(--text-body); }
+.table th { text-align:left; color:var(--muted); font-size:var(--text-label); font-weight:600; background:var(--surface-subtle); }
+.table th,.table td { padding:var(--space-3); border-bottom:1px solid var(--line); vertical-align:top; }
+.spinner { animation:rotate 1s linear infinite; }
+@keyframes rotate { to { transform:rotate(360deg); } }
+@media (max-width:700px) { .filterBar { grid-template-columns:repeat(2,minmax(0,1fr)); }.button,.input { min-height:44px; } }
+@media (prefers-reduced-motion:reduce) { .button,.input,.row { transition:none; }.spinner { animation:none; } }
+
+.input.embedded { border:0; border-radius:0; padding:0; min-height:24px; box-shadow:none; background:transparent; outline-offset:0; }
+
+.input.embedded:focus-visible { outline:none; }
+.dismissLayer { position:fixed; inset:0; width:100%; height:100%; padding:0; border:0; border-radius:0; background:var(--overlay-bg); cursor:default; }
+
+.textarea.embedded { min-height:80px; padding:var(--space-3); }
+.menuItem { display:grid; grid-template-columns:20px minmax(0,1fr); align-items:start; gap:var(--space-2); width:100%; padding:var(--space-2); min-height:var(--control-height); border:0; border-radius:var(--radius-control); background:transparent; color:var(--ink); text-align:left; font:500 var(--text-body)/1.4 var(--font-ui); cursor:pointer; }
+.menuItem:hover,.menuItem:focus-visible { background:var(--hover); }.menuItem:disabled { opacity:.5; cursor:not-allowed; }.menuItem svg { width:18px; height:18px; }.menuItem small { display:block; color:var(--muted); font-size:var(--text-label); }
+.sortButton { display:inline-flex; align-items:center; gap:var(--space-2); padding:4px 0; min-height:32px; border:0; background:transparent; color:var(--muted); cursor:pointer; font:600 var(--text-label)/1.4 var(--font-ui); text-align:left; }.sortButton svg { width:14px; height:14px; }.sortButton:hover,.sortActive { color:var(--accent); }
+
+.chip { max-width:100%; min-width:0; }.chip > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.resizeHandle { position:absolute; inset:0 auto 0 0; width:12px; height:100%; min-width:0; min-height:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--accent); cursor:col-resize; touch-action:none; }
+.resizeHandle::before { content:""; position:absolute; inset:0 auto 0 0; width:2px; background:var(--line-strong); }
+.resizeHandle:hover::before,.resizeHandle:focus-visible::before { background:var(--accent); }.resizeHandle:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }.resizeHandle svg { width:10px; height:16px; }

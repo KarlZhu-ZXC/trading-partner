@@ -1,0 +1,192 @@
+
+.root :global(.account-summary) { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; margin:0 0 14px; }
+.root :global(.account-summary article) { border:1px solid var(--line); background:var(--surface-subtle); padding:12px; }
+.root :global(.account-summary span) { display:block; color:var(--muted); font-size:var(--text-label); }
+.root :global(.account-summary small) { display:block; color:var(--muted); font-size:var(--text-label); }
+.root :global(.account-summary strong) { display:block; font:600 20px var(--font-geist-mono); margin:8px 0 5px; }
+.root :global(.performance-controls) { display:grid; grid-template-columns:repeat(3,minmax(150px,1fr)) auto; gap:9px; align-items:end; margin-bottom:14px; }
+.root :global(.performance-controls label > span) { display:block; color:var(--muted); font-size:var(--text-label); margin-bottom:6px; }
+.root :global(.performance-results) { display:grid; gap:11px; margin-top:14px; }
+.root :global(.performance-account) { border:1px solid var(--line); background:var(--surface-subtle); padding:14px; }
+.root :global(.performance-account > header) { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
+.root :global(.performance-account > header span) { display:block; color:var(--muted); font-size:var(--text-label); margin-top:4px; }
+@media (max-width: 900px) { .root :global(.performance-controls) { grid-template-columns:1fr 1fr; } }
+@media (max-width: 700px) {
+  .root :global(.account-summary) { grid-template-columns:1fr; }
+}
+.root :global(.portfolio-tab-stack) { display: grid; gap: 16px; min-width: 0; }
+.root :global(.portfolio-account-grid) { display: grid; gap: 14px; }
+.root :global(.portfolio-account-card) { min-width: 0; border: 1px solid var(--line); border-left: 3px solid var(--active-border); background: var(--surface-subtle); padding: 16px; }
+.root :global(.portfolio-account-card.collapsed) { padding-bottom: 0; }
+.root :global(.portfolio-account-header) { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: -16px -16px 15px; text-align: left; }
+.root :global(.portfolio-account-card.collapsed .portfolio-account-header) { margin-bottom: 0; border-bottom-color: transparent; }
+.root :global(.portfolio-account-header:focus-visible) { outline-offset: -3px; }
+.root :global(.portfolio-section-trigger:focus-visible) { outline-offset: -3px; }
+.root :global(.portfolio-account-header-actions) { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 9px; min-height: 26px; }
+.root :global(.portfolio-account-count) { color: var(--muted); font: 550 var(--text-label) var(--font-geist-mono); white-space: nowrap; }
+.root :global(.portfolio-account-header svg) { transition: transform .18s ease,color .18s ease; }
+.root :global(.portfolio-section-trigger svg) { transition: transform .18s ease,color .18s ease; }
+.root :global(.portfolio-account-header svg.open) { transform: rotate(180deg); }
+.root :global(.portfolio-section-trigger svg.open) { transform: rotate(180deg); }
+.root :global(.portfolio-account-body[hidden]) { display: none; }
+.root :global(.portfolio-section-body[hidden]) { display: none; }
+.root :global(.portfolio-account-identity) { display: grid; gap: 5px; min-width: 0; }
+.root :global(.portfolio-account-title) { display: block; margin: 0; color: var(--ink); font: 400 24px/1.05 var(--font-ui); letter-spacing: -.015em; overflow-wrap: anywhere; }
+.root :global(.portfolio-account-identity > span) { color: var(--green); font: 650 var(--text-label)/1.35 var(--font-geist-mono); letter-spacing: .1em; text-transform: uppercase; overflow-wrap: anywhere; }
+.root :global(.portfolio-account-identity.compact) { gap: 3px; }
+.root :global(.portfolio-account-identity.compact strong) { color: var(--ink-soft); font-size: var(--text-label); line-height: 1.25; }
+.root :global(.portfolio-account-identity.compact > span) { color: var(--muted); font-size: var(--text-label); letter-spacing: .07em; }
+.root :global(.portfolio-exposure-summary > div) { min-width: 0; border: 1px solid var(--line); background: var(--panel); padding: 10px; }
+.root :global(.coverage-overview > div) { min-width: 0; border: 1px solid var(--line); background: var(--panel); padding: 10px; }
+.root :global(.policy-grid > div) { min-width: 0; border: 1px solid var(--line); background: var(--panel); padding: 10px; }
+.root :global(.portfolio-position-metrics dt) { margin: 0; }
+.root :global(.portfolio-position-metrics dd) { margin: 0; }
+.root :global(.portfolio-position-metrics dt) { color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-warning-line) { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; border-left: 2px solid var(--amber); margin: 8px 0 13px; padding: 3px 0 3px 9px; color: var(--amber); font-size: var(--text-label); line-height: 1.5; }
+.root :global(.portfolio-warning-line span) { color: var(--muted); }
+.root :global(.portfolio-warning-line ul) { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
+.root :global(.portfolio-warning-line li strong) { display:block; }
+.root :global(.portfolio-warning-line li small) { display:block; }
+.root :global(.portfolio-warning-line li strong) { font:650 var(--text-label) var(--font-geist-mono); }
+.root :global(.portfolio-warning-line li small) { margin-top:2px; color:var(--muted); font-size:var(--text-label); }
+.root :global(.portfolio-data-notes) { margin:8px 0 13px; background:var(--panel-alt); color:var(--muted); font-size:var(--text-label); }
+.root :global(.portfolio-data-notes ul) { display:grid; gap:8px; margin:0; padding:0 12px 0 18px; }
+.root :global(.portfolio-data-notes li) { padding-left:2px; line-height:1.5; }
+.root :global(.portfolio-data-notes li strong) { display:block; }
+.root :global(.portfolio-data-notes li span) { display:block; }
+.root :global(.portfolio-data-notes li strong) { color:var(--ink-soft); font:600 var(--text-label) var(--font-geist-mono); }
+.root :global(.portfolio-data-notes li span) { margin-top:3px; color:var(--muted); }
+.root :global(.portfolio-desktop-table th) { padding-top:0; padding-bottom:0; }
+.root :global(.portfolio-desktop-table .sort-header) { justify-content:flex-start; margin:0 -7px; white-space:normal; }
+.root :global(.portfolio-mobile-cards) { display: none; gap: 8px; }
+.root :global(.portfolio-position-card) { border: 1px solid var(--line); background: var(--panel); padding: 12px; }
+.root :global(.portfolio-activity-card) { border: 1px solid var(--line); background: var(--panel); padding: 12px; }
+.root :global(.portfolio-position-card header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.root :global(.portfolio-activity-card header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.root :global(.risk-result > header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.root :global(.coverage-list article > header) { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.root :global(.portfolio-position-card > small) { display: block; color: var(--muted); font-size: var(--text-label); margin-top: 5px; overflow-wrap: anywhere; }
+.root :global(.portfolio-activity-card > small) { display: block; color: var(--muted); font-size: var(--text-label); margin-top: 5px; overflow-wrap: anywhere; }
+.root :global(.portfolio-position-metrics) { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin: 12px 0 0; }
+.root :global(.portfolio-position-metrics > div) { border-top: 1px solid var(--line); padding-top: 7px; min-width: 0; }
+.root :global(.portfolio-position-metrics dd) { margin-top: 5px; color: var(--ink-soft); font: 550 var(--text-label) var(--font-geist-mono); overflow-wrap: anywhere; }
+.root :global(.trade-cycle-list) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+.root :global(.trade-cycle-list > article) { display:grid; gap:10px; padding:12px; border:1px solid var(--line); background:var(--panel-alt); }
+.root :global(.trade-cycle-list article > header) { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.root :global(.trade-cycle-list article > header div) { display:grid; gap:3px; min-width:0; }
+.root :global(.trade-cycle-list article > header strong) { color:var(--ink); font-size:var(--text-label); }
+.root :global(.trade-cycle-list article > header small) { color:var(--muted); font-size:var(--text-label); line-height:1.45; overflow-wrap:anywhere; }
+.root :global(.trade-cycle-list .disclosure small) { color:var(--muted); font-size:var(--text-label); line-height:1.45; overflow-wrap:anywhere; }
+.root :global(.trade-cycle-list dl) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }
+.root :global(.trade-cycle-list dl div) { display:grid; gap:4px; padding:8px; border:1px solid var(--line); background:var(--surface-subtle); }
+.root :global(.trade-cycle-list dt) { color:var(--muted); font-size:var(--text-label); }
+.root :global(.trade-cycle-list dd) { margin:0; color:var(--ink); font:600 var(--text-label) var(--font-geist-mono); overflow-wrap:anywhere; }
+.root :global(.trade-cycle-list dl small) { color:var(--amber); font-size:var(--text-label); }
+.root :global(.portfolio-exposure-summary) { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-bottom: 12px; }
+.root :global(.portfolio-exposure-summary span) { display: block; color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-exposure-summary small) { display: block; color: var(--muted); font-size: var(--text-label); }
+.root :global(.coverage-overview span) { display: block; color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-exposure-summary strong) { display: block; margin: 8px 0 5px; font: 550 19px var(--font-geist-mono); overflow-wrap: anywhere; }
+.root :global(.portfolio-exposure-summary small) { line-height: 1.45; overflow-wrap: anywhere; }
+.root :global(.portfolio-exposure-grid) { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 8px; }
+.root :global(.portfolio-exposure-grid > div) { border: 1px solid var(--line); padding: 11px; background: var(--surface-subtle); }
+.root :global(.portfolio-exposure-grid span) { display: block; color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-exposure-grid small) { display: block; color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-exposure-grid strong) { display: block; margin: 6px 0; font-size: var(--text-label); overflow-wrap: anywhere; }
+.root :global(.portfolio-exposure-grid small) { font: 500 var(--text-label) var(--font-geist-mono); }
+.root :global(.portfolio-exposure-position) { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0 0; padding-top:9px; border-top:1px solid var(--line); }
+.root :global(.portfolio-exposure-position div) { min-width:0; }
+.root :global(.portfolio-exposure-position dt) { color:var(--muted); font-size:var(--text-label); }
+.root :global(.portfolio-exposure-position dd) { margin:4px 0 0; color:var(--ink); font:600 var(--text-label) var(--font-geist-mono); overflow-wrap:anywhere; }
+.root :global(.portfolio-collapsible-section) { padding-top: 0; }
+.root :global(.portfolio-section-head) { margin: 0 -20px; }
+.root :global(.portfolio-section-trigger) { display: flex; align-items: center; justify-content: space-between; gap: 16px; text-align: left; }
+.root :global(.portfolio-section-trigger > span:first-child) { display: grid; gap: 4px; }
+.root :global(.portfolio-section-title) { color: var(--ink); font: 400 21px/1.2 var(--font-ui); letter-spacing: -.02em; }
+.root :global(.portfolio-disclosure-meta) { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 10px; color: var(--muted); font: 550 var(--text-label) var(--font-geist-mono); }
+.root :global(.portfolio-section-body) { padding-top: 18px; border-top: 1px solid var(--line); }
+.root :global(.coverage-overview) { display: grid; grid-template-columns: repeat(3,minmax(120px,1fr)); gap: 9px; margin-bottom: 12px; }
+.root :global(.coverage-overview strong) { display: block; margin-top: 8px; font: 550 18px var(--font-geist-mono); }
+.root :global(.coverage-list) { display: grid; gap: 9px; }
+.root :global(.coverage-list article) { border: 1px solid var(--line); background: var(--surface-subtle); padding: 13px; }
+.root :global(.coverage-list article > header) { margin-bottom: 11px; }
+.root :global(.coverage-list article > header strong) { overflow-wrap: anywhere; font-size: var(--text-label); }
+.root :global(.coverage-grid) { display: grid; grid-template-columns: repeat(4,minmax(120px,1fr)); gap: 8px; }
+.root :global(.coverage-grid > span) { display: block; color: var(--muted); font-size: var(--text-label); border-top: 1px solid var(--line); padding-top: 8px; }
+.root :global(.coverage-grid strong) { display: block; color: var(--ink-soft); margin-top: 5px; font: 550 var(--text-label) var(--font-geist-mono); overflow-wrap: anywhere; }
+.root :global(.portfolio-form-grid) { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
+.root :global(.portfolio-field) { display: block; min-width: 0; }
+.root :global(.portfolio-field > span) { display: block; color: var(--muted); font-size: var(--text-label); margin-bottom: 6px; }
+.root :global(.portfolio-form-actions) { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-top: 1px solid var(--line); margin-top: 15px; padding-top: 13px; }
+.root :global(.policy-grid) { display: grid; grid-template-columns: repeat(4,minmax(120px,1fr)); gap: 8px; margin-bottom: 13px; }
+.root :global(.policy-grid span) { display: block; overflow-wrap: anywhere; }
+.root :global(.policy-grid strong) { display: block; overflow-wrap: anywhere; }
+.root :global(.policy-grid span) { color: var(--muted); font-size: var(--text-label); }
+.root :global(.policy-grid strong) { margin-top: 7px; font: 550 var(--text-label) var(--font-geist-mono); }.root :global(.portfolio-policy-editor){ margin-top:14px; }.root :global(.portfolio-what-if){ margin-top:14px; }
+.root :global(.portfolio-policy-form) { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; margin-top: 13px; }
+.root :global(.risk-result) { margin-top: 13px; }
+.root :global(.risk-result > header) { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.root :global(.risk-result > header strong) { font: 600 var(--text-label) var(--font-geist-mono); }
+.root :global(.risk-result .table-wrap) { margin-top: 4px; }
+.root :global(.portfolio-hypothetical) { display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid var(--line); background: var(--surface-subtle); padding: 10px; margin-top: 11px; color: var(--muted); font-size: var(--text-label); }
+.root :global(.portfolio-hypothetical strong) { color: var(--ink-soft); font: 550 var(--text-label) var(--font-geist-mono); overflow-wrap: anywhere; }
+.root :global(.portfolio-json) { margin: 8px 0 0; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--code-ink); background: var(--code-bg); border: 1px solid var(--line); padding: 10px; font: 500 var(--text-label)/1.5 var(--font-geist-mono); }
+.root :global(.portfolio-segmented) { display: flex; gap: 5px; margin: 13px 0; }
+
+@media (max-width: 1100px) {
+  .root :global(.portfolio-form-grid) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width: 1100px) {
+  .root :global(.portfolio-policy-form) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width: 1100px) {
+  .root :global(.policy-grid) { grid-template-columns: repeat(3,minmax(120px,1fr)); }
+}
+
+@media (max-width: 1100px) {
+  .root :global(.coverage-grid) { grid-template-columns: repeat(2,minmax(120px,1fr)); }
+}
+@media (max-width: 700px) {
+  .root :global(.portfolio-form-grid) { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.portfolio-policy-form) { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.policy-grid) { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.coverage-grid) { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.portfolio-exposure-summary) { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.coverage-overview) { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .root :global(.portfolio-desktop-table) { display: none; }
+}
+@media (max-width: 700px) {
+  .root :global(.portfolio-mobile-cards) { display: grid; }
+}
+@media (max-width: 440px) {
+  .root :global(.portfolio-form-grid) { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  .root :global(.portfolio-policy-form) { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  .root :global(.policy-grid) { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  .root :global(.coverage-grid) { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  .root :global(.portfolio-position-metrics) { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  .root :global(.trade-cycle-list) { grid-template-columns: 1fr; }
+}

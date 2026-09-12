@@ -6,7 +6,7 @@
 
 产品入口：Console `Journal`
 
-公共 MCP 表面：`mcp_vnext_shadow` **28 个工具**
+公共 MCP 表面：`mcp_vnext_shadow` **24 个工具**
 
 ## 1. 产品决定
 
@@ -56,7 +56,7 @@ Phase 4 不为流程中的每个名词创建新模块。实现优先级固定为
   TWR/MWR/XIRR/drawdown、behavior cohort、immutable review 和 external Observation 均已实现。
 - 页面读取 durable state，不因打开页面隐式刷新 Broker；Notes 正文仅在 Notes 页签按需读取。
 - exact durable link 缺失时保持未关联/不可用；Instrument 和时间接近不能证明事前 Decision。
-- 公共 MCP 当前为 28 个工具，当前 migration head 为
+- 公共 MCP 当前为 24 个工具，当前 migration head 为
   `0072_external_note_review_drafts`。
 
 ## 2. 用户要能直接回答的问题
@@ -216,7 +216,15 @@ idempotency key、创建时间和被替代版本。任何修正都不能改变 B
 8. 无法判断的历史活动进入 `UNRESOLVED`，不猜测。
 
 状态固定为 `OPEN`、`REDUCING`、`CLOSED`、`UNRESOLVED`。自动归组是 rebuildable projection；
+`add_count` 统计开仓后继续买入的成交记录，首次买入只计入 `opening_count`；
+`reduce_count` 统计卖出成交记录，包含最终清仓。同一订单的分笔成交可能分别计数，
+这些字段不是主观加减仓决策次数。Console 保留真实零值，缺失字段显示 `—`；带
+`MANUAL_RECOMPUTE_REQUIRED` 的周期不把兼容性零占位符显示成真实次数。
+
 人工拆分、合并或重新关联是 append-only override，保留原算法结果和修订历史。
+MCP 预览和写入以 `override_operation` 指定 Cycle 动作，`operation` 仅用于工具内分发。
+带投影校验的写入也必须先识别幂等重放和过期版本；相同请求返回原修订，不能再次应用
+已经执行的拆分。仓库继续在事务内核对完整请求内容和版本，拒绝幂等键复用及版本冲突。
 
 ### 5.4 Daily Equity Snapshot
 
@@ -353,10 +361,10 @@ closed-cycle 胜率分母。
 
 ### 7.3 行为统计
 
-第一版包括：
+当前包括：
 
 - closed Cycle 数量、winning/losing/flat 数量；
-- 胜率、平均盈利、平均亏损、payoff ratio；
+- 胜率、平均盈利／亏损金额、平均盈利／亏损收益率，以及两种 payoff ratio；
 - 平均/中位持有时间和 turnover；
 - 有事前 Decision、exact Plan、pre-fill invalidation 的 Cycle 比例；
 - 按失效条件退出比例；
@@ -369,6 +377,27 @@ closed-cycle 胜率分母。
 - NO_ACTION 数量及到期复核完成率。
 
 胜率按完整 CLOSED Cycle 计算，不按 Fill 计算。不创建无法解释的综合纪律总分。
+
+Behavior `behavior_summary_v3` 同时提供两个盈亏比，旧 `payoff_ratio` 保留金额口径：
+
+- 金额盈亏比 `payoff_ratio` = 平均盈利周期净盈利金额 ÷ 平均亏损周期净亏损金额的绝对值。
+- 收益率盈亏比 `return_payoff_ratio` = `avg_win_return` ÷ `abs(avg_loss_return)`。
+  单周期收益率 = 周期交易净盈亏 ÷ `maximum_deployed_capital`。分母是周期内最高同时
+  占用的持仓买入价成本，不是累计买入金额，也不是初始开仓金额；分母不含手续费，
+  分子已扣除可验证手续费。先逐周期计算，再等权平均，不按仓位或资金规模加权。
+
+`return_basis=NET_PNL_OVER_MAXIMUM_DEPLOYED_CAPITAL` 明确百分比的成本口径。
+收益率 DTO 用小数比例（0.2 表示 20%）；两个 payoff ratio 都是无量纲倍数，不显示为百分数。
+不设置最少交易次数门槛，也不按样本数标记 LIMITED。一个有效周期即可计算对应均值或
+比例；两个盈亏比只需盈利、亏损各有一个有效周期，且平均亏损不为零。任一侧为空时
+无比值，不生成无穷大。继续显示真实样本数和排除原因。OPEN、UNRESOLVED、现金管理和平盘周期不进入盈亏比。
+缺失净盈亏、币种或正数成本分母的周期不进入收益率样本，并保留排除原因和精确 Cycle ID。
+收益率在每个周期内按同一原生币种相除后可跨币种等权汇总，不做 FX 转换；金额口径仍
+要求同一原生币种。手工调整后无法重算的成本不能被估计补齐。所有已有筛选条件继续生效。
+
+新指标只用于当次只读计算；历史 v1/v2 结果和已保存的 Review 不改写。旧数据缺少收益率指标
+时，Console 显示不可用，不从金额指标反推百分比。
+
 
 ## 8. Console 新形态
 
@@ -394,7 +423,7 @@ Journal 不复制第二套 Portfolio 编辑器或 Retro 写入口。
 
 ### 8.2 页面结构
 
-Journal 遵循 [Console Layout Standard](../guide/console-layout.md)。全局 durable-only 筛选包括
+Journal 遵循 [Console design system](../guide/console-design-system.md)。全局 durable-only 筛选包括
 Period、Account、Instrument/Research Subject、Strategy、Classification、Data Quality。
 
 Journal 默认以全部账户、全部 Instrument 的 durable 交易事实为范围；Research Subject 是可选筛选和
@@ -444,6 +473,17 @@ Cycle 生命周期、质量和分类不得共用无语义的默认灰色：`OPEN
 - `SUMMARY_ONLY` 不进入模型，也不显示为可采纳正文；
 - `Review as Decision` 只预填现有 Decision 对话框，并保存 exact Observation Revision 引用；
 - Note、模型解释或时间接近都不能自动改写 Thesis、Trade Plan、Activity annotation 或订单。
+- 从 Observation 打开 Research 时，URL 只带 exact `note_revision_id` 和目标 Subject ID，
+  不携带私密标题、正文或模型内容。Console 的只读 `research-draft` 投影优先复用该修订
+  已成功的升级复核，否则使用已成功的首次解析；不会重新请求模型或写入 review 状态。
+- 新建 Subject 仍只创建稳定研究身份；随后直接打开预填的 DRAFT Thesis 编辑器。
+  USER 观点进入 Statement，依据、四情景、点位参考、待补证据进入草稿说明。其他说话人
+  保持单独归属。Trade Plan 预填笔记及 USER 场景的 MANUAL/REVIEW 条件；不把未分类点位
+  猜成止损、入场价、仓位比例或 MONITORABLE 阈值。已有计划数值和条件保留。
+- 所有源内容都保留 exact revision 和 model draft 引用，仍使用既有 Propose → Confirm
+  流程。未保存的编辑不会因读取刷新被覆盖；历史修订读取不替换成另一条最新/较早修订。
+  未证实 FULL 或未成功解析的来源只能预填身份信息；同修订经现有严格证明恢复的 FULL 可用。
+
 
 #### Reviews
 
@@ -486,7 +526,7 @@ idempotency 仍保留。
 
 ### 8.4 Unlinked Activity durable read
 
-`portfolio_analyze/unlinked_activity` 仍可按需读取未关联 Fill，显式调用方可执行：
+`portfolio_get/unlinked_activity` 仍可按需读取未关联 Fill，显式调用方可执行：
 
 - `Link Existing Decision / Plan`
 - `Mark As Unplanned`
@@ -591,16 +631,16 @@ infrastructure/persistence/trade_cycle_repository.py
 
 ## 11. MCP 与 Agent
 
-不新增第 28 个工具，在现有 grouped tools 增加 closed variants：
+不新增第 24 个工具，在现有 grouped tools 增加 closed variants：
 
-- `portfolio_analyze/journal_timeline`
-- `portfolio_analyze/trade_cycles`
-- `portfolio_analyze/performance_series`
-- `portfolio_analyze/behavior_summary`
+- `portfolio_get/journal_timeline`
+- `portfolio_get/trade_cycles`
+- `portfolio_get/performance_series`
+- `portfolio_get/behavior_summary`
 - `research_memory_append/decision|journal` 增加 Strategy、Scenario、Action、source-link 字段；
 - `research_workflow_run/trade_retro` 支持 exact `trade_cycle_ids` 或 period cohort。
 
-`account_get/transactions` 继续 durable-only；upstream 仍只通过明确
+`portfolio_get/transactions` 继续 durable-only；upstream 仍只通过明确
 `external_state_sync/transactions` 或已安装 operational scheduler 刷新。Journal `Refresh` 只刷新
 durable projection，`Sync Activity` 才访问 Broker。
 
@@ -684,9 +724,12 @@ NO_ACTION 不创建订单；自动/人工记录可区分；页面不访问 Provi
 ReviewItem、Research/Portfolio/Retro deep links。
 
 实现复用 AccountTransaction 与现有 FIFO 口径，提供无持久化、可重建的
-`portfolio_analyze/trade_cycles`：按 account + Instrument + native currency 归组；0→BUY 开启、BUY
+`portfolio_get/trade_cycles`：按 account + Instrument + native currency 归组；0→BUY 开启、BUY
 加仓、partial SELL 减仓、归零关闭、后续 BUY 新建 re-entry Cycle。SELL-without-open、oversell、
 缺 price/fee 和覆盖不足 fail closed/降级；Transfer、Corporate Action 和其他非 TRADE 不制造 Cycle。
+OPEN Cycle 的 `current_average_cost` 为剩余 FIFO 批次成本除以剩余数量，使用原币且不含交易手续费；
+它是交易账本截至查询时点的均价，并非券商当前成本快照。CLOSED、UNRESOLVED、缺失成本以及
+手工调整后待重算的 Cycle 返回 null。Console 在 Journal 和 Portfolio 展示该值及 FIFO 口径。
 Journal Execute 组件显示 latest Cycle 和 Cycle count，不创建第二套交易页面。
 SGOV Cycle 确定性标为 `CASH_MANAGEMENT`，其他 Cycle 暂为 `UNCLASSIFIED`，避免在 Behavior
 阶段把现金管理污染成主动交易，也不提前猜测用户意图。Portfolio Activity 复用共享 Paginator，
@@ -737,7 +780,7 @@ durable reads；`research_workflow_run/evaluate_view` 是单独确认的 Provide
 
 - CI 必须通过 Ruff、strict Mypy、覆盖率门槛、Console build/unit/E2E、依赖审计、SBOM、
   forward-only migration 幂等与隔离 Wheel smoke。
-- 公共 MCP 当前为 28 个工具；数量只通过显式兼容迁移调整，closed schema、确认策略和
+- 公共 MCP 当前为 24 个工具；数量只通过显式兼容迁移调整，closed schema、确认策略和
   compact transport 预算继续由仓库测试锁定。
 - 盘后 job 的各步骤保留 durable receipt、幂等键和失败隔离；已完成步骤不会因后续
   Observation/Watchlist 失败回滚。
@@ -797,9 +840,18 @@ durable-only、deep link、Quick Capture、migration 和 rebuild switch。
 - Journal、Portfolio、Research、Retro 不存在冲突写入口；
 - Console 主要流程无需复制 ID 或翻找多个页面；
 - Agent 与 Console 使用同一 application contract；
-- 公共 MCP 当前为 28 个工具；
+- 公共 MCP 当前为 24 个工具；
 - 订单权限、确认门和 SGOV 唯一 unattended exception 不变；
 - README、capability guide、Console layout、roadmap、release note 和 Skill 同步更新。
 
 Phase 4 的最终产品不是一个更漂亮的收益页面，而是一个能够持续证明“判断—执行—结果—改进”
 关系的系统。
+
+### Observation review fidelity
+
+Review drafts validate complete numeric values and explicit units against the
+attributed source. Named-speaker summaries are checked against that speaker's
+evidence; USER scenarios use the latest USER judgment. A number embedded in another
+number is not evidence, and third-party conditions cannot become USER judgment.
+Synthetic positive and negative regressions cover both false acceptance and false
+rejection; model drafts remain non-authoritative.

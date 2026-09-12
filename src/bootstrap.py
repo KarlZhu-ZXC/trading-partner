@@ -6,10 +6,8 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from application.ports.agent_conversation_repository import AgentConversationRepository
-from application.ports.agent_handoff_repository import AgentHandoffRepository
 from application.ports.agent_pending_action_repository import AgentPendingActionRepository
 from application.ports.agent_preferences_repository import AgentPreferencesRepository
 from application.ports.challenge_review_repository import ChallengeReviewRepository
@@ -42,7 +40,6 @@ from application.services.futures_contract_service import FuturesContractService
 from application.services.futures_curve_service import FuturesCurveService
 from application.services.futures_instrument_directory import FuturesInstrumentDirectory
 from application.services.health_service import HealthService
-from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_access_service import InstrumentAccessService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
@@ -171,7 +168,6 @@ class OperationalServices:
     catalyst_agenda_sync: CatalystAgendaSyncService
     catalyst_agenda_notifications: CatalystAgendaNotificationService
     agent_conversations: AgentConversationRepository
-    agent_handoffs: AgentHandoffRepository
     agent_pending_actions: AgentPendingActionRepository
     agent_metrics: AgentConversationMetricsService
     agent_preferences: AgentPreferencesRepository
@@ -240,16 +236,9 @@ def build_application(
     post_market_sync_run_repository = persistence.post_market_sync_runs
     research_unit_of_work_factory = persistence.research_uow_factory
     watchlist_hub_unit_of_work_factory = persistence.watchlist_uow_factory
-    historical_validation_service = HistoricalValidationService(
-        persistence.historical_validation_artifacts,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     maintenance_service = SqliteOperationalMaintenance(
         engine=engine,
         database_url=settings.database_url,
-        artifact_root=settings.paths.historical_validation,
         backup_root=settings.paths.backups,
         clock=clock,
     )
@@ -793,7 +782,7 @@ def build_application(
             agent_attachment_store=build_agent_attachment_store(settings),
             agent_web_search_provider=agent_web_search_provider,
             agent_turn_lock_factory=AgentTurnLockFactory(
-                settings.telegram_agent_lock_path.parent / "agent_turns"
+                settings.paths.data / "locks" / "agent_turns"
             ),
         ),
         providers=ProviderBundle(router=provider_router, registry=vendor_registry),
@@ -826,7 +815,6 @@ def build_application(
             behavior_reviews=phase4.behavior_reviews,
             daily_equity=phase4.daily_equity,
             workflows=research_workflow_orchestrator,
-            historical_validation=historical_validation_service,
             watchlist=watchlist_hub_service,
             trade_retro=trade_retro_service,
             scorecards=judgment_scorecard_service,
@@ -854,7 +842,6 @@ def build_application(
             catalyst_agenda_sync=catalyst_agenda_sync_service,
             catalyst_agenda_notifications=catalyst_agenda_notification_service,
             agent_conversations=persistence.agent_conversations,
-            agent_handoffs=persistence.agent_handoffs,
             agent_pending_actions=persistence.agent_pending_actions,
             agent_metrics=AgentConversationMetricsService(persistence.agent_conversations),
             agent_preferences=persistence.agent_preferences,
@@ -865,23 +852,6 @@ def build_application(
 
 def load_settings(env_file: Path | None = None) -> AppSettings:
     return AppSettings.load(env_file=env_file)
-
-
-def build_telegram_agent_client(container: ApplicationContainer) -> Any:
-    from interfaces.telegram.agent_client import TelegramBotAgentClient
-
-    settings = container.settings
-    if not settings.telegram_bot_token:
-        raise ValueError("Telegram Agent bot token is not configured")
-    return TelegramBotAgentClient(
-        bot_token=settings.telegram_bot_token,
-        timeout_seconds=max(settings.provider_timeout_default_seconds, 35.0),
-        proxy_url=settings.provider_proxy_url,
-    )
-
-
-def build_telegram_agent_lock(path: Path) -> Any:
-    return ProcessFileLock(path)
 
 
 def build_default_application() -> ApplicationContainer:

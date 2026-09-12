@@ -257,7 +257,7 @@ def test_project_review_item_preserves_console_action_and_builds_read() -> None:
     assert projected.tracking_kind == AttentionTrackingKind.REVIEW_ITEM.value
     assert projected.recommended_action == "LINK_OUTCOME_OR_REVISE"
     assert projected.next_read is not None
-    assert projected.next_read.tool == "research_memory_get"
+    assert projected.next_read.tool == "research_get"
     assert projected.next_read.request == {
         "operation": "agenda",
         "agenda_item_id": "agenda_1",

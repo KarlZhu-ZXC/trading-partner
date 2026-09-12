@@ -1,7 +1,7 @@
 # Trading Partner Phase 1
 
 > Status: completed on 2026-07-18  
-> Current product surface: 28 compact public MCP tools
+> Current product surface: 9 MCP entry tools over 24 business capabilities
 > Migration head at closeout: `0008_phase1l_workflows`  
 > Markets: A-share and US  
 > Interaction surface: Codex conversation
@@ -23,8 +23,8 @@ The product can:
 - preserve reports, events, decisions, journals, and challenge reviews;
 - run deep-dive, catalyst, market, and portfolio research workflows.
 
-Phase 1 cannot backtest, submit/cancel orders, or run autonomous
-monitoring. Those capabilities belong to later phases.
+Phase 1 cannot submit/cancel orders or run autonomous monitoring. Those capabilities
+belong to later phases.
 
 ## 2. Phase map
 
@@ -50,18 +50,18 @@ closeout without changing the tool count or introducing order methods.
 ## 3. Public MCP boundary
 
 The authoritative Phase 1 runtime inventory is exposed through the consolidated
-public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 28 tools.
+public façade documented in `AGENTS.md`; the current MCP vNext Shadow surface is 9 entry tools over 24 business capabilities.
 
 ```text
 system_health                 instrument_resolve
-investment_case_read          investment_case_manage
-research_judgment_get         research_judgment_propose
-research_judgment_confirm     research_memory_get
+research_get          investment_case_manage
+research_get         research_judgment_propose
+research_judgment_confirm     research_get
 research_memory_append        a_share_get_facts
 market_data_get               technical_get_snapshot
-technical_render_chart        us_company_get
-us_context_get                account_get
-external_state_sync           portfolio_analyze
+technical_render_chart        us_get_facts
+us_get_facts                portfolio_get
+external_state_sync           portfolio_get
 broker_order_manage
 research_workflow_run         watchlist_get
 watchlist_manage              portfolio_risk_get
@@ -94,9 +94,6 @@ All six Phase 1/3B research `research_workflow_run` operations require a request
 `idempotency_key`. The durable run
 state is `STARTED` → `RUNNING` → `SUCCEEDED` / `PARTIAL` / `FAILED`, and terminal
 retries replay bounded, hashed fact artifacts without another Provider call.
-The two later Phase 3C historical-validation variants use a separate local artifact
-contract documented in the Phase 3 specification; they do not write these workflow
-receipts.
 
 ## 4. Research model
 
@@ -338,8 +335,8 @@ without rebuilding the full Phase 1 test matrix.
   and the feed must not be presented as a historical archive.
 - Polymarket can require a separately configured proxy.
 - Broker position market-price timestamps may be unavailable.
-- Phase 1 has no scheduler, automatic evidence ingestion, runtime LLM synthesis,
-  backtest, or order-write code.
+- Phase 1 has no scheduler, automatic evidence ingestion, runtime LLM synthesis, or
+  order-write code.
 
 ## 12. Successor phases
 
@@ -347,12 +344,15 @@ Phase 2 is the Watchlist Hub: one active upstream source (Moomoo or strict Manua
 CSV), database-persisted groups/memberships/history, research metadata, and
 conversation-authorized add/remove. Phase 3A–3D now add cross-asset facts, company
 operating facts, automatic Monitoring v2, versioned Trade Plans, Position Sizing,
-and deterministic Risk v2. The Phase 3C-0 bridge can prepare a hashed LEAN package
-and import a user-downloaded QuantConnect Free result, but it does not run a
-backtest. Order execution remains outside this MCP. The
+and deterministic Risk v2. Order execution remains outside this MCP. The
 [global roadmap](../roadmap/global-roadmap-cn-us.md) is the authority for later-phase sequencing.
 
 ## 13. Public documentation policy
 
 Detailed implementation-stage notes are intentionally excluded from the public
 tree. This consolidated specification is the current source of truth.
+
+
+Yahoo 即时报价的分钟恢复只证明最新成交价和时间。常规交易时段恢复同样清空旧日线快照的
+open/high/low/volume，并标注 `INTRADAY_QUOTE_SESSION_RANGE_UNAVAILABLE`，避免新成交价
+突破旧高低范围时误报整笔报价无效。K 线原有 OHLC 校验、请求时间截止和失败降级保持不变。

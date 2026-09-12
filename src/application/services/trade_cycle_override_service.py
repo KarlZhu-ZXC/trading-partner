@@ -13,6 +13,7 @@ from application.dto.trade_cycle_overrides import (
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.trade_cycle_override_repository import TradeCycleOverrideRepository
+from domain.common.errors import TradeCycleOverrideVersionConflict
 from domain.common.ids import EntityIdPrefix
 from domain.portfolio.models import TradeCycleProjection
 from domain.portfolio.trade_cycle_overrides import (
@@ -67,6 +68,20 @@ class TradeCycleOverrideService:
             created_at=self._clock.now(),
             expected_version=request.expected_version,
         )
+        # Replays must be checked before applying an already-persisted correction
+        # again. The repository remains authoritative for exact payload matching.
+        if self._repository.get_by_idempotency_key(request.idempotency_key) is not None:
+            return TradeCycleOverrideRevisionDTO.from_domain(
+                self._repository.append(revision, expected_version=request.expected_version)
+            )
+        if request.expected_version is not None and request.expected_version != current_version:
+            raise TradeCycleOverrideVersionConflict(
+                "Trade Cycle override expected version does not match current version",
+                details={
+                    "current_version": current_version,
+                    "expected_version": request.expected_version,
+                },
+            )
         if projection is not None:
             # Fail closed before persistence if this revision cannot be applied
             # to the currently displayed algorithm projection.

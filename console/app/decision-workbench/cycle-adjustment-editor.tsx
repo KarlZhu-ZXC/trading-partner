@@ -1,5 +1,9 @@
 "use client";
 
+import { Button, Input, Textarea } from "../components/ui/controls";
+
+import { useAccountLabel } from "../components/account-aliases";
+
 import { useEffect, useMemo, useState } from "react";
 import { ActionButton, Badge, Disclosure, ErrorNote, formatDate, shortId } from "../components/ui";
 import { MultiSelectAutosuggest, type AutosuggestOption } from "../components/multi-select-autosuggest";
@@ -22,11 +26,11 @@ function number(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function cycleOption(cycle: Dict): AutosuggestOption {
+function cycleOption(cycle: Dict, accountLabel: (account: Dict) => string): AutosuggestOption {
   return {
     value: text(cycle.cycle_id, ""),
     label: `${shortId(cycle.instrument_id)} · ${formatDate(cycle.opened_at)} → ${cycle.closed_at ? formatDate(cycle.closed_at) : "Open"}`,
-    description: `${text(cycle.status, "UNKNOWN")} · ${text(cycle.quality, "UNKNOWN")} · ${shortId(cycle.account_ref)}`,
+    description: `${text(cycle.status, "UNKNOWN")} · ${text(cycle.quality, "UNKNOWN")} · ${accountLabel(cycle)}`,
   };
 }
 
@@ -41,6 +45,7 @@ export function CycleAdjustmentEditor({
   overrideRevisions: Dict[];
   onApplied: () => void;
 }) {
+  const accountLabel = useAccountLabel();
   const [operation, setOperation] = useState<Operation>("SPLIT");
   const [selectedCycleIds, setSelectedCycleIds] = useState<string[]>([]);
   const [targetCycleId, setTargetCycleId] = useState("");
@@ -51,7 +56,7 @@ export function CycleAdjustmentEditor({
   const [preview, setPreview] = useState<Dict | null>(null);
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const cycleOptions = useMemo(() => cycles.map(cycleOption), [cycles]);
+  const cycleOptions = useMemo(() => cycles.map((cycle) => cycleOption(cycle, accountLabel)), [cycles, accountLabel]);
   const selectedCycles = cycles.filter((cycle) => selectedCycleIds.includes(text(cycle.cycle_id, "")));
   const sourceActivityIds = Array.from(new Set(selectedCycles.flatMap((cycle) => listOf<string>(cycle, "activity_ids"))));
   const activityById = new Map(transactions.map((transaction) => [text(transaction.provider_transaction_id, ""), transaction]));
@@ -89,7 +94,7 @@ export function CycleAdjustmentEditor({
     if (!activity) return { title: shortId(activityId), detail: "Durable activity reference" };
     return {
       title: `${text(activity.side, text(activity.kind, "ACTIVITY")).toUpperCase()} · ${text(activity.quantity)} @ ${text(activity.price)} ${text(activity.currency, "")}`,
-      detail: `${shortId(activity.instrument_id)} · ${formatDate(activity.occurred_at)} · ${shortId(activity.account_ref)}`,
+      detail: `${shortId(activity.instrument_id)} · ${formatDate(activity.occurred_at)} · ${accountLabel(activity)}`,
     };
   }
 
@@ -182,7 +187,7 @@ export function CycleAdjustmentEditor({
   >
     <div className="cycle-adjustment-editor">
       <div className="cycle-adjustment-operations" role="tablist" aria-label="Cycle Adjustment Operation">
-        {(["SPLIT", "MERGE", "RELINK"] as Operation[]).map((item) => <button type="button" role="tab" aria-selected={operation === item} className={operation === item ? "selected" : ""} key={item} onClick={() => changeOperation(item)}>{item.charAt(0) + item.slice(1).toLowerCase()}</button>)}
+        {(["SPLIT", "MERGE", "RELINK"] as Operation[]).map((item) => <Button variant={operation === item ? "primary" : "secondary"} type="button" role="tab" aria-selected={operation === item} className={operation === item ? "selected" : ""} key={item} onClick={() => changeOperation(item)}>{item.charAt(0) + item.slice(1).toLowerCase()}</Button>)}
       </div>
 
       <section className="cycle-adjustment-step">
@@ -192,19 +197,19 @@ export function CycleAdjustmentEditor({
 
       {operation === "SPLIT" && rootCycleId ? <section className="cycle-adjustment-step">
         <header><span>2</span><div><strong>Partition Every Activity</strong><small>Name both destinations, then assign every fill. Unassigned activities block Preview.</small></div><div className="cycle-adjustment-counts"><Badge value={`${groupA.length} ${splitNames.A}`} /><Badge value={`${groupB.length} ${splitNames.B}`} /><Badge value={`${unassigned.length} UNASSIGNED`} tone={unassigned.length ? "warn" : "good"} /></div></header>
-        <div className="cycle-split-destinations"><label><span>Group A Destination</span><input value={splitNames.A} onChange={(event) => setSplitNames((current) => ({ ...current, A: event.target.value }))} /></label><label><span>Group B Destination</span><input value={splitNames.B} onChange={(event) => setSplitNames((current) => ({ ...current, B: event.target.value }))} /></label><div className="page-actions"><button type="button" onClick={assignChronologicalHalves}>Split Chronologically</button><button type="button" onClick={() => { setSplitAssignments({}); setPreview(null); }}>Reset Assignments</button></div></div>
-        <div className="cycle-activity-assignment-list">{sourceActivityIds.map((activityId) => { const presentation = activityPresentation(activityId); const assignment = splitAssignments[activityId]; return <article key={activityId}><div><strong>{presentation.title}</strong><small>{presentation.detail}</small></div><div className="cycle-assignment-buttons" role="group" aria-label={`Assign ${presentation.title}`}><button type="button" className={assignment === "A" ? "selected" : ""} onClick={() => { setSplitAssignments((current) => ({ ...current, [activityId]: "A" })); setPreview(null); }}>{splitNames.A || "Group A"}</button><button type="button" className={assignment === "B" ? "selected" : ""} onClick={() => { setSplitAssignments((current) => ({ ...current, [activityId]: "B" })); setPreview(null); }}>{splitNames.B || "Group B"}</button></div></article>; })}</div>
+        <div className="cycle-split-destinations"><label><span>Group A Destination</span><Input value={splitNames.A} onChange={(event) => setSplitNames((current) => ({ ...current, A: event.target.value }))} /></label><label><span>Group B Destination</span><Input value={splitNames.B} onChange={(event) => setSplitNames((current) => ({ ...current, B: event.target.value }))} /></label><div className="page-actions"><Button type="button" onClick={assignChronologicalHalves}>Split Chronologically</Button><Button type="button" onClick={() => { setSplitAssignments({}); setPreview(null); }}>Reset Assignments</Button></div></div>
+        <div className="cycle-activity-assignment-list">{sourceActivityIds.map((activityId) => { const presentation = activityPresentation(activityId); const assignment = splitAssignments[activityId]; return <article key={activityId}><div><strong>{presentation.title}</strong><small>{presentation.detail}</small></div><div className="cycle-assignment-buttons" role="group" aria-label={`Assign ${presentation.title}`}><Button variant={assignment === "A" ? "primary" : "secondary"} aria-pressed={assignment === "A"} type="button" className={assignment === "A" ? "selected" : ""} onClick={() => { setSplitAssignments((current) => ({ ...current, [activityId]: "A" })); setPreview(null); }}>{splitNames.A || "Group A"}</Button><Button variant={assignment === "B" ? "primary" : "secondary"} aria-pressed={assignment === "B"} type="button" className={assignment === "B" ? "selected" : ""} onClick={() => { setSplitAssignments((current) => ({ ...current, [activityId]: "B" })); setPreview(null); }}>{splitNames.B || "Group B"}</Button></div></article>; })}</div>
       </section> : null}
 
       {operation === "RELINK" && selectedCycleIds.length > 0 ? <section className="cycle-adjustment-step">
         <header><span>2</span><div><strong>Select Activities to Move</strong><small>Only exact activities from the selected source Cycles are eligible.</small></div></header>
-        <div className="cycle-activity-checklist">{sourceActivityIds.map((activityId) => { const presentation = activityPresentation(activityId); const checked = relinkActivityIds.includes(activityId); return <label key={activityId}><input type="checkbox" checked={checked} onChange={() => { setRelinkActivityIds((current) => checked ? current.filter((item) => item !== activityId) : [...current, activityId]); setPreview(null); }} /><span><strong>{presentation.title}</strong><small>{presentation.detail}</small></span></label>; })}</div>
+        <div className="cycle-activity-checklist">{sourceActivityIds.map((activityId) => { const presentation = activityPresentation(activityId); const checked = relinkActivityIds.includes(activityId); return <label key={activityId}><Input type="checkbox" checked={checked} onChange={() => { setRelinkActivityIds((current) => checked ? current.filter((item) => item !== activityId) : [...current, activityId]); setPreview(null); }} /><span><strong>{presentation.title}</strong><small>{presentation.detail}</small></span></label>; })}</div>
         <MultiSelectAutosuggest label="Target Cycle" placeholder="Search target Cycle" options={targetOptions} value={targetCycleId ? [targetCycleId] : []} onChange={(values) => { setTargetCycleId(values.at(-1) ?? ""); setPreview(null); }} maxSuggestions={8} closeOnSelect />
       </section> : null}
 
       <section className="cycle-adjustment-step cycle-adjustment-review">
         <header><span>{operation === "MERGE" ? "2" : "3"}</span><div><strong>Review and Preview</strong><small>The algorithm projection remains retained. Applying appends an immutable manual revision.</small></div></header>
-        <label className="cycle-adjustment-note"><span>Revision Note</span><textarea rows={3} value={note} onChange={(event) => { setNote(event.target.value); setPreview(null); }} placeholder="Why is this structural correction needed?" /></label>
+        <label className="cycle-adjustment-note"><span>Revision Note</span><Textarea rows={3} value={note} onChange={(event) => { setNote(event.target.value); setPreview(null); }} placeholder="Why is this structural correction needed?" /></label>
         {preview ? <div className="cycle-adjustment-preview"><header><strong>Proposed Effective Projection</strong><Badge value={`${previewImpacts.length} IMPACT${previewImpacts.length === 1 ? "" : "S"}`} /></header>{previewImpacts.map((impact, index) => { const resultIds = listOf<string>(impact, "result_cycle_ids"); const effectiveCycles = listOf<Dict>(asDict(preview.effective_projection), "cycles").filter((cycle) => resultIds.includes(text(cycle.cycle_id, ""))); return <div key={`${text(impact.operation)}-${index}`}><span>{text(impact.operation)} · {text(impact.before_activity_count, "0")} → {text(impact.after_activity_count, "0")} activities</span><small>Source: {listOf<string>(impact, "source_cycle_ids").map(shortId).join(", ")} · Result: {resultIds.map(shortId).join(", ")}</small>{effectiveCycles.map((cycle, cycleIndex) => <article key={text(cycle.cycle_id)}><strong>{operation === "SPLIT" ? (cycleIndex === 0 ? splitNames.A : splitNames.B) : shortId(cycle.cycle_id)}</strong><span>{formatDate(cycle.opened_at)} → {cycle.closed_at ? formatDate(cycle.closed_at) : "Open"} · {listOf<string>(cycle, "activity_ids").length} activities</span><small>{listOf<string>(cycle, "activity_ids").map((activityId) => activityPresentation(activityId).title).join(" · ")}</small><em>P/L and quantities require deterministic recomputation after this structural revision.</em></article>)}<small>{listOf<string>(impact, "warning_codes").join(" · ") || "No additional warning code."}</small></div>; })}</div> : null}
         <ErrorNote>{error}</ErrorNote>
         <div className="cycle-adjustment-actions"><ActionButton busy={busy === "preview"} disabled={!canPreview} onClick={() => { void previewImpact(); }}>Preview Impact</ActionButton><ActionButton busy={busy === "apply"} disabled={!preview} tone={preview ? "warning" : "default"} onClick={() => { void applyRevision(); }}>Apply Revision</ActionButton><small>{preview ? "Preview is current. Applying appends the reviewed structural revision." : "Apply stays disabled until the current selection has a successful Preview."}</small></div>

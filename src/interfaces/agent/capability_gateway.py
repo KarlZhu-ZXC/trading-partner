@@ -54,11 +54,11 @@ _PROPOSAL_OPERATIONS = frozenset(
 # metadata.  Keep conversational aliases here so Chinese requests route
 # deterministically without adding translated prose to every public schema.
 _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("持仓", ("account_get", "positions", "portfolio_analyze", "exposure")),
-    ("仓位", ("account_get", "positions", "portfolio_analyze", "exposure")),
-    ("组合", ("portfolio_analyze", "account_get", "positions", "exposure")),
-    ("账户", ("account_get", "positions", "transactions")),
-    ("交易记录", ("account_get", "transactions")),
+    ("持仓", ("portfolio_get", "positions", "exposure")),
+    ("仓位", ("portfolio_get", "positions", "exposure")),
+    ("组合", ("portfolio_get", "positions", "exposure")),
+    ("账户", ("portfolio_get", "positions", "transactions")),
+    ("交易记录", ("portfolio_get", "transactions")),
     ("自选", ("watchlist_get", "groups", "items")),
     ("关注", ("watchlist_get", "items")),
     ("监控", ("monitor_read", "dashboard", "definitions", "runs", "events")),
@@ -70,24 +70,24 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("技术", ("technical_get_snapshot", "technical_render_chart")),
     ("图表", ("technical_render_chart",)),
     ("风险", ("portfolio_risk_get", "check", "policy")),
-    ("研究标的", ("investment_case_read", "query", "context")),
-    ("研究档案", ("investment_case_read", "query", "context")),
+    ("研究标的", ("research_get", "query", "context")),
+    ("研究档案", ("research_get", "query", "context")),
     (
         "研究",
-        ("investment_case_read", "research_memory_get", "search", "timeline", "attention"),
+        ("research_get", "search", "timeline", "attention"),
     ),
-    ("待处理", ("investment_case_read", "attention")),
-    ("待办", ("investment_case_read", "attention")),
-    ("注意事项", ("investment_case_read", "attention")),
-    ("今天决策", ("investment_case_read", "attention")),
-    ("需要处理", ("investment_case_read", "attention")),
-    ("decision inbox", ("investment_case_read", "attention")),
-    ("催化", ("research_memory_get", "agenda")),
+    ("待处理", ("research_get", "attention")),
+    ("待办", ("research_get", "attention")),
+    ("注意事项", ("research_get", "attention")),
+    ("今天决策", ("research_get", "attention")),
+    ("需要处理", ("research_get", "attention")),
+    ("decision inbox", ("research_get", "attention")),
+    ("催化", ("research_get", "agenda")),
     ("健康", ("system_health",)),
     ("数据质量", ("system_health",)),
-    ("财报", ("a_share_get_facts", "financials", "us_company_get")),
-    ("公告", ("us_company_get", "filings", "company_updates")),
-    ("新闻", ("us_company_get", "live_news")),
+    ("财报", ("a_share_get_facts", "financials", "us_get_facts")),
+    ("公告", ("us_get_facts", "filings", "company_updates")),
+    ("新闻", ("us_get_facts", "live_news")),
     (
         "审阅",
         (
@@ -136,7 +136,7 @@ _REVIEW_ACTION_OPERATIONS = ("acknowledge", "resolve")
 _REVIEW_ADJACENT: tuple[tuple[str, str | None], ...] = (
     (_REVIEW_QUEUE_CAPABILITY, "open_items"),
     (_REVIEW_QUEUE_CAPABILITY, "summary"),
-    ("research_memory_get", "agenda"),
+    ("research_get", "agenda"),
     ("monitor_read", "dashboard"),
 )
 _ROUTING_SENSITIVE_TERMS = frozenset(

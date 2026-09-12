@@ -95,10 +95,18 @@ def validate_dialogue_catalog(path: Path, public_tools: frozenset[str]) -> None:
         tool_set = frozenset(tools)
         if not tool_set <= public_tools or tool_set & FORBIDDEN_EVAL_TOOLS:
             raise DataContractError("Dialogue references a non-public or forbidden tool")
+        from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
+
+        capabilities = item.get("required_capabilities", [])
+        if not isinstance(capabilities, list) or any(not isinstance(x, str) for x in capabilities):
+            raise DataContractError("Dialogue capabilities must be strings")
+        capability_set = frozenset(capabilities)
+        if not capability_set <= MCP_VNEXT_TOOL_NAMES:
+            raise DataContractError("Dialogue references an unknown capability")
         if required_operations is not None:
             if not isinstance(required_operations, dict) or not required_operations:
                 raise DataContractError("Dialogue required_operations must be a nonempty object")
-            if not set(required_operations) <= tool_set:
+            if not set(required_operations) <= tool_set | capability_set:
                 raise DataContractError(
                     "Dialogue required_operations must reference required_tools"
                 )

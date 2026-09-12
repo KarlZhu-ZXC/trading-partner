@@ -293,7 +293,7 @@ class AccountTransactionCoordinator:
                 transactions=transactions,
                 as_of=as_of,
                 coverage_status=AccountActivityCoverageStatus.INCOMPLETE,
-                limit=500,
+                limit=None,
                 coverage_warning_codes=("TRADE_CYCLE_COVERAGE_INCOMPLETE",),
             )
             projection = self._classify_cycles(projection)
@@ -322,7 +322,6 @@ class AccountTransactionCoordinator:
                 instrument_ids=request.instrument_ids,
                 currency=request.currency,
                 classifications=request.classifications,
-                minimum_sample_size=request.minimum_sample_size,
                 start=request.start,
                 end=request.end,
             )
@@ -500,7 +499,7 @@ class AccountTransactionCoordinator:
             )
 
     def list_durable_transactions(
-        self, request: AccountGetTransactionsInput
+        self, request: AccountGetTransactionsInput, *, complete_history: bool = False
     ) -> ToolEnvelope[AccountTransactionsDTO]:
         """Read normalized durable transactions without contacting a broker."""
         request_id = self._ids.new(EntityIdPrefix.REQ)
@@ -510,7 +509,7 @@ class AccountTransactionCoordinator:
                 providers=request.providers,
                 start=request.start,
                 end=request.end,
-                limit=request.limit,
+                limit=None if complete_history else request.limit,
             )
             return ToolEnvelope.success(
                 request_id=request_id,
@@ -751,7 +750,7 @@ class AccountTransactionCoordinator:
             )
 
     def get_trade_cycles(
-        self, request: TradeCycleQueryInput
+        self, request: TradeCycleQueryInput, *, complete_history: bool = False
     ) -> ToolEnvelope[TradeCycleProjectionDTO]:
         """Project long-only Trade Cycles from durable activities only."""
 
@@ -821,8 +820,8 @@ class AccountTransactionCoordinator:
                 transactions=transactions,
                 as_of=as_of,
                 coverage_status=coverage_status,
-                start=request.start,
-                limit=request.limit,
+                start=None if complete_history else request.start,
+                limit=None if complete_history else request.limit,
                 coverage_warning_codes=coverage_warnings,
             )
             projection = self._classify_cycles(projection)

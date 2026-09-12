@@ -439,9 +439,9 @@ async def test_us_etf_deep_dive_uses_asset_aware_recipe_without_company_facts() 
     assert result.data.status is WorkflowRunStatus.SUCCEEDED
     assert {fact.receipt.tool_name for fact in result.data.facts} >= {
         "market_data_get/composite",
-        "us_company_get/live_news",
-        "us_context_get/sentiment",
-        "us_context_get/macro",
+        "us_get_facts/live_news",
+        "us_get_facts/sentiment",
+        "us_get_facts/macro",
     }
     dependencies.us_research.get_fundamental_snapshot.assert_not_awaited()
     dependencies.us_research.get_fundamental_statements.assert_not_awaited()
@@ -528,9 +528,9 @@ async def test_workflow_receipts_only_name_public_tools() -> None:
 
     assert result.ok is True and result.data is not None
     assert {fact.receipt.tool_name for fact in result.data.facts} == {
-        "account_get/positions",
-        "account_get/transactions",
-        "portfolio_analyze/exposure",
+        "portfolio_get/positions",
+        "portfolio_get/transactions",
+        "portfolio_get/exposure",
         "research_workflow_run/portfolio_review",
     }
 

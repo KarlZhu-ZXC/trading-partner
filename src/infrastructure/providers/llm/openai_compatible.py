@@ -88,6 +88,7 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
         client: httpx.AsyncClient | None = None,
         session_header_name: str | None = None,
         default_session_id: str | None = None,
+        send_output_token_limit: bool = True,
     ) -> None:
         if config is None:
             config = LLMEndpointConfig(
@@ -117,6 +118,13 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
         self._model_catalog_lock = asyncio.Lock()
         self._session_header_name = session_header_name
         self._default_session_id = default_session_id
+        self._send_output_token_limit = send_output_token_limit
+
+    def _apply_output_token_policy(self, payload: dict[str, object]) -> None:
+        """Allow an endpoint to use its own output budget, including reasoning."""
+        if not self._send_output_token_limit:
+            for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+                payload.pop(key, None)
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         effective = replace(
@@ -152,6 +160,7 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
                 max_output_tokens=self.config.max_output_tokens,
             )
             path = "/chat/completions"
+        self._apply_output_token_policy(payload)
         started = perf_counter()
         raw = await self._post(path, payload, request=effective)
         if self.config.api_style == "responses":
@@ -203,6 +212,7 @@ class OpenAICompatibleModelProvider(AgentModelProvider):
                 max_output_tokens=self.config.max_output_tokens,
             )
             path = "/chat/completions"
+        self._apply_output_token_policy(payload)
         payload["stream"] = True
         url = f"{self.config.base_url.rstrip('/')}{path}"
         started = perf_counter()

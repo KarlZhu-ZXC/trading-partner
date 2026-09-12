@@ -118,12 +118,15 @@ function qualityNotice(
   accountProviderByRef: Map<string, string>,
   activityByRef: Map<string, Dict>,
   routeByRef: Map<string, Dict>,
+  accountLabel?: (account: Dict) => string,
 ): ConsoleNotice {
   const code = String(issue.code ?? "DATA_QUALITY_ISSUE");
   const subject = String(issue.subject_ref ?? "");
   const monitorItem = monitorItems.find((item) => monitorInfo(item)?.id === subject);
   const monitor = monitorItem ? monitorInfo(monitorItem) : null;
-  const provider = accountProviderLabel(accountProviderByRef.get(subject));
+  const provider = accountLabel && accountProviderByRef.has(subject)
+    ? accountLabel({ account_ref: subject, provider: accountProviderByRef.get(subject) })
+    : accountProviderLabel(accountProviderByRef.get(subject));
   const observedAt = formatRunTime(issue.observed_at);
   const href = qualityIssueHref(issue);
 
@@ -237,7 +240,9 @@ export function buildConsoleNotices({
   qualityAccounts,
   qualityActivity,
   qualityRoutes,
+  accountLabel,
 }: {
+  accountLabel?: (account: Dict) => string;
   monitorItems: Dict[];
   notifications?: Dict;
   qualityAccounts: Dict[];
@@ -329,7 +334,7 @@ export function buildConsoleNotices({
   ]);
   const qualityNotices = qualityIssues
     .map((issue) => {
-      const notice = qualityNotice(issue, monitorItems, accountProviderByRef, activityByRef, routeByRef);
+      const notice = qualityNotice(issue, monitorItems, accountProviderByRef, activityByRef, routeByRef, accountLabel);
       const next = recommendedActionLabel(issue.recommended_action_code);
       return next ? { ...notice, detail: `${notice.detail} · Next: ${next}` } : notice;
     })

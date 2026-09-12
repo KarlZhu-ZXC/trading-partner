@@ -28,7 +28,6 @@ from application.services.external_note_review_draft_service import (
 from application.services.external_note_review_service import ExternalNoteReviewService
 from application.services.external_note_sync_service import ExternalNoteSyncService
 from application.services.health_service import HealthService
-from application.services.historical_validation_service import HistoricalValidationService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
@@ -87,7 +86,6 @@ class ApplicationServices:
     behavior_reviews: BehaviorReviewService
     daily_equity: DailyEquityMaterializationService
     workflows: ResearchWorkflowOrchestrator
-    historical_validation: HistoricalValidationService
     watchlist: WatchlistHubService
     trade_retro: TradeRetroService
     scorecards: JudgmentScorecardService

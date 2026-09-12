@@ -400,14 +400,6 @@ class YahooFinanceAdapter:
             },
         )
 
-    @staticmethod
-    def _futures_warning_codes(instrument: Instrument) -> tuple[str, ...]:
-        if instrument.asset_type is not AssetType.FUTURE:
-            return ()
-        if instrument.market is Market.CME:
-            return _SPECIFIC_FUTURES_WARNING_CODES
-        return _CONTINUOUS_FUTURES_WARNING_CODES
-
     def _chart_url(self, symbol: str) -> str:
         # URL-encode the path segment; keep host/path fixed.
         return f"{_CHART_HOST}{_CHART_PATH_PREFIX}{quote(symbol, safe='')}"
@@ -1170,7 +1162,20 @@ class YahooFinanceAdapter:
                             )
                         )
                     else:
-                        additional_warnings.append(_INTRADAY_QUOTE_RECOVERY_WARNING)
+                        # The recovered trade is newer than the daily metadata.
+                        # Its minute range cannot establish the whole session's
+                        # range, and retaining the old range can reject a valid
+                        # breakout as inconsistent OHLC. Keep only proven facts.
+                        open_ = None
+                        high = None
+                        low = None
+                        volume = None
+                        additional_warnings.extend(
+                            (
+                                _INTRADAY_QUOTE_RECOVERY_WARNING,
+                                "INTRADAY_QUOTE_SESSION_RANGE_UNAVAILABLE",
+                            )
+                        )
 
         if (
             request_session is TradingSession.OVERNIGHT

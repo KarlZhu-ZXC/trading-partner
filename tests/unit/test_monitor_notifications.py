@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -472,6 +473,75 @@ def test_data_interruption_is_one_compact_operational_card() -> None:
     assert "影响：1 条规则暂停计算；未改变原有触发结论" in message.body
     assert "dukascopy / primary_quote / PROVIDER_TIMEOUT_ERROR" in message.body
     assert "CHANGES" not in message.body and "RULES" not in message.body
+    assert "数据状态：全部规则暂停计算" in message.body
+    # Provider text is not a safe diagnostic: only closed structured diagnostics render.
+    unsafe = replace(observation, message="https://private.example/?token=secret")
+    safe_message = _notification_messages(
+        monitor, (event,), (unsafe,), {}, (), MagicMock(new=lambda _: "notice_safe")
+    )[0]
+    assert "private.example" not in safe_message.body and "secret" not in safe_message.body
+
+    gdx_rule = replace(
+        rule,
+        rule_code="GDX_AUX",
+        instrument_id="etf:US:GDX",
+        description="矿业 ETF 辅助确认",
+        max_fact_age_seconds=18000,
+    )
+    second_gdx_rule = replace(gdx_rule, rule_code="GDX_SECOND", description="矿业 ETF 第二辅助规则")
+    composite = replace(monitor, rules=(rule, gdx_rule, second_gdx_rule))
+    healthy = replace(
+        observation,
+        state=MonitorRuleStateValue.QUIET,
+        observed_value=Decimal("2390"),
+        fact_as_of=NOW,
+        fact_age_seconds=0,
+        error_codes=(),
+        diagnostics=(),
+        message="Quiet.",
+    )
+    stale = replace(
+        observation,
+        rule_code=gdx_rule.rule_code,
+        instrument_id=gdx_rule.instrument_id,
+        fact_as_of=NOW - timedelta(hours=18),
+        fact_age_seconds=64800,
+        error_codes=(),
+        diagnostics=(),
+        message="Required fact exceeded the rule freshness limit.",
+    )
+    second_stale = replace(stale, rule_code=second_gdx_rule.rule_code, instrument_id=None)
+    gdx_event = replace(event, rule_code=gdx_rule.rule_code)
+    partial = _notification_messages(
+        composite,
+        (gdx_event,),
+        (healthy, stale, second_stale),
+        {},
+        ("dukascopy",),
+        MagicMock(new=lambda _: "notice_partial"),
+    )[0]
+    assert partial.title == "⛔ GDX · 数据部分中断"
+    assert "影响：2 条规则暂停计算" in partial.body
+    assert "其他规则仍正常计算" in partial.body
+    assert "数据年龄 18 小时，上限 5 小时" in partial.body
+    assert stale.fact_as_of.isoformat() in partial.body
+    assert "矿业 ETF 辅助确认" in partial.body
+    assert "矿业 ETF 第二辅助规则" in partial.body
+    assert "上一有效价格" not in partial.body
+
+    recovered = replace(stale, state=MonitorRuleStateValue.QUIET, observed_value=Decimal("45"))
+    recovery = _data_recovery_message(
+        run_id="recovery",
+        monitor=composite,
+        observations=(healthy, recovered),
+        recovered=(recovered,),
+        data_sources=(),
+        id_generator=MagicMock(new=lambda _: "notice_recovery"),
+        created_at=NOW,
+    )
+    assert recovery.title == "🔵 GDX · 数据恢复"
+    assert "当前价格：45" in recovery.body
+    assert "2390" not in recovery.body
 
 
 def test_data_recovery_is_blue_and_not_described_as_market_recovery() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,8 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 from application.ports.agent_model_provider import ModelResponse, ModelToolCall
+from application.services.external_note_interpretation_service import (
+    validate_note_interpretation_attribution,
+)
 from application.services.external_note_review_draft_service import (
     ExternalNoteReviewDraftService,
+    NoteInterpretationDraft,
+    _validate_fidelity,
+    _validate_text_fidelity,
 )
 from domain.external_note.enums import ExternalNoteReviewStatus, NoteCoverage, NoteSpeakerKind
 from domain.external_note.models import (
@@ -219,6 +226,268 @@ class _Notes:
         return self.interpretation
 
 
+def _revision_with_blocks(*blocks: AttributedNoteBlock) -> ExternalNoteRevision:
+    base = _Notes().revision
+    return replace(
+        base,
+        full_body="\n".join(item.body for item in blocks),
+        blocks=tuple(blocks),
+    )
+
+
+def _fidelity_draft(
+    *,
+    viewpoints: list[dict[str, object]] | None = None,
+    scenarios: list[dict[str, object]] | None = None,
+) -> NoteInterpretationDraft:
+    return NoteInterpretationDraft.model_validate(
+        {
+            "change_relation": "REVISION",
+            "material_change_summary": "当前记录保持可复核。",
+            "viewpoints": viewpoints
+            or [
+                {
+                    "speaker_kind": "USER",
+                    "speaker_label": "USER",
+                    "source_block_ordinals": [0],
+                    "summary": "继续观察。",
+                    "holding_horizon": "POSITION",
+                    "direction": "SIDEWAYS",
+                    "structure": "当前不采取行动。",
+                }
+            ],
+            "user_scenarios": scenarios or _scenarios(),
+            "catalysts": [],
+            "key_levels": [],
+            "missing_evidence": [],
+            "contradictions": [],
+            "suggested_next_step": "REVIEW",
+        }
+    )
+
+
+def _block(
+    ordinal: int,
+    speaker_kind: NoteSpeakerKind,
+    speaker_label: str,
+    body: str,
+    *,
+    section_date: str | None = "2026-09-03",
+) -> AttributedNoteBlock:
+    return AttributedNoteBlock(
+        ordinal=ordinal,
+        speaker_kind=speaker_kind,
+        speaker_label=speaker_label,
+        body=body,
+        section_date=section_date,
+    )
+
+
+def test_fidelity_uses_each_viewpoints_attributed_source() -> None:
+    revision = _revision_with_blocks(
+        _block(0, NoteSpeakerKind.USER, "USER", "继续观察。"),
+        _block(
+            1,
+            NoteSpeakerKind.NAMED_PERSON,
+            "宝总",
+            "等待收盘确认，突破150后再评估。",
+        ),
+    )
+    value = _fidelity_draft(
+        viewpoints=[
+            {
+                "speaker_kind": "USER",
+                "speaker_label": "USER",
+                "source_block_ordinals": [0],
+                "summary": "继续观察。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "当前不采取行动。",
+            },
+            {
+                "speaker_kind": "NAMED_PERSON",
+                "speaker_label": "宝总",
+                "source_block_ordinals": [1],
+                "summary": "等待收盘确认。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "突破150后再评估。",
+            },
+        ]
+    )
+
+    validate_note_interpretation_attribution(value, revision)
+    _validate_fidelity(value, revision)
+
+
+def test_fidelity_rejects_numeric_substring_even_when_attributed() -> None:
+    revision = _revision_with_blocks(
+        _block(0, NoteSpeakerKind.USER, "USER", "继续观察。"),
+        _block(
+            1,
+            NoteSpeakerKind.NAMED_PERSON,
+            "宝总",
+            "等待收盘确认，突破150后再评估。",
+        ),
+    )
+    value = _fidelity_draft(
+        viewpoints=[
+            {
+                "speaker_kind": "USER",
+                "speaker_label": "USER",
+                "source_block_ordinals": [0],
+                "summary": "继续观察。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "当前不采取行动。",
+            },
+            {
+                "speaker_kind": "NAMED_PERSON",
+                "speaker_label": "宝总",
+                "source_block_ordinals": [1],
+                "summary": "等待收盘确认。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "突破50后再评估。",
+            },
+        ]
+    )
+
+    validate_note_interpretation_attribution(value, revision)
+    with pytest.raises(ValueError) as error:
+        _validate_fidelity(value, revision)
+
+    assert getattr(error.value, "code", None) == (
+        "NOTE_REVIEW_UNGROUNDED_NUMERIC_CONDITION"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "rendered"),
+    (
+        ("价格50美元，仓位20%。", "价格50美元，仓位20%。"),
+        ("价格50美元，观察150万。", "价格50，观察150。"),
+    ),
+)
+def test_fidelity_accepts_exact_numeric_units_or_explicit_unit_omission(
+    source: str,
+    rendered: str,
+) -> None:
+    _validate_text_fidelity(rendered, source)
+
+
+@pytest.mark.parametrize(
+    ("source", "rendered"),
+    (
+        ("价格50美元。", "价格50%。"),
+        ("观察150万。", "观察150亿。"),
+    ),
+)
+def test_fidelity_rejects_mismatched_numeric_units(source: str, rendered: str) -> None:
+    with pytest.raises(ValueError) as error:
+        _validate_text_fidelity(rendered, source)
+
+    assert getattr(error.value, "code", None) == (
+        "NOTE_REVIEW_UNGROUNDED_NUMERIC_CONDITION"
+    )
+
+
+def test_fidelity_keeps_user_scenarios_on_latest_user_section() -> None:
+    revision = _revision_with_blocks(
+        _block(
+            0,
+            NoteSpeakerKind.USER,
+            "USER",
+            "等待收盘确认。",
+            section_date="2026-09-02",
+        ),
+        _block(
+            1,
+            NoteSpeakerKind.USER,
+            "USER",
+            "继续观察。",
+            section_date="2026-09-03",
+        ),
+    )
+    scenarios = _scenarios()
+    scenarios[0] = {
+        **scenarios[0],
+        "confirmation": "等待收盘确认。",
+    }
+    value = _fidelity_draft(scenarios=scenarios)
+
+    with pytest.raises(ValueError) as error:
+        _validate_fidelity(value, revision)
+
+    assert getattr(error.value, "code", None) == (
+        "NOTE_REVIEW_UNGROUNDED_TIME_CONDITION"
+    )
+
+
+def test_fidelity_does_not_apply_named_speaker_negation_to_user_action() -> None:
+    revision = _revision_with_blocks(
+        _block(0, NoteSpeakerKind.USER, "USER", "考虑加仓。"),
+        _block(1, NoteSpeakerKind.NAMED_PERSON, "宝总", "撤回加仓。"),
+    )
+    value = _fidelity_draft(
+        viewpoints=[
+            {
+                "speaker_kind": "USER",
+                "speaker_label": "USER",
+                "source_block_ordinals": [0],
+                "summary": "考虑加仓。",
+                "holding_horizon": "POSITION",
+                "direction": "UP",
+                "structure": "等待进一步确认。",
+            },
+            {
+                "speaker_kind": "NAMED_PERSON",
+                "speaker_label": "宝总",
+                "source_block_ordinals": [1],
+                "summary": "撤回加仓。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "等待新的证据。",
+            },
+        ],
+        scenarios=[
+            {
+                **item,
+                "action": "ADD" if item["scenario"] == "UPSIDE" else "NO_ACTION",
+            }
+            for item in _scenarios()
+        ],
+    )
+
+    validate_note_interpretation_attribution(value, revision)
+    _validate_fidelity(value, revision)
+
+
+def test_fidelity_preserves_attribution_guard_for_cited_block() -> None:
+    revision = _revision_with_blocks(
+        _block(0, NoteSpeakerKind.USER, "USER", "继续观察。"),
+        _block(1, NoteSpeakerKind.NAMED_PERSON, "宝总", "等待收盘确认。"),
+    )
+    value = _fidelity_draft(
+        viewpoints=[
+            {
+                "speaker_kind": "USER",
+                "speaker_label": "USER",
+                "source_block_ordinals": [1],
+                "summary": "等待收盘确认。",
+                "holding_horizon": "POSITION",
+                "direction": "SIDEWAYS",
+                "structure": "等待新的证据。",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_note_interpretation_attribution(value, revision)
+
+    assert str(error.value) == "NOTE_INTERPRETATION_ATTRIBUTION_KIND_CHANGED"
+
+
 @pytest.mark.asyncio
 async def test_max_review_draft_is_separate_strict_and_idempotent(
     fixed_clock, id_generator
@@ -247,6 +516,8 @@ async def test_max_review_draft_is_separate_strict_and_idempotent(
         reasoning_effort="high",
     )
 
+    assert service.review_enabled is True
+    assert service.requires_deep_review(REVISION_ID, explicit_review=True) is True
     first = await service.review(REVISION_ID, explicit_review=True)
     repeated = await service.review(REVISION_ID, explicit_review=True)
 
@@ -322,7 +593,7 @@ async def test_max_review_rejects_an_invented_time_confirmation(
 
     assert result is not None and result.status == "FAILED"
     assert result.error_code == "NOTE_REVIEW_UNGROUNDED_TIME_CONDITION"
-    assert len(provider.requests) == 2
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -363,6 +634,7 @@ async def test_max_review_rejects_ungrounded_or_withdrawn_actions(
 
     assert result is not None and result.status == "FAILED"
     assert result.error_code == error_code
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio

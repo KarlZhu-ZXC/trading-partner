@@ -1,25 +1,22 @@
 """Single source of truth for the sole public MCP inventory."""
 
+# Stable internal business identities; only PUBLIC_TOOL_NAMES are MCP entry tools.
 MCP_VNEXT_TOOL_NAMES = frozenset(
     {
         "system_health",
         "instrument_resolve",
-        "investment_case_read",
+        "research_get",
         "investment_case_manage",
-        "research_judgment_get",
         "research_judgment_propose",
         "research_judgment_confirm",
-        "research_memory_get",
         "research_memory_append",
         "a_share_get_facts",
         "market_data_get",
         "technical_get_snapshot",
         "technical_render_chart",
-        "us_company_get",
-        "us_context_get",
-        "account_get",
+        "us_get_facts",
         "external_state_sync",
-        "portfolio_analyze",
+        "portfolio_get",
         "broker_order_manage",
         "research_workflow_run",
         "watchlist_get",
@@ -33,7 +30,13 @@ MCP_VNEXT_TOOL_NAMES = frozenset(
     }
 )
 
-PUBLIC_TOOL_NAMES = MCP_VNEXT_TOOL_NAMES
+DIRECT_PUBLIC_TOOL_NAMES = frozenset({
+    "instrument_resolve", "research_judgment_propose", "research_judgment_confirm",
+    "external_state_sync", "broker_order_manage", "technical_render_chart",
+})
+PUBLIC_TOOL_NAMES = DIRECT_PUBLIC_TOOL_NAMES | {
+    "capability_discover", "capability_read", "capability_write",
+}
 
 FORBIDDEN_PUBLIC_TOOL_NAMES = frozenset(
     {
@@ -56,6 +59,13 @@ RETIRED_PUBLIC_TOOL_NAMES = frozenset(
         "market_get_mock_snapshot",
         "investment_case_get",
         "investment_case_list",
+        "investment_case_read",
+        "research_judgment_get",
+        "research_memory_get",
+        "account_get",
+        "portfolio_analyze",
+        "us_company_get",
+        "us_context_get",
         "journal_search",
         "a_share_get_snapshot",
         "a_share_get_market_structure",

@@ -1,9 +1,14 @@
 "use client";
 
+import { ObservationRefreshStatus } from "../components/observation-refresh-status";
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
-import { ConfirmationDialog, Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, PageActionMenu, displayJson, formatBytes, formatDate } from "../components/ui";
+import { ConfirmationDialog, Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, MetricTile, PageActionMenu, displayJson, formatBytes, formatDate,
+  Button,
+  DescriptionList,
+  Table,
+} from "../components/ui";
 import { envelopeData, listOf, postApi, useApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
@@ -24,6 +29,7 @@ export default function OperationsPage() {
   const [actionResult, setActionResult] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null);
+  const identity = result.data?.runtime_identity as Dict | undefined;
   const sync = result.data?.post_market_sync as Dict | undefined;
   const oauthFlow = oauthResult.data?.flow as Dict | undefined;
   const oauth = (oauthResult.data?.token_health as Dict | undefined)
@@ -135,7 +141,19 @@ export default function OperationsPage() {
     <ConsoleShell active="operations" pageActions={<PageActionMenu ariaLabel="Operations Page Actions" items={[
       { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload local operational state", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
     ]} />}>
+      <ObservationRefreshStatus />
       <DataBoundary loading={result.loading} error={result.error}>
+        <Card kicker="RUNTIME" title="Build & Database Identity">
+          <p className="card-note">Source and build identifiers describe files currently on disk. Uncommitted changes are marked explicitly; they do not prove which edits an already-running process has loaded.</p>
+          <DescriptionList columns={3} items={[
+            { label: "Application", value: String(identity?.application_version ?? "Unavailable") },
+            { label: "Source Revision", value: String(identity?.git_revision ?? "Unavailable"), detail: identity?.git_dirty === true ? "Uncommitted changes" : identity?.git_dirty === false ? "Clean working tree" : "Working tree unavailable" },
+            { label: "Console Build", value: String(identity?.next_build_id ?? "Unavailable") },
+            { label: "Database Revision", value: listOf<string>(identity, "schema_actual_heads").join(" · ") || "Unavailable" },
+            { label: "Expected Revision", value: String(identity?.schema_expected_head ?? "Unavailable") },
+            { label: "Compatibility", value: <Badge value={identity?.schema_compatible === true ? "COMPATIBLE" : identity?.schema_compatible === false ? "INCOMPATIBLE" : "UNKNOWN"} /> },
+          ]} />
+        </Card>
         <Card className="action-console" kicker="OPERATIONS" title="Common Actions">
           <div className="action-grid">
             <div><strong>Monitoring & Sync</strong><span>Run only what is due without forcing duplicate Runs.</span><div><ActionButton onClick={() => runAction("monitor_run_due")} busy={busy === "monitor_run_due"}>Run Due Monitors</ActionButton><ActionButton onClick={() => runAction("post_market_sync_due", "This connects to configured US account and Watchlist sources. Run the due post-market sync?")} busy={busy === "post_market_sync_due"}>Run Post-Market Sync</ActionButton><ActionButton onClick={() => runAction("post_market_sync_catch_up", "This reruns the latest US market session without a successful receipt. Continue?")} busy={busy === "post_market_sync_catch_up"}>Catch Up Latest Session</ActionButton></div></div>
@@ -143,7 +161,7 @@ export default function OperationsPage() {
             <div><strong>Data Protection</strong><span>Backups are owner-only; cache pruning can be previewed before applying.</span><div><ActionButton onClick={() => runAction("database_backup")} busy={busy === "database_backup"}>Create Database Backup</ActionButton><ActionButton onClick={() => runAction("cache_prune_preview")} busy={busy === "cache_prune_preview"}>Preview 30-Day Cache Prune</ActionButton><ActionButton tone="warning" onClick={() => runAction("cache_prune_apply", "This deletes expired Provider/Reddit cache older than 30 days. Research, Monitor, and account history are unaffected. Continue?")} busy={busy === "cache_prune_apply"}>Apply Cache Prune</ActionButton></div></div>
           </div>
           <ErrorNote>{actionError}</ErrorNote>
-          {actionResult !== null && <div className="action-result"><div className="result-head"><span>Latest Operation Receipt</span><button type="button" onClick={() => setActionResult(null)}>Clear</button></div><pre>{displayJson(actionResult)}</pre></div>}
+          {actionResult !== null && <div className="action-result"><div className="result-head"><span>Latest Operation Receipt</span><Button type="button" onClick={() => setActionResult(null)}>Clear</Button></div><pre>{displayJson(actionResult)}</pre></div>}
         </Card>
         <div className="dashboard-grid">
           <Card className="span-6" kicker="POST-MARKET SYNC" title="Post-Market Sync">
@@ -185,7 +203,7 @@ export default function OperationsPage() {
             <dl className="detail-list"><div><dt>Tables</dt><dd>{tableCounts.length}</dd></div><div><dt>Provider Cache</dt><dd>{String(maintenance?.provider_cache_total ?? 0)}</dd></div><div><dt>Expired</dt><dd>{String(maintenance?.provider_cache_expired ?? 0)}</dd></div></dl>
           </Card>
           <Card className="span-4" kicker="BACKUPS & ARTIFACTS" title="Data Protection">
-            <div className="metric-pairs single"><MetricTile label="SQLite Backups" value={String(maintenance?.backup_files ?? 0)} detail={<>Latest {formatDate(maintenance?.latest_backup_at)}</>} /><MetricTile label="Validation Artifacts" value={String(maintenance?.validation_artifact_files ?? 0)} detail={formatBytes(maintenance?.validation_artifact_bytes)} /></div>
+            <div className="metric-pairs single"><MetricTile label="SQLite Backups" value={String(maintenance?.backup_files ?? 0)} detail={<>Latest {formatDate(maintenance?.latest_backup_at)}</>} /></div>
             <code className="command-block">uv run trading-partner-maintenance backup</code>
           </Card>
           <Card className="span-4" kicker="RETENTION" title="Retention Policy">
@@ -195,11 +213,11 @@ export default function OperationsPage() {
             <Disclosure title="View Table-Level Row Counts" variant="compact"><div className="table-inventory">{tableCounts.map((item) => <div key={String(item.table)}><span className="mono">{String(item.table)}</span><strong>{String(item.rows)}</strong></div>)}</div></Disclosure>
           </Card>
           <Card className="span-12" kicker="SYNC RECEIPTS" title="Post-Market Sync History">
-            <div className="table-wrap"><table><thead><tr><th>Session</th><th>Completed</th><th>Accounts</th><th>Watchlist</th><th>Snapshots</th><th>Attempts</th><th>Errors</th><th>Status</th></tr></thead><tbody>{syncReceipts.map((receipt) => <tr key={String(receipt.run_id)}><td><strong>{String(receipt.market_session_date)}</strong><small className="mono">{String(receipt.run_id)}</small></td><td>{formatDate(receipt.completed_at)}</td><td>{String(receipt.portfolio_status)}</td><td>{String(receipt.watchlist_status)}</td><td>{String(receipt.account_snapshot_count ?? 0)}</td><td>{String(receipt.attempt_count ?? 0)}</td><td className="mono">{listOf<string>(receipt, "error_codes").join(" · ") || "—"}</td><td><Badge value={String(receipt.status)} /></td></tr>)}</tbody></table></div>
+            <div className="table-wrap"><Table><thead><tr><th>Session</th><th>Completed</th><th>Accounts</th><th>Watchlist</th><th>Snapshots</th><th>Attempts</th><th>Errors</th><th>Status</th></tr></thead><tbody>{syncReceipts.map((receipt) => <tr key={String(receipt.run_id)}><td><strong>{String(receipt.market_session_date)}</strong><small className="mono">{String(receipt.run_id)}</small></td><td>{formatDate(receipt.completed_at)}</td><td>{String(receipt.portfolio_status)}</td><td>{String(receipt.watchlist_status)}</td><td>{String(receipt.account_snapshot_count ?? 0)}</td><td>{String(receipt.attempt_count ?? 0)}</td><td className="mono">{listOf<string>(receipt, "error_codes").join(" · ") || "—"}</td><td><Badge value={String(receipt.status)} /></td></tr>)}</tbody></Table></div>
           </Card>
           <Card className="span-12" kicker="OUTBOX DELIVERY" title="Notification Delivery & Dead Letter">
             <p className="card-note">Only title, source, and delivery metadata are shown to avoid exposing message bodies or authorization notes.</p>
-            <div className="table-wrap"><table><thead><tr><th>Notification</th><th>Source</th><th>Created</th><th>Last Attempt / Delivered</th><th>Attempts</th><th>Error</th><th>Status</th></tr></thead><tbody>{outboxEntries.map((entry) => <tr key={String(entry.notification_id)}><td><strong>{String(entry.title)}</strong><small className="mono">{String(entry.notification_id)}</small></td><td><strong>{String(entry.source_type)}</strong><small className="mono">{String(entry.source_id)}</small></td><td>{formatDate(entry.created_at)}</td><td>{formatDate(entry.delivered_at ?? entry.last_attempt_at)}</td><td>{String(entry.attempt_count ?? 0)}</td><td className="mono">{String(entry.last_error_code ?? "—")}</td><td><Badge value={String(entry.status)} /></td></tr>)}</tbody></table></div>
+            <div className="table-wrap"><Table><thead><tr><th>Notification</th><th>Source</th><th>Created</th><th>Last Attempt / Delivered</th><th>Attempts</th><th>Error</th><th>Status</th></tr></thead><tbody>{outboxEntries.map((entry) => <tr key={String(entry.notification_id)}><td><strong>{String(entry.title)}</strong><small className="mono">{String(entry.notification_id)}</small></td><td><strong>{String(entry.source_type)}</strong><small className="mono">{String(entry.source_id)}</small></td><td>{formatDate(entry.created_at)}</td><td>{formatDate(entry.delivered_at ?? entry.last_attempt_at)}</td><td>{String(entry.attempt_count ?? 0)}</td><td className="mono">{String(entry.last_error_code ?? "—")}</td><td><Badge value={String(entry.status)} /></td></tr>)}</tbody></Table></div>
           </Card>
           <Card className="span-6" kicker="SCHEDULER" title="Monitor Schedule & Next Due" action={<Badge value={monitorSchedules.some(({ item }) => item.schedule_health !== "OK") ? "ATTENTION" : "READY"} />}>
             <p className="card-note">This shows definition-level schedule health and next due time. launchd installation remains an explicit local command and page loads never change system configuration.</p>
@@ -213,7 +231,7 @@ export default function OperationsPage() {
             <div className="configuration-matrix">{healthComponents.map(([name, raw]) => { const component = raw as Dict; return <div key={name}><strong>{name.replaceAll("_", " ")}</strong><Badge value={String(component.state ?? "UNKNOWN")} /><span>{String(component.check_kind ?? "configuration")}</span><small>{String(component.detail ?? component.message ?? "—")}</small></div>; })}</div>
           </Card>
           <Card className="span-12" kicker="PROVIDER ROUTES · LAST 24H" title="Routing & Admission Results">
-            <div className="provider-route-table table-wrap"><table><thead><tr><th>Market / Category</th><th>Latest</th><th>Selected</th><th>Calls</th><th>Fallback</th><th>Failures</th><th>Latest Error</th></tr></thead><tbody>{providerRoutes.length === 0 ? <tr><td colSpan={7}>No durable Provider route receipts in the last 24 hours.</td></tr> : providerRoutes.map((route) => <tr key={`${String(route.market)}-${String(route.category)}`}><td><strong>{String(route.market)}</strong><small>{String(route.category)}</small></td><td>{formatDate(route.latest_at)}</td><td>{String(route.latest_selected_vendor ?? "—")}</td><td>{String(route.execution_count ?? 0)}</td><td className={Number(route.fallback_count ?? 0) > 0 ? "text-amber" : ""}>{String(route.fallback_count ?? 0)}</td><td className={Number(route.failure_count ?? 0) > 0 ? "text-red" : ""}>{String(route.failure_count ?? 0)}</td><td className="mono">{String(route.latest_error_code ?? "—")}</td></tr>)}</tbody></table></div>
+            <div className="provider-route-table table-wrap"><Table><thead><tr><th>Market / Category</th><th>Latest</th><th>Selected</th><th>Calls</th><th>Fallback</th><th>Failures</th><th>Latest Error</th></tr></thead><tbody>{providerRoutes.length === 0 ? <tr><td colSpan={7}>No durable Provider route receipts in the last 24 hours.</td></tr> : providerRoutes.map((route) => <tr key={`${String(route.market)}-${String(route.category)}`}><td><strong>{String(route.market)}</strong><small>{String(route.category)}</small></td><td>{formatDate(route.latest_at)}</td><td>{String(route.latest_selected_vendor ?? "—")}</td><td>{String(route.execution_count ?? 0)}</td><td className={Number(route.fallback_count ?? 0) > 0 ? "text-amber" : ""}>{String(route.fallback_count ?? 0)}</td><td className={Number(route.failure_count ?? 0) > 0 ? "text-red" : ""}>{String(route.failure_count ?? 0)}</td><td className="mono">{String(route.latest_error_code ?? "—")}</td></tr>)}</tbody></Table></div>
             {quality?.provider_route_window_truncated === true && <p className="card-note text-amber">The durable read limit was reached; this view is not the complete history.</p>}
           </Card>
         </div>

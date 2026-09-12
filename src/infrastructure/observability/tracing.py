@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import atexit
-import hashlib
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
@@ -62,12 +60,6 @@ _SAFE_NUMERIC_ATTRIBUTES = {
     "tp.tool_rounds",
 }
 _SAFE_BOOLEAN_ATTRIBUTES = {"tp.bypass_cache", "tp.web_search_used"}
-
-
-def hash_telemetry_id(value: str) -> str:
-    """Return a stable non-reversible correlation key for an opaque identity."""
-
-    return hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
 def _safe_attributes(
@@ -148,14 +140,8 @@ class OpenTelemetryAdapter:
         self._provider.shutdown()
 
 
-@dataclass(slots=True)
-class _TracingState:
-    telemetry: OpenTelemetryAdapter
-    registered_global: bool
-
-
 _LOCK = Lock()
-_STATE: _TracingState | None = None
+_STATE: OpenTelemetryAdapter | None = None
 
 
 def configure_tracing(
@@ -171,7 +157,7 @@ def configure_tracing(
         return NOOP_TELEMETRY
     with _LOCK:
         if _STATE is not None:
-            return _STATE.telemetry
+            return _STATE
         provider = TracerProvider(
             resource=Resource.create(
                 {
@@ -191,20 +177,20 @@ def configure_tracing(
         if register_global:
             trace.set_tracer_provider(provider)
         telemetry = OpenTelemetryAdapter(provider)
-        _STATE = _TracingState(telemetry=telemetry, registered_global=register_global)
+        _STATE = telemetry
         atexit.register(telemetry.shutdown)
         return telemetry
 
 
 def get_telemetry() -> Telemetry:
-    return _STATE.telemetry if _STATE is not None else NOOP_TELEMETRY
+    return _STATE if _STATE is not None else NOOP_TELEMETRY
 
 
 def _reset_tracing_for_tests() -> None:
     global _STATE
     with _LOCK:
         if _STATE is not None:
-            _STATE.telemetry.shutdown()
+            _STATE.shutdown()
         _STATE = None
 
 
@@ -212,5 +198,4 @@ __all__ = [
     "OpenTelemetryAdapter",
     "configure_tracing",
     "get_telemetry",
-    "hash_telemetry_id",
 ]

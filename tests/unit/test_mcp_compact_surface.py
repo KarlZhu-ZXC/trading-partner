@@ -15,12 +15,14 @@ from mcp.server.fastmcp.exceptions import ToolError
 from application.dto.view_review import ViewInboxDTO
 from application.services.attention_projection import next_read_for
 from domain.attention.enums import AttentionSourceType
+from interfaces.mcp.progressive import READ_TOOL_NAME, WRITE_TOOL_NAME
 from interfaces.mcp.server import (
     MCP_VNEXT_TOOL_NAMES,
     PUBLIC_TOOL_NAMES,
     create_capability_registry,
     create_mcp_server,
 )
+from interfaces.mcp.tool_inventory import DIRECT_PUBLIC_TOOL_NAMES
 from interfaces.mcp.tools.compact import (
     READ_DURABLE,
     CapabilityConfirmationRequiredError,
@@ -28,6 +30,7 @@ from interfaces.mcp.tools.compact import (
     ConfirmationPolicy,
     _minimize_public_schema,
 )
+from mcp_helpers import routed_mcp_server
 
 
 class _Envelope:
@@ -166,8 +169,14 @@ async def test_compact_is_the_only_public_surface() -> None:
     compact = await create_mcp_server(_container()).list_tools()
     compact_names = {tool.name for tool in compact}
 
-    assert PUBLIC_TOOL_NAMES == MCP_VNEXT_TOOL_NAMES
-    assert compact_names == MCP_VNEXT_TOOL_NAMES
+    expected_public_names = DIRECT_PUBLIC_TOOL_NAMES | {
+        "capability_discover",
+        "capability_read",
+        "capability_write",
+    }
+    assert MCP_VNEXT_TOOL_NAMES != PUBLIC_TOOL_NAMES
+    assert expected_public_names == PUBLIC_TOOL_NAMES
+    assert compact_names == PUBLIC_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -175,38 +184,100 @@ async def test_compact_registration_order_and_schema_inventory_are_frozen() -> N
     tools = await create_mcp_server(_container()).list_tools()
 
     assert [tool.name for tool in tools] == [
-        "system_health",
         "instrument_resolve",
-        "view_get",
-        "investment_case_read",
-        "investment_case_manage",
-        "research_judgment_get",
         "research_judgment_propose",
         "research_judgment_confirm",
-        "research_memory_get",
-        "research_memory_append",
-        "a_share_get_facts",
-        "market_data_get",
-        "technical_get_snapshot",
         "technical_render_chart",
-        "us_company_get",
-        "us_context_get",
-        "account_get",
         "external_state_sync",
         "broker_order_manage",
-        "portfolio_analyze",
-        "research_workflow_run",
-        "watchlist_get",
-        "watchlist_manage",
-        "portfolio_risk_get",
-        "risk_policy_update",
-        "monitor_read",
-        "monitor_manage",
-        "monitor_evaluate",
+        "capability_discover",
+        "capability_read",
+        "capability_write",
     ]
-    # Exact inventory bytes freeze the current compact registration output.
-    assert sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools) == 28_321
-    assert _wire_size(tools) == 39_023
+    # The MCP entry point intentionally publishes only a small first page. Full
+    # operation schemas remain in the transport-neutral registry for Console and
+    # contract checks; capability discovery returns one of them on demand.
+    schema_bytes = sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in tools)
+    assert schema_bytes <= 2 * 1024
+    assert _wire_size(tools) <= 5 * 1024
+
+
+@pytest.mark.asyncio
+async def test_capability_discover_returns_one_exact_operation_schema() -> None:
+    container = _container()
+    server = create_mcp_server(container)
+    result = await server._tool_manager.call_tool(
+        "capability_discover",
+        {"tool": "portfolio_get", "operation": "positions"},
+    )
+
+    payload = result
+    assert payload["tool"] == "portfolio_get"
+    assert payload["operation"] == "positions"
+    descriptor = create_capability_registry(container).find_operation(
+        "portfolio_get", "positions"
+    )
+    assert payload["inputSchema"]["properties"]["request"] == descriptor.exact_schema
+    assert "operations" not in payload
+    assert "schemas" not in payload
+
+
+@pytest.mark.asyncio
+async def test_discovery_covers_all_106_exact_operations_without_invoking_services() -> None:
+    container = _container()
+    registry = create_capability_registry(container)
+    server = create_mcp_server(container)
+    container.services.reset_mock()
+    descriptors = registry.operation_descriptors()
+    assert len(descriptors) == 106
+    for descriptor in descriptors:
+        arguments = {"tool": descriptor.capability}
+        if descriptor.operation is not None:
+            arguments["operation"] = descriptor.operation
+        result = await server._tool_manager.call_tool("capability_discover", arguments)
+        schema = result["inputSchema"]
+        Draft202012Validator.check_schema(schema)
+        assert _local_definition_refs(schema) <= set(schema.get("$defs", {}))
+        expected = descriptor.exact_schema
+        if descriptor.operation is None:
+            assert schema == expected
+        else:
+            definitions = expected.pop("$defs", None)
+            assert schema["properties"]["request"] == expected
+            assert schema.get("$defs") == definitions
+        assert result["effect"] == descriptor.policy.effect.value
+        assert result["confirmation"] == descriptor.policy.confirmation.value
+        if descriptor.capability in DIRECT_PUBLIC_TOOL_NAMES:
+            assert result["call_tool"] == descriptor.capability
+        elif descriptor.policy.confirmation_required:
+            assert result["call_tool"] == WRITE_TOOL_NAME
+        else:
+            assert result["call_tool"] == READ_TOOL_NAME
+    assert container.services.mock_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation", ("historical_validation_prepare", "historical_validation_import")
+)
+async def test_retired_backtest_operations_are_absent_and_cannot_dispatch(operation: str) -> None:
+    container = _container()
+    server = routed_mcp_server(container)
+    registry_tools = {
+        tool.name: tool for tool in create_capability_registry(container).list_tools()
+    }
+    schema = registry_tools["research_workflow_run"].inputSchema
+    arguments = {"request": {"operation": operation}}
+    assert operation not in json.dumps(schema)
+    assert list(Draft202012Validator(schema).iter_errors(arguments))
+
+    with pytest.raises(ToolError):
+        await create_capability_registry(container).invoke(
+            "research_workflow_run", arguments, confirmation="research_workflow_run"
+        )
+    with pytest.raises(ToolError):
+        await server._tool_manager.call_tool("research_workflow_run", arguments)
+    assert container.services.mock_calls == []
 
 
 @pytest.mark.asyncio
@@ -278,7 +349,7 @@ async def test_escalated_view_review_is_explicit_and_never_a_read_side_effect() 
 
 @pytest.mark.asyncio
 async def test_research_proposal_tool_documents_direct_instrument_attachment() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
 
     description = tools["research_judgment_propose"].description
     assert "confirmed watchlist_item create attaches the Instrument directly" in description
@@ -300,8 +371,8 @@ async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable
     registry = create_capability_registry(container)
     tools = {tool.name: tool for tool in registry.list_tools()}
 
-    assert "Research Subjects (标的)" in tools["investment_case_read"].description
-    assert "decision inbox" in tools["investment_case_read"].description
+    assert "Research Subjects (标的)" in tools["research_get"].description
+    assert "decision inbox" in tools["research_get"].description
     assert "Legacy transport" in tools["investment_case_manage"].description
     serialized_manage_schema = json.dumps(
         tools["investment_case_manage"].inputSchema, separators=(",", ":")
@@ -327,7 +398,7 @@ async def test_compact_v18_keeps_legacy_case_transport_discoverable_and_callable
     )
 
     result = await registry.invoke(
-        "investment_case_read",
+        "research_get",
         {"request": {"operation": "query", "case_id": legacy_case_id}},
     )
 
@@ -363,7 +434,7 @@ async def test_investment_case_read_attention_is_read_only() -> None:
     )
     registry = create_capability_registry(container)
     result = await registry.invoke(
-        "investment_case_read",
+        "research_get",
         {"request": {"operation": "attention"}},
     )
     assert result["ok"] is True
@@ -374,7 +445,7 @@ async def test_investment_case_read_attention_is_read_only() -> None:
 
 @pytest.mark.asyncio
 async def test_technical_tools_publish_canonical_interval_enums() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
 
     snapshot = tools["technical_get_snapshot"].inputSchema["properties"]
     chart = tools["technical_render_chart"].inputSchema["properties"]
@@ -385,7 +456,7 @@ async def test_technical_tools_publish_canonical_interval_enums() -> None:
 
 @pytest.mark.asyncio
 async def test_monitor_schema_exposes_technical_timeframe_and_hysteresis() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
     schema = tools["monitor_manage"].inputSchema
     serialized = json.dumps(schema)
 
@@ -425,18 +496,40 @@ async def test_monitor_schema_exposes_technical_timeframe_and_hysteresis() -> No
 
 
 @pytest.mark.asyncio
-async def test_registry_and_mcp_transport_publish_identical_contracts() -> None:
+async def test_registry_and_mcp_transport_preserve_identity_while_thinning_schemas() -> None:
     container = _container()
     registry_tools = {
-        tool.name: tool.model_dump(mode="json")
-        for tool in create_capability_registry(container).list_tools()
+        tool.name: tool for tool in create_capability_registry(container).list_tools()
     }
-    mcp_tools = {
-        tool.name: tool.model_dump(mode="json")
-        for tool in await create_mcp_server(container).list_tools()
-    }
+    mcp_tools = {tool.name: tool for tool in await create_mcp_server(container).list_tools()}
 
-    assert registry_tools == mcp_tools
+    assert set(mcp_tools) == set(PUBLIC_TOOL_NAMES)
+    assert set(registry_tools) == set(MCP_VNEXT_TOOL_NAMES)
+    for name, full in registry_tools.items():
+        if name not in DIRECT_PUBLIC_TOOL_NAMES:
+            continue
+        thin = mcp_tools[name]
+        assert thin.name == full.name
+        assert thin.title == full.title
+        assert thin.annotations == full.annotations
+        full_size = len(json.dumps(full.inputSchema, separators=(",", ":")))
+        thin_size = len(json.dumps(thin.inputSchema, separators=(",", ":")))
+        if "request" in full.inputSchema.get("properties", {}):
+            assert thin_size < full_size
+
+    grouped = {
+        name
+        for name, tool in registry_tools.items()
+        if "oneOf" in json.dumps(tool.inputSchema, separators=(",", ":"))
+    }
+    assert grouped
+    grouped_direct = grouped & DIRECT_PUBLIC_TOOL_NAMES
+    assert grouped_direct
+    assert any(
+        len(json.dumps(mcp_tools[name].inputSchema, separators=(",", ":")))
+        < len(json.dumps(registry_tools[name].inputSchema, separators=(",", ":")))
+        for name in grouped_direct
+    )
 
 
 def test_registry_uses_explicit_confirmation_policy_not_read_only_hint() -> None:
@@ -456,7 +549,7 @@ async def test_registry_and_mcp_transport_invoke_the_same_health_handler() -> No
         "system_health",
         {},
     )
-    mcp_result = await create_mcp_server(container)._tool_manager.call_tool(
+    mcp_result = await routed_mcp_server(container)._tool_manager.call_tool(
         "system_health",
         {},
     )
@@ -493,7 +586,7 @@ async def test_local_uncompacted_invocation_keeps_validated_full_result() -> Non
 
 @pytest.mark.asyncio
 async def test_technical_snapshot_description_discloses_cross_market_support() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
 
     description = tools["technical_get_snapshot"].description
     assert "A-share" in description
@@ -504,11 +597,9 @@ async def test_technical_snapshot_description_discloses_cross_market_support() -
 
 @pytest.mark.asyncio
 async def test_compact_grouped_tools_publish_closed_discriminated_request_unions() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
     expected_variants = {
-        "investment_case_read": 3,
         "external_state_sync": 3,
-        "research_judgment_get": 4,
         "research_judgment_confirm": 2,
         "monitor_read": 4,
     }
@@ -527,8 +618,27 @@ async def test_compact_grouped_tools_publish_closed_discriminated_request_unions
 
 
 @pytest.mark.asyncio
+async def test_console_catalog_lists_all_merged_query_operations() -> None:
+    from interfaces.console.catalog import capability_catalog
+
+    container = _container()
+    registry = create_capability_registry(container)
+    tools = registry.list_tools()
+    catalog = {item["name"]: item for item in capability_catalog(tools, registry.policies)}
+    assert "capability_discover" not in catalog
+    for name, count in (("research_get", 11), ("portfolio_get", 15), ("us_get_facts", 10)):
+        expected = {
+            descriptor.operation
+            for descriptor in registry.operation_descriptors()
+            if descriptor.capability == name
+        }
+        assert len(expected) == count
+        assert set(catalog[name]["operations"]) == expected
+
+
+@pytest.mark.asyncio
 async def test_judgment_confirmation_schema_exposes_chat_authorization_provenance() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
+    tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
     serialized = json.dumps(tools["research_judgment_confirm"].inputSchema)
 
     assert '"candidate"' in serialized
@@ -541,15 +651,9 @@ async def test_judgment_confirmation_schema_exposes_chat_authorization_provenanc
 async def test_compact_wire_schema_and_each_tool_stay_bounded() -> None:
     compact = await create_mcp_server(_container()).list_tools()
 
-    assert _wire_size(compact) <= 48 * 1024
-    # Keep a reserve below the external 30 KiB ceiling so a tiny operation
-    # addition cannot turn the next release into an emergency compression pass.
-    assert (
-        sum(len(json.dumps(tool.inputSchema, separators=(",", ":"))) for tool in compact)
-        <= 29.5 * 1024
-    )
+    assert _wire_size(compact) <= 5 * 1024
     for tool in compact:
-        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 4.5 * 1024, tool.name
+        assert len(json.dumps(tool.inputSchema, separators=(",", ":"))) <= 2 * 1024, tool.name
 
 
 @pytest.mark.asyncio
@@ -568,17 +672,26 @@ async def test_compact_schema_compression_keeps_every_local_ref_resolvable() -> 
 
 @pytest.mark.asyncio
 async def test_compact_public_schema_rejects_fields_from_other_operations() -> None:
-    tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
-    schema = tools["account_get"].inputSchema
+    container = _container()
+    server = create_mcp_server(container)
+    registry = create_capability_registry(container)
+    tools = {tool.name: tool for tool in registry.list_tools()}
+    schema = tools["external_state_sync"].inputSchema
     validator = Draft202012Validator(schema)
 
-    assert not list(validator.iter_errors({"request": {"operation": "positions"}}))
+    assert not list(validator.iter_errors({"request": {"operation": "accounts"}}))
     errors = list(
         validator.iter_errors(
-            {"request": {"operation": "positions", "limit": 20}},
+            {"request": {"operation": "accounts", "limit": 20}},
         )
     )
     assert errors
+
+    with pytest.raises(ToolError):
+        await server._tool_manager.call_tool(
+            "external_state_sync",
+            {"request": {"operation": "accounts", "limit": 20}},
+        )
 
     registry = create_capability_registry(_container())
     resolve_invalid = await registry.invoke(
@@ -617,7 +730,7 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
     )
     assert scorecard_invalid["errors"][0]["code"] == "TOOL_INPUT_INVALID"
     assert "start" in scorecard_invalid["errors"][0]["details"]["unexpected_fields"]
-    judgment_validator = Draft202012Validator(tools["research_judgment_get"].inputSchema)
+    judgment_validator = Draft202012Validator(tools["research_get"].inputSchema)
     assert list(
         judgment_validator.iter_errors(
             {
@@ -631,7 +744,7 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
     )
     with pytest.raises(ToolError, match="payload"):
         await registry.invoke(
-            "research_memory_get",
+            "research_get",
             {
                 "request": {
                     "operation": "agenda",
@@ -664,20 +777,23 @@ async def test_compact_public_schema_rejects_fields_from_other_operations() -> N
 async def test_compact_annotations_distinguish_reads_sync_appends_and_destructive_manage() -> None:
     tools = {tool.name: tool for tool in await create_mcp_server(_container()).list_tools()}
 
-    assert tools["account_get"].annotations.model_dump() == {
+    assert tools["capability_read"].annotations.model_dump() == {
         "title": None,
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
+        "openWorldHint": True,
+    }
+    assert tools["capability_write"].annotations.model_dump() == {
+        "title": None,
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
     }
     assert tools["external_state_sync"].annotations.readOnlyHint is False
     assert tools["external_state_sync"].annotations.openWorldHint is True
     assert tools["instrument_resolve"].annotations.destructiveHint is False
-    assert tools["research_memory_append"].annotations.destructiveHint is False
-    assert tools["investment_case_manage"].annotations.destructiveHint is True
-    assert tools["research_workflow_run"].annotations.readOnlyHint is False
-    assert tools["research_workflow_run"].annotations.idempotentHint is True
     assert tools["broker_order_manage"].annotations.readOnlyHint is False
     assert tools["broker_order_manage"].annotations.destructiveHint is True
     assert tools["broker_order_manage"].annotations.openWorldHint is True
@@ -741,7 +857,7 @@ async def test_broker_order_manage_keeps_shadow_preview_and_live_write_closed() 
 async def test_system_health_discloses_the_active_surface_profile() -> None:
     container = _container()
     container.services.health.check.return_value = _Envelope()
-    result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
+    result = await routed_mcp_server(container)._tool_manager.call_tool("system_health", {})
 
     assert result["data"] == {
         "data_quality": {
@@ -752,8 +868,8 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
             ],
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
-        "public_tool_count": len(MCP_VNEXT_TOOL_NAMES),
-        "surface_schema_version": "mcp-vnext-shadow-v5",
+        "public_tool_count": len(PUBLIC_TOOL_NAMES),
+        "surface_schema_version": "mcp-vnext-shadow-v11",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",
@@ -784,7 +900,7 @@ async def test_system_health_keeps_operational_and_data_quality_states_separate(
         ],
     )
 
-    result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
+    result = await routed_mcp_server(container)._tool_manager.call_tool("system_health", {})
 
     assert result["degraded"] is False
     assert result["data"]["status"] == "ok"
@@ -801,7 +917,7 @@ async def test_system_health_survives_data_quality_center_failure() -> None:
     container.services.health.check.return_value = _Envelope({"status": "ok"})
     container.services.data_quality.check.side_effect = RuntimeError("token=secret")
 
-    result = await create_mcp_server(container)._tool_manager.call_tool("system_health", {})
+    result = await routed_mcp_server(container)._tool_manager.call_tool("system_health", {})
 
     assert result["ok"] is True
     assert result["degraded"] is False
@@ -818,8 +934,8 @@ async def test_performance_summary_routes_through_durable_attribution_service() 
     container = _container()
     container.services.account_transactions.get_performance_attribution.return_value = _Envelope()
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "portfolio_analyze",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {
             "request": {
                 "operation": "performance_summary",
@@ -839,8 +955,8 @@ async def test_trade_cycles_routes_through_durable_transaction_projection() -> N
     container = _container()
     container.services.account_transactions.get_trade_cycles.return_value = _Envelope()
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "portfolio_analyze",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {
             "request": {
                 "operation": "trade_cycles",
@@ -862,14 +978,13 @@ async def test_behavior_summary_routes_aware_date_window_to_durable_calculator()
     container = _container()
     container.services.account_transactions.get_behavior_summary.return_value = _Envelope()
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "portfolio_analyze",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {
             "request": {
                 "operation": "behavior_summary",
                 "start": "2026-07-01T00:00:00Z",
                 "end": "2026-07-31T23:59:59Z",
-                "minimum_sample_size": 3,
             }
         },
     )
@@ -881,12 +996,28 @@ async def test_behavior_summary_routes_aware_date_window_to_durable_calculator()
 
 
 @pytest.mark.asyncio
+async def test_behavior_summary_no_longer_accepts_a_minimum_sample_policy() -> None:
+    container = _container()
+    server = routed_mcp_server(container)
+    tools = {
+        tool.name: tool for tool in create_capability_registry(container).list_tools()
+    }
+    assert "minimum_sample_size" not in json.dumps(tools["portfolio_get"].inputSchema)
+    with pytest.raises(ToolError, match="minimum_sample_size"):
+        await server._tool_manager.call_tool(
+            "portfolio_get",
+            {"request": {"operation": "behavior_summary", "minimum_sample_size": 3}},
+        )
+    container.services.account_transactions.get_behavior_summary.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_performance_series_routes_through_durable_return_calculator() -> None:
     container = _container()
     container.services.account_transactions.get_performance_series.return_value = _Envelope()
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "portfolio_analyze",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {
             "request": {
                 "operation": "performance_series",
@@ -916,8 +1047,8 @@ async def test_journal_timeline_routes_complete_durable_chain_without_provider_r
     container.services.activity_annotations.list_annotations.return_value = ()
     container.services.broker_orders.list_recent.return_value = ()
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "portfolio_analyze",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {
             "request": {
                 "operation": "journal_timeline",
@@ -994,7 +1125,7 @@ async def test_judgment_scorecard_run_and_history_route_without_new_public_tools
         confirmation="research_workflow_run",
     )
     history_result = await registry.invoke(
-        "research_judgment_get",
+        "research_get",
         {
             "request": {
                 "operation": "scorecard_history",
@@ -1030,7 +1161,7 @@ async def test_catalyst_agenda_read_and_confirmed_append_reuse_memory_tools() ->
     registry = create_capability_registry(container)
 
     read_result = await registry.invoke(
-        "research_memory_get",
+        "research_get",
         {
             "request": {
                 "operation": "agenda",
@@ -1107,9 +1238,11 @@ async def test_durable_account_and_watchlist_reads_cannot_refresh_upstreams() ->
     container.services.portfolio.get_account_positions.return_value = _Envelope()
     container.services.portfolio.get_account_snapshot = AsyncMock(return_value=_Envelope())
     container.services.watchlist.get_items = AsyncMock(return_value=_Envelope())
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
 
-    account_result = await manager.call_tool("account_get", {"request": {"operation": "positions"}})
+    account_result = await manager.call_tool(
+        "portfolio_get", {"request": {"operation": "positions"}}
+    )
     watchlist_result = await manager.call_tool(
         "watchlist_get",
         {"request": {"operation": "items"}},
@@ -1128,8 +1261,8 @@ async def test_account_transactions_read_is_durable_only() -> None:
     container.services.account_transactions.list_durable_transactions.return_value = _Envelope()
     container.services.account_transactions.get_transactions = AsyncMock(return_value=_Envelope())
 
-    result = await create_mcp_server(container)._tool_manager.call_tool(
-        "account_get",
+    result = await routed_mcp_server(container)._tool_manager.call_tool(
+        "portfolio_get",
         {"request": {"operation": "transactions", "limit": 20}},
     )
 
@@ -1143,7 +1276,7 @@ async def test_external_state_sync_refreshes_accounts_and_watchlist_only_when_se
     container = _container()
     container.services.portfolio.get_account_snapshot = AsyncMock(return_value=_Envelope())
     container.services.watchlist.sync_all = AsyncMock(return_value=_Envelope())
-    manager = create_mcp_server(container)._tool_manager
+    manager = routed_mcp_server(container)._tool_manager
 
     accounts_result = await manager.call_tool(
         "external_state_sync",

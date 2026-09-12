@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -83,7 +84,7 @@ async def test_console_full_result_invocation_keeps_validated_grouped_request() 
     )
     result = await console_api._invoke_capability(
         request,
-        "research_judgment_get",
+        "research_get",
         {"request": {"operation": "state", "case_id": "case_001"}},
         preserve_full_result=True,
     )
@@ -91,7 +92,7 @@ async def test_console_full_result_invocation_keeps_validated_grouped_request() 
     assert result["ok"] is True
     assert calls == [
         (
-            "research_judgment_get",
+            "research_get",
             {"request": {"operation": "state", "case_id": "case_001"}},
         )
     ]
@@ -170,13 +171,13 @@ async def test_tool_workbench_compacts_by_default_and_owned_reads_opt_into_full_
         headers = await _console_headers(client)
         compact = await client.post(
             "/api/tools/invoke",
-            json={"tool_name": "research_memory_get", "arguments": {}},
+            json={"tool_name": "research_get", "arguments": {}},
             headers=headers,
         )
         full = await client.post(
             "/api/tools/invoke",
             json={
-                "tool_name": "research_memory_get",
+                "tool_name": "research_get",
                 "arguments": {},
                 "preserve_full_result": True,
             },
@@ -469,6 +470,10 @@ class _AgendaSummaryService:
 
 
 class _ExternalNotesService:
+    @asynccontextmanager
+    async def exclusive_session(self):
+        yield
+
     def __init__(self, now: datetime) -> None:
         self.now = now
         self.sync_inputs: list[bool] = []
@@ -673,7 +678,7 @@ class _AgendaContainer:
                         "observed_complete": True,
                         "limitation_codes": [],
                     }
-                )
+                ),
             ),
             external_notes=_ExternalNotesService(current),
             external_note_reviews=_ExternalNoteReviewsService(),
@@ -690,7 +695,7 @@ class _AgendaContainer:
                         "acknowledged_count": 0,
                     }
                 ),
-            )
+            ),
         )
         self.operations = SimpleNamespace(
             catalyst_agenda_sync=sync_service,
@@ -719,7 +724,7 @@ async def _console_headers(client: httpx.AsyncClient) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_moomoo_note_refresh_returns_before_background_analysis(
+async def test_moomoo_note_sync_does_not_implicitly_analyze_pending_notes(
     monkeypatch: Any,
 ) -> None:
     container = _AgendaContainer(now=datetime(2026, 8, 27, 12, tzinfo=UTC))
@@ -747,9 +752,9 @@ async def test_moomoo_note_refresh_returns_before_background_analysis(
     assert denied.status_code == 403
     assert response.status_code == 200
     assert response.json()["data"]["revisions_created"] == 2
-    assert response.json()["data"]["analysis_started"] is True
+    assert response.json()["data"]["analysis_started"] is False
     assert service.sync_inputs == [False]
-    assert service.analysis_limits == [20]
+    assert service.analysis_limits == []
 
 
 @pytest.mark.asyncio
@@ -792,6 +797,8 @@ async def test_observation_source_hub_lists_capabilities_and_syncs_all_sources(
     assert history.json()["data"]["items"] == []
     assert synced.status_code == 200
     assert synced.json()["data"]["source_code"] is None
+    assert synced.json()["data"]["analysis_started"] is False
+    assert service.analysis_limits == []
     assert service.sync_inputs == [False]
 
 
@@ -835,6 +842,8 @@ async def test_observation_capture_route_is_session_gated_and_source_neutral(
     assert accepted.status_code == 200
     assert accepted.json()["data"]["source_code"] == "TRADINGVIEW_NOTE"
     assert service.captures[0][0].external_id == "layout-afrm"
+    assert accepted.json()["data"]["analysis_started"] is False
+    assert service.analysis_limits == []
 
 
 @pytest.mark.asyncio
@@ -971,17 +980,13 @@ async def test_observation_deep_review_is_explicit_session_gated_and_readable(
             json={"force": False},
             headers=headers,
         )
-        latest = await client.get(
-            f"/api/observations/{revision_id}/deep-review"
-        )
+        latest = await client.get(f"/api/observations/{revision_id}/deep-review")
 
     assert denied.status_code == 403
     assert reviewed.status_code == 200
     assert reviewed.json()["data"]["model"] == "qwen3.8-max"
     assert latest.json()["data"]["status"] == "SUCCEEDED"
-    assert container.services.external_note_review_drafts.calls == [
-        (revision_id, True, False)
-    ]
+    assert container.services.external_note_review_drafts.calls == [(revision_id, True, False)]
 
 
 @pytest.mark.asyncio
@@ -1236,6 +1241,7 @@ async def test_decision_workbench_does_not_read_or_return_unlinked_activity(
     monkeypatch: Any,
 ) -> None:
     container = _AgendaContainer()
+    container.services.account_transactions = SimpleNamespace()
     container.services.activity_annotations.list_unlinked = lambda **_kwargs: (_ for _ in ()).throw(
         AssertionError("Journal must not materialize Unlinked Activity")
     )
@@ -1255,15 +1261,30 @@ async def test_decision_workbench_does_not_read_or_return_unlinked_activity(
         tool_name: str,
         _arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        if tool_name == "account_get":
+        if tool_name == "portfolio_get" and _arguments["request"]["operation"] in {
+            "positions", "transactions"
+        }:
             return {"ok": True, "data": {"accounts": [], "transactions": []}}
-        if tool_name == "portfolio_analyze":
+        if tool_name == "portfolio_get":
             return {"ok": True, "data": {"cycles": [], "runs": []}}
-        if tool_name == "research_judgment_get":
+        if tool_name == "research_get":
             return {"ok": True, "data": {"runs": []}}
         return {"ok": True, "data": {"items": []}}
 
     monkeypatch.setattr(console_api, "_console_subject_choices", fake_subject_choices)
+
+    async def fake_history(_service: Any, **filters: Any) -> dict[str, Any]:
+        return {
+            "transactions": await fake_durable_call(
+                None, "portfolio_get", {"request": {"operation": "transactions"}}
+            ),
+            "trade_cycles": await fake_durable_call(
+                None, "portfolio_get", {"request": {"operation": "trade_cycles"}}
+            ),
+            "filter_options": {},
+        }
+
+    monkeypatch.setattr(console_api, "journal_history", fake_history)
     monkeypatch.setattr(console_api, "_durable_console_call", fake_durable_call)
     request = SimpleNamespace(
         app=SimpleNamespace(
@@ -1506,7 +1527,7 @@ async def test_accounts_console_uses_grouped_durable_positions_contract(
     registry = CompactCapabilityRegistry()
     registry.add_capability(
         account_get,
-        name="account_get",
+        name="portfolio_get",
         description="accounts",
         policy=READ_DURABLE,
     )
@@ -1593,20 +1614,20 @@ async def test_portfolio_console_aggregates_durable_compact_reads_without_sync(
         "risk_check",
     }
     assert calls == [
-        ("account_get", {"operation": "positions"}),
-        ("account_get", {"operation": "transactions", "limit": 17}),
-        ("portfolio_analyze", {"operation": "trade_cycles", "limit": 200}),
+        ("portfolio_get", {"operation": "positions"}),
+        ("portfolio_get", {"operation": "transactions", "limit": 17}),
+        ("portfolio_get", {"operation": "trade_cycles", "limit": 200}),
         (
-            "portfolio_analyze",
+            "portfolio_get",
             {
                 "operation": "performance_series",
                 "start": datetime(2026, 1, 1, tzinfo=UTC),
                 "end": datetime(2026, 8, 21, 12, tzinfo=UTC),
             },
         ),
-        ("portfolio_analyze", {"operation": "daily_equity", "limit": 500}),
-        ("portfolio_analyze", {"operation": "exposure"}),
-        ("portfolio_analyze", {"operation": "coverage", "limit": 23}),
+        ("portfolio_get", {"operation": "daily_equity", "limit": 500}),
+        ("portfolio_get", {"operation": "exposure"}),
+        ("portfolio_get", {"operation": "coverage", "limit": 23}),
         ("portfolio_risk_get", {"operation": "policy"}),
         ("portfolio_risk_get", {"operation": "check"}),
     ]
@@ -1619,7 +1640,7 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
     monkeypatch: Any,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
-    full_result_calls: list[str] = []
+    full_result_calls: list[tuple[str, str]] = []
     first_page = [{"case_id": "case_001", "title": "First", "status": "active"} for _ in range(200)]
     first_page[0] = {"case_id": "case_001", "title": "First", "status": "active"}
     second_page = [{"case_id": "case_201", "title": "Archived", "status": "archived"}]
@@ -1635,8 +1656,8 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
         _ = confirmation
         calls.append((tool_name, arguments))
         if preserve_full_result:
-            full_result_calls.append(tool_name)
-        if tool_name == "investment_case_read":
+            full_result_calls.append((tool_name, arguments["request"]["operation"]))
+        if tool_name == "research_get" and arguments["request"]["operation"] == "query":
             offset = arguments["request"]["offset"]
             items = first_page if offset == 0 else second_page
             return {"ok": True, "data": {"items": items, "total": len(items)}}
@@ -1683,12 +1704,18 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
     assert payload["subjects"][0]["state"]["errors"][0]["code"] == "CASE_STATE_FAILED"
     assert payload["subjects"][-1]["state"]["ok"] is True
 
-    list_calls = [arguments for name, arguments in calls if name == "investment_case_read"]
+    list_calls = [
+        arguments for name, arguments in calls
+        if name == "research_get" and arguments["request"]["operation"] == "query"
+    ]
     assert [call["request"] for call in list_calls] == [
         {"operation": "query", "include_archived": True, "limit": 200, "offset": 0},
         {"operation": "query", "include_archived": True, "limit": 200, "offset": 200},
     ]
-    state_calls = [arguments for name, arguments in calls if name == "research_judgment_get"]
+    state_calls = [
+        arguments for name, arguments in calls
+        if name == "research_get" and arguments["request"]["operation"] == "state"
+    ]
     assert state_calls[0]["request"] == {
         "operation": "state",
         "case_id": "case_001",
@@ -1696,9 +1723,9 @@ async def test_research_console_pages_all_subjects_and_keeps_partial_state_failu
         "include_watchlist": True,
     }
     assert state_calls[-1]["request"]["case_id"] == "case_201"
-    assert full_result_calls.count("investment_case_read") == 2
-    assert full_result_calls.count("research_judgment_get") == 201
-    assert set(full_result_calls) == {"investment_case_read", "research_judgment_get"}
+    assert full_result_calls.count(("research_get", "query")) == 2
+    assert full_result_calls.count(("research_get", "state")) == 201
+    assert set(full_result_calls) == {("research_get", "query"), ("research_get", "state")}
 
 
 @pytest.mark.asyncio
@@ -1719,7 +1746,7 @@ async def test_scorecard_console_reads_subjects_and_history_through_compact_capa
         assert preserve_full_result is True
         compact_request = arguments["request"]
         calls.append((tool_name, compact_request))
-        if tool_name == "investment_case_read":
+        if tool_name == "research_get" and compact_request["operation"] == "query":
             return {
                 "ok": True,
                 "data": {
@@ -1774,11 +1801,11 @@ async def test_scorecard_console_reads_subjects_and_history_through_compact_capa
     assert payload["scorecards"]["data"]["items"][0]["subject_id"] == "case_001"
     assert calls == [
         (
-            "investment_case_read",
+            "research_get",
             {"operation": "query", "include_archived": True, "limit": 200, "offset": 0},
         ),
         (
-            "research_judgment_get",
+            "research_get",
             {
                 "operation": "state",
                 "case_id": "case_001",
@@ -1787,7 +1814,7 @@ async def test_scorecard_console_reads_subjects_and_history_through_compact_capa
             },
         ),
         (
-            "research_judgment_get",
+            "research_get",
             {
                 "operation": "scorecard_history",
                 "limit": 12,
@@ -1817,7 +1844,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         assert preserve_full_result is True
         compact_request = arguments["request"]
         calls.append((tool_name, compact_request))
-        if tool_name == "investment_case_read":
+        if tool_name == "research_get" and compact_request["operation"] == "query":
             return {
                 "ok": True,
                 "data": {
@@ -1839,7 +1866,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
             }
         if tool_name == "monitor_read":
             raise RuntimeError("monitor dashboard unavailable")
-        if tool_name == "research_judgment_get" and compact_request["operation"] == "state":
+        if tool_name == "research_get" and compact_request["operation"] == "state":
             return {
                 "ok": True,
                 "data": {
@@ -1850,11 +1877,13 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
                     },
                 },
             }
-        if tool_name == "research_judgment_get":
+        if tool_name == "research_get" and compact_request["operation"] == "scorecard_history":
             return {"ok": True, "data": {"runs": []}}
-        if tool_name == "research_memory_get":
+        if tool_name == "research_get" and compact_request["operation"] in {"agenda", "timeline"}:
             return {"ok": True, "data": {"items": []}}
-        if tool_name == "account_get":
+        if tool_name == "portfolio_get" and compact_request["operation"] in {
+            "positions", "transactions"
+        }:
             if compact_request["operation"] == "positions":
                 return {
                     "ok": True,
@@ -1884,7 +1913,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
                     ]
                 },
             }
-        assert tool_name == "portfolio_analyze"
+        assert tool_name == "portfolio_get"
         if compact_request["operation"] == "trade_cycles":
             return {
                 "ok": True,
@@ -1918,10 +1947,30 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         }
 
     container = _AgendaContainer()
+    container.services.account_transactions = SimpleNamespace()
     reconciled: list[ReviewItemProjection] = []
     container.services.review_items.reconcile = lambda projections, **_kwargs: reconciled.extend(
         projections
     )
+
+    async def fake_history(_service: Any, **filters: Any) -> dict[str, Any]:
+        return {
+            "transactions": await fake_invoke(
+                None,
+                "portfolio_get",
+                {"request": {"operation": "transactions"}},
+                preserve_full_result=True,
+            ),
+            "trade_cycles": await fake_invoke(
+                None,
+                "portfolio_get",
+                {"request": {"operation": "trade_cycles"}},
+                preserve_full_result=True,
+            ),
+            "filter_options": {},
+        }
+
+    monkeypatch.setattr(console_api, "journal_history", fake_history)
     monkeypatch.setattr(console_api, "_invoke_capability", fake_invoke)
     monkeypatch.setattr(console_api, "build_default_application", lambda: container)
     monkeypatch.setattr(
@@ -1951,7 +2000,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
     assert (
         calls.count(
             (
-                "research_judgment_get",
+                "research_get",
                 {
                     "operation": "state",
                     "case_id": "case_001",
@@ -1963,7 +2012,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         == 1
     )
     assert (
-        "research_memory_get",
+        "research_get",
         {
             "operation": "agenda",
             "window_days": 90,
@@ -1974,7 +2023,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         },
     ) in calls
     assert (
-        "research_memory_get",
+        "research_get",
         {
             "operation": "timeline",
             "case_id": "case_001",
@@ -1982,14 +2031,12 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
             "limit": 20,
         },
     ) in calls
-    assert ("account_get", {"operation": "positions"}) in calls
-    assert ("account_get", {"operation": "transactions", "limit": 500}) in calls
+    assert ("portfolio_get", {"operation": "positions"}) in calls
+    assert ("portfolio_get", {"operation": "transactions"}) in calls
     assert (
-        "portfolio_analyze",
+        "portfolio_get",
         {
             "operation": "trade_cycles",
-            "instrument_ids": [],
-            "limit": 500,
         },
     ) in calls
     assert all(name != "external_state_sync" for name, _request in calls)
@@ -2025,7 +2072,7 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
         compact_request = arguments["request"]
         calls.append((tool_name, compact_request))
         operation = compact_request.get("operation")
-        if tool_name == "portfolio_analyze" and operation == "trade_cycles":
+        if tool_name == "portfolio_get" and operation == "trade_cycles":
             return {
                 "ok": True,
                 "data": {
@@ -2037,7 +2084,7 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
                     ]
                 },
             }
-        if tool_name == "portfolio_analyze" and operation == "behavior_summary":
+        if tool_name == "portfolio_get" and operation == "behavior_summary":
             return {
                 "ok": True,
                 "data": {
@@ -2045,14 +2092,14 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
                     "cohort_cycle_ids": ["cycle_global"],
                 },
             }
-        if tool_name == "account_get" and operation == "transactions":
+        if tool_name == "portfolio_get" and operation == "transactions":
             return {
                 "ok": True,
                 "data": {"transactions": [{"provider_transaction_id": "tx_global"}]},
             }
-        if tool_name == "research_memory_get" and operation == "agenda":
+        if tool_name == "research_get" and operation == "agenda":
             return {"ok": True, "data": {"items": []}}
-        if tool_name == "research_judgment_get":
+        if tool_name == "research_get":
             return {"ok": True, "data": {"runs": []}}
         return {"ok": True, "data": {"items": [], "runs": []}}
 
@@ -2082,6 +2129,7 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
         raise AssertionError("global Journal reads must not reconcile ReviewItems")
 
     container = _AgendaContainer()
+    container.services.account_transactions = SimpleNamespace()
     container.services.review_items = SimpleNamespace(
         reconcile=reconcile,
         list_open=list_open,
@@ -2089,6 +2137,19 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
         metrics=metrics,
     )
     monkeypatch.setattr(console_api, "_console_subject_choices", fake_subject_choices)
+
+    async def fake_history(_service: Any, **filters: Any) -> dict[str, Any]:
+        return {
+            "transactions": await fake_durable_call(
+                None, "portfolio_get", {"request": {"operation": "transactions"}}
+            ),
+            "trade_cycles": await fake_durable_call(
+                None, "portfolio_get", {"request": {"operation": "trade_cycles"}}
+            ),
+            "filter_options": {},
+        }
+
+    monkeypatch.setattr(console_api, "journal_history", fake_history)
     monkeypatch.setattr(console_api, "_durable_console_call", fake_durable_call)
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(container=container)),
@@ -2099,6 +2160,7 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
         subject_id=None,
         classification=None,
         classifications=["ACTIVE_TRADE", "HEDGE"],
+        account_refs=["schwab_test_ira"],
         behavior_start=datetime(2026, 7, 1, tzinfo=UTC),
         behavior_end=datetime(2026, 7, 31, 23, 59, tzinfo=UTC),
     )
@@ -2106,8 +2168,7 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
     assert result["selected_subject_id"] is None
     assert all(item["state"] is None for item in result["subjects"])
     assert (
-        result["transactions"]["data"]["transactions"][0]["provider_transaction_id"]
-        == "tx_global"
+        result["transactions"]["data"]["transactions"][0]["provider_transaction_id"] == "tx_global"
     )
     assert result["trade_cycles"]["data"]["cycles"][0]["cycle_id"] == "cycle_global"
     assert result["behavior"]["data"]["cohort"]["strategy_code"] is None
@@ -2124,22 +2185,21 @@ async def test_decision_workbench_without_subject_id_uses_global_journal_scope(
         ("recent", {"subject_id": None, "limit": 20}),
     ]
     assert (
-        "portfolio_analyze",
+        "portfolio_get",
         {
             "operation": "trade_cycles",
-            "instrument_ids": [],
-            "limit": 500,
         },
     ) in calls
     behavior_requests = [
         request
         for tool, request in calls
-        if tool == "portfolio_analyze" and request["operation"] == "behavior_summary"
+        if tool == "portfolio_get" and request["operation"] == "behavior_summary"
     ]
     assert len(behavior_requests) == 1
     assert behavior_requests[0]["case_id"] is None
     assert behavior_requests[0]["instrument_ids"] == []
     assert behavior_requests[0]["strategy_code"] is None
+    assert behavior_requests[0]["account_refs"] == ["schwab_test_ira"]
     assert behavior_requests[0]["classifications"] == ["ACTIVE_TRADE", "HEDGE"]
     assert behavior_requests[0]["start"] == datetime(2026, 7, 1, tzinfo=UTC)
     assert behavior_requests[0]["end"] == datetime(2026, 7, 31, 23, 59, tzinfo=UTC)
@@ -2231,7 +2291,7 @@ async def test_retro_console_uses_the_canonical_completed_week_window(
         confirmation: str | None = None,
         preserve_full_result: bool = False,
     ) -> dict[str, Any]:
-        assert tool_name == "portfolio_analyze"
+        assert tool_name == "portfolio_get"
         assert arguments == {"request": {"operation": "retro_history", "limit": 50}}
         assert confirmation is None
         assert preserve_full_result is True
@@ -2283,7 +2343,7 @@ async def test_agenda_console_reads_durable_items_and_subject_choices_without_sy
         assert confirmation is None
         assert preserve_full_result is True
         calls.append((tool_name, arguments["request"]))
-        if tool_name == "research_memory_get":
+        if tool_name == "research_get":
             if arguments["request"]["operation"] == "timeline":
                 return {
                     "ok": True,
@@ -2338,7 +2398,7 @@ async def test_agenda_console_reads_durable_items_and_subject_choices_without_sy
     assert candidates_response.json()["candidates"]["data"]["items"][0]["entity_id"] == "event_001"
     assert calls == [
         (
-            "research_memory_get",
+            "research_get",
             {
                 "operation": "agenda",
                 "window_days": 14,
@@ -2354,11 +2414,11 @@ async def test_agenda_console_reads_durable_items_and_subject_choices_without_sy
             },
         ),
         (
-            "investment_case_read",
+            "research_get",
             {"operation": "query", "include_archived": False, "limit": 200, "offset": 0},
         ),
         (
-            "research_memory_get",
+            "research_get",
             {
                 "operation": "timeline",
                 "case_id": "case_001",
@@ -2606,3 +2666,43 @@ async def test_console_requires_confirmation_after_failed_schwab_flow(
     assert rejected.status_code == 409
     assert confirmed.status_code == 200
     assert manager.renew_calls == [True]
+
+
+async def test_journal_rejects_reversed_dates_before_reading() -> None:
+    with pytest.raises(console_api.HTTPException) as error:
+        await console_api.decision_workbench(
+            SimpleNamespace(),
+            behavior_start=datetime(2026, 8, 2, tzinfo=UTC),
+            behavior_end=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+    assert error.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_observation_lock_contention_returns_retryable_code_without_exception_text():
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from domain.common.errors import DataContractError
+
+    notes = SimpleNamespace(
+        sync=AsyncMock(
+            side_effect=DataContractError(
+                "private diagnostic must not escape",
+                code="OBSERVATION_SYNC_BUSY",
+                retryable=True,
+            )
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                container=SimpleNamespace(services=SimpleNamespace(external_notes=notes)),
+            )
+        )
+    )
+    with pytest.raises(HTTPException) as caught:
+        await console_api._sync_observations(request, source_code=None, analyze=False)
+    assert caught.value.status_code == 503
+    assert caught.value.detail == {"code": "OBSERVATION_SYNC_BUSY", "retryable": True}
