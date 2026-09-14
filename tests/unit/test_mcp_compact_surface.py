@@ -869,7 +869,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
         "public_tool_count": len(PUBLIC_TOOL_NAMES),
-        "surface_schema_version": "mcp-vnext-shadow-v11",
+        "surface_schema_version": "mcp-vnext-shadow-v12",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",

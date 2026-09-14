@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from io import BytesIO
 
 import numpy as np
@@ -72,9 +73,136 @@ class MatplotlibChartRenderer:
                 linestyle="--",
                 alpha=0.6,
             )
+        smart_money = analysis.smart_money
+        if smart_money is not None:
+            index_by_time = {bar.timestamp: index for index, bar in enumerate(visible)}
+
+            def zone_start(created_at: datetime) -> int | None:
+                if created_at in index_by_time:
+                    return index_by_time[created_at]
+                if created_at < visible[0].timestamp:
+                    return 0
+                return None
+
+            value_colors = {
+                "premium": "#ef4444",
+                "equilibrium": "#94a3b8",
+                "discount": "#22c55e",
+            }
+            for zone in smart_money.value_zones:
+                price_ax.axhspan(
+                    float(zone.low),
+                    float(zone.high),
+                    color=value_colors.get(zone.kind, "#94a3b8"),
+                    alpha=0.055,
+                )
+            visible_zones = (
+                tuple(
+                    zone
+                    for zone in smart_money.order_blocks
+                    if zone.scope == "swing" and zone.status == "active"
+                )[-3:]
+                + tuple(
+                    zone
+                    for zone in smart_money.fair_value_gaps
+                    if zone.status == "active"
+                )[-3:]
+            )
+            for zone in visible_zones:
+                start = zone_start(zone.created_at)
+                if start is None:
+                    continue
+                start = max(start, len(visible) - 80)
+                color = "#22c55e" if zone.direction == "bullish" else "#ef4444"
+                alpha = 0.13 if zone.kind == "order_block" else 0.075
+                price_ax.add_patch(
+                    Rectangle(
+                        (start - 0.45, float(zone.low)),
+                        len(visible) - start - 0.1,
+                        max(float(zone.high - zone.low), 1e-8),
+                        facecolor=color,
+                        edgecolor=color,
+                        linewidth=0.7,
+                        alpha=alpha,
+                    )
+                )
+                price_ax.annotate(
+                    "OB" if zone.kind == "order_block" else "FVG",
+                    (start, float((zone.low + zone.high) / 2)),
+                    color=color,
+                    fontsize=6,
+                    ha="left",
+                    va="center",
+                )
+            for liquidity in smart_money.liquidity_levels:
+                start = zone_start(liquidity.first_swing_at)
+                end = zone_start(liquidity.second_swing_at)
+                if start is None or end is None:
+                    continue
+                price_ax.hlines(
+                    float(liquidity.price),
+                    start,
+                    end,
+                    color="#facc15",
+                    linewidth=0.65,
+                    linestyle=":",
+                    alpha=0.8,
+                )
+                price_ax.annotate(
+                    "EQH" if liquidity.kind == "equal_high" else "EQL",
+                    ((start + end) / 2, float(liquidity.price)),
+                    color="#facc15",
+                    fontsize=6,
+                    ha="center",
+                    va="bottom" if liquidity.kind == "equal_high" else "top",
+                )
+            swing_events = tuple(
+                event
+                for event in smart_money.structure_events
+                if event.scope == "swing"
+            )
+            chart_events = swing_events[-6:] or smart_money.structure_events[-4:]
+            for event in chart_events:
+                event_index = index_by_time.get(event.occurred_at)
+                if event_index is None:
+                    continue
+                color = "#22c55e" if event.direction == "bullish" else "#ef4444"
+                price_ax.annotate(
+                    f"{event.scope[0].upper()} {event.event.upper()}",
+                    (event_index, float(event.price)),
+                    color=color,
+                    fontsize=6.5,
+                    ha="center",
+                    va="center",
+                    xytext=(0, 8 if event.direction == "bullish" else -8),
+                    textcoords="offset points",
+                )
+            for swing in smart_money.swings[-10:]:
+                if swing.scope != "swing":
+                    continue
+                swing_index = index_by_time.get(swing.occurred_at)
+                if swing_index is None:
+                    continue
+                price_ax.annotate(
+                    swing.label,
+                    (swing_index, float(swing.price)),
+                    color="#cbd5e1",
+                    fontsize=6,
+                    ha="center",
+                    va="center",
+                    xytext=(0, 7 if swing.kind == "high" else -7),
+                    textcoords="offset points",
+                )
         price_ax.legend(loc="upper left", frameon=False, labelcolor="#e2e8f0")
         price_ax.set_title(
-            f"{instrument_id} · {analysis.interval} · {analysis.trend_state}",
+            (
+                f"{instrument_id} · {analysis.interval} · {analysis.trend_state}"
+                + (
+                    f" · SMC {smart_money.trend}"
+                    if smart_money is not None
+                    else ""
+                )
+            ),
             color="#f8fafc",
             loc="left",
             fontsize=13,

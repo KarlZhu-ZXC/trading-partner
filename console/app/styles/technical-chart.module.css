@@ -1,0 +1,13 @@
+.workspace { display:grid; gap:var(--space-3); margin-top:var(--space-4); padding-top:var(--space-4); border-top:1px solid var(--line); }
+.toolbar { display:flex; align-items:end; gap:var(--space-2); flex-wrap:wrap; }
+.toolbar label,.indicators { display:grid; gap:5px; }
+.toolbar label > span,.indicators > span { color:var(--muted); font-size:var(--text-label); }
+.toolbar button { gap:6px; }
+.toolbar button svg { width:15px; height:15px; }
+.indicators > div { display:flex; gap:4px; flex-wrap:wrap; }
+.chart { width:100%; height:clamp(440px,62vh,720px); overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-panel); background:var(--panel); }
+.status { display:flex; gap:var(--space-3); flex-wrap:wrap; color:var(--muted); font:500 var(--text-label)/1.5 var(--font-geist-mono); }
+.status span { overflow-wrap:anywhere; }
+.help,.error { margin:0; font-size:var(--text-label); line-height:1.5; }
+.help { color:var(--muted); }.error { color:var(--red); }
+@media (max-width:700px) { .toolbar { align-items:stretch; }.toolbar label,.indicators { width:100%; }.toolbar select { width:100%; }.chart { height:520px; } }

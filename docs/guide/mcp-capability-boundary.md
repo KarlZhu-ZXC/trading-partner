@@ -94,11 +94,11 @@ capability_read(tool="portfolio_get", arguments={"request":{"operation":"positio
 底层继续检查 actor、版本、幂等键与业务授权。两个路由均拒绝上述六个独立工具，
 查询入口拒绝任何写入，发现不触发任何业务操作。标的解析参数较短，直接完整发布。
 
-当前 schema 为 `mcp-vnext-shadow-v11`：9 个入口、24 个业务能力、106 个业务操作。
+当前 schema 为 `mcp-vnext-shadow-v12`：9 个入口、24 个业务能力、106 个业务操作。
 原业务名称不再全部是公开 MCP 工具；历史记录及 next-read 提示保留原能力名，调用前
 根据发现返回的 `call_tool` 路由。Console 和内置 Agent 仍使用完整 Registry。
 完整 schema 的 `$ref` 在同一结果内可解析，绝不为了压缩而截断 schema。
-重新连接 MCP 客户端获取 v11；不需要迁移数据库或改写历史记录。
+重新连接 MCP 客户端获取 v12；不需要迁移数据库或改写历史记录。
 
 业务能力保留此前合并结果：
 
@@ -622,7 +622,7 @@ V1 检查账户/价格时效、原币种内单标的集中度、同币种且 NAV
 
 除价格上穿、价格下穿和组合 Risk 外，`FACT_COMPARISON` 还支持成交量、技术指标、
 基本面、公司事件、宏观、情绪、Thesis 状态和组合风险。技术指标可明确选择日线 `1d`
-或周线 `1w`；旧规则未提供周期时按日线读取。支持 Technical Engine v2 输出的
+或周线 `1w`；旧规则未提供周期时按日线读取。支持 Technical Engine v3 输出的
 `rsi_14`、MACD、ADX、ATR、均线、布林带、MFI、OBV、相对成交量等 metric key。
 有序数值比较可额外设置 `recovery_threshold` 形成迟滞区间，例如 RSI 低于 30 触发、
 回到 35 以上才恢复。当前不支持小时/4 小时技术指标、复合布尔条件或把指标称为回测信号。
@@ -692,26 +692,43 @@ Provider 尝试链会以脱敏结构写入 immutable Monitor observation。Conso
 但永不保存或显示 URL、代理地址、请求/响应正文、header 或底层异常文本。旧 Run 没有该
 sidecar 时继续按空诊断读取，不伪造历史细节。
 
-### 3.16 Technical Engine v2
+### 3.16 Technical Engine v3
 
 | 工具 | 能力与边界 |
 |---|---|
-| `technical_get_snapshot` | 对 A 股、美股或韩股标的返回日线/周线标准指标、四类状态、结构位和近期 K 线形态 |
-| `technical_render_chart` | 返回同一数据口径的审计 envelope，并直接附带 PNG K线、成交量与 RSI 图 |
+| `technical_get_snapshot` | 对支持的标的返回日线/周线标准指标、四类状态、结构位、近期 K 线形态和结构化 SMC |
+| `technical_render_chart` | 返回同一数据口径的审计 envelope，并附带含 SMC 结构与区域的 PNG K线、成交量与 RSI 图 |
 
 公开 schema 使用规范周期 `1d`/`1w`；对话输入中的 `daily`、`1wk`、`1week`、`weekly`
 会在 DTO 边界归一化，输出仍只返回规范值。
+`technical_get_snapshot(include_bars=true)` 可在同一 envelope 中返回第一个请求周期的规范
+OHLCV，供完整结果模式下的 Console 交互图使用；默认仍不返回 bars，MCP 传输仍受大小限制。
 
 美股与韩股使用 Yahoo 拆股与分红调整日线，A 股使用前复权日线；周线由同一批日线按 ISO 周聚合，避免
 重复请求 Provider。标准指标由 TA-Lib 计算，支撑/阻力由项目自有的五根 K 线摆动点与
-0.75 ATR 聚类生成。两种输出都保留 provider、时间、新鲜度、复权口径和算法版本，并固定
+0.75 ATR 聚类生成。`tp_smc_v1` 使用 LuxAlgo 公布的默认计算参数：internal length 5、swing
+length 50、EQH/EQL confirmation 3 与 0.1 × ATR(200) 阈值、Order Block ATR(200) 波动过滤和
+High/Low mitigation。只有确认后的收盘 crossover/crossunder 才生成 BOS/CHoCH；同时返回
+HH/HL/LH/LL、Order Block、自动阈值三 K 线 FVG、EQH/EQL 流动性位和价值区。发生时间与
+确认时间分开，避免前视。十标的相同 OHLC 对照中五类核心计算通过 50/50；这不代表不同
+Provider K 线或 TradingView UI 像素必然一致，也不证明机构订单。
+周期历史不足以形成 ATR(200) 时，结构与 FVG 仍可计算，但 `atr_200_ready=false` 并明确标注
+Order Block 波动过滤和 EQH/EQL 覆盖不足。
+
+两种输出都保留 provider、时间、新鲜度、复权口径和算法版本，并固定
 `historically_validated=false`。它们是可复现的派生事实，不是预测、买卖信号、仓位建议、
-回测结论或执行授权。分钟线、相对强弱基准、参数优化和策略评分仍不在当前范围内。
+回测结论或执行授权。分钟线、Breaker Block、displacement、inducement、killzone、相对强弱
+基准、参数优化和策略评分仍不在当前范围内。
 
 `technical_render_chart` 成功时同时返回标准 MCP `ImageContent` 和
 `chart_artifact.display_markdown`。若客户端没有把内存图片自动提升为会话附件，Host 必须将
 该 Markdown 原样写入回复；PNG 位于本地 `data/artifacts/technical/`、权限为 `0600`，且被
 Git 忽略。不得把原始 base64 写入聊天或日志。
+
+Console Market & Technical Lens 使用 Apache-2.0 KLineChart 10.x 渲染完整 bars，支持六种
+K线/线型、EMA/MA/BOLL/VOL/MACD/RSI/KDJ、常用画线、SMC 锁定层和本地 PNG 导出。
+KLineChart 内置指标仅是图上辅助显示；MCP technical snapshot 仍是带来源和算法版本的权威
+技术事实。用户画线在当前图表会话内有效，切换标的或周期后清空，不写入 Research 或订单。
 
 ## 4. Tool Envelope：如何判断结果能不能信
 

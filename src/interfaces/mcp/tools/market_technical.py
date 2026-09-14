@@ -147,8 +147,9 @@ def build_market_technical_adapters(
         as_of: datetime | None = None,
         lookback_sessions: int = 260,
         intervals: list[TechnicalIntervalInput] | None = None,
+        include_bars: bool = False,
     ) -> dict[str, Any]:
-        """Return daily/weekly technical facts for supported cross-market instruments.
+        """Return daily/weekly indicators and Smart Money structure.
 
         Supported identities include A-share, US, KR, CME, and Dukascopy OTC instruments.
         """
@@ -159,6 +160,7 @@ def build_market_technical_adapters(
                     "as_of": as_of,
                     "lookback_sessions": lookback_sessions,
                     "intervals": tuple(intervals or ("1d", "1w")),
+                    "include_bars": include_bars,
                 }
             )
             envelope = await container.services.technical.get_snapshot(inp)
@@ -174,7 +176,7 @@ def build_market_technical_adapters(
         interval: TechnicalIntervalInput = "1d",
         lookback_sessions: int = 160,
     ) -> list[TextContent | ImageContent]:
-        """Return an auditable technical-analysis envelope followed by a PNG chart."""
+        """Return an auditable indicator/SMC envelope followed by a PNG chart."""
         inp = TechnicalChartInput.model_validate(
             {
                 "instrument_id": instrument_id,

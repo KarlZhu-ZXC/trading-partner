@@ -17,6 +17,7 @@ from domain.technical.models import (
     TechnicalPattern,
     TechnicalTimeframe,
 )
+from infrastructure.technical.smart_money_engine import analyze_smart_money
 
 
 def _decimal(value: float) -> Decimal | None:
@@ -150,6 +151,7 @@ class TALibIndicatorEngine:
         rsi = talib.RSI(close, timeperiod=14)
         macd, macd_signal, macd_hist = talib.MACD(close, 12, 26, 9)
         atr = talib.ATR(high, low, close, timeperiod=14)
+        smc_atr = talib.ATR(high, low, close, timeperiod=200)
         bb_upper, bb_mid, bb_lower = talib.BBANDS(close, 20, 2, 2)
         adx = talib.ADX(high, low, close, timeperiod=14)
         plus_di = talib.PLUS_DI(high, low, close, timeperiod=14)
@@ -249,4 +251,5 @@ class TALibIndicatorEngine:
             metrics=metrics,
             levels=_cluster_levels(bars, float(atr[-1])),
             patterns=_patterns(open_, high, low, close),
+            smart_money=analyze_smart_money(bars, atr=smc_atr),
         )

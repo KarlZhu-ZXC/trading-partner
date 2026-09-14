@@ -5,7 +5,7 @@ relevant to the affected behavior; paths in this document are repository-relativ
 
 ## Implemented boundary
 
-The public `mcp_vnext_shadow` v11 surface has nine entry tools over the unchanged
+The public `mcp_vnext_shadow` v12 surface has nine entry tools over the unchanged
 24-capability/106-operation Registry. `capability_discover` reveals a compact catalog,
 operation names, or one exact original input schema plus `call_tool`. `capability_read`
 routes only READ_DURABLE/READ_PROVIDER capabilities; `capability_write` routes only
@@ -475,7 +475,7 @@ are unchanged.
   `trade_retro`)
 
 QuantConnect/LEAN code generation, backtesting, and result import are removed.
-The public schema is `mcp-vnext-shadow-v11`; `research_workflow_run` rejects the
+The public schema is `mcp-vnext-shadow-v12`; `research_workflow_run` rejects the
 retired `historical_validation_prepare` and `historical_validation_import` operations.
 Existing private artifacts are historical files only, not a runtime capability.
 
@@ -915,6 +915,14 @@ candlestick/volume/RSI chart. Hosts that do not promote MCP image blocks must em
 the returned `chart_artifact.display_markdown` verbatim. Technical outputs
 remain `historically_validated=false`: they are derived facts, not forecasts,
 strategies, trade signals, or execution authority.
+`tp_technical_v3` additionally embeds independent deterministic `tp_smc_v1` output:
+confirmed internal/swing HH/HL/LH/LL, close-through BOS/CHoCH, Order Blocks, FVGs,
+EQH/EQL liquidity, and premium/equilibrium/discount zones. Preserve occurrence and
+confirmation times and zone status. The compatibility profile uses LuxAlgo's
+published default lengths and thresholds; describe it as core calculation
+compatibility on identical OHLC, not TradingView pixel parity or cross-provider bar
+equality. Do not claim institutional order knowledge, historical validation, Breaker
+Blocks, displacement, inducement, killzones, or automated signals.
 
 **Not public MCP tools:** `evidence_create`, `evidence_update`, `report_create`,
 `event_create`, `decision_update`, `journal_update`, `journal_delete`. Evidence /

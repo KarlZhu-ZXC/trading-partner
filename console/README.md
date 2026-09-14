@@ -1,7 +1,9 @@
 # Trading Partner Local Console
 
 本地操作型前端，展示并操作 Trading Partner 的持久化事实、Monitor、账户、自选、
-28 个 MCP vNext 能力和确定性运维服务。可选 Shared Agent 以可折叠右侧栏常驻在各工作台旁；
+9 个 MCP vNext 入口下的 24 个业务能力和确定性运维服务。Capabilities 的 Market & Technical
+Lens 使用 KLineChart 提供交互 K 线、常用指标、SMC overlay、画线和 PNG 导出；用户画线当前
+仅保留在图表会话中。可选 Shared Agent 以可折叠右侧栏常驻在各工作台旁；
 它默认关闭且不执行订单。只有用户点击同步或
 运行按钮时才访问外部 Provider。若某个 Monitor 已显式启用复合判断策略，运行该 Monitor
 可以调用配置好的服务端 LLM；模型没有状态写入或订单端口。其他写入仍受原 MCP 确认、actor

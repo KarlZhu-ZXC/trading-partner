@@ -2,7 +2,7 @@
 
 > Updated: 2026-09-08
 > Scope: active defects and accepted operational constraints only. Resolved work
-> belongs in the Phase specifications and release notes.
+> belongs in the current product specification and release notes.
 
 ## Active issues
 
@@ -30,11 +30,5 @@ No tracked code defects remain in this list. Resolved fixes are recorded in
   orders, short selling, and unattended execution remain unavailable except for the
   closed installed SGOV cash-sweep scheduler.
 
-See [Phase 1](../phases/phase1.md), [Phase 2](../phases/phase2.md),
-[Phase 3](../phases/phase3.md), [Phase 4](../phases/phase4.md), and
+See the [current product specification](../product.md) and
 [Unreleased](../releases/unreleased.md) for implemented behavior.
-
-## Validation gaps
-
-- A full VoiceOver/screen-reader pass remains unverified. Browser keyboard, focus
-  restoration, responsive layout, and theme regressions do not substitute for it.

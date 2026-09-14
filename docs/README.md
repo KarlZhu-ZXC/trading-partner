@@ -1,31 +1,23 @@
 # Trading Partner documentation
 
-This directory contains current product documentation, the durable roadmap,
-operator runbooks, machine-readable contracts, and release history. Completed plans,
-dated smoke receipts, and superseded UI audits are removed after their lasting rules
-are folded into `AGENTS.md`, a Phase specification, or an operator guide.
+This directory contains one current product specification, focused user/operator
+guides, a future-only roadmap, machine-readable contracts, and release history.
+Completed design ledgers and audits are removed after their lasting rules reach the
+current specification, agent instructions, or an operator guide.
 
 ## Start here
 
 | Document | Use it for |
 |---|---|
 | [../README.md](../README.md) | Product overview, installation, architecture, and common commands |
+| [product.md](product.md) | Current product model, capability boundary, technical scope, and exclusions |
 | [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文安装、MCP 接入、首次验证与安全边界 |
 | [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Claude Desktop, Cursor, generic stdio, upgrade, and uninstall recipes |
 | [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Progressive MCP discovery, exact call contracts, trust model and host usage |
 | [guide/console-design-system.md](guide/console-design-system.md) | Current Console hierarchy, shared controls, density, and interaction standard |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |
-| [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Current direction and genuinely deferred integrations |
-
-## Implemented specifications
-
-| Document | Scope |
-|---|---|
-| [phases/phase1.md](phases/phase1.md) | Research memory, market/company facts, accounts, workflows, and compact MCP foundation |
-| [phases/phase2.md](phases/phase2.md) | Watchlist Hub, Risk Engine, Monitoring Hub, notifications, and Technical Engine |
-| [phases/phase3.md](phases/phase3.md) | Cross-asset facts, company operating data, and plan controls |
-| [phases/phase4.md](phases/phase4.md) | Journal, Observations, Trade Cycles, performance, and behavior review |
+| [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Prioritized evolution proposal, open-source evidence, acceptance gates, and deferred integrations |
 
 ## User and operator guides
 
@@ -55,12 +47,13 @@ when those releases shipped. They are not current usage instructions.
   Its task-specific details live in [product contracts](../.agents/references/product-contracts.md),
   [Agent runtime](../.agents/references/agent-runtime.md), and
   [Console rules](../.agents/references/console.md); load them only for affected work.
-- `phases/` owns implemented contracts; it does not act as a progress diary.
+- `product.md` owns the concise current product boundary. Exact public schemas live
+  in the capability guide and code.
 - `guide/` and `operations/` own current user/operator instructions only.
 - `roadmap/` owns genuinely deferred directions.
 - `releases/` preserves version-specific historical truth.
-- Completed plans, dated local paths, screenshots, test counts, and smoke receipts are
-  removed instead of becoming a second current specification.
+- Completed plans, phase ledgers, dated local paths, screenshots, test counts, and
+  smoke receipts are removed instead of becoming a second current specification.
 
 Runtime research data, broker exports, generated validation artifacts, audit captures,
 and private reports live under gitignored `data/` or `artifacts/`. They must not be

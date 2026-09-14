@@ -145,6 +145,11 @@
       "reason": "v9 removes the Behavior minimum_sample_size request policy; all valid nonempty samples are calculated.",
       "legacy_contract_sha256": "ef73839c17b556697a7c10e38d457568486b535d2fc54329f9fc87b2164debe3",
       "current_contract_sha256": "6a31b314e98b2bbcea7f52d897b58fb94282bebaf5506ebd8f4fa86bae8fad7c"
+    },
+    "technical_get_snapshot": {
+      "reason": "v12 adds opt-in bars for the complete Console chart result; ordinary calls keep bars disabled.",
+      "legacy_contract_sha256": "e3dc1cfcab1fd02d5478dfb64d10200313700d013b01a3a3468a242f03a48955",
+      "current_contract_sha256": "3a4e6afeb15600c50aac6cb2a9d5ee739cf8d098ac7ffd3f99a64c1269649493"
     }
   },
   "operations": [
@@ -716,7 +721,7 @@
       "technical_get_snapshot",
       null,
       "technical_get_snapshot",
-      "e3dc1cfcab1fd02d5478dfb64d10200313700d013b01a3a3468a242f03a48955",
+      "3a4e6afeb15600c50aac6cb2a9d5ee739cf8d098ac7ffd3f99a64c1269649493",
       [
         "READ_PROVIDER",
         false,

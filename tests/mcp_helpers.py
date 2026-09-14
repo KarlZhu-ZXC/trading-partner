@@ -18,7 +18,7 @@ from interfaces.mcp.tool_inventory import (
 
 
 class _RoutedToolManager:
-    """Proxy FastMCP's manager while routing legacy test calls through v11."""
+    """Proxy FastMCP's manager while routing legacy test calls through v12."""
 
     def __init__(self, manager: Any, policies: dict[str, Any]) -> None:
         self._manager = manager
@@ -57,7 +57,7 @@ class _RoutedToolManager:
 
 
 def routed_mcp_server(container: Any) -> Any:
-    """Return a public server whose test calls use the real v11 gateways."""
+    """Return a public server whose test calls use the real v12 gateways."""
 
     server = create_mcp_server(container)
     registry = create_capability_registry(container)

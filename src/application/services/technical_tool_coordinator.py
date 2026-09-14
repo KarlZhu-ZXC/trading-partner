@@ -177,6 +177,10 @@ class TechnicalToolCoordinator:
                 timeframes=timeframes,
                 price_basis=basis,
             )
+            bars_interval = request.intervals[0] if request.include_bars else None
+            chart_bars = (
+                bars if bars_interval == "1d" else _weekly_bars(bars)
+            ) if bars_interval is not None else None
             warnings = _warnings(result)
             return ToolEnvelope.success(
                 request_id=request_id,
@@ -185,7 +189,11 @@ class TechnicalToolCoordinator:
                 fetched_at=result.meta.fetched_at,
                 freshness=result.meta.freshness,
                 sources=_source(result.meta),
-                data=TechnicalAnalysisDTO.from_domain(analysis),
+                data=TechnicalAnalysisDTO.from_domain(
+                    analysis,
+                    bars=chart_bars,
+                    bars_interval=bars_interval,
+                ),
                 degraded=result.meta.freshness is not Freshness.FRESH or bool(warnings),
                 warnings=warnings,
             )

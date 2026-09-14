@@ -67,3 +67,9 @@ For frontend-only deployment, restart Console Web after building and verifying i
 do not unnecessarily restart the data API or scheduled jobs.
 
 Current component usage and preview instructions: `docs/guide/console-design-system.md`.
+
+The Market & Technical Lens uses KLineChart only inside a mounted client component.
+Fetch bars through the validated technical snapshot with complete Console result
+mode. Keep `derived:smc` overlays locked and `user:drawing` overlays editable and
+session-only. Built-in chart indicators are visual aids; backend technical DTOs remain
+the authoritative facts. Retain the Matplotlib PNG path for MCP/Agent artifacts.

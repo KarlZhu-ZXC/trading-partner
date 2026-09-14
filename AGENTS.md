@@ -33,8 +33,9 @@ not user-facing terminology. Equity means an actual stock Instrument only.
   compatibility migration when that improves intent discovery and workflow cohesion.
 - Application version is read from `src/application/__init__.py`; the current database
   migration head is `0072_external_note_review_drafts`.
-- This file and its linked `.agents/references/` files own agent-facing invariants. `docs/phases/` owns implemented product
-  contracts, `docs/guide/` and `docs/operations/` own current instructions,
+- This file and its linked `.agents/references/` files own agent-facing invariants.
+  `docs/product.md` owns the concise current product specification;
+  `docs/guide/` and `docs/operations/` own current instructions,
   `docs/roadmap/` owns genuinely deferred work, and `docs/releases/` owns historical
   version truth.
 - Do not retain completed plans, dated smoke receipts, local-path screenshots, or
@@ -80,7 +81,7 @@ alternatives to its boundaries. A documentation typo does not require a product 
 | Built-in Agent conversation, tools, pending actions, model selection, or attachments | [.agents/references/agent-runtime.md](.agents/references/agent-runtime.md), plus affected capability contracts |
 | Console UI, forms, controls, or frontend deployment | [.agents/references/console.md](.agents/references/console.md) and [design system](docs/guide/console-design-system.md) |
 | Investment research or portfolio work through MCP | [.agents/skills/trading-partner/SKILL.md](.agents/skills/trading-partner/SKILL.md) |
-| Installation, maintenance, or a product specification | [docs/README.md](docs/README.md); select the relevant guide or Phase |
+| Installation, maintenance, or product behavior | [docs/README.md](docs/README.md); select the current specification or relevant guide |
 
 ## Boundaries that apply across tasks
 
@@ -141,8 +142,8 @@ src/
 Imports are top-level (`application.*`, `domain.*`, `infrastructure.*`,
 `interfaces.*`, `bootstrap`). There is no `trading_partner` package layer.
 
-Docs: `docs/README.md` indexes the roadmap, consolidated Phase specifications,
-current guides/runbooks, contracts, and release history.
+Docs: `docs/README.md` indexes the current product specification, future roadmap,
+focused guides/runbooks, contracts, and release history.
 
 ## Documentation placement
 
@@ -159,10 +160,11 @@ under `docs/` (typically `docs/operations/` or `docs/guide/`) for
 operator/user-facing detail. When the detail already exists here or under
 `docs/`, link to it from the README instead of restating it. Every new `docs/`
 page must be added to the `docs/README.md` index.
-Completed implementation plans and dated audit/smoke artifacts are deleted after their
-durable rules and evidence summary have moved to a Phase spec, guide, release note, or
-this file. Do not create a new `docs/plans/` or `docs/audits/` archive merely to preserve
-superseded prose; Git history already owns that record.
+Completed implementation plans and dated audit/smoke artifacts are deleted after
+their durable rules and evidence summary have moved to `docs/product.md`, a focused
+guide, a release note, or this file. Do not create a new `docs/plans/`, `docs/phases/`,
+or `docs/audits/` archive merely to preserve superseded prose; Git history already
+owns that record.
 
 ## Secrets and configuration
 

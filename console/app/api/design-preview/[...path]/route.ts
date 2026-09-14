@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { workbench, SYNTHETIC_NOTE_SUMMARIES } from "../../../../dev/journal-fixtures";
+import { syntheticTechnicalChartScene } from "../../../../dev/chart-fixtures";
 
 type Dict = Record<string, unknown>;
 type Context = { params: Promise<{ path: string[] }> };
@@ -47,7 +48,15 @@ export async function GET(request: Request, context: Context) {
   return reply({ items: [] });
 }
 
-export async function POST() {
+export async function POST(request: Request, context: Context) {
   if (process.env.CONSOLE_DESIGN_PREVIEW !== "1") return reply({ detail: "Not found" }, 404);
+  const { path } = await context.params;
+  const route = path.join("/").replace(/^api\//, "");
+  if (route === "tools/invoke") {
+    const payload = await request.json() as { tool_name?: unknown; arguments?: { include_bars?: unknown } };
+    if (payload.tool_name === "technical_get_snapshot" && payload.arguments?.include_bars === true) {
+      return reply({ tool_name: payload.tool_name, result: { ok: true, data: syntheticTechnicalChartScene(), warnings: [], errors: [], degraded: false } });
+    }
+  }
   return reply({ detail: "This preview uses synthetic data. Operational writes are disabled." }, 403);
 }

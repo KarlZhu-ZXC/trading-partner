@@ -3,6 +3,10 @@
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
+import {
+  InteractiveTechnicalChart,
+  type InteractiveTechnicalScene,
+} from "../components/interactive-technical-chart";
 import { Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, PageActionMenu, displayJson,
   Button,
   Input,
@@ -111,10 +115,37 @@ function toolImages(value: unknown): Array<{ data: string; mimeType: string }> {
   return images;
 }
 
+function interactiveScene(value: unknown): InteractiveTechnicalScene | null {
+  if (!value || typeof value !== "object") return null;
+  const data = (value as Dict).data;
+  if (!data || typeof data !== "object") return null;
+  const candidate = data as Dict;
+  if (
+    typeof candidate.instrument_id !== "string"
+    || (candidate.bars_interval !== "1d" && candidate.bars_interval !== "1w")
+    || !Array.isArray(candidate.bars)
+    || !Array.isArray(candidate.timeframes)
+    || typeof candidate.price_basis !== "string"
+  ) return null;
+  return candidate as InteractiveTechnicalScene;
+}
+
+function receiptWithoutBars(response: Dict): Dict {
+  const envelope = response.result;
+  if (!envelope || typeof envelope !== "object") return response;
+  const data = (envelope as Dict).data;
+  if (!data || typeof data !== "object") return response;
+  const boundedData = { ...(data as Dict) };
+  delete boundedData.bars;
+  return { ...response, result: { ...(envelope as Dict), data: boundedData } };
+}
+
 function MarketLens() {
   const [market, setMarket] = useState("US");
   const [query, setQuery] = useState("TTWO");
   const [instrumentId, setInstrumentId] = useState("equity:US:TTWO");
+  const [chartInterval, setChartInterval] = useState<"1d" | "1w">("1d");
+  const [scene, setScene] = useState<InteractiveTechnicalScene | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<unknown>(null);
@@ -129,13 +160,62 @@ function MarketLens() {
         const envelope = response.result as Dict | undefined;
         const data = envelope?.data as Dict | undefined;
         const resolved = data?.instrument_id ?? (data?.instrument as Dict | undefined)?.instrument_id;
-        if (typeof resolved === "string") setInstrumentId(resolved);
+        if (typeof resolved === "string") {
+          setInstrumentId(resolved);
+          setScene(null);
+        }
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Fact retrieval failed"); }
     finally { setRunning(null); }
   }
 
-  return <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Quick Facts Workspace"><p className="card-note">Resolve an instrument, then retrieve its current quote, daily/weekly technical snapshot, or chart. Every result preserves source, fact time, and warnings; no trading instruction is generated.</p><div className="market-lens-controls"><label><FieldLabel required>Market</FieldLabel><Select required value={market} onChange={(event) => setMarket(event.target.value)}>{MARKET_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label><label><FieldLabel required>Symbol / Query</FieldLabel><Input required value={query} onChange={(event) => setQuery(event.target.value)} /></label><ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton><label className="market-lens-instrument"><FieldLabel required>Instrument ID</FieldLabel><Input required value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)} /></label><ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton><ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton><ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: "1d", lookback_sessions: 160 }); }}>Chart</ActionButton></div><ErrorNote>{error}</ErrorNote>{images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}{result !== null && <Disclosure className="run-receipt" title="Fact Receipt" variant="code" defaultOpen><pre>{displayJson(result)}</pre></Disclosure>}</Card>;
+  async function loadInteractiveChart() {
+    setRunning("interactive_chart");
+    setError(null);
+    try {
+      const response = await postApi<Dict>("/api/tools/invoke", {
+        tool_name: "technical_get_snapshot",
+        arguments: {
+          instrument_id: instrumentId,
+          lookback_sessions: chartInterval === "1w" ? 1000 : 500,
+          intervals: [chartInterval],
+          include_bars: true,
+        },
+        preserve_full_result: true,
+      });
+      const envelope = response.result as Dict | undefined;
+      if (envelope?.ok !== true) throw new Error("Interactive chart data is unavailable");
+      const parsed = interactiveScene(envelope);
+      if (!parsed || parsed.bars.length === 0) throw new Error("Interactive chart returned no usable bars");
+      setScene(parsed);
+      setResult(receiptWithoutBars(response));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Interactive chart failed to load");
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  return (
+    <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Chart Workspace">
+      <p className="card-note">Resolve an instrument, then inspect sourced facts or open the interactive chart. SMC overlays remain deterministic evidence; chart indicators and drawings do not create trading instructions.</p>
+      <div className="market-lens-controls">
+        <label><FieldLabel required>Market</FieldLabel><Select required value={market} onChange={(event) => setMarket(event.target.value)}>{MARKET_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
+        <label><FieldLabel required>Symbol / Query</FieldLabel><Input required value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <ActionButton busy={running === "instrument_resolve"} onClick={() => { void invoke("instrument_resolve", { market, query, asset_type: null }); }}>Resolve</ActionButton>
+        <label className="market-lens-instrument"><FieldLabel required>Instrument ID</FieldLabel><Input required value={instrumentId} onChange={(event) => { setInstrumentId(event.target.value); setScene(null); }} /></label>
+        <label><FieldLabel required>Chart Period</FieldLabel><Select required value={chartInterval} onChange={(event) => { setChartInterval(event.target.value as "1d" | "1w"); setScene(null); }}><option value="1d">Daily</option><option value="1w">Weekly</option></Select></label>
+        <ActionButton busy={running === "interactive_chart"} onClick={() => { void loadInteractiveChart(); }}>Open Chart</ActionButton>
+        <ActionButton busy={running === "market_data_get"} onClick={() => { void invoke("market_data_get", { request: { operation: "quote", instrument_id: instrumentId } }); }}>Quote</ActionButton>
+        <ActionButton busy={running === "technical_get_snapshot"} onClick={() => { void invoke("technical_get_snapshot", { instrument_id: instrumentId, lookback_sessions: 260, intervals: ["1d", "1w"] }); }}>Technical</ActionButton>
+        <ActionButton busy={running === "technical_render_chart"} onClick={() => { void invoke("technical_render_chart", { instrument_id: instrumentId, interval: chartInterval, lookback_sessions: 500 }); }}>Export PNG</ActionButton>
+      </div>
+      <ErrorNote>{error}</ErrorNote>
+      {scene && <InteractiveTechnicalChart scene={scene} />}
+      {images.length > 0 && <div className="market-lens-images">{images.map((item, index) => <img alt={`${instrumentId} technical chart ${index + 1}`} key={`${item.mimeType}-${index}`} src={`data:${item.mimeType};base64,${item.data}`} />)}</div>}
+      {result !== null && <Disclosure className="run-receipt" title="Fact Receipt" variant="code"><pre>{displayJson(result)}</pre></Disclosure>}
+    </Card>
+  );
 }
 
 export default function CapabilitiesPage() {

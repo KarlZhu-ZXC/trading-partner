@@ -162,3 +162,16 @@ action button.
   actor, idempotency, or audit requirements.
 - The specialist page owns domain editing; aggregate pages link to it rather than
   duplicating a second write path.
+
+## Interactive technical chart
+
+The Market & Technical Lens owns the client-only KLineChart workspace. Initialize it
+after mount, give its container an explicit height, resize it with its stable parent,
+and dispose it on unmount. Toolbar controls use the shared Button and Select skins.
+
+Source bars and SMC come from one validated `technical_get_snapshot` read using
+complete Console result mode. Derived overlays use the locked `derived:smc` group;
+user drawings use the editable `user:drawing` group. Chart-library indicators are
+visual aids and must not replace the sourced snapshot or create Monitor/Decision/order
+facts. Drawings are session-only until a versioned local persistence contract exists.
+Keep the Matplotlib PNG path for Agent/MCP artifacts and portable export.

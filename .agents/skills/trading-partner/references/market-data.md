@@ -28,3 +28,13 @@ overnight field. Otherwise retain the latest-known fallback with
 OTC `XAUUSD`/`XAGUSD` and rolling CFDs are broker observations, not licensed spot
 benchmarks or exchange futures. A midpoint is not a trade. Weekend proxy sources
 must retain their token/perpetual/CFD identity and basis warnings.
+
+Technical snapshots use `tp_technical_v3`. Its `smart_money` member is deterministic
+`tp_smc_v1`: confirmed internal/swing structure, BOS/CHoCH, Order Blocks, FVGs,
+EQH/EQL liquidity, and value zones. Preserve each swing's occurrence and confirmation
+time, each zone's status, source-bar basis, and `historically_validated=false`. The
+published LuxAlgo defaults are the calculation compatibility target on identical
+OHLC; Provider bars and TradingView rendering may still differ. Never present it as
+direct evidence of institutional orders or an automatic trade signal.
+If `atr_200_ready=false`, disclose that Order Block volatility filtering and
+EQH/EQL coverage are incomplete even though price structure and FVGs remain usable.

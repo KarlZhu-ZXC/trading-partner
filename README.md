@@ -84,8 +84,9 @@ ETF, theme, macro question, catalyst, or portfolio concern—not only an equity.
   selected futures, and explicitly labelled OTC/cross-asset references.
 - **Monitoring:** deterministic facts plus optional bounded composite judgment,
   immutable run diagnostics, and transition-aware Telegram delivery.
-- **Technical analysis:** shared daily/weekly indicators, market structure,
-  support/resistance, candlestick patterns, and auditable charts.
+- **Technical analysis:** shared daily/weekly indicators, LuxAlgo-compatible SMC,
+  support/resistance, candlestick patterns, auditable PNGs, and a Console interactive
+  chart with common indicators and drawing tools.
 - **Safe workflows:** deep dives, catalyst and market reviews, peer comparisons,
   deterministic Trade Retro, and confirmation-gated US stock/ETF orders.
 
@@ -256,6 +257,7 @@ them are documented in [AGENTS.md](AGENTS.md).
 ## <img src="docs/assets/readme/sections/documentation.svg" alt="" width="24" /> Documentation
 
 - [MCP capability and trust boundary](docs/guide/mcp-capability-boundary.md)
+- [Current product specification](docs/product.md)
 - [MCP host setup: Claude Desktop, Cursor, and generic stdio](docs/guide/mcp-host-setup.md)
 - [Local Console and maintenance](docs/operations/local-console-and-maintenance.md)
 - [Documentation index](docs/README.md)
@@ -264,9 +266,10 @@ them are documented in [AGENTS.md](AGENTS.md).
 - [Contributing guide](.github/CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
-Completed plans, dated smoke receipts, and superseded UI audits are removed after
-their lasting rules move into `AGENTS.md`, a Phase specification, or an operator
-guide. Git history and versioned release notes retain historical evidence.
+Completed plans, phase ledgers, dated smoke receipts, and superseded UI audits are
+removed after their lasting rules move into the current product specification,
+`AGENTS.md`, or an operator guide. Git history and release notes retain historical
+evidence.
 
 ## <img src="docs/assets/readme/sections/development.svg" alt="" width="24" /> Development
 

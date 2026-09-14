@@ -51,6 +51,10 @@ def test_ta_lib_engine_and_png_renderer() -> None:
     assert metrics["relative_volume_20"] is not None
     assert metrics["vwma_20"] is not None
     assert analysis.bar_count == 260
+    assert analysis.smart_money is not None
+    assert analysis.smart_money.algorithm_version == "tp_smc_v1"
+    assert analysis.smart_money.atr_200_ready is True
+    assert analysis.smart_money.limitations == ()
     assert all(level.basis == "five_bar_swing_cluster_within_0.75_atr" for level in analysis.levels)
 
     png = MatplotlibChartRenderer().render(
@@ -73,6 +77,10 @@ def test_ta_lib_engine_and_png_renderer() -> None:
     assert dto.bar_as_of == analysis.bar_as_of
     assert dto.indicators.rsi_14 == metrics["rsi_14"]
     assert dto.indicators.vwma == metrics["vwma_20"]
+    assert dto.algorithm_version == "tp_technical_v3"
+    assert dto.timeframes[0].smart_money is not None
+    assert dto.bars is None
+    assert dto.bars_interval is None
 
 
 def test_png_renderer_reports_missing_optional_chart_extra(

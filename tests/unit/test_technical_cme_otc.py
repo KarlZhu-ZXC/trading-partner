@@ -175,7 +175,12 @@ async def test_technical_snapshot_cme_uses_unadjusted_us_bars() -> None:
     from application.dto.technical import TechnicalAnalysisInput
 
     env = await coord.get_snapshot(
-        TechnicalAnalysisInput(instrument_id=_CME.instrument_id, as_of=AS_OF)
+        TechnicalAnalysisInput(
+            instrument_id=_CME.instrument_id,
+            as_of=AS_OF,
+            intervals=("1d",),
+            include_bars=True,
+        )
     )
 
     assert env.ok is True
@@ -186,6 +191,9 @@ async def test_technical_snapshot_cme_uses_unadjusted_us_bars() -> None:
     assert kwargs["interval"] is USBarInterval.ONE_DAY
     # price_basis is on domain analysis via DTO
     assert env.data.price_basis == "unadjusted_specific_futures_close"
+    assert env.data.bars_interval == "1d"
+    assert env.data.bars is not None
+    assert len(env.data.bars) == len(bars)
 
 
 @pytest.mark.asyncio

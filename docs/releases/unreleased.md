@@ -1,5 +1,29 @@
 # Unreleased
 
+- Added an Apache-2.0 KLineChart 10.x workspace to the Console Market & Technical
+  Lens. One validated technical read can optionally return complete bars for Console
+  rendering; ordinary MCP reads still omit them. The client supports six candle/bar
+  styles, EMA/MA/BOLL/VOL/MACD/RSI/KDJ, common magnetized drawing tools, locked SMC
+  overlays, responsive light/dark rendering, and local PNG export. User drawings are
+  explicitly session-only. Upgraded Next.js and Sharp to patched versions after the
+  dependency audit exposed unrelated current advisories.
+
+- Added independent deterministic `tp_smc_v1` analysis to `tp_technical_v3`, based on
+  LuxAlgo's published Smart Money Concepts feature set. Daily/weekly output now
+  includes confirmed internal/swing HH/HL/LH/LL, close-through BOS/CHoCH, Order
+  Blocks, auto-threshold FVGs, EQH/EQL liquidity, value zones, confirmation times,
+  and active-zone state. The compatibility profile uses published default
+  lengths, ATR(200) filters/thresholds, and High/Low mitigation; a ten-symbol
+  three-year daily identical-OHLC comparison passed all 50 core category checks.
+  Insufficient ATR(200) history is now explicit instead of silently weakening OB and
+  EQH/EQL coverage. Charts render the
+  bounded structure and active zones. It
+  remains `historically_validated=false` and makes no institutional-flow or signal
+  claim. The additive output contract advances the public surface to
+  `mcp-vnext-shadow-v12` without changing its nine entries, 24 capabilities, or 106
+  operations. Consolidated four completed Phase design ledgers into one concise
+  current product specification and reduced the roadmap to future work.
+
 - Set the OpenCode Go model and both Observation model defaults to `deepseek-flash`
   (DeepSeek V4.1 Flash). The owner runtime uses it at `max` for Console Agent,
   Monitor/event analysis, Trade Retro and both note layers. Go Chat Completions

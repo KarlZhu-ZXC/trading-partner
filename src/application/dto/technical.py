@@ -1,4 +1,4 @@
-"""Phase 2D technical-analysis MCP input and output DTOs."""
+"""Technical-analysis MCP input and output DTOs."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
+from application.dto.market import MarketBarDTO
 from domain.common.enums import Market
 from domain.common.time import require_aware_datetime
+from domain.market.models import MarketBar
 from domain.technical.models import TechnicalAnalysis, TechnicalTimeframe
 
 
@@ -42,6 +44,7 @@ class TechnicalAnalysisInput(_FrozenForbid):
     as_of: datetime | None = None
     lookback_sessions: int = Field(default=260, ge=60, le=1000)
     intervals: tuple[TechnicalIntervalInput, ...] = ("1d", "1w")
+    include_bars: bool = False
 
     @field_validator("as_of")
     @classmethod
@@ -100,6 +103,73 @@ class TechnicalPatternDTO(_FrozenForbid):
     basis: str
 
 
+SmartMoneyScope = Literal["internal", "swing"]
+SmartMoneyDirection = Literal["bullish", "bearish"]
+
+
+class SmartMoneySwingDTO(_FrozenForbid):
+    scope: SmartMoneyScope
+    kind: Literal["high", "low"]
+    label: Literal["HH", "HL", "LH", "LL"]
+    price: Decimal
+    occurred_at: datetime
+    confirmed_at: datetime
+
+
+class SmartMoneyStructureEventDTO(_FrozenForbid):
+    scope: SmartMoneyScope
+    event: Literal["bos", "choch"]
+    direction: SmartMoneyDirection
+    price: Decimal
+    occurred_at: datetime
+    broken_swing_at: datetime
+    basis: str
+
+
+class SmartMoneyZoneDTO(_FrozenForbid):
+    kind: Literal[
+        "order_block",
+        "fair_value_gap",
+        "premium",
+        "equilibrium",
+        "discount",
+    ]
+    scope: SmartMoneyScope
+    direction: SmartMoneyDirection | None
+    low: Decimal
+    high: Decimal
+    created_at: datetime
+    confirmed_at: datetime
+    status: Literal["active", "mitigated", "invalidated", "filled", "current"]
+    basis: str
+
+
+class SmartMoneyLiquidityDTO(_FrozenForbid):
+    kind: Literal["equal_high", "equal_low"]
+    scope: SmartMoneyScope
+    price: Decimal
+    first_swing_at: datetime
+    second_swing_at: datetime
+    confirmed_at: datetime
+    status: Literal["active", "swept"]
+    tolerance: Decimal
+
+
+class SmartMoneyAnalysisDTO(_FrozenForbid):
+    trend: Literal["neutral", "bullish", "bearish"]
+    atr_200_ready: bool
+    limitations: tuple[str, ...]
+    swings: tuple[SmartMoneySwingDTO, ...]
+    structure_events: tuple[SmartMoneyStructureEventDTO, ...]
+    order_blocks: tuple[SmartMoneyZoneDTO, ...]
+    fair_value_gaps: tuple[SmartMoneyZoneDTO, ...]
+    liquidity_levels: tuple[SmartMoneyLiquidityDTO, ...]
+    value_zones: tuple[SmartMoneyZoneDTO, ...]
+    algorithm_version: str
+    reference: str
+    historically_validated: bool
+
+
 class TechnicalTimeframeDTO(_FrozenForbid):
     interval: str
     bar_as_of: datetime
@@ -111,6 +181,7 @@ class TechnicalTimeframeDTO(_FrozenForbid):
     metrics: tuple[TechnicalMetricDTO, ...]
     levels: tuple[TechnicalLevelDTO, ...]
     patterns: tuple[TechnicalPatternDTO, ...]
+    smart_money: SmartMoneyAnalysisDTO | None
 
     @classmethod
     def from_domain(cls, value: TechnicalTimeframe) -> Self:
@@ -140,6 +211,8 @@ class TechnicalAnalysisDTO(_FrozenForbid):
     market: Market
     as_of: datetime
     timeframes: tuple[TechnicalTimeframeDTO, ...]
+    bars_interval: Literal["1d", "1w"] | None = None
+    bars: tuple[MarketBarDTO, ...] | None = None
     price_basis: str
     bar_as_of: datetime
     indicators: TechnicalCompatibilityIndicatorsDTO
@@ -151,7 +224,13 @@ class TechnicalAnalysisDTO(_FrozenForbid):
     historically_validated: bool
 
     @classmethod
-    def from_domain(cls, value: TechnicalAnalysis) -> Self:
+    def from_domain(
+        cls,
+        value: TechnicalAnalysis,
+        *,
+        bars: tuple[MarketBar, ...] | None = None,
+        bars_interval: Literal["1d", "1w"] | None = None,
+    ) -> Self:
         daily = next(
             (timeframe for timeframe in value.timeframes if timeframe.interval == "1d"),
             value.timeframes[0],
@@ -168,6 +247,12 @@ class TechnicalAnalysisDTO(_FrozenForbid):
             market=value.market,
             as_of=value.as_of,
             timeframes=tuple(TechnicalTimeframeDTO.from_domain(v) for v in value.timeframes),
+            bars_interval=bars_interval,
+            bars=(
+                tuple(MarketBarDTO.from_domain(bar) for bar in bars)
+                if bars is not None
+                else None
+            ),
             price_basis=value.price_basis,
             bar_as_of=daily.bar_as_of,
             indicators=TechnicalCompatibilityIndicatorsDTO(
