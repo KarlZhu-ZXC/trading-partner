@@ -1133,6 +1133,7 @@ export default function ResearchPage() {
       url.searchParams.delete("changes_offset");
     }
     setSelectedSubjectId(subjectId);
+    if (url.searchParams.has("subject_id")) url.searchParams.set("subject_id", subjectId);
     url.hash = `subject-${subjectId}`;
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }
@@ -1209,7 +1210,7 @@ export default function ResearchPage() {
                   getId={(item) => String(item.subject?.subject_id ?? "")}
                   onSelect={selectSubject}
                   onClearSelection={() => setSelectedSubjectId(null)}
-                  hashToId={(hash) => hash.match(/^#subject-(case_.+)$/)?.[1] ?? hash.match(/^#case-(case_.+)$/)?.[1] ?? null}
+                  hashToId={(hash) => hash.match(/^#subject-(case_.+)$/)?.[1] ?? hash.match(/^#case-(case_.+)$/)?.[1] ?? new URLSearchParams(window.location.search).get("subject_id")}
                   search={{ value: query, onChange: setQuery, label: "Text Filter", placeholder: "Title, instrument, tags, Thesis", ariaLabel: "Filter Research Subjects" }}
                   status={{ value: status, onChange: setStatus, label: "Status", ariaLabel: "Filter by Research Subject Status", options: [{ value: "ALL", label: "All (Including Archived)" }, ...SUBJECT_STATUSES.map((value) => ({ value: value.toUpperCase(), label: optionLabel(value) }))] }}
                   onClearFilters={clearSubjectFilters}
