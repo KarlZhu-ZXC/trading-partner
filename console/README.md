@@ -28,7 +28,7 @@ Action 必须由用户点击 `Resume confirmation` 重新换发，系统不会�
 输入栏可依次选择 Provider、该 Provider 实时目录中的文本模型及对应思考强度；目录由后端
 凭据代拉并缓存，浏览器不会收到 API key 或完整 endpoint，拉取失败时回退配置默认模型。
 每次使用都会保留搜索回执和来源 URL；网页背景不能覆盖 Trading Partner 返回的价格、持仓、
-点位、收益或数量事实。不支持原生搜索的端点仍显示为 disabled。Console Agent 订单仍未开放。
+点位、收益或数量事实。不支持原生搜索的端点仍显示为 disabled。Console Copilot 订单仍未开放。
 
 总览的 Review Queue 把 Catalyst 逾期、Trade Retro 复核/行动项、Scorecard 持续缺口以及
 Agent/Broker 未决状态物化为内部持久事项。用户可以确认、设置期限或填写闭环依据后关闭；

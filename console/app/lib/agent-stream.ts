@@ -6,6 +6,8 @@ import {
   parsePendingAction,
   parseAgentFailureNotice,
   parseReceipt,
+  parseCopilotResearch,
+  type CopilotResearch,
 } from "./agent-api";
 import { asRecord, textStrict as text } from "./coerce";
 
@@ -19,6 +21,7 @@ export type AgentStreamPhase = "waiting" | "tool" | "streaming" | "complete";
  */
 export type AgentStreamSnapshot = {
   turnId: string | null;
+  research: CopilotResearch | null;
   phase: AgentStreamPhase;
   draft: string;
   receipts: AgentReceipt[];
@@ -34,6 +37,7 @@ export type AgentStreamSnapshot = {
 
 export const EMPTY_AGENT_STREAM: AgentStreamSnapshot = {
   turnId: null,
+  research: null,
   phase: "waiting",
   draft: "",
   receipts: [],
@@ -156,7 +160,7 @@ export function reduceAgentStream(
 ): AgentStreamSnapshot {
   const config = { ...DEFAULT_REDUCER_OPTIONS, ...options };
   if (event.jsonError) {
-    return { ...snapshot, error: "The Agent stream returned an invalid event payload." };
+    return { ...snapshot, error: "The Copilot stream returned an invalid event payload." };
   }
 
   const payload = eventPayload(event);
@@ -165,10 +169,14 @@ export function reduceAgentStream(
       return {
         ...snapshot,
         turnId: text(payload.turn_id) || null,
+        research: null,
         phase: "waiting",
         error: null,
         failureNotice: null,
       };
+    case "research_progress":
+      if (!snapshot.turnId || text(payload.turn_id) !== snapshot.turnId) return snapshot;
+      return { ...snapshot, research: parseCopilotResearch(payload.research) };
     case "tool_started":
       return { ...snapshot, phase: "tool", error: null };
     case "tool_finished": {
@@ -252,7 +260,7 @@ export function reduceAgentStream(
         error: failureNotice
           ? null
           : firstText(payload, ["message", "detail", "error", "code"])
-            || "The Agent stream failed before completion.",
+            || "The Copilot stream failed before completion.",
       };
     }
     case "cancelled":

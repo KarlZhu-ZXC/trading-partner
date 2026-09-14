@@ -6,6 +6,7 @@ import {
   retryAgentTurnStream,
   streamAgentMessage,
   type AgentEphemeralContext,
+  type CopilotResearchConfig,
   type AgentImageInput,
   type AgentStreamEvent,
 } from "./agent-api";
@@ -35,6 +36,7 @@ export type SendAgentMessageOptions = {
   modelName?: string;
   reasoningEffort?: string;
   attachments?: AgentImageInput[];
+  research?: CopilotResearchConfig;
 };
 
 export type AgentConversationHookOptions = {
@@ -167,6 +169,7 @@ export function useAgentConversation(
           streamOptions.modelName,
           streamOptions.reasoningEffort,
           streamOptions.attachments,
+          streamOptions.research,
         );
       } else if (mode === "retry") {
         await retryAgentTurnStream(
@@ -209,7 +212,7 @@ export function useAgentConversation(
           ? "Unable to reconnect to this turn"
           : mode === "retry"
             ? "Unable to retry this turn"
-            : "The Agent stream could not be started.";
+            : "The Copilot stream could not be started.";
         const message = errorText(finalError, fallback);
         if (mode === "send" || mode === "reconnect") {
           updateStream(conversationId, { phase: "complete", error: message });

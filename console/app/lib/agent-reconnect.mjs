@@ -1,5 +1,5 @@
 function abortError() {
-  return new DOMException("The Agent reconnect was aborted", "AbortError");
+  return new DOMException("The Copilot reconnect was aborted", "AbortError");
 }
 
 function defaultRetryable(error) {
@@ -39,7 +39,7 @@ export async function reconnectAgentStreamWithBackoff(connect, options = {}) {
   const delays = options.delays ?? [200, 600, 1_500];
   const sleep = options.sleep ?? wait;
   const retryable = options.retryable ?? defaultRetryable;
-  let lastError = new Error("Agent reconnect did not run");
+  let lastError = new Error("Copilot reconnect did not run");
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (options.signal?.aborted) throw abortError();
     try {

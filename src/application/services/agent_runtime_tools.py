@@ -35,6 +35,23 @@ from domain.agent.models import arguments_digest
 from domain.common.errors import TradingPartnerError
 from domain.common.ids import EntityIdPrefix
 
+
+def _durable_read_errors(receipt: AgentToolReceipt, result: object) -> tuple[str, ...]:
+    """Persist completion quality so reconnect cannot promote failed reads."""
+    if receipt.error_code:
+        return (receipt.error_code,)
+    if receipt.result_truncated:
+        return ("AGENT_TOOL_RESULT_TRUNCATED",)
+    if receipt.effect not in {"READ_DURABLE", "READ_PROVIDER"}:
+        return ("AGENT_TOOL_RESULT_NOT_READ",)
+    if result is None or (
+        isinstance(result, Mapping)
+        and (result.get("ok") is False or result.get("error") or result.get("errors"))
+    ):
+        return ("AGENT_TOOL_RESULT_UNAVAILABLE",)
+    return ()
+
+
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,95}$")
 _SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._-]+\.png$")
 _SAFE_ARTIFACT_URL = re.compile(r"^/api/agent/artifacts/[A-Za-z0-9._-]+\.png$")
@@ -322,13 +339,11 @@ class AgentRuntimeToolHandler:
             message_id=message_id,
             capability="agent_web_search",
             operation="search",
-            arguments_sha256=arguments_digest(
-                {"query": query, "max_results": max_results}
-            ),
+            arguments_sha256=arguments_digest({"query": query, "max_results": max_results}),
             request_id=receipt.request_id or "unavailable",
             source_codes=receipt.source_codes,
             warning_codes=receipt.warning_codes,
-            error_codes=(receipt.error_code,) if receipt.error_code else (),
+            error_codes=_durable_read_errors(receipt, typed_result.result),
             created_at=self._clock.now(),
         )
         self._repository.append_tool_receipt(durable)
@@ -364,9 +379,7 @@ class AgentRuntimeToolHandler:
             return tool_error(exc.code), None, None
         except (LookupError, PermissionError, ValueError):
             return tool_error("AGENT_CAPABILITY_SEARCH_FAILED"), None, None
-        payload: dict[str, object] = {
-            "capabilities": [item.as_dict() for item in descriptors]
-        }
+        payload: dict[str, object] = {"capabilities": [item.as_dict() for item in descriptors]}
         audit_method = getattr(self._gateway, "search_audit", None)
         if callable(audit_method):
             try:
@@ -504,11 +517,15 @@ class AgentRuntimeToolHandler:
                     None,
                     None,
                 )
-            return tool_error(
-                "AGENT_TOOL_PROPOSE_DENIED"
-                if call_name == "tp_propose"
-                else "AGENT_TOOL_READ_DENIED"
-            ), None, None
+            return (
+                tool_error(
+                    "AGENT_TOOL_PROPOSE_DENIED"
+                    if call_name == "tp_propose"
+                    else "AGENT_TOOL_READ_DENIED"
+                ),
+                None,
+                None,
+            )
         typed_result = result
         receipt = typed_result.receipt
         durable = DurableToolReceipt(
@@ -521,7 +538,13 @@ class AgentRuntimeToolHandler:
             request_id=receipt.request_id or "unavailable",
             source_codes=receipt.source_codes,
             warning_codes=receipt.warning_codes,
-            error_codes=(receipt.error_code,) if receipt.error_code else (),
+            error_codes=(
+                _durable_read_errors(receipt, typed_result.result)
+                if call_name == "tp_read"
+                else (receipt.error_code,)
+                if receipt.error_code
+                else ()
+            ),
             created_at=self._clock.now(),
         )
         self._repository.append_tool_receipt(durable)

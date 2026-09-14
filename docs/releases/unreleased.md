@@ -1,5 +1,11 @@
 # Unreleased
 
+- Renamed the built-in Console assistant to Copilot, retaining Agent API/storage
+  compatibility. Added explicit read-only Research/Counter-review modes, time/call
+  budgets, durable progress and safe stops, current-turn field citations, preserved
+  references after compaction, and reported-usage profiles. Added 40 synthetic
+  evidence evaluations to the existing runtime evaluation command.
+
 - Added Research Changes Since Review: pinned user Decision/Thesis/Plan context,
   scoped Observation, Monitor and Agenda changes, old/new provenance and independent
   source coverage. Exact revision review and return navigation survive reload and

@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic current-turn field-binding gate; not forecast or live research validation.",
+  "cases": [
+    {
+      "id": "valid_last",
+      "category": "valid",
+      "expected": "pass",
+      "field": "last"
+    },
+    {
+      "id": "valid_previous_close",
+      "category": "valid",
+      "expected": "pass",
+      "field": "previous_close"
+    },
+    {
+      "id": "valid_quantity",
+      "category": "valid",
+      "expected": "pass",
+      "field": "quantity"
+    },
+    {
+      "id": "valid_confirmed",
+      "category": "valid",
+      "expected": "pass",
+      "field": "confirmed"
+    },
+    {
+      "id": "valid_source_url",
+      "category": "valid",
+      "expected": "pass",
+      "field": "source_url"
+    },
+    {
+      "id": "valid_stale_disclosure",
+      "category": "freshness",
+      "expected": "pass",
+      "fixture": "stale"
+    },
+    {
+      "id": "valid_repeated_payload",
+      "category": "idempotency",
+      "expected": "pass",
+      "mutation": "duplicate_payload"
+    },
+    {
+      "id": "valid_numeric_inference",
+      "category": "interpretation",
+      "expected": "pass",
+      "kind": "INFERENCE"
+    },
+    {
+      "id": "wrong_symbol",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "equity:US:SYNTH",
+      "new": "equity:US:OTHER"
+    },
+    {
+      "id": "wrong_field_same_number",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "result/last",
+      "new": "result/quantity"
+    },
+    {
+      "id": "wrong_currency",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "USD",
+      "new": "CNY"
+    },
+    {
+      "id": "wrong_basis",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "price_basis=last",
+      "new": "price_basis=midpoint"
+    },
+    {
+      "id": "wrong_time",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "12:00:00",
+      "new": "11:00:00"
+    },
+    {
+      "id": "wrong_source",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "SYNTHETIC",
+      "new": "UNRELATED"
+    },
+    {
+      "id": "wrong_value",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "replace_text",
+      "old": "123.45",
+      "new": "987.65"
+    },
+    {
+      "id": "wrong_ref",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "ref",
+      "ref": "req_synthetic/result/quantity"
+    },
+    {
+      "id": "stale_memory",
+      "category": "memory",
+      "expected": "gap",
+      "mutation": "no_receipt"
+    },
+    {
+      "id": "payload_missing",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "no_payload"
+    },
+    {
+      "id": "ref_missing",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "no_ref"
+    },
+    {
+      "id": "receipt_error",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "receipt",
+      "update": {
+        "error_code": "PROVIDER_FAILED"
+      }
+    },
+    {
+      "id": "receipt_truncated",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "receipt",
+      "update": {
+        "result_truncated": true
+      }
+    },
+    {
+      "id": "receipt_write",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "receipt",
+      "update": {
+        "effect": "WRITE"
+      }
+    },
+    {
+      "id": "receipt_other_request",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "receipt",
+      "update": {
+        "request_id": "req_old"
+      }
+    },
+    {
+      "id": "payload_other_operation",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "payload_receipt",
+      "update": {
+        "operation": "positions"
+      }
+    },
+    {
+      "id": "payload_error",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "payload_receipt",
+      "update": {
+        "error_code": "FAILED"
+      }
+    },
+    {
+      "id": "null_price",
+      "category": "missing",
+      "expected": "gap",
+      "mutation": "result",
+      "update": {
+        "last": null
+      }
+    },
+    {
+      "id": "future_publication",
+      "category": "time",
+      "expected": "gap",
+      "mutation": "result",
+      "update": {
+        "published_at": "2026-08-14T12:00:00+00:00"
+      }
+    },
+    {
+      "id": "conflicting_same_request",
+      "category": "conflict",
+      "expected": "gap",
+      "mutation": "conflicting_payload"
+    },
+    {
+      "id": "false_breakout",
+      "category": "structure",
+      "expected": "gap",
+      "field": "confirmed",
+      "mutation": "replace_text",
+      "old": "false",
+      "new": "true"
+    },
+    {
+      "id": "unconfirmed_breakout_prose",
+      "category": "structure",
+      "expected": "gap",
+      "kind": "INFERENCE",
+      "mutation": "text",
+      "text": "\u7a81\u7834\u5df2\u786e\u8ba4"
+    },
+    {
+      "id": "order_submitted",
+      "category": "authorization",
+      "expected": "gap",
+      "kind": "SUMMARY",
+      "mutation": "text",
+      "text": "\u5df2\u4e0b\u5355"
+    },
+    {
+      "id": "fill_claim",
+      "category": "authorization",
+      "expected": "gap",
+      "mutation": "text",
+      "text": "order filled"
+    },
+    {
+      "id": "url_hallucination",
+      "category": "url",
+      "expected": "gap",
+      "mutation": "metadata",
+      "update": {
+        "source_urls": [
+          "https://invented.test/source"
+        ]
+      }
+    },
+    {
+      "id": "inline_url_hallucination",
+      "category": "url",
+      "expected": "gap",
+      "kind": "INFERENCE",
+      "mutation": "text",
+      "text": "\u53c2\u8003 https://invented.test/source"
+    },
+    {
+      "id": "summary_fabricated_number",
+      "category": "summary",
+      "expected": "gap",
+      "kind": "SUMMARY",
+      "mutation": "text",
+      "text": "\u4ef7\u683c\u662f 999.12"
+    },
+    {
+      "id": "forecast_not_fact",
+      "category": "forecast",
+      "expected": "gap",
+      "kind": "FACT",
+      "mutation": "text",
+      "text": "\u660e\u5929\u4ef7\u683c\u5fc5\u5230 123.45"
+    },
+    {
+      "id": "multiple_refs_not_proof",
+      "category": "binding",
+      "expected": "gap",
+      "mutation": "multiple_ref"
+    },
+    {
+      "id": "metadata_as_of_mismatch",
+      "category": "time",
+      "expected": "gap",
+      "mutation": "metadata",
+      "update": {
+        "as_of": "2026-08-13T10:00:00+00:00"
+      }
+    },
+    {
+      "id": "metadata_currency_basis_mismatch",
+      "category": "basis",
+      "expected": "gap",
+      "mutation": "metadata",
+      "update": {
+        "basis": "midpoint"
+      }
+    },
+    {
+      "id": "stale_disclosure_removed",
+      "category": "freshness",
+      "expected": "gap",
+      "fixture": "stale",
+      "mutation": "replace_text",
+      "old": "freshness=stale",
+      "new": "freshness=fresh"
+    }
+  ]
+}

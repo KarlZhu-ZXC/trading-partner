@@ -284,10 +284,10 @@ export function ConsoleShell({
             <IconButton
               aria-controls="console-agent-panel"
               aria-expanded={!agentRailCollapsed}
-              aria-label={agentRailCollapsed ? "Open Agent Panel" : "Close Agent Panel"}
+              aria-label={agentRailCollapsed ? "Open Copilot Panel" : "Close Copilot Panel"}
               className={`workspace-pane-toggle right${agentRailCollapsed ? " collapsed" : ""}`}
               onClick={toggleAgentRail}
-              title={`${agentRailCollapsed ? "Open" : "Close"} Agent · ⌘⇧A`}
+              title={`${agentRailCollapsed ? "Open" : "Close"} Copilot · ⌘⇧A`}
               type="button"
             >
               {agentRailCollapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}

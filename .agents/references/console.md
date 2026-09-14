@@ -57,7 +57,7 @@ layout and domain content, never a competing button/input/select/status skin. Ad
 component variants centrally. Navigation uses LinkButton/TextLink; actions use Button;
 status dots, noun Tags, removable FilterChips and SelectableRows are distinct.
 
-All Console routes and the Agent rail have migrated. Ordinary native controls are
+All Console routes and the Copilot rail have migrated. Ordinary native controls are
 forbidden outside the shared primitive/widget layer; there is no page allowlist.
 Run the component-conventions check for UI changes. Module-owned surface styles live
 under `console/app/styles/`, and `globals.css` contains only resets/document rules.

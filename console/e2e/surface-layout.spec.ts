@@ -29,7 +29,7 @@ for (const theme of ["light", "dark"]) test(`all Console surfaces fit supported 
       if (width > 1100 && route !== "/lan-login") {
         const panel = page.locator("#console-agent-panel");
         await expect.poll(() => panel.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
-        const handle = page.getByRole("separator", { name: "Resize Agent Panel" });
+        const handle = page.getByRole("separator", { name: "Resize Copilot Panel" });
         await expect(handle).toBeVisible();
         expect((await handle.boundingBox())!.width).toBeLessThanOrEqual(16);
       }
@@ -39,7 +39,7 @@ for (const theme of ["light", "dark"]) test(`all Console surfaces fit supported 
         await expect.poll(() => page.locator(".sidebar").evaluate((node) => node.getBoundingClientRect().width)).toBeLessThanOrEqual(80);
         await page.getByRole("button", { name: "Open navigation panel", exact: true }).click();
         await expect(page.locator(".nav-label").first()).toBeVisible();
-        const resize = page.getByRole("separator", { name: "Resize Agent Panel" });
+        const resize = page.getByRole("separator", { name: "Resize Copilot Panel" });
         const originalWidth = Number(await resize.getAttribute("aria-valuenow"));
         await resize.press("ArrowLeft");
         await expect.poll(async () => Number(await resize.getAttribute("aria-valuenow"))).toBeGreaterThan(originalWidth);

@@ -147,7 +147,7 @@ configured or reachable.
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Local Console
 
 The optional Console is a local control room over the same application services
-and public capability registry, with an opt-in Shared Agent rail:
+and public capability registry, with an opt-in Shared Copilot rail:
 
 ```bash
 # Terminal 1

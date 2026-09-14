@@ -418,6 +418,10 @@ export namespace AgentSendMessageRequestTypes {
   export type Model = string | null;
   export type ModelId = string | null;
   export type ReasoningEffort = ("low" | "medium" | "high" | "max") | null;
+  export type ResearchMaxModelCalls = number;
+  export type ResearchMaxSeconds = number;
+  export type ResearchMaxToolCalls = number;
+  export type ResearchMode = "standard" | "research" | "challenge";
 
   export interface AgentSendMessageRequest {
     attachments?: Attachments;
@@ -427,6 +431,10 @@ export namespace AgentSendMessageRequestTypes {
     model?: Model;
     model_id?: ModelId;
     reasoning_effort?: ReasoningEffort;
+    research_max_model_calls?: ResearchMaxModelCalls;
+    research_max_seconds?: ResearchMaxSeconds;
+    research_max_tool_calls?: ResearchMaxToolCalls;
+    research_mode?: ResearchMode;
   }
   /**
    * One image encoded by the browser as a bounded data URL.

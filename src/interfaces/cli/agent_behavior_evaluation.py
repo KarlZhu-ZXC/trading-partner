@@ -47,12 +47,16 @@ from domain.agent.models import (
 from domain.common.ids import EntityIdPrefix
 from interfaces.agent.action_gateway import AgentActionGateway
 from interfaces.agent.prompts import AGENT_SYSTEM_PROMPT
+from interfaces.cli.copilot_research_evaluation import run_research_evidence_evaluations
 from interfaces.console.agent_api import _reconcile_orphaned_agent_turns
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CATALOG_PATH = PROJECT_ROOT / "evals" / "agent-behavior.v1.json"
 _MANIFEST_FILES = (
     "evals/agent-behavior.v1.json",
+    "evals/copilot-research.v1.json",
+    "src/application/services/copilot_research_evidence.py",
+    "src/application/services/copilot_research_budget.py",
     "src/interfaces/agent/prompts.py",
     "src/application/services/agent_runtime_service.py",
     "src/interfaces/agent/capability_gateway.py",
@@ -148,9 +152,7 @@ class _Repository:
         return self.turns.get(turn_id)
 
     def latest_turn(self, conversation_id: str) -> AgentTurn | None:
-        values = [
-            item for item in self.turns.values() if item.conversation_id == conversation_id
-        ]
+        values = [item for item in self.turns.values() if item.conversation_id == conversation_id]
         return max(values, key=lambda item: item.started_at) if values else None
 
     def list_turns(
@@ -202,6 +204,7 @@ class _Repository:
         return tuple(item for item in self.receipts if item.conversation_id == conversation_id)[
             :limit
         ]
+
 
 class _Model:
     def __init__(self, responses: list[ModelResponse]) -> None:
@@ -304,9 +307,7 @@ class _Gateway(AgentToolGateway):
                         {
                             "source": "catalyst_agenda",
                             "state": "PARTIAL",
-                            "limitation_codes": [
-                                "CATALYST_AGENDA_SYNC_RECEIPT_MISSING"
-                            ],
+                            "limitation_codes": ["CATALYST_AGENDA_SYNC_RECEIPT_MISSING"],
                         }
                     ],
                     "items": [
@@ -326,9 +327,7 @@ class _Gateway(AgentToolGateway):
                 }
             else:
                 data = {
-                    "instrument_id": arguments.get(
-                        "instrument_id", "commodity_spot:OTC:XAUUSD"
-                    ),
+                    "instrument_id": arguments.get("instrument_id", "commodity_spot:OTC:XAUUSD"),
                     "display_price": "4310.00",
                     "price_basis": "midpoint",
                     "previous_close": "4290.00",
@@ -434,15 +433,9 @@ class _PendingRepository:
     def get_pending_action(self, action_id: str) -> AgentPendingAction | None:
         return self.actions.get(action_id)
 
-    def get_pending_action_by_token_sha256(
-        self, token_sha256: str
-    ) -> AgentPendingAction | None:
+    def get_pending_action_by_token_sha256(self, token_sha256: str) -> AgentPendingAction | None:
         return next(
-            (
-                value
-                for value in self.actions.values()
-                if value.token_sha256 == token_sha256
-            ),
+            (value for value in self.actions.values() if value.token_sha256 == token_sha256),
             None,
         )
 
@@ -550,9 +543,9 @@ class _PendingRepository:
             AgentPendingActionStatus.FAILED,
             AgentPendingActionStatus.UNKNOWN,
         }
-        return tuple(
-            value for value in self.actions.values() if value.status not in terminal
-        )[:limit]
+        return tuple(value for value in self.actions.values() if value.status not in terminal)[
+            :limit
+        ]
 
     def expire_due(self, *, now: datetime | None = None, limit: int = 100) -> int:
         current_time = now or datetime.now(UTC)
@@ -560,10 +553,14 @@ class _PendingRepository:
         for action in tuple(self.actions.values()):
             if count >= limit:
                 break
-            if action.status in {
-                AgentPendingActionStatus.PROPOSED,
-                AgentPendingActionStatus.PRESENTED,
-            } and action.expires_at <= current_time:
+            if (
+                action.status
+                in {
+                    AgentPendingActionStatus.PROPOSED,
+                    AgentPendingActionStatus.PRESENTED,
+                }
+                and action.expires_at <= current_time
+            ):
                 self.actions[action.action_id] = replace(
                     action,
                     status=AgentPendingActionStatus.EXPIRED,
@@ -741,16 +738,19 @@ def _responses(case_id: str) -> list[ModelResponse]:
             ModelResponse(text=answer),
         ]
     if case_id == "agent_research_proposal_once":
-        arguments = cast(dict[str, Any], {
-            "case_id": "case_eval_gold",
-            "payload": {
-                "kind": "thesis_revision",
-                "thesis_id": "thesis_eval_gold",
-                "title": "Gold Confirmation Thesis",
+        arguments = cast(
+            dict[str, Any],
+            {
+                "case_id": "case_eval_gold",
+                "payload": {
+                    "kind": "thesis_revision",
+                    "thesis_id": "thesis_eval_gold",
+                    "title": "Gold Confirmation Thesis",
+                },
+                "proposed_by": "user",
+                "idempotency_key": "eval-thesis-proposal",
             },
-            "proposed_by": "user",
-            "idempotency_key": "eval-thesis-proposal",
-        })
+        )
         return [
             ModelResponse(
                 tool_calls=(
@@ -1205,17 +1205,23 @@ async def _run_pending_reload_case(case: Mapping[str, Any]) -> EvaluationCaseRes
             errors.append("reissue_changed_exact_arguments")
         if reissued_action.expires_at != before.expires_at:
             errors.append("reissue_changed_expiry")
-        if service.get_by_token(
-            old_token,
-            channel=AgentChannel.CONSOLE,
-            principal="eval",
-        ) is not None:
+        if (
+            service.get_by_token(
+                old_token,
+                channel=AgentChannel.CONSOLE,
+                principal="eval",
+            )
+            is not None
+        ):
             errors.append("old_confirmation_token_remained_valid")
-        if service.get_by_token(
-            reissued_proposal.confirmation_token,
-            channel=AgentChannel.CONSOLE,
-            principal="eval",
-        ) is None:
+        if (
+            service.get_by_token(
+                reissued_proposal.confirmation_token,
+                channel=AgentChannel.CONSOLE,
+                principal="eval",
+            )
+            is None
+        ):
             errors.append("new_confirmation_token_not_durable")
         if old_token in json.dumps(pending_repository.actions, default=str):
             errors.append("raw_confirmation_token_persisted")
@@ -1399,13 +1405,19 @@ async def run_catalog(*, live: bool = False) -> dict[str, Any]:
         raise ValueError("Agent behavior catalog must contain exactly 15 cases")
     results = [await _run_case(case) for case in cases if isinstance(case, dict)]
     schema_repair = await _run_schema_repair_smoke()
+    research_results = run_research_evidence_evaluations()
     return {
         "schema_version": 1,
         "catalog": str(CATALOG_PATH.relative_to(PROJECT_ROOT)),
         "fingerprint_manifest": _fingerprint_manifest(),
         "live": False,
-        "passed": all(item.passed for item in results) and schema_repair["passed"],
-        "case_count": len(results),
+        "passed": all(item.passed for item in results)
+        and schema_repair["passed"]
+        and all(item["passed"] for item in research_results),
+        "case_count": len(results) + len(research_results),
+        "runtime_case_count": len(results),
+        "research_case_count": len(research_results),
+        "research_results": research_results,
         "results": [item.as_dict() for item in results],
         "schema_repair": schema_repair,
     }

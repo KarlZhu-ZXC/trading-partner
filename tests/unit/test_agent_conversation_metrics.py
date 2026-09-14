@@ -73,3 +73,62 @@ def test_metrics_aggregate_usage_and_ignore_malformed_receipts() -> None:
     assert metrics.malformed_receipt_count == 1
     assert metrics.turn_statuses["COMPLETED"] == 1
     assert metrics.truncated is False
+
+
+def test_research_profiles_keep_partial_usage_and_do_not_count_user_policy() -> None:
+    from dataclasses import replace
+
+    from application.services.copilot_research_budget import ResearchBudget
+
+    repo = _Repo()
+    template = repo.messages[0]
+    policy = (
+        ResearchBudget(mode="research", max_seconds=60, max_model_calls=2, max_tool_calls=2)
+        .snapshot()
+        .model_dump()
+    )
+    first = {
+        **policy,
+        "phase": "FINISHED",
+        "stop_reason": "COMPLETED",
+        "elapsed_ms": 100,
+        "usage_complete": True,
+    }
+    second = {
+        **policy,
+        "phase": "FINISHED",
+        "stop_reason": "TIME_BUDGET",
+        "elapsed_ms": 300,
+        "usage_complete": False,
+    }
+    repo.messages = [
+        replace(
+            template,
+            message_id="a",
+            model="test-model",
+            model_receipt_json=json.dumps(
+                {"research": first, "usage": {"input_tokens": 10, "output_tokens": 5}}
+            ),
+        ),
+        replace(
+            template,
+            message_id="b",
+            model="test-model",
+            model_receipt_json=json.dumps({"research": second}),
+        ),
+        replace(
+            template,
+            message_id="u",
+            role=AgentMessageRole.USER,
+            model_receipt_json=json.dumps({"research": policy}),
+        ),
+    ]
+    (profile,) = AgentConversationMetricsService(repo).aggregate("c-1").research_profiles
+    assert profile["sample_count"] == 2
+    assert profile["completed_count"] == 1
+    assert profile["p50_elapsed_ms"] == 100
+    assert profile["p95_elapsed_ms"] == 300
+    assert profile["input_tokens"] == 10
+    assert profile["output_tokens"] == 5
+    assert profile["usage_complete"] is False
+    assert profile["cost_usd"] is None

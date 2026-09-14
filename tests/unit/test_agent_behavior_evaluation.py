@@ -71,7 +71,9 @@ async def test_agent_behavior_catalog_executes_against_the_real_runtime() -> Non
     receipt = await run_catalog()
 
     assert receipt["passed"] is True
-    assert receipt["case_count"] == 15
+    assert receipt["case_count"] == 55
+    assert receipt["research_case_count"] == 40
+    assert all(item["passed"] and not item["failures"] for item in receipt["research_results"])
     assert receipt["schema_repair"]["passed"] is True
     assert set(receipt["fingerprint_manifest"]) >= {
         "evals/agent-behavior.v1.json",

@@ -91,6 +91,7 @@ def model_receipt_json(
     trace_id: str | None = None,
     additional_web_search_used: bool = False,
     additional_web_source_urls: tuple[str, ...] = (),
+    research: dict[str, object] | None = None,
 ) -> str:
     usage = aggregate_usage(responses)
     latency_ms = aggregate_latency(responses)
@@ -101,8 +102,7 @@ def model_receipt_json(
         "tool_rounds": tool_rounds,
         "usage": asdict(usage) if usage is not None else None,
         "web_search_used": (
-            additional_web_search_used
-            or any(item.web_search_used for item in responses)
+            additional_web_search_used or any(item.web_search_used for item in responses)
         ),
         "web_extractor_used": any(item.web_extractor_used for item in responses),
         "web_source_urls": list(
@@ -141,6 +141,7 @@ def model_receipt_json(
             json.loads(answer_envelope) if isinstance(answer_envelope, str) else None
         ),
         "trace_id": trace_id,
+        "research": research,
     }
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded.encode("utf-8")) <= 16_384:
@@ -210,6 +211,20 @@ def model_receipt_json(
             "evidence_manifest",
             "answer_envelope",
             "trace_id",
+            "research",
         )
     }
-    return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 16_384:
+        # Final answer prose is durable on the message. Keep research identity,
+        # stop/usage quality and verified refs before optional rich presentation.
+        answer_bytes = json.dumps(compact.get("answer_envelope"), ensure_ascii=False).encode()
+        compact["answer_envelope"] = {
+            "schema_version": 1,
+            "truncated": True,
+            "size_bytes": len(answer_bytes),
+            "sha256": hashlib.sha256(answer_bytes).hexdigest(),
+        }
+        compact["artifact_urls"] = list((artifact_urls or [])[:4])
+        encoded = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return encoded

@@ -65,3 +65,29 @@ OpenCode Zen `x-preview-f-free` is Ox Alpha Free. It is a reasoning model with
 selectable `low`, `high`, and `max` effort; omitting the field means Provider default,
 not disabled thinking. Do not group it with Zen free chat models that reject reasoning
 parameters.
+
+
+## Copilot research modes
+
+Console user-facing name is Copilot. Agent symbols/routes/storage keys remain
+compatibility identities. Explicit `research_mode=research|challenge` restricts the
+existing runtime to read/discovery/search tools; neither proposals nor pending-action
+preparation are admitted. Chat (`standard`) retains the existing gates.
+
+Research budgets use monotonic time plus top-level attempted model/tool counts;
+fallback, repair and one requested tool-free critique count. Do not override provider
+protocol/output-token policy or present budgets as billing guarantees. Do not enable
+native model search or an uncounted summary call within research mode. User policy
+lives in the original message receipt; final progress/evidence refs live in the
+assistant receipt and survive compaction. Closed progress contains codes/counts,
+never hidden reasoning, prompts, URLs or exception payloads. Reconnect may reconstruct
+completed reads; unavailable model progress/usage must remain explicitly unavailable.
+Explicit retry restores the original policy, failing closed on corrupt policy.
+
+Only current-turn canonical field evidence can verify a research FACT/CITATION.
+Preserve query cutoff independently from underlying fact time; a nested timestamp
+must not widen it. Source web text cannot establish a price/position. Unbound claims
+become GAP, qualitative prose remains INFERENCE. The prompt and checker share one
+bounded evidence catalog; a truncated reference is not treated as verified. Final
+safe text and stored answer envelope must agree. No live model call is implied by
+software verification; use the synthetic evaluation catalog by default.

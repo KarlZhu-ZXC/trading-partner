@@ -10,6 +10,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { authenticatedFetch } from "../lib/api";
 import type { AgentImageAttachment, AgentMessage, AgentReceipt } from "../lib/agent-api";
+import { parseCopilotResearch } from "../lib/agent-api";
+import { CopilotResearchProgress } from "./copilot-research-progress";
 import { AgentMessageContent } from "./agent-message-content";
 import { Disclosure } from "./ui";
 import { IconButton, TextLink } from "./ui/controls";
@@ -19,6 +21,7 @@ type Dict = Record<string, unknown>;
 type AgentMessageCardProps = {
   message: AgentMessage;
   receipts: AgentReceipt[];
+  recoveredStatus?: string;
   copied: boolean;
   disabled: boolean;
   onCopy: (message: AgentMessage) => void;
@@ -192,7 +195,7 @@ export function AgentImageGallery({ attachments }: { attachments: AgentImageAtta
 
 export function AgentReceiptCard({ receipt }: { receipt: AgentReceipt }) {
   return (
-    <article className="agent-rail-receipt">
+    <article className="agent-rail-receipt" id={`copilot-receipt-${receipt.receipt_id}`}>
       <header><strong>{receipt.capability}</strong><time>{displayDate(receipt.created_at)}</time></header>
       <span>{receipt.operation}</span>
       {!!receipt.source_codes.length && <small>Source · {receipt.source_codes.join(" · ")}</small>}
@@ -210,9 +213,18 @@ export function AgentMessageCard({
   onCopy,
   onEdit,
   onRetry,
+  recoveredStatus,
 }: AgentMessageCardProps) {
   const isUser = message.role === "USER";
   const modelReceipt = asRecord(message.model_receipt);
+  const research = parseCopilotResearch(modelReceipt.research);
+  const evidenceRefs = useMemo(() => {
+    let envelope = modelReceipt.answer_envelope;
+    if (typeof envelope === "string") { try { envelope = JSON.parse(envelope); } catch { envelope = null; } }
+    const blocks = asRecord(envelope).blocks;
+    const refs = (Array.isArray(blocks) ? blocks : []).flatMap((block) => { const values = asRecord(block).evidence_refs; return Array.isArray(values) ? values.filter((value): value is string => typeof value === "string") : []; });
+    return [...new Set([...refs, ...(research?.verified_refs ?? [])])].slice(0, 64).map((ref) => ({ ref, receipt: receipts.find((receipt) => ref === receipt.request_id || ref.startsWith(`${receipt.request_id}/`)) }));
+  }, [modelReceipt.answer_envelope, receipts, research?.verified_refs]);
   const sourceUrls = useMemo(
     () => safeWebLinks(modelReceipt.web_source_urls),
     [modelReceipt.web_source_urls],
@@ -225,10 +237,10 @@ export function AgentMessageCard({
   return (
     <article className={`agent-rail-message ${isUser ? "user" : "assistant"}`}>
       <header>
-        <span>{isUser ? "You" : "Agent"}</span>
+        <span>{isUser ? "You" : "Copilot"}</span>
         <div className="agent-message-meta">
           <time>{displayDate(message.created_at)}</time>
-          <div className="agent-message-actions" aria-label={`${isUser ? "User" : "Agent"} message actions`}>
+          <div className="agent-message-actions" aria-label={`${isUser ? "User" : "Copilot"} message actions`}>
             <IconButton
               aria-label={copied ? "Message Copied" : "Copy Message"}
               className={copied ? "success" : ""}
@@ -267,6 +279,8 @@ export function AgentMessageCard({
       </header>
       <AgentImageGallery attachments={message.attachments} />
       <AgentMessageContent content={message.content} />
+      {research && (!isUser || recoveredStatus) && <CopilotResearchProgress research={research} recoveredStatus={isUser ? recoveredStatus : undefined} receipts={receipts} usage={isUser ? undefined : asRecord(modelReceipt.usage)} />}
+      {evidenceRefs.length > 0 && <div aria-label="Answer Evidence">{evidenceRefs.map(({ ref, receipt }) => receipt ? <TextLink key={ref} href={`#copilot-receipt-${receipt.receipt_id}`} onClick={(event) => { event.preventDefault(); const target = document.getElementById(`copilot-receipt-${receipt.receipt_id}`); const disclosure = target?.closest("details"); if (disclosure) disclosure.open = true; window.requestAnimationFrame(() => target?.scrollIntoView({ block: "nearest", behavior: "auto" })); }}>{ref}</TextLink> : <span key={ref}>{ref} · receipt unavailable</span>)}</div>}
       <AgentArtifactGallery urls={artifactUrls} />
       {!!sourceUrls.length && (
         <div className="agent-rail-source-block" aria-label="Web Sources">

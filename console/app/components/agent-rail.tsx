@@ -48,6 +48,8 @@ import {
   AgentConversationMetrics,
   AgentImageAttachment,
   AgentImageInput,
+  type CopilotResearchConfig,
+  researchConfigFromReceipt,
   archiveAgentConversation,
   cancelAgentTurn,
   collectEphemeralContext,
@@ -67,6 +69,9 @@ import {
   updateAgentPreferences,
 } from "../lib/agent-api";
 import { authenticatedFetch } from "../lib/api";
+import { CopilotResearchControls } from "./copilot-research-controls";
+import { CopilotResearchProgress, CopilotResearchProfiles } from "./copilot-research-progress";
+import researchStyles from "./copilot-research-progress.module.css";
 import { AgentMessageContent } from "./agent-message-content";
 import {
   AgentArtifactGallery,
@@ -242,7 +247,7 @@ function AgentFailureNotification({
 }) {
   return (
     <section
-      aria-label="Agent Provider Error Notification"
+      aria-label="Copilot Provider Error Notification"
       className="agent-failure-notification"
       role="alert"
     >
@@ -310,6 +315,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [providerModelsError, setProviderModelsError] = useState<string | null>(null);
   const [selectedModelName, setSelectedModelName] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
+  const [researchConfig, setResearchConfig] = useState<CopilotResearchConfig>({ research_mode: "standard", research_max_seconds: 180, research_max_model_calls: 8, research_max_tool_calls: 24 });
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState(false);
@@ -784,14 +790,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       const candidate = selectedMessages[index];
       if (candidate.role === "USER") {
         if (candidate.attachments.length === 0) {
-          void sendMessage(candidate.content);
+          void sendMessage(candidate.content, undefined, researchConfigFromReceipt(candidate.model_receipt));
           return;
         }
         try {
           const attachments = await Promise.all(
             candidate.attachments.map(restoreImageAttachment),
           );
-          void sendMessage(candidate.content, attachments);
+          void sendMessage(candidate.content, attachments, researchConfigFromReceipt(candidate.model_receipt));
         } catch (error) {
           setActionError(errorText(error, "Unable to reload the attached image."));
         }
@@ -849,7 +855,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       setPreferenceDraft(value);
       setPreferencesOpen(false);
     } catch (error) {
-      setActionError(errorText(error, "Unable to save Agent preferences"));
+      setActionError(errorText(error, "Unable to save Copilot preferences"));
       await loadPreferences();
     } finally {
       setActionBusy(null);
@@ -865,7 +871,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       setPreferences(value);
       setPreferenceDraft(value);
     } catch (error) {
-      setActionError(errorText(error, "Unable to reset Agent preferences"));
+      setActionError(errorText(error, "Unable to reset Copilot preferences"));
       await loadPreferences();
     } finally {
       setActionBusy(null);
@@ -878,7 +884,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     try {
       setStatus(await fetchAgentStatus(signal));
     } catch (error) {
-      if (!isAbortError(error)) setStatusError(errorText(error, "Unable to read Agent status"));
+      if (!isAbortError(error)) setStatusError(errorText(error, "Unable to read Copilot status"));
     } finally {
       if (!signal?.aborted) setStatusLoading(false);
     }
@@ -891,7 +897,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       setPreferences(value);
       setPreferenceDraft(value);
     } catch (error) {
-      if (!isAbortError(error)) setActionError(errorText(error, "Unable to load Agent preferences"));
+      if (!isAbortError(error)) setActionError(errorText(error, "Unable to load Copilot preferences"));
     } finally {
       if (!signal?.aborted) setPreferencesLoading(false);
     }
@@ -991,7 +997,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   async function sendMessage(
     contentOverride?: string,
     attachmentsOverride?: AgentImageInput[],
+    researchOverride?: CopilotResearchConfig,
   ) {
+    const outgoingResearch = contentOverride !== undefined ? researchOverride : researchConfig;
+    if (outgoingResearch && outgoingResearch.research_mode !== "standard" && (
+      !Number.isInteger(outgoingResearch.research_max_seconds) || outgoingResearch.research_max_seconds < 30 || outgoingResearch.research_max_seconds > 600 ||
+      !Number.isInteger(outgoingResearch.research_max_model_calls) || outgoingResearch.research_max_model_calls < 1 || outgoingResearch.research_max_model_calls > 16 ||
+      !Number.isInteger(outgoingResearch.research_max_tool_calls) || outgoingResearch.research_max_tool_calls < 1 || outgoingResearch.research_max_tool_calls > 48
+    )) { setActionError("Research budget must use whole numbers: 30–600 seconds, 1–16 model calls, and 1–48 tool calls."); return; }
     const content = (contentOverride ?? composer).trim();
     const outgoingImages = attachmentsOverride ?? composerImages;
     if (
@@ -1052,6 +1065,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       providerId: selectedProviderId || undefined,
       modelName: selectedModelName || undefined,
       reasoningEffort: selectedReasoningEffort || undefined,
+      research: outgoingResearch,
     });
     await reloadDurableConversation(conversationId);
     await loadConversations();
@@ -1177,11 +1191,11 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   }
 
   const disabledReason = !status
-    ? statusError || "Waiting for Agent runtime diagnostics."
+    ? statusError || "Waiting for Copilot runtime diagnostics."
     : !status.enabled
-      ? "Agent runtime is disabled."
+      ? "Copilot runtime is disabled."
       : !status.configured
-        ? "Agent endpoint is not configured."
+        ? "Copilot endpoint is not configured."
         : null;
   const canSend = Boolean(
     !disabledReason
@@ -1197,7 +1211,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   return (
     <>
       <aside
-        aria-label="Agent Rail"
+        aria-label="Copilot Rail"
         aria-labelledby="console-agent-heading"
         aria-modal={overlayViewport && !collapsed ? true : undefined}
         className={`agent-rail${collapsed ? " collapsed" : ""}`}
@@ -1207,7 +1221,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       >
         {!collapsed && !overlayViewport && (
           <ResizeHandle
-            aria-label="Resize Agent Panel"
+            aria-label="Resize Copilot Panel"
             aria-orientation="vertical"
             aria-valuemax={maximumRailWidth()}
             aria-valuemin={AGENT_RAIL_MIN_WIDTH}
@@ -1225,29 +1239,29 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         {collapsed ? (
           <div className="agent-rail-collapsed-control">
             <IconButton
-              aria-label="Open Agent Panel"
+              aria-label="Open Copilot Panel"
               className="agent-rail-icon-button"
               onClick={() => onCollapsedChange(false)}
-              title="Open Agent Panel"
+              title="Open Copilot Panel"
               type="button"
             >
               <PanelRightOpen aria-hidden="true" size={17} />
             </IconButton>
-            <span className="agent-rail-collapsed-label">AGENT</span>
+            <span className="agent-rail-collapsed-label">COPILOT</span>
           </div>
         ) : (
           <>
             <header className="agent-rail-header">
               <div className="agent-rail-heading">
                 <p className="card-kicker">LOCAL RUNTIME</p>
-                <h2 id="console-agent-heading">Agent</h2>
+                <h2 id="console-agent-heading">Copilot</h2>
               </div>
               <div className="agent-rail-header-actions">
                 <span className={`agent-rail-status ${statusTone}`} aria-live="polite">
                   <Badge value={statusLabel(status, statusLoading)} tone={statusTone === "attention" ? "warn" : "good"} />
                 </span>
                 <IconButton
-                  aria-label="Agent Preferences"
+                  aria-label="Copilot Preferences"
                   aria-expanded={preferencesOpen}
                   className={`agent-rail-icon-button${preferencesOpen ? " active" : ""}`}
                   disabled={preferencesLoading}
@@ -1258,18 +1272,18 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   <Settings2 aria-hidden="true" size={14} />
                 </IconButton>
                 <IconButton
-                  aria-label={focusMode ? "Exit Agent research mode" : "Expand Agent research mode"}
+                  aria-label={focusMode ? "Exit Copilot Focus View" : "Expand Copilot Focus View"}
                   aria-pressed={focusMode}
                   className="agent-rail-icon-button"
                   disabled={overlayViewport}
                   onClick={() => setFocusMode((current) => !current)}
-                  title={focusMode ? "Exit research mode" : "Research mode · 46% width"}
+                  title={focusMode ? "Exit focus view" : "Focus view · 46% width"}
                   type="button"
                 >
                   {focusMode ? <Minimize2 aria-hidden="true" size={14} /> : <Maximize2 aria-hidden="true" size={14} />}
                 </IconButton>
                 <IconButton
-                  aria-label="Refresh Agent Status"
+                  aria-label="Refresh Copilot Status"
                   className="agent-rail-icon-button"
                   disabled={statusLoading}
                   onClick={() => void loadStatus()}
@@ -1279,10 +1293,10 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   <RefreshCw aria-hidden="true" size={14} />
                 </IconButton>
                 <IconButton
-                  aria-label="Collapse Agent Panel"
+                  aria-label="Collapse Copilot Panel"
                   className="agent-rail-icon-button"
                   onClick={() => onCollapsedChange(true)}
-                  title="Collapse Agent Panel"
+                  title="Collapse Copilot Panel"
                   type="button"
                 >
                   <PanelRightClose aria-hidden="true" size={16} />
@@ -1351,9 +1365,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 </Disclosure>
               )}
               {preferencesOpen && preferenceDraft ? (
-                <section className="agent-preferences" aria-label="Agent Presentation Preferences">
+                <section className="agent-preferences" aria-label="Copilot Presentation Preferences">
                   <header>
-                    <div><p className="card-kicker">PRESENTATION ONLY</p><h3>Agent Preferences</h3></div>
+                    <div><p className="card-kicker">PRESENTATION ONLY</p><h3>Copilot Preferences</h3></div>
                     <small>v{preferenceDraft.version}</small>
                   </header>
                   <p>Controls wording and presentation across Console. It cannot store prices, positions, orders, or research state.</p>
@@ -1371,7 +1385,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   </div>
                 </section>
               ) : historyOpen ? (
-                <div className="agent-rail-history" aria-label="Agent Session History">
+                <div className="agent-rail-history" aria-label="Copilot Session History">
                   {conversationsLoading ? (
                     <div className="agent-rail-empty">Loading sessions…</div>
                   ) : conversationsError ? (
@@ -1396,12 +1410,13 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   {selectedMetrics && (
                     <div className="agent-metrics" aria-label="Conversation Usage">
                       <span><strong>{selectedMetrics.model_calls}</strong> Model Calls</span>
-                      <span><strong>{selectedMetrics.total_tokens.toLocaleString("en-US")}</strong> tokens</span>
+                      <span><strong>{selectedMetrics.total_tokens.toLocaleString("en-US")}</strong> tokens · reported usage</span>
                       <span><strong>{selectedMetrics.web_search_calls + selectedMetrics.web_extractor_calls}</strong> Web Calls</span>
                       <span><strong>{(selectedMetrics.latency_ms / 1000).toFixed(1)}s</strong> Model Time</span>
                       {selectedMetrics.truncated && <small>Bounded sample</small>}
                     </div>
                   )}
+                  {selectedMetrics && <CopilotResearchProfiles profiles={selectedMetrics.research_profiles} />}
                   {!selectedConversation ? (
                     <div className="agent-rail-empty">Ask a durable research or portfolio question. A session starts on first send.</div>
                   ) : messagesLoading && selectedMessages.length === 0 ? (
@@ -1420,11 +1435,13 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                           onEdit={editMessage}
                           onRetry={retryMessage}
                           receipts={inlineReceipts.get(message.message_id) ?? []}
+                          recoveredStatus={!selectedStreaming ? selectedTurns.find((turn) => turn.user_message_id === message.message_id && !turn.assistant_message_id)?.status : undefined}
                         />
                       ))}
+                      {selectedStream?.research && selectedStream.phase !== "complete" && <CopilotResearchProgress research={selectedStream.research} />}
                       {selectedStream?.draft && (
                         <article className="agent-rail-message assistant live">
-                          <header><span>Agent · {selectedStream.phase === "tool" ? "tool status" : "streaming"}</span><span className="agent-rail-live">LIVE</span></header>
+                          <header><span>Copilot · {selectedStream.phase === "tool" ? "tool status" : "streaming"}</span><span className="agent-rail-live">LIVE</span></header>
                           <AgentMessageContent content={selectedStream.draft} />
                           <AgentArtifactGallery urls={selectedStream.artifactUrls} />
                         </article>
@@ -1443,7 +1460,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   )}
 
                   {selectedStreaming && (
-                    <div className="agent-rail-tool-state"><Wrench aria-hidden="true" size={13} /> {selectedStream?.phase === "tool" ? "Tool call in progress…" : "Waiting for Agent…"}</div>
+                    <div className="agent-rail-tool-state"><Wrench aria-hidden="true" size={13} /> {selectedStream?.phase === "tool" ? "Tool call in progress…" : "Waiting for Copilot…"}</div>
                   )}
                   {!selectedStreaming && durableTurnActive && (
                     <div className="agent-rail-tool-state">
@@ -1499,7 +1516,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
               )}
             </div>
 
-            <form className="agent-rail-composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+            <form className={`agent-rail-composer ${researchStyles.composer}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+              <CopilotResearchControls config={researchConfig} disabled={Boolean(selectedStreaming || durableTurnActive || actionBusy)} onChange={setResearchConfig} />
               {editingMessageId && (
                 <div className="agent-composer-editing" role="status">
                   Editing an earlier prompt. Send creates a new durable turn.
@@ -1525,14 +1543,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 )}
                 <Textarea
                   appearance="embedded"
-                  aria-label="Message Agent"
+                  aria-label="Message Copilot"
                   disabled={Boolean(disabledReason) || selectedStreaming || durableTurnActive || actionBusy !== null}
                   onChange={(event) => setComposer(event.target.value)}
                   onCompositionEnd={() => setComposerComposing(false)}
                   onCompositionStart={() => setComposerComposing(true)}
                   onKeyDown={handleComposerKeyDown}
                   onPaste={handleComposerPaste}
-                  placeholder={disabledReason ?? (durableTurnActive ? "Current turn is still running…" : "Ask Agent…")}
+                  placeholder={disabledReason ?? (durableTurnActive ? "Current turn is still running…" : "Ask Copilot…")}
                   rows={3}
                   ref={composerRef}
                   value={composer}
@@ -1563,9 +1581,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                       <span>Image</span>
                     </Button>
                     <label className="agent-model-select agent-provider-select">
-                      <span className="sr-only">Agent Provider</span>
+                      <span className="sr-only">Copilot Provider</span>
                       <Select
-                        aria-label="Agent Provider"
+                        aria-label="Copilot Provider"
                         disabled={selectedStreaming || providerOptions.length < 2}
                         onChange={(event) => selectProvider(event.target.value)}
                         value={selectedProviderId}
@@ -1577,9 +1595,9 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                       <ChevronDown aria-hidden="true" size={13} />
                     </label>
                     <label className="agent-model-select agent-model-name-select">
-                      <span className="sr-only">Agent Model</span>
+                      <span className="sr-only">Copilot Model</span>
                       <Select
-                        aria-label="Agent Model"
+                        aria-label="Copilot Model"
                         disabled={selectedProviderId === "auto" || selectedStreaming || providerModelsLoading || providerModelOptions.length < 2}
                         onChange={(event) => selectModel(event.target.value)}
                         value={selectedModelName}
@@ -1614,7 +1632,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   </div>
                   {selectedStreaming || durableTurnActive ? (
                     <IconButton
-                      aria-label="Cancel Current Agent Turn"
+                      aria-label="Cancel Current Copilot Turn"
                       className="agent-rail-stop"
                       disabled={actionBusy !== null}
                       onClick={() => void cancelCurrentTurn()}
@@ -1634,18 +1652,18 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       </aside>
       {collapsed && (
         <Button
-          aria-label="Open Agent Panel"
+          aria-label="Open Copilot Panel"
           className="agent-rail-mobile-tab"
           onClick={() => onCollapsedChange(false)}
           type="button"
         >
           <PanelRightOpen aria-hidden="true" size={16} />
-          <span>Agent</span>
+          <span>Copilot</span>
         </Button>
       )}
       <ConfirmationDialog
         open={archiveConfirmation}
-        title="Archive Agent Conversation"
+        title="Archive Copilot Conversation"
         description={`Archive “${selectedConversation ? initialTitle(selectedConversation) : "this conversation"}”? Messages and receipts remain durable and read-only.`}
         confirmLabel="Archive Conversation"
         tone="warning"

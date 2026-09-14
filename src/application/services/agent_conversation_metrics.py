@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from math import ceil
 from typing import Any
 
+from pydantic import ValidationError
+
+from application.dto.copilot_research import CopilotResearchReceipt
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from domain.agent.enums import AgentTurnStatus
 
@@ -38,6 +42,7 @@ class AgentConversationMetrics:
     sampled_messages: int
     sampled_turns: int
     truncated: bool
+    research_profiles: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +62,7 @@ class AgentConversationMetrics:
             "sampled_messages": self.sampled_messages,
             "sampled_turns": self.sampled_turns,
             "truncated": self.truncated,
+            "research_profiles": list(self.research_profiles),
         }
 
 
@@ -131,10 +137,84 @@ class AgentConversationMetricsService:
             malformed_receipt_count=malformed,
             sampled_messages=len(messages),
             sampled_turns=len(turns),
+            research_profiles=_research_profiles(messages, turns),
             # Repositories cap reads at 500. Treat a full sample as a
             # conservative truncation signal so callers do not overstate totals.
             truncated=len(messages) >= _MAX_ITEMS or len(turns) >= _MAX_ITEMS,
         )
+
+
+def _research_tokens(
+    values: list[tuple[CopilotResearchReceipt, dict[str, Any]]],
+    field_name: str,
+) -> int | None:
+    valid = []
+    for _, raw in values:
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            value = usage.get(field_name)
+            if type(value) is int and value >= 0:
+                valid.append(value)
+    return sum(valid) if valid else None
+
+
+def _research_profiles(messages: Any, turns: Any) -> tuple[dict[str, Any], ...]:
+    """Descriptive telemetry by actual model, effort and budget; never a model ranking."""
+    by_message = {turn.assistant_message_id: turn for turn in turns if turn.assistant_message_id}
+    groups: dict[tuple[Any, ...], list[tuple[CopilotResearchReceipt, dict[str, Any]]]] = {}
+    for message in messages:
+        if str(message.role) != "ASSISTANT" or not message.model_receipt_json:
+            continue
+        raw = _parse_receipt(message.model_receipt_json)
+        if raw is None or not isinstance(raw.get("research"), dict):
+            continue
+        try:
+            research = CopilotResearchReceipt.model_validate(raw["research"])
+        except ValidationError:
+            continue
+        if research.phase != "FINISHED":
+            continue
+        turn = by_message.get(message.message_id)
+        key = (
+            turn.model_id
+            if turn
+            else (
+                raw.get("selected_provider_id")
+                if isinstance(raw.get("selected_provider_id"), str)
+                else None
+            ),
+            turn.model if turn else message.model,
+            turn.reasoning_effort if turn else None,
+            research.mode,
+            research.max_seconds,
+            research.max_model_calls,
+            research.max_tool_calls,
+        )
+        groups.setdefault(key, []).append((research, raw))
+    result = []
+    for key, values in groups.items():
+        durations = sorted(item.elapsed_ms for item, _ in values)
+        usage_complete = all(item.usage_complete for item, _ in values)
+        result.append(
+            {
+                "provider": key[0],
+                "model": key[1],
+                "reasoning_effort": key[2],
+                "mode": key[3],
+                "max_seconds": key[4],
+                "max_model_calls": key[5],
+                "max_tool_calls": key[6],
+                "sample_count": len(values),
+                "completed_count": sum(item.stop_reason == "COMPLETED" for item, _ in values),
+                "p50_elapsed_ms": durations[ceil(len(durations) * 0.50) - 1],
+                "p95_elapsed_ms": durations[ceil(len(durations) * 0.95) - 1],
+                "input_tokens": _research_tokens(values, "input_tokens"),
+                "output_tokens": _research_tokens(values, "output_tokens"),
+                "usage_complete": usage_complete,
+                "cost_usd": None,
+            }
+        )
+    return tuple(result)
 
 
 def _parse_receipt(raw: str) -> dict[str, Any] | None:

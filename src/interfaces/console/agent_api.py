@@ -21,7 +21,7 @@ from typing import Any, Literal, NoReturn, cast
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, ValidationError, model_validator
 
 from application.dto.agent import (
     EPHEMERAL_CONTEXT_EXCERPT_MAX_CHARS,
@@ -36,6 +36,7 @@ from application.dto.agent import (
     AgentTurnRequest,
     EphemeralContext,
 )
+from application.dto.copilot_research import CopilotResearchReceipt
 from application.ports.agent_attachment_store import AgentAttachmentStore
 from application.ports.agent_conversation_repository import AgentConversationRepository
 from application.ports.agent_model_provider import AgentModelProvider
@@ -190,6 +191,7 @@ class ImageAttachmentRequest(_RequestModel):
             original_name=self.name,
         )
 
+
 class SendMessageRequest(_RequestModel):
     content: str = Field(default="", max_length=64_000)
     attachments: tuple[ImageAttachmentRequest, ...] = Field(default_factory=tuple)
@@ -206,6 +208,10 @@ class SendMessageRequest(_RequestModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
     )
     reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
+    research_mode: Literal["standard", "research", "challenge"] = "standard"
+    research_max_seconds: int = Field(default=180, ge=30, le=600)
+    research_max_model_calls: int = Field(default=8, ge=1, le=16)
+    research_max_tool_calls: int = Field(default=24, ge=1, le=48)
     external_message_ref: str | None = Field(default=None, min_length=1, max_length=512)
     ephemeral_context: EphemeralContextRequest | None = None
 
@@ -381,7 +387,7 @@ def build_agent_runtime_state(
         diagnostics.append(
             _diagnostic(
                 "AGENT_RUNTIME_UNAVAILABLE",
-                "Agent conversation storage is unavailable.",
+                "Copilot conversation storage is unavailable.",
             )
         )
     else:
@@ -392,7 +398,7 @@ def build_agent_runtime_state(
             diagnostics.append(
                 _diagnostic(
                     "AGENT_RUNTIME_UNAVAILABLE",
-                    "Agent runtime context is unavailable.",
+                    "Copilot runtime context is unavailable.",
                 )
             )
         else:
@@ -424,16 +430,10 @@ def build_agent_runtime_state(
                 )
 
     resources = getattr(container, "resources", None)
-    web_search_sidecar_available = (
-        getattr(resources, "agent_web_search_provider", None) is not None
-    )
+    web_search_sidecar_available = getattr(resources, "agent_web_search_provider", None) is not None
     model_provider = getattr(resources, "agent_model_provider", None)
     raw_model_providers = getattr(resources, "agent_model_providers", {})
-    model_providers = (
-        dict(raw_model_providers)
-        if isinstance(raw_model_providers, Mapping)
-        else {}
-    )
+    model_providers = dict(raw_model_providers) if isinstance(raw_model_providers, Mapping) else {}
     default_model_id = getattr(settings, "default_agent_llm_id", None)
     if not model_providers and model_provider is not None:
         default_model_id = default_model_id or "default"
@@ -662,9 +662,7 @@ def _raise_unavailable(state: AgentRuntimeState, *, write: bool) -> NoReturn:
     diagnostics = state.status.get("diagnostics")
     first_code = (
         diagnostics[0].get("code")
-        if isinstance(diagnostics, list)
-        and diagnostics
-        and isinstance(diagnostics[0], dict)
+        if isinstance(diagnostics, list) and diagnostics and isinstance(diagnostics[0], dict)
         else None
     )
     if state.status.get("state") == "DISABLED" or first_code == "AGENT_DISABLED":
@@ -709,9 +707,9 @@ def _owned_conversation(
     # Return not-found for a principal mismatch so the local Console cannot
     # enumerate another channel/principal's conversations by timing.
     if conversation is None or conversation.owner_principal != AGENT_OWNER_PRINCIPAL:
-        raise HTTPException(status_code=404, detail="Agent conversation was not found")
+        raise HTTPException(status_code=404, detail="Copilot conversation was not found")
     if active and conversation.status is not AgentConversationStatus.ACTIVE:
-        raise HTTPException(status_code=409, detail="Agent conversation is archived")
+        raise HTTPException(status_code=409, detail="Copilot conversation is archived")
     return conversation
 
 
@@ -732,6 +730,15 @@ def _conversation_wire(value: AgentConversation) -> dict[str, Any]:
         "created_at": _time(value.created_at),
         "updated_at": _time(value.updated_at),
     }
+
+
+def _safe_research_receipt(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return CopilotResearchReceipt.model_validate(value).model_dump(mode="json")
+    except (ValidationError, TypeError, ValueError):
+        return None
 
 
 def _safe_model_receipt(value: str | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -760,14 +767,22 @@ def _safe_model_receipt(value: str | None) -> tuple[dict[str, Any] | None, str |
             if type(candidate := usage.get(key)) is int and candidate >= 0
         }
     urls = parsed.get("web_source_urls")
-    safe_urls = [
-        candidate
-        for candidate in urls[:20]
-        if isinstance(candidate, str)
-        and len(candidate) <= 2_048
-        and candidate.startswith(("https://", "http://"))
-    ] if isinstance(urls, list) else []
+    safe_urls = (
+        [
+            candidate
+            for candidate in urls[:20]
+            if isinstance(candidate, str)
+            and len(candidate) <= 2_048
+            and candidate.startswith(("https://", "http://"))
+        ]
+        if isinstance(urls, list)
+        else []
+    )
     safe = {
+        "research": _safe_research_receipt(parsed.get("research")),
+        "model_calls": parsed.get("model_calls")
+        if type(parsed.get("model_calls")) is int and parsed["model_calls"] >= 0
+        else None,
         "model": parsed.get("model") if isinstance(parsed.get("model"), str) else None,
         "selected_model": parsed.get("selected_model")
         if isinstance(parsed.get("selected_model"), str)
@@ -984,7 +999,7 @@ def _preferences_wire(value: AgentPreferences | None) -> dict[str, Any]:
 
 def _require_preferences(state: AgentRuntimeState) -> AgentPreferencesService:
     if state.preferences_service is None:
-        raise HTTPException(status_code=503, detail="Agent preferences are unavailable")
+        raise HTTPException(status_code=503, detail="Copilot preferences are unavailable")
     return state.preferences_service
 
 
@@ -1016,7 +1031,7 @@ def update_agent_preferences(
     except TradingPartnerError as error:
         raise HTTPException(
             status_code=409,
-            detail={"code": error.code, "message": "Agent preferences were not updated."},
+            detail={"code": error.code, "message": "Copilot preferences were not updated."},
         ) from None
     return {"preferences": _preferences_wire(value)}
 
@@ -1038,7 +1053,7 @@ def reset_agent_preferences(
     except TradingPartnerError as error:
         raise HTTPException(
             status_code=409,
-            detail={"code": error.code, "message": "Agent preferences were not reset."},
+            detail={"code": error.code, "message": "Copilot preferences were not reset."},
         ) from None
     return {"preferences": _preferences_wire(value)}
 
@@ -1081,12 +1096,12 @@ async def list_agent_provider_models(
     """Return a bounded, secret-safe model directory for one configured Provider."""
 
     if re.fullmatch(r"[a-z0-9][a-z0-9._:-]{0,63}", provider_id) is None:
-        raise HTTPException(status_code=404, detail="Agent Provider was not found")
+        raise HTTPException(status_code=404, detail="Copilot Provider was not found")
     state = _state(request)
     _require_runtime(state)
     provider = state.model_providers.get(provider_id)
     if provider is None:
-        raise HTTPException(status_code=404, detail="Agent Provider was not found")
+        raise HTTPException(status_code=404, detail="Copilot Provider was not found")
     config = getattr(provider, "config", None)
     configured_model = getattr(config, "model", None) or getattr(provider, "model", None)
     list_models = getattr(provider, "list_models", None)
@@ -1129,24 +1144,22 @@ async def list_agent_provider_models(
             or model_id in seen
         ):
             continue
-        raw_efforts = () if isinstance(raw_item, str) else getattr(
-            raw_item,
-            "reasoning_efforts",
-            (),
+        raw_efforts = (
+            ()
+            if isinstance(raw_item, str)
+            else getattr(
+                raw_item,
+                "reasoning_efforts",
+                (),
+            )
         )
         reasoning_supported = (
-            None
-            if isinstance(raw_item, str)
-            else getattr(raw_item, "reasoning_supported", None)
+            None if isinstance(raw_item, str) else getattr(raw_item, "reasoning_supported", None)
         )
         efforts = (
             ()
             if reasoning_supported is False
-            else tuple(
-                value
-                for value in ("low", "medium", "high", "max")
-                if value in raw_efforts
-            )
+            else tuple(value for value in ("low", "medium", "high", "max") if value in raw_efforts)
             or fallback_efforts
         )
         seen.add(model_id)
@@ -1166,8 +1179,7 @@ async def list_agent_provider_models(
         "native_web_search": getattr(config, "native_web_search", "disabled"),
         "web_search_available": bool(
             state.status.get("web_search_sidecar_available")
-            or getattr(config, "native_web_search", "disabled")
-            == "responses_web_search"
+            or getattr(config, "native_web_search", "disabled") == "responses_web_search"
         ),
         "fetched_at": _time(fetched_at) if isinstance(fetched_at, datetime) else None,
         "cached": cached,
@@ -1180,11 +1192,11 @@ def get_agent_chart_artifact(artifact_name: str) -> FileResponse:
     """Serve only a PNG below the project-owned technical artifact directory."""
 
     if _SAFE_ARTIFACT_NAME.fullmatch(artifact_name) is None:
-        raise HTTPException(status_code=404, detail="Agent chart artifact was not found")
+        raise HTTPException(status_code=404, detail="Copilot chart artifact was not found")
     root = (Path.cwd() / "data" / "artifacts" / "technical").resolve()
     candidate = (root / artifact_name).resolve()
     if candidate.parent != root or not candidate.is_file() or candidate.suffix.lower() != ".png":
-        raise HTTPException(status_code=404, detail="Agent chart artifact was not found")
+        raise HTTPException(status_code=404, detail="Copilot chart artifact was not found")
     return FileResponse(candidate, media_type="image/png", filename=artifact_name)
 
 
@@ -1259,12 +1271,12 @@ def get_agent_attachment(
     """Serve one image only after proving it belongs to the owned conversation."""
 
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,159}", attachment_id) is None:
-        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+        raise HTTPException(status_code=404, detail="Copilot attachment was not found")
     conversation = _owned_conversation(request, conversation_id)
     state = _state(request)
     store = state.attachment_store
     if store is None:
-        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+        raise HTTPException(status_code=404, detail="Copilot attachment was not found")
     repository = _require_repository(state)
     attachment: AgentImageAttachment | None = None
     after_sequence = 0
@@ -1290,11 +1302,11 @@ def get_agent_attachment(
             break
         after_sequence = messages[-1].sequence
     if attachment is None:
-        raise HTTPException(status_code=404, detail="Agent attachment was not found")
+        raise HTTPException(status_code=404, detail="Copilot attachment was not found")
     try:
         content = store.read(attachment)
     except TradingPartnerError:
-        raise HTTPException(status_code=404, detail="Agent attachment was not found") from None
+        raise HTTPException(status_code=404, detail="Copilot attachment was not found") from None
     return Response(
         content=content,
         media_type=attachment.media_type,
@@ -1324,7 +1336,9 @@ def list_agent_turns(
     return {
         "count": len(values),
         "items": [_turn_wire(item) for item in values],
-        "latest_turn": _turn_wire(values[0]) if values and newest_first else _latest_turn_wire(
+        "latest_turn": _turn_wire(values[0])
+        if values and newest_first
+        else _latest_turn_wire(
             repository,
             conversation.conversation_id,
         ),
@@ -1339,7 +1353,7 @@ def get_agent_conversation_metrics(
     _owned_conversation(request, conversation_id)
     service = _state(request).metrics_service
     if service is None:
-        raise HTTPException(status_code=503, detail="Agent metrics are unavailable")
+        raise HTTPException(status_code=503, detail="Copilot metrics are unavailable")
     return {"metrics": service.aggregate(conversation_id).as_dict()}
 
 
@@ -1362,7 +1376,10 @@ def archive_agent_conversation(
     except TradingPartnerError as error:
         raise HTTPException(
             status_code=409,
-            detail={"code": error.code, "message": "Agent conversation changed; reload and retry."},
+            detail={
+                "code": error.code,
+                "message": "Copilot conversation changed; reload and retry.",
+            },
         ) from None
     return {"conversation": _conversation_wire(conversation)}
 
@@ -1414,7 +1431,7 @@ def _pending_action_conversation(
         or action.channel is not AGENT_CHANNEL
         or action.principal != AGENT_OWNER_PRINCIPAL
     ):
-        raise HTTPException(status_code=404, detail="Agent pending action was not found")
+        raise HTTPException(status_code=404, detail="Copilot pending action was not found")
     return gateway
 
 
@@ -1508,6 +1525,30 @@ def _sse(event: AgentTurnEvent, ordinal: int) -> bytes:
 _STREAM_END = object()
 
 
+def _find_durable_messages(
+    repository: AgentConversationRepository,
+    conversation_id: str,
+    message_ids: set[str],
+) -> dict[str, AgentMessage]:
+    """Walk durable sequence pages; a long conversation must not lose retry policy."""
+    found: dict[str, AgentMessage] = {}
+    cursor = 0
+    while message_ids - found.keys():
+        page = repository.list_messages(conversation_id, after_sequence=cursor, limit=500)
+        if not page:
+            break
+        for item in page:
+            if item.conversation_id == conversation_id and item.message_id in message_ids:
+                found[item.message_id] = item
+        next_cursor = max((item.sequence for item in page), default=cursor)
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(page) < 500:
+            break
+    return found
+
+
 def _replay_turn_events(
     repository: AgentConversationRepository,
     turn: AgentTurn,
@@ -1532,12 +1573,14 @@ def _replay_turn_events(
                 },
             )
         )
+    restored_receipts: list[AgentToolReceipt] = []
     receipts = getattr(repository, "list_tool_receipts", None)
     if callable(receipts):
         for receipt in receipts(turn.conversation_id, limit=500):
-            if (
-                receipt.message_id != turn.user_message_id
-                or (skip_receipt_ids is not None and receipt.receipt_id in skip_receipt_ids)
+            if receipt.message_id == turn.user_message_id:
+                restored_receipts.append(receipt)
+            if receipt.message_id != turn.user_message_id or (
+                skip_receipt_ids is not None and receipt.receipt_id in skip_receipt_ids
             ):
                 continue
             events.append(
@@ -1553,11 +1596,59 @@ def _replay_turn_events(
             )
     messages = getattr(repository, "list_messages", None)
     assistant: AgentMessage | None = None
+    user: AgentMessage | None = None
     if callable(messages):
-        for item in messages(turn.conversation_id, after_sequence=0, limit=500):
-            if item.message_id == turn.assistant_message_id:
-                assistant = item
-                break
+        wanted = {turn.user_message_id}
+        if turn.assistant_message_id is not None:
+            wanted.add(turn.assistant_message_id)
+        matched = _find_durable_messages(repository, turn.conversation_id, wanted)
+        assistant = matched.get(turn.assistant_message_id) if turn.assistant_message_id else None
+        user = matched.get(turn.user_message_id)
+    final_receipt, _ = _safe_model_receipt(assistant.model_receipt_json if assistant else None)
+    initial_receipt, _ = _safe_model_receipt(user.model_receipt_json if user else None)
+    research = (final_receipt or {}).get("research")
+    initial_research = (initial_receipt or {}).get("research")
+    if research is None and isinstance(initial_research, dict):
+        research = dict(initial_research)
+        terminal = turn.is_terminal
+        research.update(
+            {
+                "phase": "FINISHED" if terminal else "READING",
+                "stop_reason": turn.status.value
+                if turn.status.value in {"FAILED", "CANCELLED"}
+                else None,
+                "elapsed_ms": max(
+                    0, int((turn.updated_at - turn.started_at).total_seconds() * 1000)
+                ),
+                "completed_reads": sum(not item.error_codes for item in restored_receipts),
+                "usage_complete": False,
+                "evidence_status": "STOPPED" if terminal else "NOT_CHECKED",
+                "gaps": ["MODEL_USAGE_UNAVAILABLE", "MODEL_PROGRESS_UNAVAILABLE"],
+            }
+        )
+        research["steps"] = [
+            {
+                "code": step["code"],
+                "status": "COMPLETED"
+                if step["code"] == "READ" and research["completed_reads"] > 0
+                else "STOPPED"
+                if terminal
+                else "PENDING",
+            }
+            for step in research["steps"]
+        ]
+    if research is not None:
+        events.append(
+            AgentTurnEvent(
+                type="research_progress",
+                data={
+                    "conversation_id": turn.conversation_id,
+                    "turn_id": turn.turn_id,
+                    "research": research,
+                    "replay": True,
+                },
+            )
+        )
     if assistant is not None:
         events.append(
             AgentTurnEvent(
@@ -1678,15 +1769,17 @@ async def stream_agent_message(
         owner_principal=AGENT_OWNER_PRINCIPAL,
         channel=AGENT_CHANNEL,
         content=payload.content,
+        research_mode=payload.research_mode,
+        research_max_seconds=payload.research_max_seconds,
+        research_max_model_calls=payload.research_max_model_calls,
+        research_max_tool_calls=payload.research_max_tool_calls,
         model_id=payload.model_id,
         model=payload.model,
         reasoning_effort=payload.reasoning_effort,
         attachments=payload.image_inputs(),
         external_message_ref=payload.external_message_ref,
         ephemeral_context=(
-            payload.ephemeral_context.to_dto()
-            if payload.ephemeral_context is not None
-            else None
+            payload.ephemeral_context.to_dto() if payload.ephemeral_context is not None else None
         ),
     )
     return StreamingResponse(
@@ -1723,7 +1816,7 @@ async def cancel_agent_turn(
             status_code=status,
             detail={
                 "code": error.code,
-                "message": "Agent turn cannot be cancelled in its current state.",
+                "message": "Copilot turn cannot be cancelled in its current state.",
             },
         ) from None
     return {"turn": _turn_wire(turn)}
@@ -1744,7 +1837,7 @@ async def retry_agent_turn(
     getter = getattr(repository, "get_turn", None)
     turn = getter(turn_id) if callable(getter) else None
     if turn is None or turn.conversation_id != conversation.conversation_id:
-        raise HTTPException(status_code=404, detail="Agent turn was not found")
+        raise HTTPException(status_code=404, detail="Copilot turn was not found")
     runtime.recover_interrupted_turn(turn_id)
     turn = getter(turn_id) if callable(getter) else turn
     if turn is None or turn.status is not AgentTurnStatus.FAILED:
@@ -1752,32 +1845,44 @@ async def retry_agent_turn(
             status_code=409,
             detail={
                 "code": "AGENT_TURN_RETRY_NOT_ALLOWED",
-                "message": "Only a failed Agent turn can be retried.",
+                "message": "Only a failed Copilot turn can be retried.",
             },
         )
-    messages = repository.list_messages(
-        conversation_id,
-        after_sequence=0,
-        limit=500,
-    )
-    original = next(
-        (item for item in messages if item.message_id == turn.user_message_id),
-        None,
+    original = _find_durable_messages(repository, conversation_id, {turn.user_message_id}).get(
+        turn.user_message_id
     )
     if original is None or original.role.value != "USER":
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "AGENT_TURN_RETRY_SOURCE_UNAVAILABLE",
-                "message": "The original Agent prompt is unavailable for retry.",
+                "message": "The original Copilot prompt is unavailable for retry.",
             },
         )
+    research_policy: dict[str, Any] = {}
+    if original.model_receipt_json is not None:
+        try:
+            saved_policy = json.loads(original.model_receipt_json)
+            if isinstance(saved_policy, dict) and "research" in saved_policy:
+                policy = CopilotResearchReceipt.model_validate(saved_policy["research"])
+                research_policy = {
+                    "research_mode": policy.mode,
+                    "research_max_seconds": policy.max_seconds,
+                    "research_max_model_calls": policy.max_model_calls,
+                    "research_max_tool_calls": policy.max_tool_calls,
+                }
+        except (ValidationError, TypeError, ValueError):
+            raise HTTPException(
+                status_code=409, detail="Copilot research retry policy is unavailable"
+            ) from None
     retry_request = AgentTurnRequest(
         conversation_id=conversation_id,
         owner_principal=AGENT_OWNER_PRINCIPAL,
         channel=AGENT_CHANNEL,
         content=original.content,
         model_id=turn.model_id,
+        model=turn.model,
+        **research_policy,
         reasoning_effort=turn.reasoning_effort,
     )
     return StreamingResponse(
@@ -1870,7 +1975,7 @@ async def reconnect_agent_turn_stream(
     getter = getattr(repository, "get_turn", None)
     turn = getter(turn_id) if callable(getter) else None
     if turn is None or turn.conversation_id != conversation.conversation_id:
-        raise HTTPException(status_code=404, detail="Agent turn was not found")
+        raise HTTPException(status_code=404, detail="Copilot turn was not found")
     runtime = state.runtime
     if runtime is None and not turn.is_terminal:
         _raise_unavailable(state, write=False)

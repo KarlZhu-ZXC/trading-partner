@@ -32,7 +32,7 @@ exclusions remain authoritative. Text search covers note title and summary only.
 
 ## Enforcement across Console
 
-All Console routes and the Agent rail use the shared control layer. There is no
+All Console routes and the Copilot rail use the shared control layer. There is no
 raw-control migration allowance. `node --test tests/component-conventions.test.mjs`
 checks every surface, competing control styles, literal colors and CSS variables.
 Native interactive elements belong only to the shared primitive/widget layer.
@@ -44,7 +44,7 @@ more than one route. Primitives own control skins; surface modules own arrangeme
 and domain-content presentation. Add variants centrally rather than reviving old
 page-specific control selectors.
 
-The only runtime-owned CSS properties are the Agent rail width and entity page size.
+The only runtime-owned CSS properties are the Copilot rail width and entity page size.
 The layout smoke tests use synthetic data across the primary and auxiliary routes
 in both themes at 390, 1440 and 1920px. Existing Journal/Research/Agent tests retain
 confirmation, account filtering and durable reconnect coverage.

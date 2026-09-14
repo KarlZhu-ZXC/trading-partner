@@ -27,9 +27,7 @@ EPHEMERAL_CONTEXT_MAX_BYTES = 16_384
 EPHEMERAL_CONTEXT_ROUTE_HASH_MAX_CHARS = 256
 EPHEMERAL_CONTEXT_NAV_FIELD_MAX_CHARS = 160
 EPHEMERAL_CONTEXT_SURFACE_MAX_CHARS = 96
-_EPHEMERAL_CONTEXT_ROUTE_HASH_PATTERN = re.compile(
-    r"^[A-Za-z0-9._~:/?#=&%+-]+$"
-)
+_EPHEMERAL_CONTEXT_ROUTE_HASH_PATTERN = re.compile(r"^[A-Za-z0-9._~:/?#=&%+-]+$")
 _EPHEMERAL_CONTEXT_SURFACE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]*$")
 _EPHEMERAL_CONTEXT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
@@ -128,6 +126,7 @@ class EphemeralContext:
 
 AgentTurnEventName = Literal[
     "message_started",
+    "research_progress",
     "tool_started",
     "tool_finished",
     "pending_action",
@@ -193,8 +192,21 @@ class AgentTurnRequest:
     external_message_ref: str | None = None
     ephemeral_context: EphemeralContext | None = None
     attachments: tuple[AgentImageInput, ...] = ()
+    research_mode: Literal["standard", "research", "challenge"] = "standard"
+    research_max_seconds: int = 180
+    research_max_model_calls: int = 8
+    research_max_tool_calls: int = 24
 
     def __post_init__(self) -> None:
+        if self.research_mode not in {"standard", "research", "challenge"}:
+            raise ValueError("Unknown research mode")
+        for name, value, minimum, maximum in (
+            ("research_max_seconds", self.research_max_seconds, 30, 600),
+            ("research_max_model_calls", self.research_max_model_calls, 1, 16),
+            ("research_max_tool_calls", self.research_max_tool_calls, 1, 48),
+        ):
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"{name} is out of bounds")
         if not isinstance(self.attachments, tuple):
             raise ValueError("Agent attachments must be a tuple")
         if len(self.attachments) > AGENT_IMAGE_MAX_COUNT:

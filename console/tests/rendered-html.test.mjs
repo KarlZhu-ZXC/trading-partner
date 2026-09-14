@@ -79,7 +79,7 @@ test("server-renders the local control room", async () => {
   assert.match(html, /Dark/);
   assert.match(html, /Overview/);
   assert.match(html, /Capabilities/);
-  assert.match(html, /Agent Rail/);
+  assert.match(html, /Copilot Rail/);
   assert.doesNotMatch(html, /Your site is taking shape|react-loading-skeleton/);
 });
 
@@ -109,7 +109,7 @@ test("restores the persisted sidebar width before paint and keeps it in sync", a
   assert.match(styles, /html\.agent-rail-collapsed \.app-shell \{ --agent-rail-width:0px; \}/);
 });
 
-test("provides independent Obsidian-style navigation and Agent panel toggles", async () => {
+test("provides independent Obsidian-style navigation and Copilot panel toggles", async () => {
   const shellSource = await readFile(new URL("../app/components/console-shell.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
   const styles = await consoleStyles();
@@ -117,7 +117,7 @@ test("provides independent Obsidian-style navigation and Agent panel toggles", a
   assert.match(shellSource, /aria-controls="console-navigation-panel"/);
   assert.match(shellSource, /aria-controls="console-agent-panel"/);
   assert.match(shellSource, /Open navigation panel/);
-  assert.match(shellSource, /Open Agent Panel/);
+  assert.match(shellSource, /Open Copilot Panel/);
   assert.match(shellSource, /LOCAL HUB/);
   assert.doesNotMatch(shellSource, /LOCAL CONTROL ROOM/);
   assert.match(shellSource, /event\.key === "Escape"/);
@@ -240,7 +240,7 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(source, /\/api\/decision-workbench/);
   assert.match(source, /useApi<JournalWorkbenchResponse>/);
   assert.match(source, /useApi<ObservationInboxResponse>/);
-  assert.match(source, /enabled: journalTab === "notes"/);
+  assert.match(source, /enabled: !pinnedRevisionId && \(journalTab === "notes"/);
   assert.doesNotMatch(source, /useApi<Dict>\("\/api\/(research|monitors|agenda|retro|scorecards)/);
   assert.match(source, /partial_failures/);
   assert.match(source, /postApi/);
@@ -889,7 +889,7 @@ test("keeps small metadata contrast above the normal-text threshold", async () =
   }
 });
 
-test("legacy Chat route redirects to the shared Agent Rail", async () => {
+test("legacy Chat route redirects to the shared Copilot Rail", async () => {
   const response = await render("/chat");
   assert.equal(response.status, 200);
   assert.match(response.url, /\/?\?agent=open$/);
@@ -908,11 +908,11 @@ test("legacy Chat route redirects to the shared Agent Rail", async () => {
   assert.match(shellSource, /agentRequested/);
   assert.doesNotMatch(shellSource, /label: "Chat"/);
   assert.match(shellSource, /AgentRail/);
-  assert.match(railSource, /Agent Rail/);
+  assert.match(railSource, /Copilot Rail/);
   assert.match(shellSource, /trading-partner-agent-rail-collapsed/);
   assert.match(railSource, /collectEphemeralContext/);
   assert.match(railSource, /nativeEvent\.isComposing/);
-  assert.match(railSource, /Cancel Current Agent Turn/);
+  assert.match(railSource, /Cancel Current Copilot Turn/);
   assert.match(railSource, /useAgentConversation/);
   assert.match(conversationSource, /reconnectAgentTurnStream/);
   assert.match(streamSource, /reduceAgentStream/);
@@ -923,28 +923,28 @@ test("legacy Chat route redirects to the shared Agent Rail", async () => {
   assert.match(railSource, /fetchAgentTurns/);
   assert.match(railSource, /fetchAgentPendingActions/);
   assert.match(railSource, /fetchAgentProviderModels/);
-  assert.match(railSource, /aria-label="Agent Provider"/);
-  assert.match(railSource, /aria-label="Agent Model"/);
+  assert.match(railSource, /aria-label="Copilot Provider"/);
+  assert.match(railSource, /aria-label="Copilot Model"/);
   assert.match(railSource, /aria-label="Reasoning Effort"/);
   assert.match(railSource, /continues on the server/);
   assert.match(railSource, /AgentMessageContent/);
   assert.doesNotMatch(railSource, /Continue in Telegram|createTelegramHandoff/);
   assert.match(railSource, /archiveAgentConversation/);
-  assert.match(railSource, /Resize Agent Panel/);
-  assert.match(railSource, /Expand Agent research mode/);
+  assert.match(railSource, /Resize Copilot Panel/);
+  assert.match(railSource, /Expand Copilot Focus View/);
   assert.match(railSource, /role={overlayViewport \? "dialog" : "complementary"}/);
   assert.match(railSource, /event\.key !== "Tab"/);
   assert.match(railSource, /AgentMessageCard/);
   assert.match(railSource, /Editing an earlier prompt/);
-  assert.match(railSource, /void sendMessage\(candidate\.content\)/);
+  assert.match(railSource, /void sendMessage\(candidate\.content, undefined, researchConfigFromReceipt\(candidate\.model_receipt\)\)/);
   assert.match(railSource, /Retry Turn/);
-  assert.match(railSource, /Agent Provider Error Notification/);
+  assert.match(railSource, /Copilot Provider Error Notification/);
   assert.match(railSource, /Dismiss Provider Error Notification/);
   assert.match(railSource, /trading-partner-agent-dismissed-failures/);
   assert.match(railSource, /HTTP Status/);
   assert.match(railSource, /Retryable/);
   assert.match(streamSource, /parseAgentFailureNotice/);
-  assert.match(railSource, /Agent Preferences/);
+  assert.match(railSource, /Copilot Preferences/);
   assert.match(railSource, /PRESENTATION ONLY/);
   assert.match(railSource, /Web Search Background/);
   assert.match(railSource, /ON BY DEFAULT/);
@@ -986,7 +986,7 @@ test("legacy Chat route redirects to the shared Agent Rail", async () => {
   assert.doesNotMatch(railSource, /localStorage.*confirmation/i);
 });
 
-test("keeps the Agent rail width and focus mode accessible and durable", async () => {
+test("keeps the Copilot rail width and focus mode accessible and durable", async () => {
   const layoutSource = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   const railSource = await readFile(new URL("../app/components/agent-rail.tsx", import.meta.url), "utf8");
   const railConstants = await readFile(new URL("../app/lib/agent-rail-layout.mjs", import.meta.url), "utf8");

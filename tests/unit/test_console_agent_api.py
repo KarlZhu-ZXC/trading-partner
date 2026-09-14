@@ -205,9 +205,9 @@ class _Repository:
         *,
         limit: int = 100,
     ) -> tuple[DurableReceipt, ...]:
-        return tuple(
-            item for item in self.receipts if item.conversation_id == conversation_id
-        )[:limit]
+        return tuple(item for item in self.receipts if item.conversation_id == conversation_id)[
+            :limit
+        ]
 
     def update_summary(self, *args: Any, **kwargs: Any) -> AgentConversation:
         raise AssertionError("summary is not expected in this focused fixture")
@@ -685,16 +685,39 @@ async def test_console_reconnect_replays_terminal_turn_without_live_runtime() ->
 
 
 @pytest.mark.asyncio
-async def test_console_retry_replays_failed_turn_from_durable_original_prompt() -> None:
+@pytest.mark.parametrize("research", [False, True])
+@pytest.mark.parametrize("prior_messages", [0, 505])
+async def test_console_retry_replays_failed_turn_from_durable_original_prompt(
+    research: bool,
+    prior_messages: int,
+) -> None:
+    from application.services.copilot_research_budget import ResearchBudget
+
+    policy = (
+        ResearchBudget(mode="research", max_seconds=60, max_model_calls=1, max_tool_calls=2)
+        .snapshot()
+        .model_dump()
+    )
     model = _Model([ModelResponse(text="重试已完成")])
     repository, conversation_id = _client_state(enabled=True, model=model)
     failed_at = datetime.now(UTC)
+    for index in range(prior_messages):
+        repository.append_message(
+            AgentMessage(
+                message_id=f"history_{index}",
+                conversation_id=conversation_id,
+                role=AgentMessageRole.USER,
+                content="Earlier synthetic prompt",
+                created_at=failed_at,
+            )
+        )
     original = repository.append_message(
         AgentMessage(
             message_id="agent_message_retry_source",
             conversation_id=conversation_id,
             role=AgentMessageRole.USER,
             content="读取原始问题",
+            model_receipt_json=json.dumps({"research": policy}) if research else None,
             channel=AgentChannel.CONSOLE,
             created_at=failed_at,
         )
@@ -726,15 +749,23 @@ async def test_console_retry_replays_failed_turn_from_durable_original_prompt() 
     assert response.status_code == 200
     assert "event: completed" in response.text
     assert "重试已完成" in response.text
-    assert len(model.requests) == 1
+    assert len(model.requests) == (2 if prior_messages and not research else 1)
+    if research:
+        assert all(
+            t.name not in {"tp_propose", "tp_prepare_action"} for t in model.requests[0].tools
+        )
+        last = repository.messages[conversation_id][-1]
+        restored = json.loads(last.model_receipt_json)["research"]
+        assert restored["max_model_calls"] == 1
+        assert restored["mode"] == "research"
     assert model.requests[0].reasoning_effort == "high"
     turns = repository.list_turns(conversation_id)
     assert len(turns) == 2
     assert turns[0].status is AgentTurnStatus.COMPLETED
     assert turns[0].turn_id != "agent_turn_retry_source"
-    repeated_prompts = [
-        item.content for item in repository.messages[conversation_id]
-    ].count("读取原始问题")
+    repeated_prompts = [item.content for item in repository.messages[conversation_id]].count(
+        "读取原始问题"
+    )
     assert repeated_prompts == 2
 
 
@@ -873,10 +904,10 @@ def test_agent_status_metadata_is_secret_safe() -> None:
             "api_style": "responses",
             "reasoning_mode": "effort",
             "reasoning_effort": None,
-                "reasoning_efforts": ["low", "medium", "high", "max"],
-                "native_web_search": "disabled",
-                "web_search_available": False,
-                "is_default": True,
+            "reasoning_efforts": ["low", "medium", "high", "max"],
+            "native_web_search": "disabled",
+            "web_search_available": False,
+            "is_default": True,
         }
     ]
     assert "secret.example" not in encoded
@@ -1018,9 +1049,7 @@ async def test_sse_tool_events_and_failures_are_bounded() -> None:
             headers=headers,
             json={"content": "限流问题"},
         )
-    limited_payload = next(
-        item for item in limited.text.split("\n\n") if "event: failed" in item
-    )
+    limited_payload = next(item for item in limited.text.split("\n\n") if "event: failed" in item)
     limited_wire = json.loads(limited_payload.split("data: ", 1)[1])
     assert limited_wire["notification"]["code"] == "PROVIDER_RATE_LIMIT_ERROR"
     assert limited_wire["notification"]["http_status"] == 429
@@ -1109,3 +1138,82 @@ def test_chart_artifact_route_is_png_only_and_traversal_safe(
     with pytest.raises(HTTPException) as missing:
         get_agent_chart_artifact("missing.png")
     assert missing.value.status_code == 404
+
+
+def test_research_request_policy_and_receipt_are_closed() -> None:
+    from pydantic import ValidationError
+
+    from application.services.copilot_research_budget import ResearchBudget
+    from interfaces.console.agent_api import SendMessageRequest, _safe_model_receipt
+
+    for values in (
+        {"research_max_seconds": 29},
+        {"research_max_tool_calls": 49},
+        {"research_max_model_calls": 0},
+    ):
+        with pytest.raises(ValidationError):
+            SendMessageRequest(content="Synthetic research", research_mode="research", **values)
+    policy = (
+        ResearchBudget(mode="research", max_seconds=60, max_model_calls=2, max_tool_calls=2)
+        .snapshot()
+        .model_dump()
+    )
+    safe, _ = _safe_model_receipt(json.dumps({"research": policy}))
+    assert safe["research"]["mode"] == "research"
+    policy["private_prompt"] = "must not appear"
+    safe, _ = _safe_model_receipt(json.dumps({"research": policy}))
+    assert safe["research"] is None
+    assert "must not appear" not in json.dumps(safe)
+
+
+def test_failed_research_replay_keeps_saved_reads_and_unknown_usage() -> None:
+    from application.services.copilot_research_budget import ResearchBudget
+    from interfaces.console.agent_api import _replay_turn_events
+
+    repository, cid = _client_state(enabled=False)
+    now = datetime.now(UTC)
+    policy = (
+        ResearchBudget(mode="research", max_seconds=60, max_model_calls=2, max_tool_calls=2)
+        .snapshot()
+        .model_dump()
+    )
+    repository.append_message(
+        AgentMessage(
+            message_id="research_user",
+            conversation_id=cid,
+            role=AgentMessageRole.USER,
+            content="Synthetic private question",
+            created_at=now,
+            model_receipt_json=json.dumps({"research": policy}),
+        )
+    )
+    repository.append_tool_receipt(
+        DurableReceipt(
+            receipt_id="saved_read",
+            conversation_id=cid,
+            capability="portfolio_get",
+            operation="positions",
+            arguments_sha256="a" * 64,
+            request_id="req_saved",
+            message_id="research_user",
+            created_at=now,
+        )
+    )
+    turn = AgentTurn(
+        turn_id="research_failed",
+        conversation_id=cid,
+        user_message_id="research_user",
+        channel=AgentChannel.CONSOLE,
+        status=AgentTurnStatus.FAILED,
+        started_at=now,
+        updated_at=now,
+        completed_at=now,
+        error_code="PROVIDER_TIMEOUT_ERROR",
+    )
+    events = _replay_turn_events(repository, turn)
+    research = next(e.data["research"] for e in events if e.type == "research_progress")
+    assert research["completed_reads"] == 1
+    assert research["steps"][0]["status"] == "COMPLETED"
+    assert research["usage_complete"] is False
+    assert "MODEL_PROGRESS_UNAVAILABLE" in research["gaps"]
+    assert "Synthetic private question" not in json.dumps(research)

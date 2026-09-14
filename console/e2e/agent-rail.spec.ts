@@ -315,12 +315,12 @@ test("legacy Chat opens the shared Rail and preserves Provider-scoped choices", 
   await mockConsoleApi(page);
   await page.goto("/chat");
   await expect(page).toHaveURL(/\/\?agent=open$/);
-  await expect(page.getByRole("complementary", { name: "Agent" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Copilot" })).toBeVisible();
   await expect(page.getByText("READY", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Telegram" })).toHaveCount(0);
 
-  const provider = page.getByLabel("Agent Provider");
-  const model = page.getByLabel("Agent Model");
+  const provider = page.getByLabel("Copilot Provider");
+  const model = page.getByLabel("Copilot Model");
   const reasoning = page.getByLabel("Reasoning Effort");
   await model.selectOption("qwen3.7-plus");
   await reasoning.selectOption("low");
@@ -355,7 +355,7 @@ test("an incomplete send stream reconnects by durable turn id without resending"
   const api = await mockConsoleApi(page);
   await page.goto("/?agent=open");
   await expect(page.getByText("READY", { exact: true })).toBeVisible();
-  await page.getByLabel("Message Agent").fill("test durable reconnect");
+  await page.getByLabel("Message Copilot").fill("test durable reconnect");
   await page.getByRole("button", { name: "Send Message" }).click();
   await expect(page.getByText("Recovered durable answer", { exact: true })).toBeVisible();
   expect(api.reconnectCalls()).toBe(1);
@@ -366,13 +366,13 @@ test("Provider failures render a structured durable notification", async ({ page
   api.failNext();
   await page.goto("/?agent=open");
   await expect(page.getByText("READY", { exact: true })).toBeVisible();
-  await page.getByLabel("Agent Provider").selectOption("opencode_zen");
-  await page.getByLabel("Agent Model").selectOption("hy3-free");
+  await page.getByLabel("Copilot Provider").selectOption("opencode_zen");
+  await page.getByLabel("Copilot Model").selectOption("hy3-free");
   await expect(page.getByLabel("Reasoning Effort")).toHaveCount(0);
-  await page.getByLabel("Message Agent").fill("trigger provider failure");
+  await page.getByLabel("Message Copilot").fill("trigger provider failure");
   await page.getByRole("button", { name: "Send Message" }).click();
 
-  const notice = page.getByRole("alert", { name: "Agent Provider Error Notification" });
+  const notice = page.getByRole("alert", { name: "Copilot Provider Error Notification" });
   await expect(notice).toBeVisible();
   await expect(notice).toContainText("Provider Rate Limited");
   await expect(notice).toContainText("PROVIDER_RATE_LIMIT_ERROR");
@@ -388,5 +388,107 @@ test("Provider failures render a structured durable notification", async ({ page
   await expect(notice).toHaveCount(0);
   await page.reload();
   await expect(page.getByText("READY", { exact: true })).toBeVisible();
-  await expect(page.getByRole("alert", { name: "Agent Provider Error Notification" })).toHaveCount(0);
+  await expect(page.getByRole("alert", { name: "Copilot Provider Error Notification" })).toHaveCount(0);
+});
+
+const researchReceipt = {
+  mode: "research", phase: "FINISHED", stop_reason: "MODEL_BUDGET",
+  max_seconds: 60, max_model_calls: 2, max_tool_calls: 3,
+  elapsed_ms: 1400, model_calls_attempted: 2, tool_calls_attempted: 1, completed_reads: 1,
+  usage_complete: false, cost_usd: null, provider_internal_attempts: null,
+  challenge_performed: false, verified_claims: 2, blocked_claims: 1, verified_refs: ["request_synthetic/result/last"], evidence_status: "STOPPED", gaps: ["MODEL_BUDGET"],
+  steps: [{ code: "READ", status: "COMPLETED" }, { code: "SYNTHESIZE", status: "STOPPED" }, { code: "CHALLENGE", status: "SKIPPED" }, { code: "EVIDENCE_CHECK", status: "STOPPED" }],
+};
+
+async function mockResearchTurn(page: Page, failed = false) {
+  const posts: { path: string; body: Record<string, unknown> }[] = [];
+  let submitted = false;
+  const user = { message_id: "research_user", conversation_id: CONVERSATION_ID, role: "USER", content: "Research synthetic evidence", created_at: "2026-09-15T00:00:00Z", sequence: 1, model_receipt: { research: { ...researchReceipt, phase: "QUEUED", stop_reason: null, evidence_status: "NOT_CHECKED", verified_claims: 0, blocked_claims: 0, verified_refs: [] } } };
+  const assistant = { message_id: "research_answer", conversation_id: CONVERSATION_ID, role: "ASSISTANT", content: "Research stopped at the requested budget.", created_at: "2026-09-15T00:00:01Z", sequence: 2, model_receipt: { research: researchReceipt, usage: { input_tokens: 123, output_tokens: 45 }, answer_envelope: { _truncated: true } } };
+  await page.route("**/api/console/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/api/console", "");
+    const json = (value: unknown) => route.fulfill({ json: value });
+    if (route.request().method() === "POST") {
+      posts.push({ path, body: route.request().postDataJSON() });
+      if (!path.endsWith("/messages/stream")) return route.fulfill({ status: 403, json: { error: "Unexpected write" } });
+      submitted = true;
+      return route.fulfill({ contentType: "text/event-stream", body: sse([
+        ["message_started", { conversation_id: CONVERSATION_ID, turn_id: TURN_ID }],
+        ["research_progress", { conversation_id: CONVERSATION_ID, turn_id: TURN_ID, research: { ...researchReceipt, phase: "READING", stop_reason: null } }],
+        ["research_progress", { conversation_id: CONVERSATION_ID, turn_id: TURN_ID, research: researchReceipt }],
+        [failed ? "failed" : "completed", { conversation_id: CONVERSATION_ID, turn_id: TURN_ID }],
+      ]) });
+    }
+    if (path === "/api/session") return json({ token: "synthetic-research-token-000000000000" });
+    if (path === "/api/agent/status") return json(status);
+    if (path === "/api/agent/conversations") return json({ items: [conversation] });
+    if (path.includes("/providers/") && path.endsWith("/models")) return json({ provider_id: "bailian", default_model: "qwen3.8-max", models: [{ id: "qwen3.8-max", label: "Synthetic", is_default: true, reasoning_efforts: [] }] });
+    if (path.endsWith("/messages")) return json({ items: submitted ? failed ? [user] : [user, assistant] : [] });
+    if (path.endsWith("/turns")) return json({ items: submitted ? [{ turn_id: TURN_ID, conversation_id: CONVERSATION_ID, user_message_id: user.message_id, assistant_message_id: failed ? null : assistant.message_id, status: failed ? "FAILED" : "COMPLETED", version: 1 }] : [] });
+    if (path.endsWith("/receipts")) return json({ items: submitted ? [{ receipt_id: "receipt_synthetic", conversation_id: CONVERSATION_ID, message_id: user.message_id, request_id: "request_synthetic", capability: "market_data_get", operation: "quote", source_codes: ["SYNTHETIC"], warning_codes: [], error_codes: [], created_at: "2026-09-15T00:00:01Z" }] : [] });
+    if (path.endsWith("/metrics")) return json({ metrics: { conversation_id: CONVERSATION_ID, turn_statuses: {} } });
+    return json({ items: [] });
+  });
+  return posts;
+}
+
+test("explicit Research budget stops visibly and restores exact report without resubmission", async ({ page }) => {
+  const posts = await mockResearchTurn(page);
+  await page.goto("/?agent=open");
+  await expect(page.getByLabel("Copilot Mode", { exact: true })).toHaveValue("standard");
+  await page.getByLabel("Copilot Mode", { exact: true }).selectOption("research");
+  await page.getByText("Research Budget", { exact: true }).click();
+  await page.getByLabel("Maximum Seconds", { exact: true }).fill("60");
+  await page.getByLabel("Maximum Model Calls", { exact: true }).fill("2");
+  await page.getByLabel("Maximum Tool Calls", { exact: true }).fill("3");
+  await page.getByLabel("Message Copilot").fill("Research synthetic evidence");
+  await page.getByRole("button", { name: "Send Message", exact: true }).click();
+  await expect(page.getByText("Model call budget reached", { exact: true })).toBeVisible();
+  expect(posts).toHaveLength(1);
+  const progress = page.getByRole("region", { name: "Research Progress" });
+  await expect(progress.getByText("123", { exact: true })).toBeVisible();
+  await expect(progress.getByText("45", { exact: true })).toBeVisible();
+  await expect(progress.getByText("Partial", { exact: true })).toBeVisible();
+  await expect(progress.getByText("Verified Claims", { exact: true })).toBeVisible();
+  await expect(progress.getByText("Blocked Claims", { exact: true })).toBeVisible();
+  await expect(progress.getByRole("list", { name: "Research Focus" }).getByRole("listitem")).toHaveCount(3);
+  expect(posts[0].body).toMatchObject({ research_mode: "research", research_max_seconds: 60, research_max_model_calls: 2, research_max_tool_calls: 3 });
+  await page.getByRole("link", { name: "request_synthetic/result/last" }).click();
+  await expect(page.locator("#copilot-receipt-receipt_synthetic")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Model call budget reached", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Research Progress" })).toContainText("Unavailable");
+  expect(posts).toHaveLength(1);
+});
+
+test("failed Research reload reconstructs saved steps without inventing usage", async ({ page }) => {
+  const posts = await mockResearchTurn(page, true);
+  await page.goto("/?agent=open");
+  await page.getByLabel("Copilot Mode", { exact: true }).selectOption("research");
+  await page.getByLabel("Message Copilot").fill("Research synthetic evidence");
+  await page.getByRole("button", { name: "Send Message", exact: true }).click();
+  await expect(page.getByText(/Progress and model usage unavailable after recovery/)).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(/Progress and model usage unavailable after recovery/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "Research Progress" }).getByText("Verified Claims", { exact: true })).toHaveCount(0);
+  await page.getByText("Saved Tool Steps · 1", { exact: true }).click();
+  await expect(page.getByRole("region", { name: "Research Progress" })).toContainText("market_data_get");
+  expect(posts).toHaveLength(1);
+});
+
+test("Counter-review requires explicit selection and validates budgets before submission", async ({ page }) => {
+  const posts = await mockResearchTurn(page);
+  await page.goto("/?agent=open");
+  await page.getByLabel("Copilot Mode", { exact: true }).selectOption("challenge");
+  await page.getByText("Research Budget", { exact: true }).click();
+  await page.getByLabel("Maximum Seconds", { exact: true }).fill("29");
+  await page.getByLabel("Message Copilot").fill("Research synthetic evidence");
+  await page.getByLabel("Message Copilot").press("Enter");
+  await expect(page.getByText(/Research budget must use whole numbers/)).toBeVisible();
+  expect(posts).toHaveLength(0);
+  await page.getByLabel("Maximum Seconds", { exact: true }).fill("60");
+  await page.getByLabel("Message Copilot").press("Enter");
+  await expect(page.getByText("Model call budget reached", { exact: true })).toBeVisible();
+  expect(posts).toHaveLength(1);
+  expect(posts[0].body.research_mode).toBe("challenge");
 });

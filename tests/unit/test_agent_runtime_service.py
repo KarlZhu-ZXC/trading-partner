@@ -179,6 +179,7 @@ class MemoryConversationRepository:
         self.conversations[conversation_id] = updated
         return updated
 
+
 class QueueModelProvider:
     def __init__(self, responses: list[ModelResponse]) -> None:
         self.responses = responses
@@ -533,9 +534,7 @@ async def test_agent_runtime_creates_proposal_without_pending_action_double_gate
     )
 
     assert result.tool_trace == ("tp_propose",)
-    assert gateway.proposals == [
-        ("research_judgment_propose", "thesis_revision", arguments)
-    ]
+    assert gateway.proposals == [("research_judgment_propose", "thesis_revision", arguments)]
     assert result.tool_receipts[0].request_id == "req_proposal"
     assert result.text == "候选已创建，仍需最终确认。"
 
@@ -1016,9 +1015,7 @@ async def test_agent_runtime_exposes_sidecar_web_search_to_non_native_models() -
                     ModelToolCall(
                         id="call_web",
                         name="tp_web_search",
-                        arguments=json.dumps(
-                            {"query": "current gold news", "max_results": 3}
-                        ),
+                        arguments=json.dumps({"query": "current gold news", "max_results": 3}),
                     ),
                 )
             ),
@@ -1480,3 +1477,429 @@ async def test_agent_runtime_prepare_action_is_explicitly_disabled_in_agent_a() 
     assert not isinstance(tool_message, Mapping)
     assert "AGENT_ACTIONS_DISABLED" in (tool_message.content or "")
     assert repository.receipts == []
+
+
+@pytest.mark.asyncio
+async def test_research_model_budget_stops_and_persists_completed_reads():
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                text="unverified intermediate",
+                model="fake-model",
+                tool_calls=(
+                    ModelToolCall(
+                        id="read1",
+                        name="tp_read",
+                        arguments=json.dumps(
+                            {
+                                "capability": "portfolio_get",
+                                "operation": "positions",
+                                "arguments": {},
+                            }
+                        ),
+                    ),
+                ),
+            )
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    events = []
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research positions",
+            research_mode="research",
+            research_max_model_calls=1,
+        ),
+        event_sink=events.append,
+    )
+    messages = repository.messages[conversation.conversation_id]
+    user_receipt = json.loads(messages[0].model_receipt_json)
+    assert user_receipt["research"]["mode"] == "research"
+    receipt = json.loads(messages[-1].model_receipt_json)
+    assert receipt["research"]["stop_reason"] == "MODEL_BUDGET"
+    assert receipt["research"]["completed_reads"] == 1
+    assert len(result.tool_receipts) == 1
+    assert len(model.requests) == 1
+    assert not any(
+        "unverified intermediate" in str(event.data)
+        for event in events
+        if event.type == "text_delta"
+    )
+    assert any(event.type == "research_progress" for event in events)
+    assert all(
+        tool.name not in {"tp_propose", "tp_prepare_action"} for tool in model.requests[0].tools
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_tool_budget_rejects_whole_batch_before_dispatch():
+    repository = MemoryConversationRepository()
+    gateway = FakeGateway()
+    call = ModelToolCall(
+        id="r1",
+        name="tp_read",
+        arguments=json.dumps(
+            {"capability": "portfolio_get", "operation": "positions", "arguments": {}}
+        ),
+    )
+    model = QueueModelProvider(
+        [ModelResponse(text="", model="fake-model", tool_calls=(call, replace(call, id="r2")))]
+    )
+    runtime, conversation = _runtime(repository, model, tool_gateway=gateway)
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+            research_max_tool_calls=1,
+        )
+    )
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert receipt["research"]["stop_reason"] == "TOOL_BUDGET"
+    assert gateway.reads == []
+
+
+@pytest.mark.asyncio
+async def test_research_disallows_proposal_even_when_model_requests_it():
+    repository = MemoryConversationRepository()
+    gateway = FakeGateway()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                text="",
+                model="fake-model",
+                tool_calls=(ModelToolCall(id="p1", name="tp_propose", arguments="{}"),),
+            ),
+            ModelResponse(text="No action taken", model="fake-model"),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model, tool_gateway=gateway)
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+        )
+    )
+    assert not gateway.proposals
+
+
+@pytest.mark.asyncio
+async def test_challenge_has_exactly_one_tool_free_critique():
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(text="Initial qualitative view", model="fake-model"),
+            ModelResponse(
+                text=json.dumps(
+                    {
+                        "schema_version": 1,
+                        "generated_by": "model",
+                        "blocks": [{"kind": "INFERENCE", "text": "Qualified qualitative view"}],
+                    }
+                ),
+                model="fake-model",
+            ),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="challenge",
+        )
+    )
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert len(model.requests) == 2
+    assert model.requests[1].tools == ()
+    assert receipt["research"]["challenge_performed"] is True
+    assert receipt["research"]["model_calls_attempted"] == 2
+    assert receipt["research"]["cost_usd"] is None
+
+
+@pytest.mark.asyncio
+async def test_research_stalled_tool_stops_preserving_prior_receipt(monkeypatch):
+    from application.services.copilot_research_budget import ResearchBudget
+
+    repository = MemoryConversationRepository()
+
+    class Gateway(FakeGateway):
+        async def read(self, capability, operation, arguments):
+            if self.reads:
+                await asyncio.sleep(60)
+            return await super().read(capability, operation, arguments)
+
+    gateway = Gateway()
+    call = ModelToolCall(
+        id="r1",
+        name="tp_read",
+        arguments=json.dumps(
+            {"capability": "portfolio_get", "operation": "positions", "arguments": {}}
+        ),
+    )
+    model = QueueModelProvider(
+        [ModelResponse(text="", model="fake-model", tool_calls=(call, replace(call, id="r2")))]
+    )
+    runtime, conversation = _runtime(repository, model, tool_gateway=gateway)
+    monkeypatch.setattr(ResearchBudget, "remaining_seconds", property(lambda self: 0.02))
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+        )
+    )
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert receipt["research"]["stop_reason"] == "TIME_BUDGET"
+    assert len(result.tool_receipts) == 1
+
+
+@pytest.mark.asyncio
+async def test_research_fallback_attempt_is_counted_before_call():
+    class TimeoutModel(QueueModelProvider):
+        async def complete(self, request):
+            self.requests.append(request)
+            raise ProviderTimeoutError("safe timeout")
+
+    repository = MemoryConversationRepository()
+    fallback = QueueModelProvider([ModelResponse(text="Must not call")])
+    fast = TimeoutModel([])
+    runtime, conversation = _runtime(
+        repository,
+        fallback,
+        model_providers={"default": fallback, "deepseek": fast},
+        default_model_id="default",
+    )
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="查询最新价格",
+            model_id="auto",
+            research_mode="research",
+            research_max_model_calls=1,
+        )
+    )
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert len(fast.requests) == 1 and fallback.requests == []
+    assert receipt["research"]["model_calls_attempted"] == 1
+    assert receipt["research"]["stop_reason"] == "MODEL_BUDGET"
+
+
+@pytest.mark.asyncio
+async def test_research_evidence_repair_obeys_model_budget(monkeypatch):
+    import application.services.agent_runtime_service as module
+
+    original_guard = module.guard_agent_response
+
+    def repair_guard(*args, **kwargs):
+        return replace(original_guard(*args, **kwargs), repair_request={"code": "VERIFY"})
+
+    monkeypatch.setattr(module, "guard_agent_response", repair_guard)
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [ModelResponse(text="Qualitative interpretation", model="fake-model")]
+    )
+    runtime, conversation = _runtime(repository, model)
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+            research_max_model_calls=1,
+        )
+    )
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert len(model.requests) == 1
+    assert receipt["research"]["stop_reason"] == "MODEL_BUDGET"
+
+
+@pytest.mark.asyncio
+async def test_research_stalled_model_stops_with_durable_safe_answer(monkeypatch):
+    from application.services.copilot_research_budget import ResearchBudget
+
+    class Stalled(QueueModelProvider):
+        async def complete(self, request):
+            self.requests.append(request)
+            await asyncio.sleep(60)
+
+    repository = MemoryConversationRepository()
+    model = Stalled([])
+    runtime, conversation = _runtime(repository, model)
+    monkeypatch.setattr(ResearchBudget, "remaining_seconds", property(lambda self: 0.01))
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+        )
+    )
+    assert result.text
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    assert receipt["research"]["stop_reason"] == "TIME_BUDGET"
+    assert receipt["research"]["model_calls_attempted"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_tools", [False, True])
+async def test_optional_challenge_failure_preserves_primary_answer(invalid_tools):
+    from domain.common.errors import ProviderUnavailableError
+
+    class CritiqueModel(QueueModelProvider):
+        async def complete(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return ModelResponse(text="Primary qualitative view", model="fake-model")
+            if invalid_tools:
+                return ModelResponse(
+                    text="Invalid critique",
+                    model="fake-model",
+                    tool_calls=(ModelToolCall(id="bad", name="tp_read", arguments="{}"),),
+                )
+            raise ProviderUnavailableError("private failure text")
+
+    repository = MemoryConversationRepository()
+    model = CritiqueModel([])
+    runtime, conversation = _runtime(repository, model)
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="challenge",
+        )
+    )
+    assert "Primary qualitative view" in result.text
+    receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
+    summary = receipt["research"]
+    assert summary["model_calls_attempted"] == 2
+    assert summary["challenge_performed"] is False
+    assert "CHALLENGE_UNAVAILABLE" in summary["gaps"]
+    assert (
+        next(step for step in summary["steps"] if step["code"] == "CHALLENGE")["status"]
+        == "STOPPED"
+    )
+    assert "private failure text" not in json.dumps(receipt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text,finish_reason",
+    [
+        ("Unstructured optional critique", "stop"),
+        ('{"schema_version":1,"blocks":[', "stop"),
+        (json.dumps({"blocks": [{"kind": "INFERENCE", "text": "Truncated critique"}]}), "length"),
+    ],
+)
+async def test_malformed_or_truncated_critique_keeps_primary(text, finish_reason):
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(text="Valid primary qualitative view"),
+            ModelResponse(text=text, finish_reason=finish_reason),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="challenge",
+        )
+    )
+    assert "Valid primary qualitative view" in result.text
+    summary = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)[
+        "research"
+    ]
+    assert summary["challenge_performed"] is False
+    assert "CHALLENGE_UNAVAILABLE" in summary["gaps"]
+    assert (
+        next(step for step in summary["steps"] if step["code"] == "CHALLENGE")["status"]
+        == "STOPPED"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["receipt", "payload", "truncated", "effect"])
+async def test_failed_reads_are_attempts_not_completed_reads(failure):
+    class FailedGateway(FakeGateway):
+        async def read(self, capability, operation, arguments):
+            value = await super().read(capability, operation, arguments)
+            if failure == "receipt":
+                return replace(
+                    value, receipt=replace(value.receipt, error_code="PROVIDER_TIMEOUT_ERROR")
+                )
+            if failure == "payload":
+                return replace(
+                    value, result={"ok": False, "error": {"code": "PROVIDER_TIMEOUT_ERROR"}}
+                )
+            if failure == "truncated":
+                return replace(value, receipt=replace(value.receipt, result_truncated=True))
+            return replace(value, receipt=replace(value.receipt, effect="WRITE"))
+
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                tool_calls=(
+                    ModelToolCall(
+                        id="failedread",
+                        name="tp_read",
+                        arguments=json.dumps(
+                            {
+                                "capability": "portfolio_get",
+                                "operation": "positions",
+                                "arguments": {},
+                            }
+                        ),
+                    ),
+                )
+            ),
+            ModelResponse(text="Evidence unavailable"),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model, tool_gateway=FailedGateway())
+    events = []
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="research",
+        ),
+        event_sink=events.append,
+    )
+    summary = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)[
+        "research"
+    ]
+    assert summary["tool_calls_attempted"] == 1
+    assert summary["completed_reads"] == 0
+    final_progress = [event for event in events if event.type == "research_progress"][-1]
+    assert final_progress.data["research"]["completed_reads"] == 0
+    assert len(result.tool_receipts) == 1
+    assert repository.receipts[0].error_codes
+    if failure == "receipt":
+        assert result.tool_receipts[0].error_code == "PROVIDER_TIMEOUT_ERROR"
+        assert repository.receipts[0].error_codes == ("PROVIDER_TIMEOUT_ERROR",)

@@ -43,6 +43,48 @@ export const AGENT_API_ROUTES = {
     `/api/agent/conversations/${encodeURIComponent(conversationId)}/archive`,
 } as const;
 
+export type CopilotResearchConfig = {
+  research_mode: "standard" | "research" | "challenge";
+  research_max_seconds: number;
+  research_max_model_calls: number;
+  research_max_tool_calls: number;
+};
+export type CopilotResearch = {
+  mode: "research" | "challenge";
+  phase: "QUEUED" | "READING" | "SYNTHESIZING" | "CHALLENGING" | "CHECKING" | "FINISHED";
+  stop_reason: "COMPLETED" | "TIME_BUDGET" | "MODEL_BUDGET" | "TOOL_BUDGET" | "ROUND_LIMIT" | "EVIDENCE_GAP" | "CANCELLED" | "FAILED" | null;
+  max_seconds: number; max_model_calls: number; max_tool_calls: number;
+  elapsed_ms: number; model_calls_attempted: number; tool_calls_attempted: number; completed_reads: number;
+  usage_complete: boolean; cost_usd: null; provider_internal_attempts: null;
+  challenge_performed: boolean; evidence_status: "NOT_CHECKED" | "VERIFIED" | "GAPS" | "STOPPED";
+  gaps: string[];
+  verified_claims: number; blocked_claims: number; verified_refs: string[];
+  steps: { code: "READ" | "SYNTHESIZE" | "CHALLENGE" | "EVIDENCE_CHECK"; status: "PENDING" | "RUNNING" | "COMPLETED" | "SKIPPED" | "STOPPED" }[];
+};
+export function parseCopilotResearch(value: unknown): CopilotResearch | null {
+  const item = asRecord(value);
+  if (!["research", "challenge"].includes(String(item.mode)) || !["QUEUED", "READING", "SYNTHESIZING", "CHALLENGING", "CHECKING", "FINISHED"].includes(String(item.phase))) return null;
+  for (const key of ["max_seconds", "max_model_calls", "max_tool_calls", "elapsed_ms", "model_calls_attempted", "tool_calls_attempted", "completed_reads"]) {
+    if (typeof item[key] !== "number" || !Number.isSafeInteger(item[key]) || Number(item[key]) < 0) return null;
+  }
+  if (item.stop_reason !== null && !["COMPLETED", "TIME_BUDGET", "MODEL_BUDGET", "TOOL_BUDGET", "ROUND_LIMIT", "EVIDENCE_GAP", "CANCELLED", "FAILED"].includes(String(item.stop_reason))) return null;
+  if (!["NOT_CHECKED", "VERIFIED", "GAPS", "STOPPED"].includes(String(item.evidence_status)) || !Array.isArray(item.gaps) || !Array.isArray(item.steps)) return null;
+  if (item.gaps.length > 32 || item.gaps.some((entry) => typeof entry !== "string") || item.steps.length > 4) return null;
+  if (item.steps.some((entry) => { const step = asRecord(entry); return !["READ", "SYNTHESIZE", "CHALLENGE", "EVIDENCE_CHECK"].includes(String(step.code)) || !["PENDING", "RUNNING", "COMPLETED", "SKIPPED", "STOPPED"].includes(String(step.status)); })) return null;
+  if (Number(item.max_seconds) < 30 || Number(item.max_seconds) > 600 || Number(item.max_model_calls) < 1 || Number(item.max_model_calls) > 16 || Number(item.max_tool_calls) < 1 || Number(item.max_tool_calls) > 48) return null;
+  if (typeof item.usage_complete !== "boolean" || typeof item.challenge_performed !== "boolean" || item.cost_usd !== null || item.provider_internal_attempts !== null) return null;
+  const verifiedClaims = item.verified_claims === undefined ? 0 : item.verified_claims;
+  const blockedClaims = item.blocked_claims === undefined ? 0 : item.blocked_claims;
+  if (typeof verifiedClaims !== "number" || !Number.isSafeInteger(verifiedClaims) || verifiedClaims < 0 || typeof blockedClaims !== "number" || !Number.isSafeInteger(blockedClaims) || blockedClaims < 0) return null;
+  const verifiedRefs = item.verified_refs === undefined ? [] : item.verified_refs;
+  if (!Array.isArray(verifiedRefs) || verifiedRefs.length > 32 || verifiedRefs.some((ref) => typeof ref !== "string" || ref.length > 160)) return null;
+  return { ...item, verified_claims: verifiedClaims, blocked_claims: blockedClaims, verified_refs: verifiedRefs } as CopilotResearch;
+}
+export function researchConfigFromReceipt(value: unknown): CopilotResearchConfig | undefined {
+  const research = parseCopilotResearch(asRecord(value).research);
+  return research ? { research_mode: research.mode, research_max_seconds: research.max_seconds, research_max_model_calls: research.max_model_calls, research_max_tool_calls: research.max_tool_calls } : undefined;
+}
+
 export type AgentRecord = Record<string, unknown>;
 
 export type AgentImageAttachment = AgentRecord & {
@@ -189,6 +231,13 @@ export type AgentPreferences = AgentRecord & {
   updated_at: string | null;
 };
 
+export type CopilotResearchProfile = {
+  provider: string | null; model: string | null; reasoning_effort: string | null; mode: string;
+  max_seconds: number; max_model_calls: number; max_tool_calls: number;
+  sample_count: number; completed_count: number; p50_elapsed_ms: number; p95_elapsed_ms: number;
+  input_tokens: number | null; output_tokens: number | null; usage_complete: boolean; cost_usd: null;
+};
+
 export type AgentConversationMetrics = AgentRecord & {
   conversation_id: string;
   model_calls: number;
@@ -201,6 +250,7 @@ export type AgentConversationMetrics = AgentRecord & {
   turn_statuses: Record<string, number>;
   api_styles: string[];
   truncated: boolean;
+  research_profiles: CopilotResearchProfile[];
 };
 
 export type AgentPendingAction = AgentRecord & {
@@ -558,7 +608,7 @@ export async function updateAgentPreferences(
     default_chart: preferences.default_chart,
     expected_version: preferences.version,
     idempotency_key: crypto.randomUUID(),
-    authorization_note: "User updated Agent presentation preferences in Console.",
+    authorization_note: "User updated Copilot presentation preferences in Console.",
   }, signal);
   const source = unwrap(raw);
   return parsePreferences(source.preferences ?? source);
@@ -571,7 +621,7 @@ export async function resetAgentPreferences(
   const raw = await sendJson(AGENT_API_ROUTES.resetPreferences, {
     expected_version: expectedVersion,
     idempotency_key: crypto.randomUUID(),
-    authorization_note: "User reset Agent presentation preferences in Console.",
+    authorization_note: "User reset Copilot presentation preferences in Console.",
   }, signal);
   const source = unwrap(raw);
   return parsePreferences(source.preferences ?? source);
@@ -705,7 +755,7 @@ export async function createAgentConversation(
   const raw = await sendJson(AGENT_API_ROUTES.conversations, { title }, signal);
   const source = unwrap(raw);
   const candidate = parseConversation(source.conversation) ?? parseConversation(source);
-  if (!candidate) throw new Error("The Agent API returned no conversation");
+  if (!candidate) throw new Error("The Copilot API returned no conversation");
   return candidate;
 }
 
@@ -735,7 +785,7 @@ export async function decideAgentPendingAction(
   }, signal);
   const source = unwrap(raw);
   const parsed = parsePendingAction(source.action ?? source);
-  if (!parsed) throw new Error("The Agent API returned no pending action");
+  if (!parsed) throw new Error("The Copilot API returned no pending action");
   return parsed;
 }
 
@@ -759,7 +809,7 @@ export async function reissueAgentPendingAction(
   const source = unwrap(raw);
   const parsed = parsePendingAction(source.action);
   const token = text(source.confirmation_token);
-  if (!parsed || !token) throw new Error("The Agent API returned no confirmation credential");
+  if (!parsed || !token) throw new Error("The Copilot API returned no confirmation credential");
   return { action: parsed, token };
 }
 
@@ -814,6 +864,7 @@ export async function fetchAgentConversationMetrics(
     turn_statuses: asRecord(source.turn_statuses) as Record<string, number>,
     api_styles: arrayFrom(source.api_styles).filter((item): item is string => typeof item === "string"),
     truncated: source.truncated === true,
+    research_profiles: arrayFrom(source.research_profiles).filter((item) => typeof asRecord(item).sample_count === "number") as CopilotResearchProfile[],
   };
 }
 
@@ -827,6 +878,7 @@ export async function streamAgentMessage(
   model?: string,
   reasoningEffort?: string,
   attachments?: AgentImageInput[],
+  research?: CopilotResearchConfig,
 ): Promise<void> {
   const body: Record<string, unknown> = {
     content,
@@ -837,6 +889,7 @@ export async function streamAgentMessage(
   if (model) body.model = model;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;
   if (attachments?.length) body.attachments = attachments;
+  if (research && research.research_mode !== "standard") Object.assign(body, research);
   const response = await authenticatedFetch(AGENT_API_ROUTES.stream(conversationId), {
     method: "POST",
     headers: {
@@ -858,7 +911,7 @@ async function consumeAgentStream(
     error.status = response.status;
     throw error;
   }
-  if (!response.body) throw new Error("The Agent stream returned no body");
+  if (!response.body) throw new Error("The Copilot stream returned no body");
 
   // Importing the small parser here keeps the API adapter usable in tests and
   // avoids shipping a second parser implementation in the React workspace.
@@ -885,7 +938,7 @@ async function consumeAgentStream(
     reader.releaseLock();
   }
   if (!terminal) {
-    const error = new Error("The Agent stream ended before a durable terminal event") as Error & {
+    const error = new Error("The Copilot stream ended before a durable terminal event") as Error & {
       retryable?: boolean;
     };
     error.retryable = true;
@@ -901,7 +954,7 @@ export async function cancelAgentTurn(
   const raw = await sendJson(AGENT_API_ROUTES.cancelTurn(conversationId, turnId), {}, signal);
   const source = unwrap(raw);
   const turn = parseTurn(source.turn ?? source);
-  if (!turn) throw new Error("The Agent API returned no cancelled turn");
+  if (!turn) throw new Error("The Copilot API returned no cancelled turn");
   return turn;
 }
 

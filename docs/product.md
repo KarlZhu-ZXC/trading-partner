@@ -45,7 +45,7 @@ confirmation never authorizes an order.
 ## Product surfaces
 
 The Console provides Research, Journal, Portfolio, Monitoring, Operations, Data
-Quality, an optional Agent rail, and a KLineChart-based interactive technical
+Quality, an optional Copilot rail, and a KLineChart-based interactive technical
 workspace. The chart supports six candle/bar styles, common overlay and pane
 indicators, zoom/crosshair interaction, SMC overlays, drawing tools, and PNG export.
 Console reads complete local results and does not implicitly refresh a broker.
@@ -56,11 +56,50 @@ read and write gateways preserve the original capability validation. Identity,
 judgment confirmation, sync, broker-order, and chart operations keep dedicated
 entry tools. The tool count may change through an explicit compatibility migration.
 
-The optional built-in Agent uses a smaller private tool set for capability search,
+The optional built-in Copilot uses a smaller private tool set for capability search,
 reads, proposals, action preparation, and web search. Writes become exact Pending
 Actions and require the same-channel user to confirm an unexpired, single-use token.
 Agent conversation memory is continuity context, not a current market or account
 fact.
+
+## Copilot research process
+
+Console calls the built-in assistant **Copilot**; existing Agent API paths, stored
+identities and internal symbols remain compatible. Chat keeps the existing behavior.
+Research and Counter-review are explicitly selected modes on that same runtime.
+
+Research exposes fixed evidence questions, deterministic step progress and a bounded
+read-only tool surface. Defaults are 180 seconds, eight top-level model calls and
+24 tool calls; the server validates narrower or larger allowed choices. The ordinary
+six-tool-round limit also applies. Fallback, repair and optional critique calls count
+against the model budget. Research uses explicit web-search tools, not hidden native
+search or an uncounted conversation-summary call. Provider-internal retries and actual
+billing remain unknown; these controls are not a guaranteed token or dollar ceiling.
+
+Model text is held until final evidence checking. Canonical FACT/CITATION blocks bind
+to an exact current-turn request and field path, including available Instrument,
+account, unit, time and basis context. Unverifiable numerical/factual blocks become
+GAP entries; qualitative synthesis stays INFERENCE. Old conversation memory and web
+text cannot establish a canonical price or position. The bounded field catalog may
+omit unsupported/oversized evidence; omission is not proof of absence. Verified refs
+survive receipt compaction for later source inspection.
+
+Counter-review permits one additional tool-free critique, only within the remaining
+budget. Failure preserves the primary answer and reports a gap. Completed read steps
+and receipts survive budget stops; reconnect/reload only restores records and never
+resubmits a prompt or confirms an action. A user-requested failed-turn retry restores
+the original research-only mode and budgets. Missing model progress or usage after
+failure is explicitly unavailable rather than zero.
+
+The UI shows reported input/output tokens, usage completeness, elapsed time, call
+counts, evidence-check counts and stop reasons. Price information for inference
+billing is not configured, so cost stays unknown. Conversation usage profiles group
+recorded samples by model/effort/mode/budget and report P50/P95 elapsed times; different
+prompts make these descriptive samples, not model rankings or quality comparisons.
+The deterministic evaluation command includes 40 additional synthetic evidence cases
+alongside the existing runtime catalog. These gates validate implementation behavior,
+not live model research quality, investment returns, or the correctness of every
+qualitative inference.
 
 ## Research and observations
 
