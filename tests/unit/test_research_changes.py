@@ -671,3 +671,19 @@ def test_monitor_repository_batches_observation_queries(migrated_sqlite_url):
     assert len(rows) == 501
     assert len(statements) == 3, "One run query plus two <=500 observation batches"
     engine.dispose()
+
+
+def test_review_card_collects_sources_once_without_widening_public_page_limit():
+    from unittest.mock import Mock
+
+    svc, *_ = service()
+    svc._observations = Mock(return_value=[])
+    svc._monitor_changes = Mock(return_value=[])
+    svc._agenda_changes = Mock(return_value=[])
+    result = svc.get_for_review("s1")
+    assert result.limit == 1000 and result.has_more is False
+    svc._observations.assert_called_once()
+    svc._monitor_changes.assert_called_once()
+    svc._agenda_changes.assert_called_once()
+    with pytest.raises(DataContractError):
+        svc.get("s1", limit=101)

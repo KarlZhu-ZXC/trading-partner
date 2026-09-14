@@ -36,6 +36,7 @@ import { envelopeData, getJson, listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { notifyConsole } from "../lib/notifications";
 import { observationResearchSeed, type ObservationResearchDraft, type ObservationResearchSeed } from "../lib/observation-research-draft";
+import { QuickReview } from "./quick-review";
 import { ValuationLedger } from "./valuation-ledger";
 import { JudgmentCalibration } from "./judgment-calibration";
 import { chartResearchProvenance, readChartResearchContext, consumeChartResearchContext, type ChartResearchContext } from "../lib/chart-research-context";
@@ -64,6 +65,7 @@ const INVALIDATION_SEVERITIES = ["soft", "hard"];
 const ATTACHED_INSTRUMENT_STATUSES = new Set(["watching", "shortlisted", "selected"]);
 const RESEARCH_MODULES = [
   { key: "overview", label: "Overview" },
+  { key: "quick-review", label: "Quick Review" },
   { key: "instruments", label: "Instruments" },
   { key: "thesis", label: "Thesis" },
   { key: "evidence", label: "Evidence" },
@@ -576,6 +578,7 @@ function ResearchSubjectDetail({
   const [candidateResolveMessage, setCandidateResolveMessage] = useState<string | null>(null);
   const [candidateProposalError, setCandidateProposalError] = useState<string | null>(null);
   const [candidateProposalSuccess, setCandidateProposalSuccess] = useState<string | null>(null);
+  const [quickAdjustment, setQuickAdjustment] = useState(false);
   const [activeModule, setActiveModule] = useState<ResearchModule>("overview");
   const [detailError, setDetailError] = useState<string | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState(false);
@@ -625,6 +628,7 @@ function ResearchSubjectDetail({
   }, []);
 
   useEffect(() => {
+    setQuickAdjustment(false);
     setSubjectDraft(subjectDraftFrom(researchSubject));
     setSubjectEditor(false);
     setThesisEditor(false);
@@ -929,6 +933,19 @@ function ResearchSubjectDetail({
       <ErrorNote>{chartSeedError}</ErrorNote>
       {chartSeed && <Card kicker="SOURCE PREVIEW" title="Review Chart Context"><p>Destination: {chartSeed.target === "thesis" ? "New DRAFT Thesis" : "Trade Plan notes"}. Accepting prefills an editor only. Review and confirmation remain separate.</p><pre>{chartResearchProvenance(chartSeed)}</pre><p>Your interpretation: {chartSeed.note || "No interpretation supplied; complete it in the editor."}</p><Button disabled={busy || (chartSeed.target === "thesis" ? thesisEditor : planEditorOpen)} onClick={acceptChartContext}>Accept Context into Draft</Button>{(chartSeed.target === "thesis" ? thesisEditor : planEditorOpen) && <p>Finish or close the open editor first; your draft will not be overwritten.</p>}</Card>}
       <HorizontalTabs className="research-section-nav" items={RESEARCH_MODULES.map((module) => ({ id: module.key, label: module.label, attention: module.key === "overview" && pendingCandidates.length > 0, suffix: module.key === "overview" && pendingCandidates.length > 0 ? <span className="horizontal-tab-count" aria-label={`${pendingCandidates.length} Pending Candidates`}>{pendingCandidates.length}</span> : undefined }))} value={activeModule} onChange={selectModule} ariaLabel="Research Subject Modules" idPrefix="research-tab" panelIdPrefix="research-panel" />
+      {quickAdjustment && activeModule !== "quick-review" && <Button onClick={() => selectModule("quick-review")}>Return to Quick Review</Button>}
+      <section id="research-panel-quick-review" role="tabpanel" aria-labelledby="research-tab-quick-review" hidden={activeModule !== "quick-review"}>
+        <QuickReview key={text(researchSubject.subject_id)} subjectId={text(researchSubject.subject_id)} enabled={activeModule === "quick-review"} onAdjustThesis={(seed) => {
+          setQuickAdjustment(true);
+          if (!thesisEditor) {
+            const currentThesis = liveTheses.find((item) => text(item.role).toLowerCase() === "primary") ?? liveTheses[0];
+            startThesisEditor(currentThesis, !currentThesis);
+            if (!currentThesis) setThesisDraft((current) => ({ ...current, thesisStatus: "draft" }));
+            if (seed) { setThesisDraft((current) => ({ ...current, statement: seed.statement, rationale: [current.rationale, seed.rationale].filter(Boolean).join("\n\n") })); setThesisSourceRevisionId(seed.sourceRevisionId); }
+          }
+          selectModule("thesis");
+        }} onAdjustPlan={() => { setQuickAdjustment(true); if (!planEditorOpen) setPlanReviewRequest((value) => value + 1); selectModule("trade-plan"); }} />
+      </section>
       <section id="research-panel-overview" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-overview" hidden={activeModule !== "overview"}>
       <Card id="research-section-overview" className="research-subject-detail" kicker={text(researchSubject.subject_type, "RESEARCH SUBJECT").replaceAll("_", " ").toUpperCase()} title={text(researchSubject.title, "Unnamed Research Subject")} action={<div className="research-detail-actions">{primaryInstrumentId && <LinkButton href={`/charts?instrument_id=${encodeURIComponent(primaryInstrumentId)}&subject_id=${encodeURIComponent(text(researchSubject.subject_id))}`}>Inspect Chart</LinkButton>}<Badge value={text(researchSubject.status, "UNKNOWN").toUpperCase()} /><Link className="close-button" href={`/decision-workbench?subject_id=${encodeURIComponent(text(researchSubject.subject_id))}&capture=decision`}>Record Decision</Link><Button className="close-button" type="button" onClick={() => { setDetailError(null); setSubjectEditor((value) => !value); }}>{subjectEditor ? "Close Editor" : "Edit Research Subject"}</Button>{String(researchSubject.status).toLowerCase() === "draft" && <Button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void activateSubject(); }}>Start Tracking</Button>}{String(researchSubject.status).toLowerCase() === "archived" ? <Button className="close-button restore-text" type="button" disabled={busy} onClick={() => { void restoreSubject(); }}>Restore to Draft</Button> : <Button className="close-button warning-text" type="button" disabled={busy} onClick={archiveSubject}>Archive</Button>}</div>}>
         <DescriptionList columns={3} items={[{ label: "Instruments", value: instrumentInventory.length === 0 ? "—" : <span className="research-overview-instruments">{instrumentInventory.map((instrument) => <span key={`${instrument.status}-${instrument.instrumentId}`}><strong>{instrument.displayName}</strong><small>{instrument.status}</small></span>)}</span> }, { label: "Created", value: formatDate(researchSubject.created_at) }, { label: "Updated", value: formatDate(researchSubject.updated_at) }]} />

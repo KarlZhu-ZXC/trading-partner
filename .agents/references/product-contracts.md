@@ -323,6 +323,25 @@ opaque context IDs and numeric offset, never source/model text. Journal's exact
 revision read validates the Subject Instrument and returns no-store; the existing
 review confirmation workflow owns all writes.
 
+**Console Quick Review**
+
+`GET /api/research/{subject_id}/quick-review` composes durable sources only. A
+20-minute server token pins exact baseline references, source changes, latest USER
+thinking and formal versions. POST requires `confirmed=true`, rationale and an
+idempotency key; maintain appends NO_ACTION, defer appends RESEARCH_MORE with a future
+review_due_at through DecisionRecordService's NORMAL-mode, user-actor and unique-key
+gates. Retry retrieves the matching completed intent; no reload-triggered write.
+Recheck source fingerprint before append; never silently adopt a new baseline.
+General review does not adopt or close Observation reviews or authorize orders.
+
+Latest thinking is exact-Instrument MOOMOO_NOTE only, newest revision per note,
+FULL USER-attributed sections only. Existing model summaries require same-revision
+success plus valid ordinals pointing to the selected USER blocks. Never fall back to
+old success. Quote attribution, unavailable interpretation, missing/future dates,
+inferred years and bounded excerpts remain explicit. Use configured local timezone
+for note-date visibility. Page loads never sync notes or call models; the existing
+explicit note-refresh action owns capture and authorized analysis.
+
 **Console valuation and judgment calibration**
 
 `GET /api/research/{subject_id}/calibration` is durable-only and pins the exact

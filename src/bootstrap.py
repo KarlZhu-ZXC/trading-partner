@@ -44,7 +44,6 @@ from application.services.instrument_access_service import InstrumentAccessServi
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
-from application.services.judgment_calibration_service import JudgmentCalibrationService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
@@ -64,7 +63,6 @@ from application.services.position_sizing_service import PositionSizingService
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.provider_router import ProviderRouter
 from application.services.research_archive_service import ResearchArchiveService
-from application.services.research_changes_service import ResearchChangesService
 from application.services.research_context_builder import ResearchContextBuilder
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
@@ -79,12 +77,12 @@ from application.services.routed_futures_provider import RoutedFuturesProvider
 from application.services.sgov_shadow_plan_service import SgovShadowPlanService
 from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.trade_retro_service import TradeRetroService
-from application.services.valuation_service import ValuationService
 from application.services.watchlist_hub_service import WatchlistHubService
 from composition_root.external_notes import build_external_note_services
 from composition_root.market_facts import build_market_facts_services
 from composition_root.monitoring import build_monitoring_services
 from composition_root.phase4 import build_phase4_services
+from composition_root.review_workspace import build_review_workspace
 from domain.common.enums import DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
 from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
@@ -585,13 +583,6 @@ def build_application(
         secret_redactor,
         trade_retro_narrative_provider,
     )
-    research_changes_service = ResearchChangesService(
-        notes=persistence.external_notes,
-        research_uow_factory=research_unit_of_work_factory,
-        monitors=monitor_repository,
-        agenda=persistence.catalyst_agenda,
-        clock=clock,
-    )
     judgment_scorecard_service = JudgmentScorecardService(
         persistence.scorecards,
         persistence.catalyst_agenda,
@@ -766,6 +757,22 @@ def build_application(
         id_generator,
         secret_redactor,
     )
+    review_workspace = build_review_workspace(
+        notes=persistence.external_notes,
+        note_reviews=persistence.external_note_reviews,
+        snapshots=account_snapshot_repository,
+        monitors=monitor_repository,
+        agenda=persistence.catalyst_agenda,
+        scorecards=persistence.scorecards,
+        retro=persistence.trade_retro,
+        uow=research_unit_of_work_factory,
+        statements=market_facts.us_research,
+        journal=journal_service,
+        decisions=decision_record_service,
+        clock=clock,
+        redactor=secret_redactor,
+        timezone=settings.default_timezone,
+    )
     return ApplicationContainer(
         settings=settings,
         context=RuntimeContext(
@@ -837,21 +844,10 @@ def build_application(
             external_note_reviews=external_notes.reviews,
             external_note_review_drafts=external_notes.review_drafts,
             view_reviews=external_notes.view_reviews,
-            judgment_calibration=JudgmentCalibrationService(
-                research_unit_of_work_factory,
-                persistence.catalyst_agenda,
-                persistence.scorecards,
-                persistence.trade_retro,
-                clock,
-                changes=research_changes_service,
-            ),
-            valuation=ValuationService(
-                research_unit_of_work_factory,
-                market_facts.us_research,
-                journal_service,
-                clock,
-            ),
-            research_changes=research_changes_service,
+            judgment_calibration=review_workspace.calibration,
+            valuation=review_workspace.valuation,
+            research_changes=review_workspace.changes,
+            quick_review=review_workspace.quick_review,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,

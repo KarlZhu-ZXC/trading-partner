@@ -58,7 +58,35 @@ class ResearchChangesService:
         offset: int = 0,
         limit: int = 25,
     ) -> ResearchChangesDTO:
-        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise DataContractError("Invalid changes pagination")
+        return self._project(
+            subject_id,
+            baseline_decision_id=baseline_decision_id,
+            change_id=change_id,
+            offset=offset,
+            limit=limit,
+        )
+
+    def get_for_review(self, subject_id: str) -> ResearchChangesDTO:
+        """One bounded snapshot; avoid re-reading every source for each display page."""
+        return self._project(subject_id, limit=1000)
+
+    def _project(
+        self,
+        subject_id: str,
+        *,
+        baseline_decision_id: str | None = None,
+        change_id: str | None = None,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> ResearchChangesDTO:
+        if (
+            type(offset) is not int
+            or offset < 0
+            or type(limit) is not int
+            or not 1 <= limit <= 1000
+        ):
             raise DataContractError("Invalid changes pagination")
         now = self._clock.now()
         require_aware_datetime(now, field_name="as_of")

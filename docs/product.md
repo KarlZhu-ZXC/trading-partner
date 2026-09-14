@@ -62,6 +62,38 @@ Actions and require the same-channel user to confirm an unexpired, single-use to
 Agent conversation memory is continuity context, not a current market or account
 fact.
 
+## Quick Review
+
+Overview links directly to a Quick Review card inside the selected Research Subject.
+The card combines the pinned user Decision/Thesis/Plan, durable position snapshots,
+source coverage and changes. It reads up to 1,000 changes in one projection; larger
+histories disclose the limit and cannot use the maintain shortcut. Nothing is
+refreshed or sent to a model merely by opening the card.
+
+Latest Thinking reads the latest synced Moomoo revision for each matching note,
+selects the latest dated USER blocks, and may show an existing successful
+same-revision summary only when its source ordinals bind to those USER blocks.
+Others' viewpoints stay separate. Pending/failed latest interpretations never fall
+back to an older revision. SUMMARY_ONLY sources expose metadata only. Up to five
+recent notes are shown, with missing dates and truncation disclosed. Date headings
+use the configured local timezone; inferred years remain explicitly labelled.
+
+Maintain records a new NO_ACTION with the exact prior references; defer records
+RESEARCH_MORE with the user's gap and a future review time. One explicit submit is
+authorization for that record. Expiring server context is checked again against
+current evidence/formal versions; stale context requires refresh without discarding
+the user's draft. Existing Decision idempotency supports recovery without duplicate
+writes; reload does not resubmit. Source-specific Observation adoption remains a
+separate explicit action, never an implied consequence of a general review.
+
+Adjustments reuse the existing Thesis and Plan editors in the same Research page,
+with a return shortcut and preserved Quick Review draft. Latest thinking may prefill
+a Thesis only after the user requests it, without overwriting an open editor.
+Refresh Notes uses the existing explicit capture/interpret/review workflow. When it
+finishes, an active idle card refreshes while keeping the user's text; hidden,
+submitting or recorded cards stay pinned. Existing proposal/confirmation and order
+authorization boundaries remain unchanged.
+
 ## Copilot research process
 
 Console calls the built-in assistant **Copilot**; existing Agent API paths, stored

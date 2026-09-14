@@ -98,7 +98,7 @@ export default function OverviewPage() {
   return (
     <ConsoleShell active="overview">
       <DataBoundary loading={result.loading} error={result.error}>
-        <Card className="span-12" kicker="JUDGMENT INTAKE" title="View Inbox" subtitle="Moomoo and external-note changes waiting for your review" action={<div className="page-actions"><Badge value={`${observationReviewItems.length} PENDING`} /><QuickLink href="/decision-workbench#notes">Review View Changes</QuickLink></div>}>
+        <Card className="span-12" kicker="JUDGMENT INTAKE" title="View Inbox" subtitle="Moomoo and external-note changes waiting for your review" action={<div className="page-actions"><Badge value={`${observationReviewItems.length} PENDING`} /><QuickLink href="/research?section=quick-review">Quick Review</QuickLink><QuickLink href="/decision-workbench#notes">Review View Changes</QuickLink></div>}>
           {observationReviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No View Change Waiting</strong><small>Your confirmed Decisions remain the durable current view. New FULL note revisions appear here after interpretation.</small></div></div> : <div className="attention-queue">{observationReviewItems.slice(0, 8).map((item) => <Link href={String(item.href ?? "/decision-workbench#notes")} key={String(item.review_item_id ?? item.source_key)}><Badge value="VIEW" /><div><strong>{String(item.title ?? "View review due")}</strong><span>{String(item.detail ?? "Review this exact note revision against the confirmed judgment.")}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
         </Card>
 

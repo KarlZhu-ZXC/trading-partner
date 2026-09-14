@@ -27,6 +27,7 @@ from application.dto.catalyst_agenda_sync import (
 )
 from application.dto.external_note_review import ExternalNoteReviewTransitionInput
 from application.dto.monitoring import MonitorArchiveInput
+from application.dto.quick_review import QuickReviewInput
 from application.dto.review_item import ReviewItemTransitionInput
 from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
 from application.dto.valuation import ValuationCalculateInput, ValuationSaveInput
@@ -1268,6 +1269,28 @@ def _canonical_subject_transport(value: Any) -> Any:
     if isinstance(value, list):
         return [_canonical_subject_transport(item) for item in value]
     return value
+
+
+@app.get("/api/research/{subject_id}/quick-review")
+async def quick_review(request: Request, subject_id: str) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(_container(request).services.quick_review.get, subject_id)
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.post("/api/research/{subject_id}/quick-review")
+async def quick_review_submit(
+    request: Request, subject_id: str, body: QuickReviewInput,
+) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.quick_review.submit, subject_id, body,
+        )
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
 
 
 @app.get("/api/research/{subject_id}/calibration")

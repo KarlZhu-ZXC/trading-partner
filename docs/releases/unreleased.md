@@ -1,5 +1,11 @@
 # Unreleased
 
+- Added Quick Review with pinned prior judgment, durable changes/positions and
+  latest synced Moomoo USER thinking. Maintain/defer use one explicit Decision
+  submission with stale-context checks and idempotent recovery. Same-page editor
+  shortcuts preserve drafts; explicit note-refresh completion updates idle cards.
+  Source-specific Observation review and formal judgment/order gates remain intact.
+
 - Connected Research/Monitor to a dedicated chart workspace with SMC provenance,
   confirmation-time cutoff and explicit session-bound draft handoff. Added a
   SEC annual diluted-EPS/P/E assumption ledger with deterministic sensitivity and

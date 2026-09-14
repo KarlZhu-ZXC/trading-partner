@@ -35,6 +35,7 @@ from application.services.judgment_scorecard_service import JudgmentScorecardSer
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
+from application.services.quick_review_service import QuickReviewService
 from application.services.research_archive_service import ResearchArchiveService
 from application.services.research_changes_service import ResearchChangesService
 from application.services.research_context_builder import ResearchContextBuilder
@@ -102,6 +103,7 @@ class ApplicationServices:
     external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
     research_changes: ResearchChangesService
+    quick_review: QuickReviewService
     judgment_calibration: JudgmentCalibrationService
     valuation: ValuationService
 
