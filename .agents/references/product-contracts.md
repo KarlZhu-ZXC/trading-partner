@@ -323,6 +323,23 @@ opaque context IDs and numeric offset, never source/model text. Journal's exact
 revision read validates the Subject Instrument and returns no-store; the existing
 review confirmation workflow owns all writes.
 
+**Console review digests**
+
+`GET /api/review-digest` groups durable reminders by exact Instrument, preserving
+separate Subject scopes and source identities. Only unique exact-Instrument matches
+may map previously unscoped note reviews, and only under complete Subject coverage.
+Broker/Agent actions remain independent. Folding old/deferred reasons is UI state,
+never a write to source reviews. Failed source reads cannot hide previously known
+pending reminders. Monitor transition timestamps are not polling timestamps; current
+recovery may suppress obsolete unavailable/triggered events. Processing failures
+remain actionable until the source recovers. All links are local safe paths.
+
+`GET /api/weekly-review` is the current local calendar week through now, with exact
+confirmed revision/supersedes comparison and definition-only assumption/invalidation
+changes. Missing comparison is unavailable, not reconfirmation. Current questions
+and due groups are not historical reconstruction. Digests are read-only and do not
+send messages, call models, sync or create new ReviewItem state.
+
 **Console Quick Review**
 
 `GET /api/research/{subject_id}/quick-review` composes durable sources only. A
@@ -333,6 +350,14 @@ review_due_at through DecisionRecordService's NORMAL-mode, user-actor and unique
 gates. Retry retrieves the matching completed intent; no reload-triggered write.
 Recheck source fingerprint before append; never silently adopt a new baseline.
 General review does not adopt or close Observation reviews or authorize orders.
+Read-only `/quick-review/submissions/{idempotency_key}` supports recovery of the exact
+recorded Subject/key. Browser session storage retains only bounded user input plus
+an unresolved original request for 24 hours, never arbitrary provider/note payloads.
+The saved context token is a read-context identity, not a Pending Action token.
+Reload may read status only; retry/abandon remains explicit and preserves the key.
+Thesis previews use the current PRIMARY revision, remain editable, and require
+matching target/version before prefilling the existing editor.
+
 
 Latest thinking is exact-Instrument MOOMOO_NOTE only, newest revision per note,
 FULL USER-attributed sections only. Existing model summaries require same-revision

@@ -62,9 +62,32 @@ Actions and require the same-channel user to confirm an unexpired, single-use to
 Agent conversation memory is continuity context, not a current market or account
 fact.
 
+## Today and weekly review
+
+Overview defaults to Today Review: durable note reviews, Monitor transitions,
+Agenda and due Decisions are grouped by exact Instrument. Multiple Research
+Subjects keep separate links and judgments. Unmapped sources and broker/Agent
+pending actions stay explicit rather than inheriting another Subject's decision.
+Deferred and previously reviewed reasons are folded by default; new evidence
+reopens attention. This is a presentation grouping, not resolution of source records.
+Processing failures stay visible, including a failed latest note interpretation.
+Operational failures retain visible action links outside the research groups.
+
+Sources fail independently and bounded histories remain partial. Repeated Monitor
+polls do not manufacture new transitions; recovered current state suppresses stale
+error events. No page read reconciles, acknowledges, refreshes a Provider, runs a
+model or sends a notification through these projections.
+
+The Weekly Review tab uses the configured local Monday-to-Monday window, through
+now. It combines exact confirmed Thesis revisions, including definition changes,
+user Decisions (including NO_ACTION), current unresolved questions and due review
+groups. Missing predecessors or definition comparisons remain unavailable. It does
+not reconstruct historical question status, infer investment outcomes or compute a
+win rate. The tab is a read-only review surface, not an automatic weekly message.
+
 ## Quick Review
 
-Overview links directly to a Quick Review card inside the selected Research Subject.
+Today Review links directly to a Quick Review card inside the selected Research Subject.
 The card combines the pinned user Decision/Thesis/Plan, durable position snapshots,
 source coverage and changes. It reads up to 1,000 changes in one projection; larger
 histories disclose the limit and cannot use the maintain shortcut. Nothing is
@@ -75,7 +98,9 @@ selects the latest dated USER blocks, and may show an existing successful
 same-revision summary only when its source ordinals bind to those USER blocks.
 Others' viewpoints stay separate. Pending/failed latest interpretations never fall
 back to an older revision. SUMMARY_ONLY sources expose metadata only. Up to five
-recent notes are shown, with missing dates and truncation disclosed. Date headings
+recent notes are shown, with missing dates and truncation disclosed. Thought dates
+are distinct from sync/edit timestamps; comparisons show changes in the previous
+synced USER section and do not claim that the formal Thesis changed. Date headings
 use the configured local timezone; inferred years remain explicitly labelled.
 
 Maintain records a new NO_ACTION with the exact prior references; defer records
@@ -87,12 +112,21 @@ writes; reload does not resubmit. Source-specific Observation adoption remains a
 separate explicit action, never an implied consequence of a general review.
 
 Adjustments reuse the existing Thesis and Plan editors in the same Research page,
-with a return shortcut and preserved Quick Review draft. Latest thinking may prefill
-a Thesis only after the user requests it, without overwriting an open editor.
+with a return shortcut and preserved Quick Review draft. Latest thinking first produces an editable before/after preview bound to the
+current PRIMARY revision. It may prefill a Thesis only after the user accepts the
+preview, without overwriting an open editor.
 Refresh Notes uses the existing explicit capture/interpret/review workflow. When it
 finishes, an active idle card refreshes while keeping the user's text; hidden,
 submitting or recorded cards stay pinned. Existing proposal/confirmation and order
 authorization boundaries remain unchanged.
+
+Quick Review action, user rationale and follow-up date persist in bounded,
+Subject-scoped session storage for 24 hours. An unresolved submission additionally
+retains its original request/key; on reload only the durable receipt is read.
+Recorded receipts clear recovery state. Retrying or abandoning an unrecorded attempt
+requires an explicit action, and edits cannot silently create a different attempt.
+No automatic POST, copied note payload or formal editor state is persisted by this
+recovery mechanism. Storage failure remains visible and falls back to the current page.
 
 ## Copilot research process
 

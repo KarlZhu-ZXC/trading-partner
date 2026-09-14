@@ -48,6 +48,7 @@ from application.services.review_item_service import ReviewItemService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
+from application.services.today_review_service import TodayReviewService
 from application.services.trade_cycle_override_service import TradeCycleOverrideService
 from application.services.trade_retro_service import TradeRetroService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
@@ -56,6 +57,7 @@ from application.services.us_tool_coordinator import USToolCoordinator
 from application.services.valuation_service import ValuationService
 from application.services.view_review_service import ViewReviewService
 from application.services.watchlist_hub_service import WatchlistHubService
+from application.services.weekly_review_service import WeeklyReviewService
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +106,8 @@ class ApplicationServices:
     view_reviews: ViewReviewService
     research_changes: ResearchChangesService
     quick_review: QuickReviewService
+    today_review: TodayReviewService
+    weekly_review: WeeklyReviewService
     judgment_calibration: JudgmentCalibrationService
     valuation: ValuationService
 

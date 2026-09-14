@@ -1,5 +1,12 @@
 # Unreleased
 
+- Replaced duplicate homepage review lists with grouped Today Review and a
+  current-week review tab. Preserved exact Subject scope, active failures and
+  independent coverage. Added thought-date/source comparisons, editable Thesis
+  before/after previews, and bounded session draft/receipt recovery with no
+  automatic resubmission. Read-only digests neither resolve source items nor send
+  notifications or generate model judgments.
+
 - Added Quick Review with pinned prior judgment, durable changes/positions and
   latest synced Moomoo USER thinking. Maintain/defer use one explicit Decision
   submission with stale-context checks and idempotent recovery. Same-page editor

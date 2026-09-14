@@ -1271,10 +1271,38 @@ def _canonical_subject_transport(value: Any) -> Any:
     return value
 
 
+@app.get("/api/weekly-review")
+async def weekly_review(request: Request) -> JSONResponse:
+    result = await asyncio.to_thread(_container(request).services.weekly_review.get)
+    return JSONResponse(content={"data": result.model_dump(mode="json")},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/review-digest")
+async def review_digest(request: Request) -> JSONResponse:
+    result = await asyncio.to_thread(_container(request).services.today_review.get)
+    return JSONResponse(content={"data": result.model_dump(mode="json")},
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/research/{subject_id}/quick-review")
 async def quick_review(request: Request, subject_id: str) -> JSONResponse:
     try:
         result = await asyncio.to_thread(_container(request).services.quick_review.get, subject_id)
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.get("/api/research/{subject_id}/quick-review/submissions/{idempotency_key}")
+async def quick_review_submission_status(
+    request: Request, subject_id: str, idempotency_key: str,
+) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.quick_review.submission_status,
+            subject_id, idempotency_key,
+        )
         return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
     except TradingPartnerError as error:
         raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None

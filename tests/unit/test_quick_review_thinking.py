@@ -230,3 +230,65 @@ def test_local_note_day_is_not_excluded_before_utc_midnight():
     r._clock = NS(now=lambda: datetime(2026, 9, 14, 18, tzinfo=UTC))
     r._zone = ZoneInfo("Asia/Shanghai")
     assert "Local latest" in r.get(INSTRUMENT)[0]["user_excerpt"]
+
+
+def test_thinking_date_and_change_compare_exact_previous_user_section():
+    old = revision(
+        blocks=(
+            AttributedNoteBlock(0, NoteSpeakerKind.USER, "USER", "Demand stable", "2026-09-01"),
+            AttributedNoteBlock(
+                1, NoteSpeakerKind.NAMED_PERSON, "Analyst", "Buy now", "2026-09-14"
+            ),
+        )
+    )
+    latest = revision(
+        2,
+        blocks=(
+            AttributedNoteBlock(0, NoteSpeakerKind.USER, "USER", "Demand weakening", "2026-09-14"),
+        ),
+        source_timestamp=NOW - timedelta(days=7),
+    )
+    r, _ = reader((latest,))
+    r._notes.previous_revision = lambda *args: old
+    result = r.get(INSTRUMENT)[0]
+    assert result["thinking_date"] == "2026-09-14"
+    assert result["thinking_date_basis"] == "EXPLICIT_SECTION"
+    assert result["previous_revision_id"] == "r1"
+    assert result["added_lines"] == ["Demand weakening"]
+    assert result["removed_lines"] == ["Demand stable"]
+    assert "Buy now" not in str(result["added_lines"]) + str(result["removed_lines"])
+    assert result["user_summary"] == ""  # no model summary is invented
+
+
+def test_undated_thinking_not_labelled_with_sync_date():
+    r, _ = reader(
+        (revision(blocks=(AttributedNoteBlock(0, NoteSpeakerKind.USER, "USER", "Undated"),)),)
+    )
+    result = r.get(INSTRUMENT)[0]
+    assert result["thinking_date"] is None
+    assert result["thinking_date_basis"] == "UNKNOWN"
+
+
+def test_recent_thought_date_outweighs_old_note_edit_timestamp():
+    rows = (
+        revision(
+            note_id="dated-new",
+            source_timestamp=NOW - timedelta(days=10),
+            blocks=(
+                AttributedNoteBlock(
+                    0, NoteSpeakerKind.USER, "USER", "Recent thinking", "2026-09-15"
+                ),
+            ),
+        ),
+        revision(
+            note_id="edited-new",
+            source_timestamp=NOW,
+            blocks=(
+                AttributedNoteBlock(0, NoteSpeakerKind.USER, "USER", "Old thinking", "2026-09-01"),
+            ),
+        ),
+    )
+    r, _ = reader(rows)
+    results = r.get(INSTRUMENT)
+    assert results[0]["note_id"] == "dated-new"
+    assert results[0]["thinking_date"] == "2026-09-15"

@@ -579,6 +579,7 @@ function ResearchSubjectDetail({
   const [candidateProposalError, setCandidateProposalError] = useState<string | null>(null);
   const [candidateProposalSuccess, setCandidateProposalSuccess] = useState<string | null>(null);
   const [quickAdjustment, setQuickAdjustment] = useState(false);
+  const [quickDraftError, setQuickDraftError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<ResearchModule>("overview");
   const [detailError, setDetailError] = useState<string | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState(false);
@@ -628,7 +629,7 @@ function ResearchSubjectDetail({
   }, []);
 
   useEffect(() => {
-    setQuickAdjustment(false);
+    setQuickAdjustment(false); setQuickDraftError(null);
     setSubjectDraft(subjectDraftFrom(researchSubject));
     setSubjectEditor(false);
     setThesisEditor(false);
@@ -935,10 +936,16 @@ function ResearchSubjectDetail({
       <HorizontalTabs className="research-section-nav" items={RESEARCH_MODULES.map((module) => ({ id: module.key, label: module.label, attention: module.key === "overview" && pendingCandidates.length > 0, suffix: module.key === "overview" && pendingCandidates.length > 0 ? <span className="horizontal-tab-count" aria-label={`${pendingCandidates.length} Pending Candidates`}>{pendingCandidates.length}</span> : undefined }))} value={activeModule} onChange={selectModule} ariaLabel="Research Subject Modules" idPrefix="research-tab" panelIdPrefix="research-panel" />
       {quickAdjustment && activeModule !== "quick-review" && <Button onClick={() => selectModule("quick-review")}>Return to Quick Review</Button>}
       <section id="research-panel-quick-review" role="tabpanel" aria-labelledby="research-tab-quick-review" hidden={activeModule !== "quick-review"}>
+        <ErrorNote>{quickDraftError}</ErrorNote>
         <QuickReview key={text(researchSubject.subject_id)} subjectId={text(researchSubject.subject_id)} enabled={activeModule === "quick-review"} onAdjustThesis={(seed) => {
+          setQuickDraftError(null);
+          const primaryThesis = liveTheses.find((item) => text(item.role).toLowerCase() === "primary");
+          if (seed && (thesisEditor || (primaryThesis ? text(primaryThesis.thesis_id) : null) !== seed.expectedThesisId || (primaryThesis ? text(revisions.get(text(primaryThesis.thesis_id))?.revision_id, "") : null) !== seed.expectedRevisionId)) {
+            setQuickDraftError(thesisEditor ? "Your formal Thesis editor is already open. Finish or close it before applying this proposed draft; existing edits were kept." : "The current PRIMARY Thesis differs from this preview. Refresh Research and Quick Review before applying it."); return;
+          }
           setQuickAdjustment(true);
           if (!thesisEditor) {
-            const currentThesis = liveTheses.find((item) => text(item.role).toLowerCase() === "primary") ?? liveTheses[0];
+            const currentThesis = seed ? primaryThesis : primaryThesis ?? liveTheses[0];
             startThesisEditor(currentThesis, !currentThesis);
             if (!currentThesis) setThesisDraft((current) => ({ ...current, thesisStatus: "draft" }));
             if (seed) { setThesisDraft((current) => ({ ...current, statement: seed.statement, rationale: [current.rationale, seed.rationale].filter(Boolean).join("\n\n") })); setThesisSourceRevisionId(seed.sourceRevisionId); }

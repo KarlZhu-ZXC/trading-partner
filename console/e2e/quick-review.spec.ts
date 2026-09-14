@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 const SUBJECT = "case_019ff000-0000-7000-8000-000000000081";
 const INSTRUMENT = "equity:US:TEST";
-async function mock(page: Page, failFirst = false) {
+async function mock(page: Page, failFirst = false, receipt: "NOT_FOUND" | "RECORDED" = "NOT_FOUND") {
   const posts: Record<string, unknown>[] = [];
   const reads: string[] = [];
   await page.route("**/api/console/api/**", async (route) => {
@@ -14,10 +14,11 @@ async function mock(page: Page, failFirst = false) {
       return json({ data: { decision_id: "decision_synthetic_recorded", action: posts.at(-1)!.action, status: "RECORDED", review_due_at: posts.at(-1)!.review_due_at } });
     }
     reads.push(path);
+    if (path.includes("/quick-review/submissions/")) return json({ data: receipt === "RECORDED" ? { status: "RECORDED", decision_id: "decision_recovered", action: "maintain", review_due_at: null } : { status: "NOT_FOUND" } });
     if (path === "/api/session") return json({ token: "synthetic-quick-review-session-token-0000000000000" });
     if (path === "/api/agent/status") return json({ enabled: false, configured: false, providers: [], models: [], components: {} });
     if (path === "/api/research") return json({ subjects: [{ subject: { subject_id: SUBJECT, title: "Synthetic Quick Subject", subject_type: "company", primary_instrument_id: INSTRUMENT, summary: "Synthetic research", status: "active", topic_tags: [], linked_subject_ids: [] }, state: { ok: true, data: { theses: [], latest_revisions: [], assumptions: [], invalidations: [], pending_candidates: [], trade_plan_versions: [], open_questions: [], watchlist_items: [] } } }].flatMap((item) => [{ ...item, subject: { ...item.subject, subject_id: "case_019ff000-0000-7000-8000-000000000082", title: "Other Subject Listed First" } }, item]) });
-    if (path.endsWith("/quick-review")) return json({ data: { subject_id: SUBJECT, title: "Synthetic Quick Subject", instrument_id: INSTRUMENT, review_token: "synthetic-pinned-token", expires_at: new Date(Date.now() + 600000).toISOString(), baseline: { decision_id: "decision_synthetic_baseline", title: "Prior reviewed judgment", decided_at: "2026-09-10T10:00:00Z", recorded_at: "2026-09-10T10:01:00Z", theses: [{ thesis_id: "thesis_synthetic", revision_id: "revision_synthetic", statement: "Prior synthetic statement" }], plan: { plan_id: "plan_synthetic", version: 2 } }, changes: [{ change_id: "change_synthetic", title: "Demand changed", kind: "OBSERVATION", old_value: "Stable demand", new_value: "Weaker demand", occurred_at: "2026-09-12T10:00:00Z" }], coverage: { observations: "COMPLETE", monitors: "UNAVAILABLE" }, warnings: ["MONITOR_READ_FAILED"], positions: [{ account_ref: "Synthetic Account", quantity: "10", currency: "USD", as_of: "2026-09-11T10:00:00Z", snapshot_id: "snapshot_synthetic" }], pending_observation_reviews: 2, can_maintain: true, latest_thinking: [{ note_id: "note_synthetic", note_revision_id: "note_revision_synthetic", version: 4, title: "Latest synthetic thinking", source_timestamp: "2026-09-12T10:00:00Z", observed_at: "2026-09-12T10:01:00Z", status: "EXTRACTED", user_excerpt: "I want to investigate demand.", user_summary: "Investigate demand before changing judgment.", other_viewpoints: [{ speaker: "Quoted Analyst", summary: "An independent opinion." }], warnings: [] }] } });
+    if (path.endsWith("/quick-review")) return json({ data: { subject_id: SUBJECT, title: "Synthetic Quick Subject", instrument_id: INSTRUMENT, draft_baseline: null, review_token: "synthetic-pinned-token", expires_at: new Date(Date.now() + 600000).toISOString(), baseline: { decision_id: "decision_synthetic_baseline", title: "Prior reviewed judgment", decided_at: "2026-09-10T10:00:00Z", recorded_at: "2026-09-10T10:01:00Z", theses: [{ thesis_id: "thesis_synthetic", revision_id: "revision_synthetic", statement: "Prior synthetic statement" }], plan: { plan_id: "plan_synthetic", version: 2 } }, changes: [{ change_id: "change_synthetic", title: "Demand changed", kind: "OBSERVATION", old_value: "Stable demand", new_value: "Weaker demand", occurred_at: "2026-09-12T10:00:00Z" }], coverage: { observations: "COMPLETE", monitors: "UNAVAILABLE" }, warnings: ["MONITOR_READ_FAILED"], positions: [{ account_ref: "Synthetic Account", quantity: "10", currency: "USD", as_of: "2026-09-11T10:00:00Z", snapshot_id: "snapshot_synthetic" }], pending_observation_reviews: 2, can_maintain: true, latest_thinking: [{ note_id: "note_synthetic", note_revision_id: "note_revision_synthetic", version: 4, title: "Latest synthetic thinking", source_timestamp: "2026-09-12T10:00:00Z", observed_at: "2026-09-12T10:01:00Z", status: "EXTRACTED", thinking_date: "2026-09-11", thinking_date_basis: "INFERRED_YEAR", previous_revision_id: "previous_synthetic", comparison_basis: "PREVIOUS_SYNCED_USER_SECTION", added_lines: ["Investigate demand"], removed_lines: ["Demand stable"], comparison_truncated: false, user_excerpt: "I want to investigate demand.", user_summary: "Investigate demand before changing judgment.", other_viewpoints: [{ speaker: "Quoted Analyst", summary: "An independent opinion." }], warnings: [] }] } });
     if (path.endsWith("/changes")) return json({ data: { subject_id: SUBJECT, baseline: null, items: [], coverage: {}, warning_codes: [], total: 0, offset: 0, has_more: false } });
     if (path.startsWith("/api/monitors")) return json({ dashboard: { ok: true, data: { items: [] } } });
     return json({ items: [] });
@@ -76,6 +77,7 @@ test("Follow-up requires gap and future date; adjustment preserves quick draft a
 test("latest USER thinking prefills only on request and never replaces an open draft", async ({ page }) => {
   const api = await mock(page); await open(page);
   await page.getByRole("button", { name: "Review Thinking in Thesis", exact: true }).click();
+  await page.getByRole("button", { name: "Use Edited Draft", exact: true }).click();
   const editor = page.getByRole("region", { name: "Create Thesis", exact: true });
   await expect(editor).toBeVisible();
   const statement = editor.getByRole("textbox", { name: /Statement/ });
@@ -84,6 +86,50 @@ test("latest USER thinking prefills only on request and never replaces an open d
   await statement.fill("My edited working draft");
   await page.getByRole("button", { name: "Return to Quick Review" }).click();
   await page.getByRole("button", { name: "Review Thinking in Thesis", exact: true }).click();
+  await page.getByRole("button", { name: "Use Edited Draft", exact: true }).click();
+  await expect(page.getByText(/formal Thesis editor is already open/)).toBeVisible();
+  await page.getByRole("button", { name: "Adjust Thesis", exact: true }).click();
   await expect(statement).toHaveValue("My edited working draft");
+  expect(api.posts).toHaveLength(0);
+});
+
+test("Saved Quick draft restores on reload without a POST", async ({ page }) => {
+  const api = await mock(page); await open(page);
+  await page.getByRole("textbox", { name: /Review Rationale/ }).fill("Keep my hand-written review.");
+  await page.reload();
+  await expect(page.getByText(/Your saved Quick Review draft was restored/)).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /Review Rationale/ })).toHaveValue("Keep my hand-written review.");
+  expect(api.posts).toHaveLength(0);
+});
+test("Unknown submission reload checks status and retries the exact saved key only explicitly", async ({ page }) => {
+  const api = await mock(page, true); await open(page);
+  await page.getByRole("button", { name: "Confirm No Action", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Retry Same Review" })).toBeVisible();
+  const original = api.posts[0]; await page.reload();
+  await expect(page.getByText(/No receipt was found/)).toBeVisible();
+  expect(api.posts).toHaveLength(1);
+  await expect(page.getByRole("textbox", { name: /Review Rationale/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Refresh Review Context" })).toBeDisabled();
+  await page.getByRole("button", { name: "Retry Same Review" }).click();
+  await expect(page.getByText(/Recorded NO_ACTION/)).toBeVisible();
+  expect(api.posts[1]).toEqual(original);
+});
+test("Recovered receipt shows outcome without resubmitting", async ({ page }) => {
+  const api = await mock(page, true, "RECORDED"); await open(page);
+  await page.getByRole("button", { name: "Confirm No Action", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Retry Same Review" })).toBeVisible();
+  await page.reload(); await expect(page.getByText(/Recorded NO_ACTION/)).toBeVisible();
+  expect(api.posts).toHaveLength(1);
+});
+test("Thinking date and edited before-after draft open formal editor only on acceptance", async ({ page }) => {
+  const api = await mock(page); await open(page);
+  await expect(page.getByText(/Thinking date: 2026-09-11 \(year inferred\)/)).toBeVisible();
+  await page.getByRole("button", { name: "Review Thinking in Thesis" }).click();
+  await expect(page.getByRole("textbox", { name: /Proposed Statement/ })).toHaveValue("Investigate demand before changing judgment.");
+  await page.getByRole("textbox", { name: /Proposed Statement/ }).fill("My edited synthetic statement.");
+  await expect(page.getByRole("region", { name: "Create Thesis", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Use Edited Draft" }).click();
+  const editor = page.getByRole("region", { name: "Create Thesis", exact: true });
+  await expect(editor.getByRole("textbox", { name: /Statement/ })).toHaveValue("My edited synthetic statement.");
   expect(api.posts).toHaveLength(0);
 });

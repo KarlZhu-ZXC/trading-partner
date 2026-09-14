@@ -71,7 +71,7 @@ ETF, theme, macro question, catalyst, or portfolio concern—not only an equity.
 ## <img src="docs/assets/readme/sections/capabilities.svg" alt="" width="24" /> Core capabilities
 
 - **View intake:** provider-neutral immutable Observations, deterministic speaker
-  attribution, Flash first-pass structure, optional escalated review, View Inbox,
+  attribution, Flash first-pass structure, optional escalated review, grouped Today/Weekly Review,
   exact Decision adoption, and derived Current View.
 - **Research memory:** Research Subjects, multiple Thesis threads, journals,
   decisions, evidence, Catalyst Agenda, Judgment Scorecards, Challenge Reviews,

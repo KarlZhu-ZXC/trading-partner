@@ -53,13 +53,33 @@ class QuickReviewService:
             subject = uow.subjects.get(subject_id)
             if subject is None:
                 raise DataContractError("Research Subject not found")
+            current_theses = uow.theses.list_by_subject(subject_id)
             formal: dict[str, Any] = {
                 "theses": sorted(
-                    (t.thesis_id, t.latest_revision_id, str(t.status))
-                    for t in uow.theses.list_by_subject(subject_id)
+                    (t.thesis_id, t.latest_revision_id, str(t.status)) for t in current_theses
                 ),
                 "plan": None,
             }
+            primary = next(
+                (
+                    t
+                    for t in current_theses
+                    if str(t.role).lower() == "primary"
+                    and str(t.status).lower() in {"active", "strengthened", "weakened"}
+                ),
+                None,
+            )
+            draft_baseline = None
+            if primary:
+                revision = uow.revisions.get(primary.latest_revision_id)
+                draft_baseline = {
+                    "thesis_id": primary.thesis_id,
+                    "revision_id": revision.revision_id,
+                    "revision_no": revision.revision_no,
+                    "title": primary.title,
+                    "statement": revision.statement,
+                    "rationale": revision.rationale,
+                }
             plan = uow.trade_plans.get_current_by_subject(subject_id)
             if plan is not None:
                 formal["plan"] = (plan.plan_id, plan.version, str(plan.status))
@@ -133,6 +153,7 @@ class QuickReviewService:
             "pending_observation_reviews": pending,
             "can_maintain": projection.baseline is not None and not more,
             "current_formal_versions": formal,
+            "draft_baseline": draft_baseline,
         }
 
     def get(self, subject_id: str) -> dict[str, Any]:
@@ -153,6 +174,26 @@ class QuickReviewService:
             **card,
             "review_token": token,
             "expires_at": (now + timedelta(minutes=20)).isoformat(),
+        }
+
+    def submission_status(self, subject_id: str, idempotency_key: str) -> dict[str, Any]:
+        if not idempotency_key or len(idempotency_key) > 128:
+            raise DataContractError("Invalid review request identity")
+        key = (
+            "quick-review:"
+            + hashlib.sha256((subject_id + ":" + idempotency_key).encode()).hexdigest()
+        )
+        with self._lock, self._uow() as uow:
+            decision = uow.decisions.get_by_idempotency_key(key)
+        if decision is None:
+            return {"status": "NOT_FOUND"}
+        if decision.subject_id != subject_id:
+            raise DataContractError("Review receipt belongs to another Subject")
+        return {
+            "status": "RECORDED",
+            "decision_id": decision.decision_id,
+            "action": "maintain" if decision.decision_type is DecisionType.NO_ACTION else "defer",
+            "review_due_at": decision.review_due_at.isoformat() if decision.review_due_at else None,
         }
 
     def submit(self, subject_id: str, request: QuickReviewInput) -> dict[str, Any]:

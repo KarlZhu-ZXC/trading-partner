@@ -760,6 +760,7 @@ def build_application(
     review_workspace = build_review_workspace(
         notes=persistence.external_notes,
         note_reviews=persistence.external_note_reviews,
+        review_items=persistence.review_items,
         snapshots=account_snapshot_repository,
         monitors=monitor_repository,
         agenda=persistence.catalyst_agenda,
@@ -848,6 +849,8 @@ def build_application(
             valuation=review_workspace.valuation,
             research_changes=review_workspace.changes,
             quick_review=review_workspace.quick_review,
+            today_review=review_workspace.today_review,
+            weekly_review=review_workspace.weekly_review,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,

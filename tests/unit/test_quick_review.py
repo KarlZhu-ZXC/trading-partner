@@ -119,8 +119,23 @@ def test_note_change_or_formal_revision_change_invalidates_card():
     writer.append.assert_not_called()
     reader.get = lambda _: []
     card = svc.get("s1")
+    uow.revisions = NS(
+        get=lambda _: NS(
+            revision_id="r2",
+            revision_no=2,
+            title="Updated",
+            statement="Changed",
+            rationale="Changed",
+        )
+    )
     uow.theses.list_by_subject = lambda _: (
-        NS(thesis_id="t1", latest_revision_id="r2", status="active"),
+        NS(
+            thesis_id="t1",
+            latest_revision_id="r2",
+            status="active",
+            role="primary",
+            title="Changed",
+        ),
     )
     with pytest.raises(DataContractError):
         svc.submit("s1", request(card))
@@ -162,3 +177,16 @@ def test_closed_explicit_request_cannot_supply_facts_or_skip_confirmation():
         request({"review_token": "token"}, thesis_revision_ids=["r9"])
     with pytest.raises(ValidationError):
         request({"review_token": "token"}, review_due_at="2026-12-01T00:00:00")
+
+
+def test_submission_status_is_read_only_and_recovers_exact_scope():
+    svc, _, writer, *_ = setup()
+    card = svc.get("s1")
+    req = request(card)
+    assert svc.submission_status("s1", "once") == {"status": "NOT_FOUND"}
+    writer.append.assert_not_called()
+    saved = svc.submit("s1", req)
+    svc._cards.clear()
+    assert svc.submission_status("s1", "once") == saved
+    assert svc.submission_status("s2", "once") == {"status": "NOT_FOUND"}
+    assert writer.append.call_count == 1

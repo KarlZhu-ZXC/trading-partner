@@ -717,9 +717,14 @@ test("card headings separate domain, object, and supporting context", async () =
   assert.doesNotMatch(styles, /\.badge \{[^}]*(?:border:|padding:|background:)/);
   assert.match(styles, /\.badge::before/);
   assert.match(overviewSource, /kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps"/);
-  assert.match(overviewSource, /kicker="JUDGMENT INTAKE" title="View Inbox"/);
+  assert.match(overviewSource, /<TodayReview \/>/);
+  const todayReviewSource = await readFile(new URL("../app/components/today-review.tsx", import.meta.url), "utf8");
+  assert.match(todayReviewSource, /kicker="DECISION WORKFLOW" title="Today Review"/);
+  assert.doesNotMatch(overviewSource, /title="View Inbox"/);
   assert.match(overviewSource, /OBSERVATION_REVIEW_DUE/);
-  assert.match(overviewSource, /kicker="DECISION WORKFLOW" title="Action & Review Inbox" subtitle="Grouped manual actions and durable closure metrics"/);
+  assert.match(overviewSource, /kicker="SYSTEM FOLLOW-UP" title="Operations & Workflow"/);
+  assert.match(overviewSource, /<Disclosure title="Workflow Details">/);
+  assert.doesNotMatch(overviewSource, /title="Action & Review Inbox"/);
   assert.match(overviewSource, /Review Queue/);
   assert.match(overviewSource, /monitor-state-summary/);
   assert.doesNotMatch(overviewSource, /kicker="CATALYST AGENDA" title="Catalyst Agenda pulse"/);
@@ -737,7 +742,8 @@ test("overview Monitor titles deep-link to async-loaded definition cards", async
   assert.match(overviewSource, /href=\{`\/monitors#\$\{monitorAnchorId\(monitor\.monitor_id\)\}`\}/);
   assert.match(overviewSource, /buildConsoleNotices/);
   assert.match(overviewSource, /Waiting for Next Evaluation/);
-  assert.match(overviewSource, /No Other Manual Action Required/);
+  assert.match(overviewSource, /aria-label="Operational Actions"/);
+  assert.match(overviewSource, /Workflow Details/);
   assert.match(attentionSource, /\/research#subject-/);
   assert.match(attentionSource, /OIL_WEEKEND_REFERENCE_UNAVAILABLE/);
   assert.match(attentionSource, /does not mean data is currently unavailable/);

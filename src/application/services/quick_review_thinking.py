@@ -3,6 +3,7 @@
 import json
 import re
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,13 +44,102 @@ class LatestThinkingReader:
             key=lambda r: (r.source_timestamp or r.observed_at, r.observed_at, r.note_id),
             reverse=True,
         )
-        result = [self._extract(revision, now) for revision in eligible[:5]]
+        result = []
+        for revision in eligible[:50]:
+            item = self._extract(revision, now)
+            self._describe_change(item, revision, now)
+            result.append(item)
+        # Thought dates outrank edit/capture metadata when the note supplies them.
+        result.sort(
+            key=lambda item: (
+                str(
+                    item.get("thinking_date")
+                    or str(item.get("source_timestamp") or item["observed_at"])[:10]
+                ),
+                str(item.get("source_timestamp") or item["observed_at"]),
+                str(item["note_id"]),
+            ),
+            reverse=True,
+        )
+        result = result[:5]
+        if len(eligible) > 50:
+            for item in result:
+                assert isinstance(item["warnings"], list)
+                item["warnings"].append("THINKING_CANDIDATE_NOTES_BOUNDED")
         if len(eligible) > 5:
             for item in result:
                 warnings = item["warnings"]
                 assert isinstance(warnings, list)
                 warnings.append("LATEST_NOTES_TRUNCATED_TO_FIVE")
         return result
+
+    def _describe_change(
+        self, item: dict[str, object], revision: ExternalNoteRevision, now: datetime
+    ) -> None:
+        item.update(
+            {
+                "thinking_date": None,
+                "thinking_date_basis": "UNKNOWN",
+                "previous_revision_id": None,
+                "comparison_basis": "NO_PREVIOUS_REVISION",
+                "added_lines": [],
+                "removed_lines": [],
+                "comparison_truncated": False,
+            }
+        )
+        if revision.coverage is not NoteCoverage.FULL:
+            return
+        warnings: list[str] = []
+        today = now.astimezone(self._zone).date()
+        selected = _latest_user_blocks(revision.blocks, today, warnings)
+        dates = [_section_date(b.section_date, today, warnings) for b in selected]
+        known = [d for d in dates if d is not None]
+        if known:
+            item["thinking_date"] = max(known).isoformat()
+            item["thinking_date_basis"] = (
+                "INFERRED_YEAR"
+                if any(b.section_date and "/" in b.section_date for b in selected)
+                else "EXPLICIT_SECTION"
+            )
+        try:
+            previous = self._notes.previous_revision(revision.note_id, revision.version)
+        except Exception:
+            item["comparison_basis"] = "PREVIOUS_REVISION_UNAVAILABLE"
+            return
+        if previous is None:
+            return
+        if (
+            previous.note_id != revision.note_id
+            or previous.version >= revision.version
+            or previous.observed_at > revision.observed_at
+            or previous.coverage is not NoteCoverage.FULL
+        ):
+            item["comparison_basis"] = "PREVIOUS_REVISION_NOT_COMPARABLE"
+            return
+        old = _latest_user_blocks(previous.blocks, today, [])
+        current_text = "\n".join(b.body for b in selected)
+        previous_text = "\n".join(b.body for b in old)
+        truncated = len(current_text) > 8000 or len(previous_text) > 8000
+        before, after = previous_text[:8000].splitlines(), current_text[:8000].splitlines()
+        added: list[str] = []
+        removed: list[str] = []
+        for tag, a, b, c, d in SequenceMatcher(a=before, b=after, autojunk=False).get_opcodes():
+            if tag in {"replace", "delete"}:
+                removed.extend(before[a:b])
+            if tag in {"replace", "insert"}:
+                added.extend(after[c:d])
+        item.update(
+            {
+                "previous_revision_id": previous.note_revision_id,
+                "comparison_basis": "PREVIOUS_SYNCED_USER_SECTION",
+                "added_lines": [line[:1000] for line in added[:8]],
+                "removed_lines": [line[:1000] for line in removed[:8]],
+                "comparison_truncated": truncated
+                or len(added) > 8
+                or len(removed) > 8
+                or any(len(line) > 1000 for line in (*added, *removed)),
+            }
+        )
 
     def _extract(self, revision: ExternalNoteRevision, now: datetime) -> dict[str, object]:
         warnings: list[str] = []

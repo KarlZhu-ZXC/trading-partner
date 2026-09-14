@@ -1,13 +1,18 @@
 "use client";
 
+import { TodayReview } from "./components/today-review";
+import { WeeklyReview } from "./components/weekly-review";
+import { useState } from "react";
 import { useAccountLabel } from "./components/account-aliases";
 
 import Link from "next/link";
 import { ConsoleShell } from "./components/console-shell";
 import {
   Badge,
+  HorizontalTabs,
   Card,
   DataBoundary,
+  Disclosure,
   QuickLink,
   Empty,
   MetricTile,
@@ -35,6 +40,7 @@ function durationLabel(value: unknown): string {
 }
 
 export default function OverviewPage() {
+  const [reviewMode, setReviewMode] = useState("today");
   const accountLabel = useAccountLabel();
   const result = useApi<Dict>("/api/overview");
   const health = envelopeData<Dict>(result.data?.health);
@@ -92,16 +98,15 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
+  const operationalActions = notices.actionItems.filter((item) => item.href.startsWith("/operations") || item.key === "outbox-dead");
   const groupedInboxCount = notices.actionItems.length + (otherReviewCount > 0 ? 1 : 0);
   const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   return (
     <ConsoleShell active="overview">
+      <HorizontalTabs items={[{id:"today",label:"Today Review"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={setReviewMode} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
+      <section id={`review-window-panel-${reviewMode}`} role="tabpanel" aria-labelledby={`review-window-${reviewMode}`}>{reviewMode === "today" ? <TodayReview /> : <WeeklyReview />}</section>
       <DataBoundary loading={result.loading} error={result.error}>
-        <Card className="span-12" kicker="JUDGMENT INTAKE" title="View Inbox" subtitle="Moomoo and external-note changes waiting for your review" action={<div className="page-actions"><Badge value={`${observationReviewItems.length} PENDING`} /><QuickLink href="/research?section=quick-review">Quick Review</QuickLink><QuickLink href="/decision-workbench#notes">Review View Changes</QuickLink></div>}>
-          {observationReviewItems.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No View Change Waiting</strong><small>Your confirmed Decisions remain the durable current view. New FULL note revisions appear here after interpretation.</small></div></div> : <div className="attention-queue">{observationReviewItems.slice(0, 8).map((item) => <Link href={String(item.href ?? "/decision-workbench#notes")} key={String(item.review_item_id ?? item.source_key)}><Badge value="VIEW" /><div><strong>{String(item.title ?? "View review due")}</strong><span>{String(item.detail ?? "Review this exact note revision against the confirmed judgment.")}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
-        </Card>
-
         <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
           <div className="agenda-summary-grid">
             <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
@@ -132,15 +137,18 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card id="review-queue" className="span-12" kicker="DECISION WORKFLOW" title="Action & Review Inbox" subtitle="Grouped manual actions and durable closure metrics" action={<div className="page-actions"><Badge value={`${groupedInboxCount} GROUPS`} /><QuickLink href="/decision-workbench#reviews">Open Reviews</QuickLink></div>}>
-            {groupedInboxCount === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>No Other Manual Action Required</strong><small>View changes are handled in the View Inbox above. Operational constraints and automatic retries appear separately.</small></div></div> : <div className="attention-queue">{otherReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Other Review Items</strong><span>{otherReviewCount} open or acknowledged non-Observation item(s).</span></div><span aria-hidden="true">→</span></Link> : null}{notices.actionItems.slice(0, 15).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>}
+          <Card id="review-queue" className="span-12" kicker="SYSTEM FOLLOW-UP" title="Operations & Workflow">
+            {operationalActions.length > 0 && <div className="attention-queue" aria-label="Operational Actions">{operationalActions.map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></Link>)}</div>}
+            <Disclosure title="Workflow Details">
+            {groupedInboxCount > 0 && <div className="attention-queue">{otherReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Other Review Items</strong><span>{otherReviewCount} open or acknowledged items.</span></div></Link> : null}{notices.actionItems.filter((item) => !operationalActions.includes(item)).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></Link>)}</div>}
+            </Disclosure>
             {notices.automaticItems.length > 0 ? (
               <div className="automatic-recovery">
                 <div className="quality-section-heading"><span>Waiting for Next Evaluation</span><small>Not the Current Source Status</small></div>
                 <div className="attention-queue">{notices.automaticItems.slice(0, 6).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>)}</div>
               </div>
             ) : null}
-            <div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
+            <Disclosure title="Review Metrics"><div className="review-metrics" aria-label="Review Queue Lifecycle Metrics">
               <span>Open<strong>{String(Number(reviewMetrics.open_count ?? 0) + Number(reviewMetrics.acknowledged_count ?? 0))}</strong></span>
               <span>Overdue<strong>{String(reviewMetrics.overdue_count ?? 0)}</strong></span>
               <span>Oldest Current Gap<strong>{durationLabel(reviewMetrics.oldest_current_open_age_seconds)}</strong></span>
@@ -148,6 +156,7 @@ export default function OverviewPage() {
               <span>Median Close<strong>{durationLabel(reviewMetrics.median_open_to_close_seconds)}</strong><small>n={String(reviewMetrics.closure_sample_size ?? 0)}</small></span>
               <span>Recurring<strong>{String(reviewMetrics.recurring_count ?? 0)}</strong></span>
             </div>
+            </Disclosure>
           </Card>
           <Card
             className="span-12"
