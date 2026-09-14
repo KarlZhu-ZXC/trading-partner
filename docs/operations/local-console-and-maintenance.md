@@ -79,8 +79,9 @@ fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执�
 
 ### Copilot 研究模型选择
 
-当前 Go 合成证据实测支持优先使用 `grok-4.6` 的 `high` 档进行 Research；
-`qwen3.8-flash` 的 `max` 档可作较快备选。Grok 的 `max` 在探测中返回请求拒绝，
+当前 Go 合成证据实测支持日常 Research 优先使用 `deepseek-v4.1-flash` 的 `high` 档；
+重要判断可手动选择 `grok-4.6` 的 `high` 档复核，`qwen3.8-flash` 的 `max` 档作为备选。
+这不是自动跨模型复核或故障切换配置。Grok 的 `max` 在探测中返回请求拒绝，
 模型目录列出的档位不代表当前路由一定接受。这个选择基于字段与解释交付，
 不代表投资预测准确率。使用 Composer 的 Provider、Model、Reasoning Effort 选择器；
 模型与档位按浏览器保存，不会更改 Monitor 或私人笔记分析的共享服务配置。
