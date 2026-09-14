@@ -20,6 +20,7 @@ import { envelopeData, getJson, listOf, postApi, useApi } from "../lib/api";
 import { endOfDayIsoOrNull } from "../lib/review-due-date.mjs";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { CYCLE_ACTIVITY_COUNTS_HELP, cycleActivityCounts } from "../lib/trade-cycle-counts";
+import { PinnedObservationStatus, ResearchChangeReview, useResearchChangeReview } from "./research-change-review";
 import { ObservationInbox } from "./observation-inbox";
 import { RetroReviewList } from "./retro-review-list";
 import { ScenarioDigest } from "./scenario-digest";
@@ -666,9 +667,6 @@ export default function DecisionWorkbenchPage() {
     activityDateParameter("behavior_end", selectedPeriodEnd, periodWindowValid, usesActivityFilters),
   ].filter(Boolean).join("&");
   const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`, { enabled: activeWindowValid });
-  const observationApi = useApi<ObservationInboxResponse>("/api/observations?limit=100", {
-    enabled: journalTab === "notes" || journalTab === "overview",
-  });
   const subjects = listOf<SubjectAggregate>(workbenchApi.data, "subjects");
   const activeSubjects = useMemo(
     () => subjects.filter((item) => upper(item.subject?.status) !== "ARCHIVED"),
@@ -676,6 +674,11 @@ export default function DecisionWorkbenchPage() {
   );
   const defaultSubjectId = text(workbenchApi.data?.selected_subject_id, "");
   const subjectId = requestedSubjectId || defaultSubjectId;
+  const researchReview = useResearchChangeReview(subjectId);
+  const { pinnedRevisionId, pinnedObservationApi } = researchReview;
+  const observationApi = useApi<ObservationInboxResponse>("/api/observations?limit=100", {
+    enabled: !pinnedRevisionId && (journalTab === "notes" || journalTab === "overview"),
+  });
   const currentViewApi = useApi<Dict>(
     `/api/current-view?subject_id=${encodeURIComponent(subjectId)}`,
     { enabled: Boolean(subjectId) },
@@ -708,9 +711,9 @@ export default function DecisionWorkbenchPage() {
   );
   const behaviorReviewRuns = listOf<Dict>(workbenchApi.data, "behavior_review_runs");
   const observationData = observationApi.data?.data;
-  const externalNotes = listOf<Dict>(observationData, "external_notes");
+  const externalNotes = researchReview.latestItems(listOf<Dict>(observationData, "external_notes"));
   const observationSources = listOf<Dict>(observationData, "observation_sources");
-  const observationReviewWorkflowEnabled = observationData?.review_workflow_enabled !== false;
+  const observationReviewWorkflowEnabled = researchReview.reviewWorkflowEnabled(observationData?.review_workflow_enabled !== false);
   const currentView = asDict(currentViewApi.data?.data);
 
   useEffect(() => {
@@ -1582,6 +1585,7 @@ export default function DecisionWorkbenchPage() {
       setDecisionReviewDate(futureDateInput(7));
       setSupersedesDecisionId(null);
       setDecisionMessage(reviewClosureWarning ?? `${decisionScenario} · ${selectedAction.replaceAll("_", " ")} recorded.`);
+      pinnedObservationApi.refresh();
       workbenchApi.refresh();
     } catch (cause) {
       setDecisionError(cause instanceof Error ? cause.message : "Decision Record failed.");
@@ -1812,8 +1816,8 @@ export default function DecisionWorkbenchPage() {
     }
   }
 
-  const loading = workbenchApi.loading || (journalTab === "notes" && observationApi.loading);
-  const error = workbenchApi.error || (journalTab === "notes" ? observationApi.error : null);
+  const loading = workbenchApi.loading || (journalTab === "notes" && !pinnedRevisionId && observationApi.loading);
+  const error = workbenchApi.error || (journalTab === "notes" && !pinnedRevisionId ? observationApi.error : null);
   const readyNotes = filteredExternalNotes.filter((item) => {
     const revision = asDict(item.revision);
     const interpretation = asDict(item.interpretation);
@@ -1834,6 +1838,14 @@ export default function DecisionWorkbenchPage() {
     { id: "refresh", label: loading ? "Refreshing…" : "Refresh", description: "Reload durable workflow context", icon: <RefreshCw aria-hidden="true" className={loading ? "spin" : undefined} />, disabled: loading, onSelect: workbenchApi.refresh },
   ]} />}>
     <div className={`${journalStyles.root} decision-workbench`}>
+        <ResearchChangeReview context={researchReview} subjectId={subjectId} canRecord={Boolean(selected)} onRecord={(reviewedChange, baselineId) => {
+              setDecisionAction("no_action"); setDecisionScenario("SIDEWAYS");
+              setDecisionReason(`Review recorded change ${text(reviewedChange.change_id)}: ${text(reviewedChange.title)}`);
+              setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null);
+              setDecisionReviewPackage(null); setDecisionDraftScenarios([]);
+              setSupersedesDecisionId(baselineId?.startsWith("decision_") ? baselineId : null);
+              setDecisionError(null); setDecisionOpen(true);
+            }} />
         <FilterBar aria-label="Journal Filters">
           {journalTab !== "notes" && journalTab !== "reviews" ? <>
             <FormField label="Period"><Select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as PeriodFilter)}><option value="ALL">All History</option><option value="30D">Last 30 Days</option><option value="90D">Last 90 Days</option><option value="YTD">Year to Date</option><option value="CUSTOM">Custom Range</option></Select></FormField>
@@ -1987,14 +1999,15 @@ export default function DecisionWorkbenchPage() {
 
           <section id="journal-panel-notes" role="tabpanel" aria-labelledby="journal-tab-notes" hidden={journalTab !== "notes"} className="journal-panel-stack">
             <ObservationRefreshStatus />
+            <PinnedObservationStatus context={researchReview} />
             <ObservationInbox
-              items={filteredExternalNotes}
+              items={researchReview.noteItems(filteredExternalNotes)}
               sources={observationSources}
               activeSubjects={activeSubjects}
               busy={noteSyncBusy}
               syncMessage={noteSyncMessage}
               syncError={noteSyncError}
-              onRefresh={() => { void refreshObservationSources(); }}
+              onRefresh={() => { if (pinnedRevisionId) pinnedObservationApi.refresh(); else void refreshObservationSources(); }}
               onSelectSubject={selectSubjectContext}
               onReviewDecision={reviewNoteAsDecision}
               onDeferReview={deferNoteReview}

@@ -79,6 +79,34 @@ are computed deterministically first. A model cannot confirm a Thesis, Decision,
 Plan, Monitor, position, or order. Contributor models require the owner's explicit
 training opt-in.
 
+## Changes since a reviewed Decision
+
+Research shows a read-only Changes Since Review workspace beside the exact user
+Decision baseline and its linked immutable Thesis revisions, assumptions,
+invalidation descriptions, and Trade Plan version. The default baseline is the
+latest user Decision by recorded time, not a model draft or a backdated decision time.
+A pinned `none` baseline explicitly preserves the unreviewed state.
+
+Scoped Observation revisions, immutable Monitor observation changes/transitions,
+and Agenda versions are compared with their predecessors. Old and new fact times,
+source/version identities, and available provenance are disclosed. Full-note previews
+are bounded USER excerpts; summary-only revisions expose metadata only. A matching
+Instrument never proves a particular Thesis assumption changed. Only a validated
+Monitor condition on an exact Plan/Thesis has an exact Plan relation.
+
+Each source reports its own coverage; missing/legacy Monitor history is partial and
+failed reads do not imply no changes or resolve reviews. Projection reads neither
+contact Providers/models nor create notifications. Stable source IDs deduplicate
+replays. Pagination follows the complete scoped projection, and a selected change
+is relocated by identity if newer rows shift its page.
+
+The baseline, selected change and page survive reload and Journal navigation using
+only opaque identifiers and a numeric offset in the URL. Journal restores an exact
+historical Observation independently of the latest inbox window. Opening or returning
+from review never confirms anything; existing Decision and Observation-review gates
+remain authoritative. Refresh keeps the baseline; Use Latest Review explicitly
+advances it after a completed review. User drafts are not auto-submitted on reload.
+
 ## Market and company facts
 
 - A-share: quotes, market structure, capital flow, limit-up and sentiment context,

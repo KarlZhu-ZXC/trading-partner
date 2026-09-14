@@ -58,9 +58,7 @@ class SqlAlchemyExternalNoteRepository:
             row = session.get(ExternalNoteRevisionRow, note_revision_id)
             return _revision(row) if row is not None else None
 
-    def previous_revision(
-        self, note_id: str, before_version: int
-    ) -> ExternalNoteRevision | None:
+    def previous_revision(self, note_id: str, before_version: int) -> ExternalNoteRevision | None:
         with Session(self._engine) as session:
             row = session.scalar(
                 select(ExternalNoteRevisionRow)
@@ -211,6 +209,36 @@ class SqlAlchemyExternalNoteRepository:
                 )
             )
 
+    def list_revisions_for_instrument(
+        self,
+        instrument_id: str,
+        *,
+        observed_after: datetime | None = None,
+        observed_through: datetime | None = None,
+    ) -> tuple[ExternalNoteRevision, ...]:
+        """Complete instrument scope; filter aware times after decoding ISO offsets."""
+        statement = (
+            select(ExternalNoteRevisionRow)
+            .join(
+                ExternalNoteIdentityRow,
+                ExternalNoteIdentityRow.note_id == ExternalNoteRevisionRow.note_id,
+            )
+            .where(ExternalNoteIdentityRow.primary_instrument_id == instrument_id)
+        )
+        with Session(self._engine) as session:
+            revisions = (_revision(row) for row in session.scalars(statement))
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in revisions
+                        if (observed_after is None or item.observed_at > observed_after)
+                        and (observed_through is None or item.observed_at <= observed_through)
+                    ),
+                    key=lambda item: (item.observed_at, item.note_revision_id),
+                )
+            )
+
     def list_latest(
         self, limit: int = 100
     ) -> tuple[tuple[ExternalNoteIdentity, ExternalNoteRevision], ...]:
@@ -233,9 +261,7 @@ class SqlAlchemyExternalNoteRepository:
                     result.append((_identity(identity_row), _revision(revision_row)))
             return tuple(result)
 
-    def list_revisions(
-        self, note_id: str, limit: int = 50
-    ) -> tuple[ExternalNoteRevision, ...]:
+    def list_revisions(self, note_id: str, limit: int = 50) -> tuple[ExternalNoteRevision, ...]:
         bounded = max(1, min(limit, 200))
         with Session(self._engine) as session:
             rows = session.scalars(
@@ -287,9 +313,7 @@ def _revision(row: ExternalNoteRevisionRow) -> ExternalNoteRevision:
                 speaker_label=str(item["speaker_label"]),
                 body=str(item["body"]),
                 section_date=(
-                    str(item["section_date"])
-                    if item.get("section_date") is not None
-                    else None
+                    str(item["section_date"]) if item.get("section_date") is not None else None
                 ),
             )
             for item in blocks

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CalendarPlus, Eye, RefreshCw, Send } from "lucide-react";
 import {
   ErrorNote,
+  Button,
   Paginator,
   ActionButton,
   Badge,
@@ -392,7 +393,18 @@ function buildRequest(action: AgendaAction, form: AgendaItemForm): Dict {
 
 export default function CatalystAgendaPage() {
   const [agendaOffset, setAgendaOffset] = useState(0);
-  const agendaApi = useApi<Dict>(`/api/agenda?window_days=60&limit=200&offset=${agendaOffset}`);
+  const [linkedAgendaScope, setLinkedAgendaScope] = useState("");
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const scope = new URLSearchParams();
+    for (const field of ["subject_id", "agenda_item_id"]) {
+      const value = query.get(field);
+      if (value) scope.set(field, value);
+    }
+    if (scope.has("agenda_item_id")) scope.set("include_history", "true");
+    setLinkedAgendaScope(scope.toString());
+  }, []);
+  const agendaApi = useApi<Dict>(`/api/agenda?window_days=60&limit=200&offset=${agendaOffset}${linkedAgendaScope ? `&${linkedAgendaScope}` : ""}`);
   const [busy, setBusy] = useState<AgendaAction | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [summaryBusy, setSummaryBusy] = useState<"preview" | "send" | null>(null);
@@ -819,6 +831,12 @@ export default function CatalystAgendaPage() {
       { id: "send", label: summaryBusy === "send" ? "Queueing Summary…" : "Queue Daily Summary", description: "Create the durable notification request", icon: <Send aria-hidden="true" />, disabled: summaryBusy !== null, onSelect: () => { void sendSummary(); } },
       { id: "refresh", label: agendaApi.loading ? "Refreshing…" : "Refresh", description: "Reload durable Catalyst Agenda data", icon: <RefreshCw aria-hidden="true" className={agendaApi.loading ? "spin" : undefined} />, disabled: agendaApi.loading, onSelect: agendaApi.refresh },
     ]} />}>
+      {linkedAgendaScope ? <div className="card-note" role="status">Showing the linked Research Agenda scope. <Button size="sm" onClick={() => {
+        setLinkedAgendaScope(""); setAgendaOffset(0);
+        const url = new URL(window.location.href);
+        url.searchParams.delete("subject_id"); url.searchParams.delete("agenda_item_id");
+        window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+      }}>Show All Agenda Items</Button></div> : null}
       <DataBoundary loading={agendaApi.loading} error={agendaApi.error}>
         {message && <p className="card-note">{message}</p>}
         {syncMessage && <p className="card-note">{syncMessage}</p>}

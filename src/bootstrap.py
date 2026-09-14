@@ -63,6 +63,7 @@ from application.services.position_sizing_service import PositionSizingService
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.provider_router import ProviderRouter
 from application.services.research_archive_service import ResearchArchiveService
+from application.services.research_changes_service import ResearchChangesService
 from application.services.research_context_builder import ResearchContextBuilder
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
@@ -827,6 +828,13 @@ def build_application(
             external_note_reviews=external_notes.reviews,
             external_note_review_drafts=external_notes.review_drafts,
             view_reviews=external_notes.view_reviews,
+            research_changes=ResearchChangesService(
+                notes=persistence.external_notes,
+                research_uow_factory=research_unit_of_work_factory,
+                monitors=monitor_repository,
+                agenda=persistence.catalyst_agenda,
+                clock=clock,
+            ),
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,

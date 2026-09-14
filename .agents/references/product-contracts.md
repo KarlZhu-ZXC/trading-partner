@@ -306,6 +306,23 @@ require an ACTIVE Research Subject, and linked ACTIVE/PAUSED Monitors block Subj
 or live-Plan retirement with `RESEARCH_STATE_CONFLICT`; callers must archive those
 Monitor definitions explicitly.
 
+**Console Changes Since Review**
+
+`GET /api/research/{subject_id}/changes` is a durable-only application projection.
+An omitted baseline chooses the latest user Decision by `recorded_at`; an exact
+Decision ID pins that reviewed version, and `none` pins no completed review.
+Never substitute current Thesis/Plan values for those exact references. Observation
+queries must be scoped before pagination, Monitor old/new values come from immutable
+run observations, and Agenda comparisons retain version visibility. Source failure
+is independently UNAVAILABLE and legacy Monitor history is PARTIAL. These reads never
+refresh Providers, invoke models, mutate reviews or send notifications. Same-Instrument
+matching is not an assumption/invalidation link. Preserve source/occurrence/recording
+metadata, including unavailable provenance; never reconstruct it from current state.
+The selected change can relocate its page by stable ID. Console URLs may keep only
+opaque context IDs and numeric offset, never source/model text. Journal's exact
+revision read validates the Subject Instrument and returns no-store; the existing
+review confirmation workflow owns all writes.
+
 **Provider facts and technicals**
 
 - `a_share_get_facts` (`snapshot`, `market_structure`, `capital`, `limit_up`,

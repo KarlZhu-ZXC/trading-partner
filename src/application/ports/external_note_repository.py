@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from domain.external_note.models import (
@@ -43,10 +44,16 @@ class ExternalNoteRepository(Protocol):
 
     def append_sync_receipt(self, value: ExternalNoteSyncReceipt) -> None: ...
 
+    def list_revisions_for_instrument(
+        self,
+        instrument_id: str,
+        *,
+        observed_after: datetime | None = None,
+        observed_through: datetime | None = None,
+    ) -> tuple[ExternalNoteRevision, ...]: ...
+
     def list_latest(
         self, limit: int = 100
     ) -> tuple[tuple[ExternalNoteIdentity, ExternalNoteRevision], ...]: ...
 
-    def list_revisions(
-        self, note_id: str, limit: int = 50
-    ) -> tuple[ExternalNoteRevision, ...]: ...
+    def list_revisions(self, note_id: str, limit: int = 50) -> tuple[ExternalNoteRevision, ...]: ...

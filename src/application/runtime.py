@@ -35,6 +35,7 @@ from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.research_archive_service import ResearchArchiveService
+from application.services.research_changes_service import ResearchChangesService
 from application.services.research_context_builder import ResearchContextBuilder
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
@@ -98,6 +99,7 @@ class ApplicationServices:
     external_note_reviews: ExternalNoteReviewService
     external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
+    research_changes: ResearchChangesService
 
 
 @dataclass(frozen=True, slots=True)

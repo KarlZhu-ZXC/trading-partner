@@ -36,6 +36,7 @@ import { useAgentPageContext } from "../lib/agent-page-context";
 import { notifyConsole } from "../lib/notifications";
 import { observationResearchSeed, type ObservationResearchDraft, type ObservationResearchSeed } from "../lib/observation-research-draft";
 import { ResearchContinuity } from "./research-continuity";
+import { ResearchChanges } from "./research-changes";
 import { ObservationResearchSource } from "./observation-research-source";
 import { textDash as text } from "../lib/coerce";
 import { EntityBrowser } from "../components/entity-browser";
@@ -902,6 +903,7 @@ function ResearchSubjectDetail({
         {failure && <div className="research-state-error" role="status"><strong>Partial Read Failed</strong><span>{failure}</span><small>Research Subject metadata remains editable; fix state loading before editing Thesis.</small></div>}
       </Card>
       {subjectEditor && <SubjectEditor draft={subjectDraft} editing busy={busy} error={detailError} onChange={setSubjectDraft} onCancel={() => setSubjectEditor(false)} onSave={() => { void saveSubject(); }} />}
+      <ResearchChanges subjectId={text(researchSubject.subject_id)} />
       <Card id="research-section-continuity" className="research-continuity-check" kicker="RESEARCH HEALTH" title="Health Check" action={continuitySignals.length > 0 ? <Badge value={`${continuitySignals.length} OPEN`} /> : undefined}>
         {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core Judgment Controls Are Present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => signal.key === "candidates" ? <Button className="continuity-checklist-action" type="button" key={signal.key} onClick={() => goToSection("research-section-review")}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div><span className="continuity-action-copy">Open Queue <ArrowDown aria-hidden="true" /></span></Button> : <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
       </Card>
@@ -1068,8 +1070,15 @@ export default function ResearchPage() {
   const selected = items.find((item) => String(item.subject?.subject_id) === selectedSubjectId) ?? null;
 
   function selectSubject(subjectId: string) {
-    setSelectedSubjectId(subjectId);
     const url = new URL(window.location.href);
+    // Initial hash restoration retains the exact review context. A real switch
+    // clears it before children mount or EntityBrowser writes the new hash.
+    if (selectedSubjectId !== null && selectedSubjectId !== subjectId) {
+      url.searchParams.delete("changes_baseline");
+      url.searchParams.delete("change_id");
+      url.searchParams.delete("changes_offset");
+    }
+    setSelectedSubjectId(subjectId);
     url.hash = `subject-${subjectId}`;
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }

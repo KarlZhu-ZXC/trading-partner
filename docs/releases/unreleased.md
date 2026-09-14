@@ -1,5 +1,11 @@
 # Unreleased
 
+- Added Research Changes Since Review: pinned user Decision/Thesis/Plan context,
+  scoped Observation, Monitor and Agenda changes, old/new provenance and independent
+  source coverage. Exact revision review and return navigation survive reload and
+  pagination; no Provider/model/notification work occurs during projection reads.
+  Existing explicit Decision and Observation confirmation gates remain unchanged.
+
 - Added an Apache-2.0 KLineChart 10.x workspace to the Console Market & Technical
   Lens. One validated technical read can optionally return complete bars for Console
   rendering; ordinary MCP reads still omit them. The client supports six candle/bar

@@ -1269,6 +1269,32 @@ def _canonical_subject_transport(value: Any) -> Any:
     return value
 
 
+@app.get("/api/research/{subject_id}/changes")
+async def research_changes(
+    request: Request,
+    subject_id: str,
+    baseline_decision_id: str | None = None,
+    change_id: str | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> JSONResponse:
+    """Read a deterministic change projection; never refresh or confirm anything."""
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.research_changes.get,
+            subject_id,
+            baseline_decision_id=baseline_decision_id,
+            offset=offset,
+            limit=limit,
+            change_id=change_id,
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+    return JSONResponse(
+        content={"data": result.model_dump(mode="json")}, headers={"Cache-Control": "no-store"}
+    )
+
+
 @app.get("/api/research")
 async def research(request: Request) -> dict[str, Any]:
     """Return every durable Research Subject and its current Thesis state.
@@ -2108,6 +2134,65 @@ async def observation_analysis_status(
             ),
         }
     }
+
+
+@app.get("/api/observations/{note_revision_id}/revision")
+async def observation_exact_revision(
+    request: Request,
+    note_revision_id: str,
+    subject_id: str,
+) -> JSONResponse:
+    """Restore one exact private revision, independent of the latest inbox window."""
+    services = _container(request).services
+    item = services.external_notes.read_revision(note_revision_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Observation revision was not found")
+    state = await _invoke_capability(
+        request,
+        "research_get",
+        {"request": {"operation": "state", "case_id": subject_id}},
+        preserve_full_result=True,
+    )
+    data = state.get("data") if isinstance(state, dict) and state.get("ok") is True else None
+    subject = data.get("subject") if isinstance(data, dict) else None
+    if not isinstance(subject, dict):
+        # The public state shape uses case at the compatibility boundary.
+        subject = data.get("case") if isinstance(data, dict) else None
+    if (
+        not isinstance(subject, dict)
+        or not item.identity.primary_instrument_id
+        or subject.get("primary_instrument_id") != item.identity.primary_instrument_id
+    ):
+        raise HTTPException(
+            status_code=422, detail="Observation does not match this Research Subject"
+        )
+    review = services.external_note_reviews.get_for_revision(note_revision_id)
+    payload = {
+        "review_workflow_enabled": (
+            _container(request).settings.observation_review_workflow_enabled is not False
+        ),
+        "identity": asdict(item.identity),
+        "revision": {
+            **asdict(item.revision),
+            "blocks": [
+                asdict(block)
+                for block in (
+                    attributed_blocks(item.revision.full_body)
+                    if item.revision.full_body
+                    else item.revision.blocks
+                )
+            ],
+        },
+        "interpretation": (
+            {**asdict(item.interpretation), "payload": json.loads(item.interpretation.payload_json)}
+            if item.interpretation is not None
+            else None
+        ),
+        "review": review.model_dump(mode="json") if review is not None else None,
+    }
+    return JSONResponse(
+        content={"data": jsonable_encoder(payload)}, headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.get("/api/observations/{note_revision_id}/research-draft")

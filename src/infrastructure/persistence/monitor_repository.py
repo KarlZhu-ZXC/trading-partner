@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -933,48 +933,57 @@ class SqlAlchemyMonitorRepository:
             )
             return _run(row, observations)
 
-    def list_runs(self, monitor_id: str | None, limit: int) -> tuple[MonitorRun, ...]:
+    def list_runs(self, monitor_id: str | None, limit: int | None) -> tuple[MonitorRun, ...]:
         statement = select(MonitorRunRow)
         if monitor_id is not None:
-            statement = (
-                statement.join(
-                    MonitorRunObservationRow,
-                    MonitorRunObservationRow.run_id == MonitorRunRow.run_id,
-                )
-                .where(MonitorRunObservationRow.monitor_id == monitor_id)
-                .distinct()
+            selected_ids = func.json_each(MonitorRunRow.selected_monitor_ids).table_valued("value")
+            selected = (
+                select(1)
+                .select_from(selected_ids)
+                .where(selected_ids.c.value == monitor_id)
+                .correlate(MonitorRunRow)
+                .exists()
             )
+            observed = (
+                select(1)
+                .select_from(MonitorRunObservationRow)
+                .where(
+                    MonitorRunObservationRow.run_id == MonitorRunRow.run_id,
+                    MonitorRunObservationRow.monitor_id == monitor_id,
+                )
+                .correlate(MonitorRunRow)
+                .exists()
+            )
+            statement = statement.where(or_(selected, observed))
         statement = statement.order_by(MonitorRunRow.completed_at.desc()).limit(limit)
         with Session(self._engine) as session:
             rows = tuple(session.scalars(statement))
-            values: list[MonitorRun] = []
-            for row in rows:
+            by_run: dict[str, list[MonitorRunObservation]] = {}
+            for offset in range(0, len(rows), 500):
+                batch = rows[offset : offset + 500]
                 observation_statement = select(MonitorRunObservationRow).where(
-                    MonitorRunObservationRow.run_id == row.run_id
+                    MonitorRunObservationRow.run_id.in_([row.run_id for row in batch])
                 )
                 if monitor_id is not None:
                     observation_statement = observation_statement.where(
                         MonitorRunObservationRow.monitor_id == monitor_id
                     )
-                observations = tuple(
-                    _observation(item)
-                    for item in session.scalars(
-                        observation_statement.order_by(
-                            MonitorRunObservationRow.monitor_id,
-                            MonitorRunObservationRow.rule_code,
-                        )
+                for observation in session.scalars(
+                    observation_statement.order_by(
+                        MonitorRunObservationRow.monitor_id, MonitorRunObservationRow.rule_code
                     )
-                )
-                values.append(_run(row, observations, scoped_monitor_id=monitor_id))
-            return tuple(values)
+                ):
+                    by_run.setdefault(observation.run_id, []).append(_observation(observation))
+            return tuple(
+                _run(row, tuple(by_run.get(row.run_id, ())), scoped_monitor_id=monitor_id)
+                for row in rows
+            )
 
     def latest_run_for_monitor(self, monitor_id: str) -> MonitorRun | None:
         values = self.list_runs(monitor_id, 1)
         return values[0] if values else None
 
-    def latest_run_for_monitor_version(
-        self, monitor_id: str, version: int
-    ) -> MonitorRun | None:
+    def latest_run_for_monitor_version(self, monitor_id: str, version: int) -> MonitorRun | None:
         with Session(self._engine) as session:
             run_id = session.scalar(
                 select(MonitorRunObservationRow.run_id)
@@ -1011,7 +1020,7 @@ class SqlAlchemyMonitorRepository:
             row = session.get(MonitorEventRow, event_id)
             return _event(row) if row is not None else None
 
-    def list_events(self, monitor_id: str | None, limit: int) -> tuple[MonitorEvent, ...]:
+    def list_events(self, monitor_id: str | None, limit: int | None) -> tuple[MonitorEvent, ...]:
         statement = select(MonitorEventRow)
         if monitor_id is not None:
             statement = statement.where(MonitorEventRow.monitor_id == monitor_id)

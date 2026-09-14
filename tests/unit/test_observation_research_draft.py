@@ -250,8 +250,11 @@ def test_exact_read_keeps_proven_full_promotion_for_the_same_revision() -> None:
     summary = "USER: Hold.\nWatch support at 210."
     current = replace(_revision(coverage=NoteCoverage.SUMMARY_ONLY), summary=summary)
     previous = replace(
-        _revision(), note_revision_id="external_note_revision_previous", version=1,
-        summary=summary, full_body="USER: Hold.",
+        _revision(),
+        note_revision_id="external_note_revision_previous",
+        version=1,
+        summary=summary,
+        full_body="USER: Hold.",
     )
     repository.revision_by_id.return_value = current
     repository.get.return_value = _identity()
@@ -276,9 +279,7 @@ async def test_console_endpoint_is_no_store_and_returns_exact_projection() -> No
     container = MagicMock()
     container.services.external_notes.read_revision.return_value = item
     container.services.external_note_review_drafts.latest.return_value = None
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(container=container))
-    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
 
     response = await observation_research_draft(request, REVISION_ID)
 
@@ -292,11 +293,77 @@ async def test_console_endpoint_is_no_store_and_returns_exact_projection() -> No
 async def test_console_endpoint_returns_404_for_missing_exact_revision() -> None:
     container = MagicMock()
     container.services.external_notes.read_revision.return_value = None
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(container=container))
-    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
 
     with pytest.raises(HTTPException) as error:
         await observation_research_draft(request, REVISION_ID)
 
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_exact_review_revision_is_scoped_and_read_only(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import interfaces.console.api as api
+
+    container = MagicMock()
+    container.settings.observation_review_workflow_enabled = False
+    item = _item(revision=_revision(), interpretation=_interpretation(_payload()))
+    container.services.external_notes.read_revision.return_value = item
+    container.services.external_note_reviews.get_for_revision.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
+    read = AsyncMock(
+        return_value={
+            "ok": True,
+            "data": {
+                "subject": {
+                    "primary_instrument_id": item.identity.primary_instrument_id,
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(api, "_invoke_capability", read)
+    response = await api.observation_exact_revision(request, REVISION_ID, "case_synthetic")
+    assert response.headers["cache-control"] == "no-store"
+    assert json.loads(response.body)["data"]["review_workflow_enabled"] is False
+    assert json.loads(response.body)["data"]["revision"]["note_revision_id"] == REVISION_ID
+    assert read.call_args.kwargs["preserve_full_result"] is True
+    container.services.external_notes.inbox.assert_not_called()
+    container.services.external_notes.analyze_revision.assert_not_called()
+    container.services.external_note_reviews.ensure_pending.assert_not_called()
+    read.return_value = {
+        "ok": True,
+        "data": {
+            "subject": {
+                "primary_instrument_id": "equity:US:DIFFERENT",
+            }
+        },
+    }
+    with pytest.raises(HTTPException) as failure:
+        await api.observation_exact_revision(request, REVISION_ID, "case_other")
+    assert failure.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_retains_full_projection_without_mutation() -> None:
+    import interfaces.console.api as api
+
+    container = MagicMock()
+    payload = {
+        "subject_id": "case_synthetic",
+        "total": 45,
+        "items": [{"change_id": str(i)} for i in range(25)],
+    }
+    container.services.research_changes.get.return_value.model_dump.return_value = payload
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
+    response = await api.research_changes(request, "case_synthetic", "decision_exact", None, 0, 25)
+    assert response.headers["cache-control"] == "no-store"
+    assert json.loads(response.body)["data"] == payload
+    container.services.research_changes.get.assert_called_once_with(
+        "case_synthetic",
+        baseline_decision_id="decision_exact",
+        change_id=None,
+        offset=0,
+        limit=25,
+    )
