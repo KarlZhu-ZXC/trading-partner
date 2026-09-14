@@ -12,6 +12,7 @@ import { ErrorNote, ActionButton, Badge, Card, Disclosure, Empty, FormActions, d
 } from "../components/ui";
 import { envelopeData, listOf, postApi } from "../lib/api";
 import { textDash as value } from "../lib/coerce";
+import { chartResearchProvenance, type ChartResearchContext } from "../lib/chart-research-context";
 import type { ObservationResearchSeed } from "../lib/observation-research-draft";
 
 type Dict = Record<string, unknown>;
@@ -85,7 +86,7 @@ function planCondition(condition: Dict): string {
     : `${value(condition.fact_type)} · ${value(condition.metric_key)} ${comparator ?? "—"} ${formatDecimal(condition.threshold, 4)} ${value(condition.unit, "")}`;
 }
 
-function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy, observationSeed, reviewRequest, onEditingChange }: { subject: Dict; state: Dict; onWrite: Write; onRefresh: () => void; busy: boolean; observationSeed: ObservationResearchSeed | null; reviewRequest: number; onEditingChange: (open: boolean) => void }) {
+function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy, observationSeed, reviewRequest, chartSeed, chartReviewRequest, onEditingChange }: { subject: Dict; state: Dict; onWrite: Write; onRefresh: () => void; busy: boolean; observationSeed: ObservationResearchSeed | null; reviewRequest: number; chartSeed: ChartResearchContext | null; chartReviewRequest: number; onEditingChange: (open: boolean) => void }) {
   const plans = listOf<Dict>(state, "trade_plan_versions");
   const current = state.current_trade_plan && typeof state.current_trade_plan === "object" ? state.current_trade_plan as Dict : null;
   const theses = listOf<Dict>(state, "theses");
@@ -110,11 +111,11 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy, observat
   const [conditions, setConditions] = useState<ConditionDraft[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  function openEditor(fromReview = false) {
+  function openEditor(fromReview = false, fromChart = false) {
     if (editing) return;
     setError(null);
     setThesisId(value(current?.thesis_id, value(liveTheses[0]?.thesis_id, "")));
-    const useSeedForNewPlan = sourceMatches && !current;
+    const useSeedForNewPlan = !fromChart && sourceMatches && !current;
     const appendReviewToExisting = sourceMatches && Boolean(current) && fromReview;
     setInstrument(value(current?.instrument_id, useSeedForNewPlan ? value(observationSeed?.plan.instrument, value(subject.primary_instrument_id, "")) : value(subject.primary_instrument_id, value(selectedCandidate?.instrument_id, ""))));
     setStatus(value(current?.status, "DRAFT"));
@@ -134,7 +135,7 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy, observat
     const existingConditions = listOf<Dict>(current ?? {}, "conditions").map((item) => ({
       conditionCode: value(item.condition_code, ""), phase: value(item.phase, "REVIEW"), mode: value(item.mode, "MANUAL"), description: value(item.description, ""), severity: value(item.severity, "MEDIUM"), factType: value(item.fact_type, "PRICE"), metricKey: value(item.metric_key, "last_price"), comparator: value(item.comparator, "GTE"), threshold: value(item.threshold, ""), unit: value(item.unit, "USD"),
     }));
-    const importedConditions = sourceMatches ? seedConditionDrafts(observationSeed) : [];
+    const importedConditions = !fromChart && sourceMatches ? seedConditionDrafts(observationSeed) : [];
     const existingConditionCodes = new Set(existingConditions.map((item) => item.conditionCode).filter(Boolean));
     const conditionsToAppend = importedConditions.filter((item) => !existingConditionCodes.has(item.conditionCode));
     setConditions(appendReviewToExisting ? [...existingConditions, ...conditionsToAppend] : useSeedForNewPlan ? importedConditions : existingConditions);
@@ -148,6 +149,12 @@ function TradePlanWorkspace({ subject, state, onWrite, onRefresh, busy, observat
   useEffect(() => {
     if (reviewRequest > 0 && !editing) openEditor(true);
   }, [reviewRequest]);
+
+  useEffect(() => {
+    if (chartReviewRequest <= 0 || !chartSeed || editing || chartSeed.instrument_id !== value(subject.primary_instrument_id, "") || chartSeed.subject_id !== value(subject.subject_id, "")) return;
+    openEditor(false, true);
+    setNotes([value(current?.notes, ""), chartSeed.note, chartResearchProvenance(chartSeed)].filter(Boolean).join("\n\n"));
+  }, [chartReviewRequest]);
 
   function updateCondition(index: number, field: keyof ConditionDraft, next: string) {
     setConditions((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: next } : item));
@@ -319,10 +326,10 @@ function ChallengeWorkspace({ subject }: { subject: Dict }) {
   return <Card className="research-challenge-card" kicker="STRICT REVIEW · NON-EXECUTING" title="Challenge Review"><div className="challenge-controls"><label><span>Review ID</span><Input value={reviewId} onChange={(event) => setReviewId(event.target.value)} placeholder="challenge_<uuid7>" /></label><ActionButton busy={busy} onClick={() => { if (reviewId.trim()) void invoke("research_get", { operation: "challenge_review", review_id: reviewId.trim() }); }}>Load</ActionButton><label><span><b className="required-mark" aria-hidden="true">*</b>Trigger</span><Select required value={trigger} onChange={(event) => setTrigger(event.target.value)}>{["discussion", "thesis_activation", "confidence_increase", "invalidation_relaxation", "position_intent", "contrary_evidence", "position_thesis_conflict", "stale_review", "confidence_without_evidence"].map((item) => <option key={item}>{item}</option>)}</Select></label><label className="challenge-action"><span><b className="required-mark" aria-hidden="true">*</b>Proposed Action</span><Input required value={proposedAction} onChange={(event) => setProposedAction(event.target.value)} /></label><ActionButton busy={busy} onClick={() => { if (!proposedAction.trim()) { setError("Enter a proposed action."); return; } void invoke("research_judgment_propose", { operation: "challenge_review", case_id: subject.subject_id, trigger, proposed_action: proposedAction.trim(), related_evidence_ids: [], idempotency_key: trigger === "discussion" ? null : key("challenge") }, "research_judgment_propose"); }}>Start Review</ActionButton></div><ErrorNote role="alert">{error}</ErrorNote>{review && <div className="challenge-review"><header><div><strong>{value(review.review_id)}</strong><small>{value(review.trigger)} · {formatDate(review.created_at)}</small></div><Badge value={value(review.status).toUpperCase()} /></header><p>{value(review.proposed_action)}</p><div className="challenge-questions">{listOf<Dict>(review, "questions").map((question) => <div key={value(question.question_id)}><span>{value(question.dimension)}</span><p>{value(question.prompt)}</p></div>)}</div>{value(review.status, "").toLowerCase() === "open" && <div className="challenge-resolution"><label><span><b className="required-mark" aria-hidden="true">*</b>Resolution</span><Select required value={resolution} onChange={(event) => setResolution(event.target.value)}>{["accept", "revise", "reject", "defer"].map((item) => <option key={item}>{item}</option>)}</Select></label><label><span><b className="required-mark" aria-hidden="true">*</b>Resolution Rationale</span><Input required value={rationale} onChange={(event) => setRationale(event.target.value)} /></label><ActionButton busy={busy} onClick={() => { if (!rationale.trim()) { setError("Enter a resolution rationale."); return; } void invoke("research_judgment_confirm", { operation: "challenge_review", review_id: review.review_id, resolution, rationale: rationale.trim(), confirmed_by: "user", idempotency_key: key("challenge-resolve") }, "research_judgment_confirm"); }}>Record Outcome</ActionButton></div>}</div>}</Card>;
 }
 
-export function ResearchContinuity({ activeModule, subject, state, onWrite, onRefresh, busy, observationSeed, planReviewRequest, onPlanEditingChange }: { activeModule: string; subject: Dict; state: Dict; onWrite: Write; onRefresh: () => void; busy: boolean; observationSeed: ObservationResearchSeed | null; planReviewRequest: number; onPlanEditingChange: (open: boolean) => void }) {
+export function ResearchContinuity({ activeModule, subject, state, onWrite, onRefresh, busy, observationSeed, planReviewRequest, chartSeed, chartReviewRequest, onPlanEditingChange }: { activeModule: string; subject: Dict; state: Dict; onWrite: Write; onRefresh: () => void; busy: boolean; observationSeed: ObservationResearchSeed | null; planReviewRequest: number; chartSeed: ChartResearchContext | null; chartReviewRequest: number; onPlanEditingChange: (open: boolean) => void }) {
   return <>
     <section id="research-panel-trade-plan" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-trade-plan" hidden={activeModule !== "trade-plan"}>
-    <TradePlanWorkspace subject={subject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} observationSeed={observationSeed} reviewRequest={planReviewRequest} onEditingChange={onPlanEditingChange} />
+    <TradePlanWorkspace subject={subject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} observationSeed={observationSeed} reviewRequest={planReviewRequest} chartSeed={chartSeed} chartReviewRequest={chartReviewRequest} onEditingChange={onPlanEditingChange} />
     </section>
     <section id="research-panel-history" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-history" hidden={activeModule !== "history"}>
     <ResearchMemoryWorkspace subject={subject} onWrite={onWrite} busy={busy} />

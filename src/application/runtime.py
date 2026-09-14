@@ -30,6 +30,7 @@ from application.services.external_note_sync_service import ExternalNoteSyncServ
 from application.services.health_service import HealthService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
+from application.services.judgment_calibration_service import JudgmentCalibrationService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
@@ -51,6 +52,7 @@ from application.services.trade_retro_service import TradeRetroService
 from application.services.us_context_tool_coordinator import USContextToolCoordinator
 from application.services.us_research_tool_coordinator import USResearchToolCoordinator
 from application.services.us_tool_coordinator import USToolCoordinator
+from application.services.valuation_service import ValuationService
 from application.services.view_review_service import ViewReviewService
 from application.services.watchlist_hub_service import WatchlistHubService
 
@@ -100,6 +102,8 @@ class ApplicationServices:
     external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
     research_changes: ResearchChangesService
+    judgment_calibration: JudgmentCalibrationService
+    valuation: ValuationService
 
 
 @dataclass(frozen=True, slots=True)

@@ -44,6 +44,7 @@ from application.services.instrument_access_service import InstrumentAccessServi
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
 from application.services.journal_service import JournalService
+from application.services.judgment_calibration_service import JudgmentCalibrationService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
@@ -78,6 +79,7 @@ from application.services.routed_futures_provider import RoutedFuturesProvider
 from application.services.sgov_shadow_plan_service import SgovShadowPlanService
 from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.trade_retro_service import TradeRetroService
+from application.services.valuation_service import ValuationService
 from application.services.watchlist_hub_service import WatchlistHubService
 from composition_root.external_notes import build_external_note_services
 from composition_root.market_facts import build_market_facts_services
@@ -583,6 +585,13 @@ def build_application(
         secret_redactor,
         trade_retro_narrative_provider,
     )
+    research_changes_service = ResearchChangesService(
+        notes=persistence.external_notes,
+        research_uow_factory=research_unit_of_work_factory,
+        monitors=monitor_repository,
+        agenda=persistence.catalyst_agenda,
+        clock=clock,
+    )
     judgment_scorecard_service = JudgmentScorecardService(
         persistence.scorecards,
         persistence.catalyst_agenda,
@@ -828,13 +837,21 @@ def build_application(
             external_note_reviews=external_notes.reviews,
             external_note_review_drafts=external_notes.review_drafts,
             view_reviews=external_notes.view_reviews,
-            research_changes=ResearchChangesService(
-                notes=persistence.external_notes,
-                research_uow_factory=research_unit_of_work_factory,
-                monitors=monitor_repository,
-                agenda=persistence.catalyst_agenda,
-                clock=clock,
+            judgment_calibration=JudgmentCalibrationService(
+                research_unit_of_work_factory,
+                persistence.catalyst_agenda,
+                persistence.scorecards,
+                persistence.trade_retro,
+                clock,
+                changes=research_changes_service,
             ),
+            valuation=ValuationService(
+                research_unit_of_work_factory,
+                market_facts.us_research,
+                journal_service,
+                clock,
+            ),
+            research_changes=research_changes_service,
         ),
         operations=OperationalServices(
             industry_metrics=industry_metric_repository,

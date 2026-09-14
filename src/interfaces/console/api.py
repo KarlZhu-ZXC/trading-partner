@@ -29,6 +29,7 @@ from application.dto.external_note_review import ExternalNoteReviewTransitionInp
 from application.dto.monitoring import MonitorArchiveInput
 from application.dto.review_item import ReviewItemTransitionInput
 from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
+from application.dto.valuation import ValuationCalculateInput, ValuationSaveInput
 from application.services.attention_projection import (
     console_attention_payload,
     project_agenda_overdue_fields,
@@ -1267,6 +1268,78 @@ def _canonical_subject_transport(value: Any) -> Any:
     if isinstance(value, list):
         return [_canonical_subject_transport(item) for item in value]
     return value
+
+
+@app.get("/api/research/{subject_id}/calibration")
+async def judgment_calibration(
+    request: Request,
+    subject_id: str,
+    decision_id: str | None = None,
+) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.judgment_calibration.get,
+            subject_id,
+            decision_id=decision_id,
+        )
+        return JSONResponse(
+            content={"data": result.model_dump(mode="json")}, headers={"Cache-Control": "no-store"}
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.get("/api/research/{subject_id}/valuation")
+async def valuation_history(request: Request, subject_id: str) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(_container(request).services.valuation.history, subject_id)
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.post("/api/research/{subject_id}/valuation/source")
+async def valuation_source(request: Request, subject_id: str) -> JSONResponse:
+    """Explicit financial read; no page-load Provider work or durable writes."""
+    try:
+        result = await _container(request).services.valuation.prepare(subject_id)
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.post("/api/research/{subject_id}/valuation/calculate")
+async def valuation_calculate(
+    request: Request,
+    subject_id: str,
+    body: ValuationCalculateInput,
+) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.valuation.calculate,
+            subject_id,
+            body,
+        )
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
+
+
+@app.post("/api/research/{subject_id}/valuation/versions")
+async def valuation_save(
+    request: Request,
+    subject_id: str,
+    body: ValuationSaveInput,
+) -> JSONResponse:
+    try:
+        result = await asyncio.to_thread(
+            _container(request).services.valuation.save,
+            subject_id,
+            body,
+        )
+        return JSONResponse(content={"data": result}, headers={"Cache-Control": "no-store"})
+    except TradingPartnerError as error:
+        raise HTTPException(status_code=422, detail=_sanitized_error(request, error)) from None
 
 
 @app.get("/api/research/{subject_id}/changes")

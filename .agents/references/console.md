@@ -73,3 +73,11 @@ Fetch bars through the validated technical snapshot with complete Console result
 mode. Keep `derived:smc` overlays locked and `user:drawing` overlays editable and
 session-only. Built-in chart indicators are visual aids; backend technical DTOs remain
 the authoritative facts. Retain the Matplotlib PNG path for MCP/Agent artifacts.
+
+Research/Monitor link to `/charts` with exact Instrument/Subject IDs. Explicit chart
+retrieval binds responses to the active selection; no Provider work on page load.
+SMC cutoff filters confirmation time, not historical invalidation status. Session
+handoffs expire, preserve snapshot/algorithm/price basis, and carry only opaque IDs
+in URLs. Accepting them prefills an editable DRAFT Thesis or Plan notes; it must not
+replace an open editor or infer numerical execution fields. The formal Plan panel
+remains separate because Plan has no comparable adjustment-basis contract.

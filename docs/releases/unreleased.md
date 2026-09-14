@@ -1,5 +1,12 @@
 # Unreleased
 
+- Connected Research/Monitor to a dedicated chart workspace with SMC provenance,
+  confirmation-time cutoff and explicit session-bound draft handoff. Added a
+  SEC annual diluted-EPS/P/E assumption ledger with deterministic sensitivity and
+  immutable, explicitly reviewed Journal versions. Added Decision-pinned calibration
+  across existing outcome, Plan observation and adherence records; unavailable
+  attribution remains unknown. No new tables, autonomous research or orders.
+
 - Fixed Copilot Research useful-answer retention: render selected field references
   with canonical context, preserve missing-value and qualitative multi-field
   explanations, distinguish known path/list indices from amounts, and skip the

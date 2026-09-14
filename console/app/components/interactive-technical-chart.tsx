@@ -9,7 +9,8 @@ import type {
   KLineData,
   Styles,
 } from "klinecharts";
-import { Button, Select } from "./ui/controls";
+import { chartStructures, type ChartStructure } from "../lib/chart-research-context";
+import { Button, Input, Select } from "./ui/controls";
 import styles from "../styles/technical-chart.module.css";
 
 export type TechnicalWireBar = {
@@ -46,12 +47,16 @@ type SmartMoneyLiquidity = {
   price: string;
   first_swing_at: string;
   second_swing_at: string;
+  confirmed_at: string;
+  status: string;
 };
 
 export type TechnicalChartTimeframe = {
   interval: "1d" | "1w";
   trend_state: string;
   smart_money: null | {
+    swings?: Array<{ scope: string; label: string; price: string; occurred_at: string; confirmed_at: string }>;
+    algorithm_version?: string;
     trend: string;
     atr_200_ready: boolean;
     limitations: string[];
@@ -69,6 +74,8 @@ export type InteractiveTechnicalScene = {
   bars: TechnicalWireBar[];
   timeframes: TechnicalChartTimeframe[];
   price_basis: string;
+  as_of?: string;
+  algorithm_version?: string;
 };
 
 type ChartColors = {
@@ -222,13 +229,13 @@ function registerTradingPartnerOverlays(module: typeof import("klinecharts")) {
               borderColor: overlay.extendData.color,
               borderSize: 1,
             },
-            ignoreEvent: true,
+            ignoreEvent: false,
           },
           {
             type: "text",
             attrs: { x: x + 5, y: y + 4, text: overlay.extendData.label, baseline: "top" },
             styles: { color: overlay.extendData.color, size: 10, backgroundColor: "transparent" },
-            ignoreEvent: true,
+            ignoreEvent: false,
           },
         ];
       },
@@ -254,7 +261,7 @@ function registerTradingPartnerOverlays(module: typeof import("klinecharts")) {
               style: overlay.extendData.dashed ? "dashed" : "solid",
               dashedValue: [4, 3],
             },
-            ignoreEvent: true,
+            ignoreEvent: false,
           },
           {
             type: "text",
@@ -266,7 +273,7 @@ function registerTradingPartnerOverlays(module: typeof import("klinecharts")) {
               baseline: "bottom",
             },
             styles: { color: overlay.extendData.color, size: 10, backgroundColor: "transparent" },
-            ignoreEvent: true,
+            ignoreEvent: false,
           },
         ];
       },
@@ -274,12 +281,14 @@ function registerTradingPartnerOverlays(module: typeof import("klinecharts")) {
   }
 }
 
-function addDerivedOverlays(chart: Chart, timeframe: TechnicalChartTimeframe, finalTime: number) {
+function addDerivedOverlays(chart: Chart, timeframe: TechnicalChartTimeframe, finalTime: number, cutoff: string, onSelect: (id: string) => void) {
   chart.removeOverlay({ groupId: "derived:smc" });
   const smartMoney = timeframe.smart_money;
   if (!smartMoney) return;
   const colors = chartColors();
-  for (const event of smartMoney.structure_events) {
+  const visible = new Set(chartStructures(timeframe, cutoff || undefined).map((r) => r.id));
+  for (const [index, event] of smartMoney.structure_events.entries()) {
+    if (!visible.has(`event-${index}`)) continue;
     const from = timestamp(event.broken_swing_at);
     const to = timestamp(event.occurred_at);
     const price = number(event.price);
@@ -290,10 +299,12 @@ function addDerivedOverlays(chart: Chart, timeframe: TechnicalChartTimeframe, fi
       groupId: "derived:smc",
       lock: true,
       points: [{ timestamp: from, value: price }, { timestamp: to, value: price }],
+      onClick: () => { onSelect(`event-${index}`); return true; },
       extendData: { color, dashed: event.scope === "internal", label: `${event.scope === "internal" ? "I" : "S"} ${event.event.toUpperCase()}` },
     });
   }
-  for (const level of smartMoney.liquidity_levels) {
+  for (const [index, level] of smartMoney.liquidity_levels.entries()) {
+    if (!visible.has(`liquidity-${index}`)) continue;
     const from = timestamp(level.first_swing_at);
     const to = timestamp(level.second_swing_at);
     const price = number(level.price);
@@ -303,12 +314,14 @@ function addDerivedOverlays(chart: Chart, timeframe: TechnicalChartTimeframe, fi
       groupId: "derived:smc",
       lock: true,
       points: [{ timestamp: from, value: price }, { timestamp: to, value: price }],
+      onClick: () => { onSelect(`liquidity-${index}`); return true; },
       extendData: { color: colors.amber, dashed: true, label: level.kind === "equal_high" ? "EQH" : "EQL" },
     });
   }
   const zones = [...smartMoney.value_zones, ...smartMoney.order_blocks, ...smartMoney.fair_value_gaps];
-  for (const zone of zones) {
-    if (zone.status !== "active" && zone.status !== "current") continue;
+  for (const [index, zone] of zones.entries()) {
+    if (!visible.has(`zone-${index}`)) continue;
+    if (!cutoff && zone.status !== "active" && zone.status !== "current") continue;
     const from = timestamp(zone.created_at);
     const low = number(zone.low);
     const high = number(zone.high);
@@ -320,6 +333,7 @@ function addDerivedOverlays(chart: Chart, timeframe: TechnicalChartTimeframe, fi
       groupId: "derived:smc",
       lock: true,
       points: [{ timestamp: from, value: high }, { timestamp: finalTime, value: low }],
+      onClick: () => { onSelect(`zone-${index}`); return true; },
       extendData: { color: directionColor, fill: `${directionColor}1f`, label },
     });
   }
@@ -340,7 +354,7 @@ function syncIndicators(chart: Chart, selected: Set<string>) {
   }
 }
 
-export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnicalScene }) {
+export function InteractiveTechnicalChart({ scene, onSelectStructure, onContextReset }: { onContextReset?: () => void; scene: InteractiveTechnicalScene; onSelectStructure?: (structure: ChartStructure, cutoff: string | null) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const [chartType, setChartType] = useState<CandleType>("candle_solid");
@@ -349,8 +363,10 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
   const [drawingCount, setDrawingCount] = useState(0);
   const [showSmc, setShowSmc] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const data = useMemo(() => chartData(scene.bars), [scene.bars]);
-  const timeframe = scene.timeframes.find((item) => item.interval === scene.bars_interval) ?? scene.timeframes[0];
+  const [cutoff, setCutoff] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const data = useMemo(() => chartData(scene.bars).filter((bar) => !cutoff || bar.timestamp <= Date.parse(cutoff)), [scene.bars, cutoff]);
+  const timeframe = scene.timeframes.find((item) => item.interval === scene.bars_interval);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -389,7 +405,7 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
       chart.setPeriod({ type: scene.bars_interval === "1w" ? "week" : "day", span: 1 });
       syncIndicators(chart, indicators);
       animationFrame = requestAnimationFrame(() => {
-        if (showSmc) addDerivedOverlays(chart, timeframe, data[data.length - 1].timestamp);
+        if (showSmc) addDerivedOverlays(chart, timeframe, data[data.length - 1].timestamp, cutoff, setSelectedId);
         chart.scrollToRealTime();
       });
       resizeObserver = new ResizeObserver(() => chart.resize());
@@ -406,7 +422,7 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
       chartRef.current = null;
       chartModule?.dispose(container);
     };
-  }, [data, scene.bars, scene.bars_interval, scene.instrument_id, timeframe]);
+  }, [data, scene.bars, scene.bars_interval, scene.instrument_id, scene.price_basis, scene.algorithm_version, timeframe, cutoff]);
 
   useEffect(() => {
     chartRef.current?.setStyles(chartStyles(chartType));
@@ -421,8 +437,8 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
     const chart = chartRef.current;
     if (!chart || !timeframe || data.length === 0) return;
     chart.removeOverlay({ groupId: "derived:smc" });
-    if (showSmc) addDerivedOverlays(chart, timeframe, data[data.length - 1].timestamp);
-  }, [data, showSmc, timeframe]);
+    if (showSmc) addDerivedOverlays(chart, timeframe, data[data.length - 1].timestamp, cutoff, setSelectedId);
+  }, [data, showSmc, timeframe, cutoff]);
 
   const toggleIndicator = useCallback((name: string) => {
     setIndicators((current) => {
@@ -461,9 +477,12 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
   }
 
   const smartMoney = timeframe?.smart_money;
+  const structures = timeframe ? chartStructures(timeframe, cutoff || undefined) : [];
+  const selected = structures.find((row) => row.id === selectedId);
   return (
     <section className={styles.workspace} aria-label="Interactive Technical Chart">
       <div className={styles.toolbar}>
+        <label><span>Historical Cutoff (UTC)</span><Input type="datetime-local" value={cutoff.replace(/Z$/, "")} onChange={(event) => { setCutoff(event.target.value ? `${event.target.value}Z` : ""); setSelectedId(null); onContextReset?.(); }} /></label>
         <label><span>Chart Style</span><Select value={chartType} onChange={(event) => setChartType(event.target.value as CandleType)}>{CHART_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
         <div className={styles.indicators} aria-label="Chart Indicators">
           <span>Indicators</span>
@@ -485,13 +504,20 @@ export function InteractiveTechnicalChart({ scene }: { scene: InteractiveTechnic
         <span>{data.length} bars</span>
         <span>{scene.bars_interval.toUpperCase()}</span>
         <span>{scene.price_basis.replaceAll("_", " ")}</span>
-        <span>Trend {timeframe?.trend_state ?? "unknown"}</span>
-        <span>SMC {smartMoney?.trend ?? "unavailable"}</span>
+        <span>Snapshot Trend {timeframe?.trend_state ?? "unknown"}</span>
+        <span>Snapshot SMC {smartMoney?.trend ?? "unavailable"}</span>
         <span>{drawingCount} {drawingCount === 1 ? "drawing" : "drawings"}</span>
         {smartMoney && !smartMoney.atr_200_ready && <span>{smartMoney.limitations.join(", ")}</span>}
       </div>
+      <p className={styles.help}>Algorithm {scene.algorithm_version ?? "unavailable"} · SMC {smartMoney?.algorithm_version ?? "unavailable"} · Source interval {scene.bars_interval} · Snapshot {scene.as_of ?? "unavailable"}. Derived SMC is locked; user drawings are editable and session-only.</p>
+      {cutoff && <p className={styles.help}>Cutoff filters confirmation times and bars only. Zone/liquidity status belongs to the current snapshot; historical invalidation, mitigation and sweep status cannot be reconstructed. This is not a historical backtest.</p>}
+      <div className={styles.inspector}>
+        <label><span>Inspect Structure</span><Select value={selectedId ?? ""} onChange={(event) => setSelectedId(event.target.value || null)}><option value="">Select an overlay or structure</option>{structures.map((row) => <option key={row.id} value={row.id}>{row.kind} · {row.occurred_at}</option>)}</Select></label>
+        {selected && <div><p>{selected.kind} · {selected.values}</p><p>Occurred {selected.occurred_at} · Confirmed {selected.confirmed_at}</p><p>Status at snapshot: {selected.status}</p>{onSelectStructure && <Button onClick={() => onSelectStructure(selected, cutoff || null)}>Use as Research Context</Button>}</div>}
+        {structures.length === 0 && <p>No confirmed structures at this cutoff.</p>}
+      </div>
       {error && <p className={styles.error}>{error}</p>}
-      <p className={styles.help}>Right-click a user drawing to remove it. Drawings remain in the current chart session; changing Instrument or period starts a fresh canvas. Chart indicators are visual aids; the receipt below remains the sourced technical record.</p>
+      <p className={styles.help}>Right-click a user drawing to remove it. Drawings remain in the current chart session; changing Instrument, period, basis, algorithm version or cutoff starts a fresh canvas. Chart indicators are visual aids; the receipt below remains the sourced technical record.</p>
     </section>
   );
 }

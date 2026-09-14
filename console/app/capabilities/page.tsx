@@ -10,6 +10,7 @@ import {
 import { Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLabel, PageActionMenu, displayJson,
   Button,
   Input,
+  LinkButton,
   Select,
   Textarea,
 } from "../components/ui";
@@ -199,6 +200,7 @@ function MarketLens() {
   return (
     <Card className="market-lens" kicker="MARKET & TECHNICAL LENS" title="Chart Workspace">
       <p className="card-note">Resolve an instrument, then inspect sourced facts or open the interactive chart. SMC overlays remain deterministic evidence; chart indicators and drawings do not create trading instructions.</p>
+      <LinkButton href={`/charts?instrument_id=${encodeURIComponent(instrumentId)}`}>Open Dedicated Chart Workspace</LinkButton>
       <div className="market-lens-controls">
         <label><FieldLabel required>Market</FieldLabel><Select required value={market} onChange={(event) => setMarket(event.target.value)}>{MARKET_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
         <label><FieldLabel required>Symbol / Query</FieldLabel><Input required value={query} onChange={(event) => setQuery(event.target.value)} /></label>

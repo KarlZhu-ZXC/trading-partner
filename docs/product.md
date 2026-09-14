@@ -106,6 +106,35 @@ alongside the existing runtime catalog. These gates validate implementation beha
 not live model research quality, investment returns, or the correctness of every
 qualitative inference.
 
+## Charts, valuation assumptions and calibration
+
+Research and Monitor can open an exact Instrument in `/charts`. Chart retrieval is
+explicit; stale responses are ignored. Locked SMC structures expose occurrence and
+confirmation times, snapshot status, algorithm version and source-bar range. A
+historical cutoff filters confirmed structures/bars without reconstructing historical
+invalidation status. Session-only drawings reset with Instrument, period, basis and
+version. Matching ACTIVE Plan conditions remain separate. An explicit reviewed
+session handoff may prefill a DRAFT Thesis or Plan notes, never execution thresholds.
+
+Valuation is a Console-only, deterministic annual diluted-EPS/P/E scenario method for
+positive-earnings US ordinary operating companies. SEC filing identity/time and USD
+per-share basis are required; unsupported companies or missing data are gaps. User
+normalization and P/E assumptions remain separate from facts and produce a nine-cell
+sensitivity grid. No enterprise/aggregate equity value or current split adjustment is
+inferred. Explicitly reviewed saves append immutable Journal versions with existing
+idempotency/audit gates; they never confirm judgment. Source tokens expire after one
+hour or API restart; calculation and save never refresh Providers.
+
+Judgment Calibration pins a user Decision and its exact Thesis/Plan references,
+separately showing factual outcomes, matched Plan observations, adherence records and
+attribution limitations. It reuses Changes Since Review, Scorecard, Agenda and Retro;
+it has no combined score or new return engine. NO_ACTION remains reviewable, future
+review dates are disclosed, and absent attribution remains unknown. These reads do
+not generate evaluations or write research state.
+
+See [the workflow guide](guide/research-chart-valuation.md) for supported inputs and
+continuous navigation/recovery rules.
+
 ## Research and observations
 
 Research Subjects support company, theme, macro, catalyst, and portfolio-concern

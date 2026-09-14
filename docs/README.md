@@ -14,6 +14,7 @@ current specification, agent instructions, or an operator guide.
 | [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文安装、MCP 接入、首次验证与安全边界 |
 | [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Claude Desktop, Cursor, generic stdio, upgrade, and uninstall recipes |
 | [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Progressive MCP discovery, exact call contracts, trust model and host usage |
+| [guide/research-chart-valuation.md](guide/research-chart-valuation.md) | 图表到研究草稿、估值假设版本与判断校准 |
 | [guide/console-design-system.md](guide/console-design-system.md) | Current Console hierarchy, shared controls, density, and interaction standard |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |

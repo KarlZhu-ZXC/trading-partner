@@ -323,6 +323,26 @@ opaque context IDs and numeric offset, never source/model text. Journal's exact
 revision read validates the Subject Instrument and returns no-store; the existing
 review confirmation workflow owns all writes.
 
+**Console valuation and judgment calibration**
+
+`GET /api/research/{subject_id}/calibration` is durable-only and pins the exact
+user Decision plus Thesis/Plan versions. Conditions reuse the Changes Since Review
+exact-link check; source failures and bounded histories remain explicit. Scorecard,
+Agenda and Retro are evidence, never a combined outcome score or causal attribution.
+
+Console valuation uses `normalized_diluted_eps_pe_v1`: annual SEC USD diluted EPS
+multiplied by explicit user normalization and P/E assumptions, with deterministic
+nine-cell sensitivity. No EV, aggregate equity value or split adjustment is inferred.
+The explicit `/valuation/source` POST reads financials and returns a bounded,
+process-owned one-hour token. `/valuation/calculate` accepts only the token and user
+assumptions, never caller-supplied facts. `/valuation/versions` requires explicit
+confirmation, authorization note and idempotency; it appends a Journal NOTE tagged
+`valuation_v1` using existing audit/search/unique-key gates. Version identity is the
+journal_id, with optional exact same-Subject supersedes link and branching allowed.
+History is durable-only. It never confirms Thesis, Decision or orders. Business-model
+eligibility is user attested, not an inferred Provider fact. No production migration
+or model call is part of these operations.
+
 **Provider facts and technicals**
 
 - `a_share_get_facts` (`snapshot`, `market_structure`, `capital`, `limit_up`,

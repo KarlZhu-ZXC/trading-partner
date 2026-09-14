@@ -29,6 +29,7 @@ export const CONSOLE_PAGE_LABELS = {
   overview: "Overview",
   "decision-workbench": "Journal",
   research: "Research",
+  charts: "Charts",
   scorecards: "Scorecards",
   agenda: "Catalyst Agenda",
   monitors: "Monitors",
