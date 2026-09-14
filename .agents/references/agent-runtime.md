@@ -91,3 +91,14 @@ become GAP, qualitative prose remains INFERENCE. The prompt and checker share on
 bounded evidence catalog; a truncated reference is not treated as verified. Final
 safe text and stored answer envelope must agree. No live model call is implied by
 software verification; use the synthetic evaluation catalog by default.
+
+Research uses the field checker directly, without a legacy prose-repair round.
+FACT/CITATION may select current catalog refs using the literal `@evidence`
+marker and absent context metadata; the host renders each field separately with its context within answer bounds.
+Exact catalog copies remain compatible. Explicit null values for allowed fields
+are missing-value evidence, never zero; absent keys are not synthesized. Qualitative
+explanations may cite multiple valid fields, remain INFERENCE/GAP and are not counted
+as verified facts. Numerical/date claims still require exact field binding. Known
+catalog paths/list labels are not amounts; affirmative execution claims stay denied.
+Malformed or unfinished optional replacement answers must preserve the primary;
+returned replacement usage counts even when the replacement is rejected.

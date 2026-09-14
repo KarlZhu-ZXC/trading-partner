@@ -1701,7 +1701,7 @@ async def test_research_fallback_attempt_is_counted_before_call():
 
 
 @pytest.mark.asyncio
-async def test_research_evidence_repair_obeys_model_budget(monkeypatch):
+async def test_research_uses_field_checker_without_legacy_repair(monkeypatch):
     import application.services.agent_runtime_service as module
 
     original_guard = module.guard_agent_response
@@ -1727,7 +1727,7 @@ async def test_research_evidence_repair_obeys_model_budget(monkeypatch):
     )
     receipt = json.loads(repository.messages[conversation.conversation_id][-1].model_receipt_json)
     assert len(model.requests) == 1
-    assert receipt["research"]["stop_reason"] == "MODEL_BUDGET"
+    assert receipt["research"]["stop_reason"] == "COMPLETED"
 
 
 @pytest.mark.asyncio
@@ -1903,3 +1903,45 @@ async def test_failed_reads_are_attempts_not_completed_reads(failure):
     if failure == "receipt":
         assert result.tool_receipts[0].error_code == "PROVIDER_TIMEOUT_ERROR"
         assert repository.receipts[0].error_codes == ("PROVIDER_TIMEOUT_ERROR",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", ['{"blocks":[', "legacy repair text"])
+async def test_malformed_repair_preserves_primary_and_counts_usage(monkeypatch, repair):
+    import application.services.agent_runtime_service as module
+
+    original_guard = module.guard_agent_response
+
+    def repair_guard(*args, **kwargs):
+        return replace(original_guard(*args, **kwargs), repair_request={"code": "VERIFY"})
+
+    monkeypatch.setattr(module, "guard_agent_response", repair_guard)
+    repository = MemoryConversationRepository()
+    primary = json.dumps({"blocks": [{"kind": "INFERENCE", "text": "Primary interpretation"}]})
+    model = QueueModelProvider(
+        [
+            ModelResponse(text=primary, model="fake-model"),
+            ModelResponse(
+                text=repair,
+                model="fake-model",
+                finish_reason="completed",
+                usage=ModelUsage(input_tokens=13, output_tokens=7, total_tokens=20),
+            ),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Explain",
+        )
+    )
+    message = repository.messages[conversation.conversation_id][-1]
+    assert "Primary interpretation" in message.content
+    assert repair not in message.content
+    assert len(model.requests) == 2
+    receipt = json.loads(message.model_receipt_json)
+    assert receipt["model_calls"] == 2
+    assert receipt["usage"]["output_tokens"] == 7

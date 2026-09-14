@@ -1,13 +1,19 @@
 # Trading Partner — Known Issues
 
-> Updated: 2026-09-08
+> Updated: 2026-09-14
 > Scope: active defects and accepted operational constraints only. Resolved work
 > belongs in the current product specification and release notes.
 
 ## Active issues
 
-No tracked code defects remain in this list. Resolved fixes are recorded in
-[Unreleased](../releases/unreleased.md).
+- **Research prose remains conservatively filtered.** Numerical/date assertions
+  embedded in explanation blocks can still be hidden even when the underlying
+  field is available. Put precise facts in field-reference blocks. Qualitative
+  interpretations are retained but are not semantically verified; cited prose
+  can still misread scope. Positive retention and real-model tests complement,
+  rather than replace, the synthetic rejection gates.
+
+Resolved fixes are recorded in [Unreleased](../releases/unreleased.md).
 
 ## Accepted operational constraints
 

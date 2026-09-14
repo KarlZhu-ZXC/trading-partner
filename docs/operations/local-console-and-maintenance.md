@@ -77,6 +77,15 @@ uv run trading-partner-agent eval
 fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执行；`--live` 当前 fail closed，
 不会意外联网或调用 LLM。
 
+### Copilot 研究模型选择
+
+当前 Go 合成证据实测支持优先使用 `grok-4.6` 的 `high` 档进行 Research；
+`qwen3.8-flash` 的 `max` 档可作较快备选。Grok 的 `max` 在探测中返回请求拒绝，
+模型目录列出的档位不代表当前路由一定接受。这个选择基于字段与解释交付，
+不代表投资预测准确率。使用 Composer 的 Provider、Model、Reasoning Effort 选择器；
+模型与档位按浏览器保存，不会更改 Monitor 或私人笔记分析的共享服务配置。
+Research 事实由程序按引用生成，解释保持推断；精确数值和日期应放在事实块。
+
 ### OpenCode Zen / Go Provider（可选）
 
 OpenCode Zen 与 Go 在 Console 中是两个独立 Provider，拥有不同的模型目录、Base URL

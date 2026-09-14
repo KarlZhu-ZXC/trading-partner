@@ -1,5 +1,12 @@
 # Unreleased
 
+- Fixed Copilot Research useful-answer retention: render selected field references
+  with canonical context, preserve missing-value and qualitative multi-field
+  explanations, distinguish known path/list indices from amounts, and skip the
+  legacy prose-repair round. Numerical/date and execution assertions remain gated.
+  Invalid optional replacements preserve the primary answer and returned usage is
+  still counted. Added positive retention and malformed-repair regressions.
+
 - Renamed the built-in Console assistant to Copilot, retaining Agent API/storage
   compatibility. Added explicit read-only Research/Counter-review modes, time/call
   budgets, durable progress and safe stops, current-turn field citations, preserved

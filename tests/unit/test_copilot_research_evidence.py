@@ -168,3 +168,165 @@ def test_financial_scale_period_and_account_context_remain_bound() -> None:
         tool_payloads=[payload],
     )
     assert guarded.summary["missing_count"] == 1
+
+
+def test_reference_rendering_and_missing_value_explanations_survive() -> None:
+    from application.ports.agent_tool_gateway import AgentToolReceipt
+    from application.services.copilot_research_evidence import research_evidence_catalog
+
+    receipt = AgentToolReceipt(
+        capability="portfolio_get",
+        operation="performance",
+        request_id="req_fees",
+        effect="READ_DURABLE",
+    )
+    payload = {
+        "receipt": receipt.as_dict(),
+        "result": {
+            "currency": "USD",
+            "basis": "gross_before_fees",
+            "realized_pnl": "80",
+            "fees": None,
+            "net_trading_pnl": None,
+        },
+    }
+    catalog = research_evidence_catalog([receipt], [payload])
+    assert any(e["ref"].endswith("/fees") and ": null" in e["text"] for e in catalog["entries"])
+    assert all("confirmed=null" not in e["text"] for e in catalog["entries"])
+    refs = ("req_fees/result/realized_pnl", "req_fees/result/fees")
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(
+            blocks=(
+                AgentAnswerBlock(kind="FACT", text="@evidence", evidence_refs=(refs[0],)),
+                AgentAnswerBlock(
+                    kind="GAP", text="缺少手续费，不能把费前收益当作净收益。", evidence_refs=refs
+                ),
+                AgentAnswerBlock(kind="INFERENCE", text="不能认定为已确认突破；缺少成交明细。"),
+            )
+        ),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    assert guarded.summary["missing_count"] == 0
+    assert guarded.summary["verified_count"] == 1
+    fact = guarded.envelope.blocks[0]
+    assert "80" in fact.text and fact.basis == "gross_before_fees"
+    assert guarded.envelope.blocks[1].text.startswith("缺少手续费")
+
+
+@pytest.mark.parametrize(
+    "text", ["not filled; sold", "不能认定为已确认突破；已买入", "价格为 999", "截至 2030-01-01"]
+)
+def test_interpretation_cannot_smuggle_numbers_or_execution(text: str) -> None:
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind="INFERENCE", text=text),)),
+        receipts=[],
+        tool_payloads=[],
+    )
+    assert guarded.summary["missing_count"] == 1
+
+
+def test_qualitative_comparison_keeps_known_paths_but_rejects_unbound_amounts() -> None:
+    from application.ports.agent_tool_gateway import AgentToolReceipt
+    from application.services.copilot_research_evidence import research_evidence_catalog
+
+    receipt = AgentToolReceipt(
+        capability="market_data_get",
+        operation="quotes",
+        request_id="req_compare",
+        effect="READ_PROVIDER",
+    )
+    payload = {
+        "receipt": receipt.as_dict(),
+        "result": {
+            "quotes": [
+                {"last": "100", "currency": "USD", "quote_at": "2026-09-10T14:00:00Z"},
+                {"last": "100", "currency": "JPY", "quote_at": "2026-09-10T13:00:00Z"},
+            ]
+        },
+    }
+    refs = ("req_compare/result/quotes/0/last", "req_compare/result/quotes/1/last")
+    assert any(
+        e["ref"].endswith("/quote_at")
+        for e in research_evidence_catalog([receipt], [payload])["entries"]
+    )
+    good = "（1）quotes/0 和 quotes/1 的币种不同；（2）需汇率与时点对齐，无法直接比较。"
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(
+            blocks=(
+                AgentAnswerBlock(kind="INFERENCE", text=good, evidence_refs=refs),
+                AgentAnswerBlock(kind="INFERENCE", text=good + "价格为 999。", evidence_refs=refs),
+                AgentAnswerBlock(
+                    kind="INFERENCE", text="quotes/99 的价格未知。", evidence_refs=refs
+                ),
+            )
+        ),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    assert guarded.envelope.blocks[0].text == good
+    assert guarded.summary["missing_count"] == 2
+    assert guarded.summary["verified_count"] == 0
+
+
+@pytest.mark.parametrize("trailing_blocks", [0, 31])
+def test_grouped_selection_renders_separate_facts_with_bounded_envelope(
+    trailing_blocks: int,
+) -> None:
+    from application.ports.agent_tool_gateway import AgentToolReceipt
+
+    receipt = AgentToolReceipt(
+        capability="market_data_get",
+        operation="quotes",
+        request_id="req_group",
+        effect="READ_PROVIDER",
+    )
+    payload = {
+        "receipt": receipt.as_dict(),
+        "result": {
+            "quotes": [
+                {"last": "100", "currency": "USD"},
+                {"last": "200", "currency": "JPY"},
+            ]
+        },
+    }
+    block = AgentAnswerBlock(
+        kind="FACT",
+        text="@evidence",
+        evidence_refs=(
+            "req_group/result/quotes/0/last",
+            "req_group/result/quotes/1/last",
+        ),
+    )
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(
+            blocks=(
+                block,
+                *(AgentAnswerBlock(kind="GAP", text="待研究") for _ in range(trailing_blocks)),
+            )
+        ),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    AgentAnswerEnvelope.model_validate(guarded.envelope.model_dump())
+    if trailing_blocks:
+        assert len(guarded.envelope.blocks) == 32
+        assert guarded.summary["missing_count"] == 1
+    else:
+        first, second = guarded.envelope.blocks
+        assert "100" in first.text and "currency=USD" in first.text
+        assert "200" in second.text and "currency=JPY" in second.text
+        assert guarded.summary["verified_count"] == 2
+
+
+@pytest.mark.parametrize("suffix", ["", "；已执行买入"])
+def test_unconfirmed_structure_explanation_is_not_an_execution_claim(suffix: str) -> None:
+    text = "不能当作已确认突破。本包未提供将结构转为已确认所需的确认条件。" + suffix
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind="GAP", text=text),)),
+        receipts=[],
+        tool_payloads=[],
+    )
+    assert guarded.summary["missing_count"] == bool(suffix)
+    if not suffix:
+        assert guarded.envelope.blocks[0].text == text

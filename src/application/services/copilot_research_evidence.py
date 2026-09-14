@@ -1,7 +1,8 @@
 """Closed, current-turn evidence binding for Copilot research answers.
 
 Fact prose is deliberately host-rendered: a model selects a field reference and
-copies its catalog text. Matching a bag of numbers cannot establish which asset,
+uses the @evidence marker (or copies its catalog text). Matching numbers cannot
+establish which asset,
 field or time a claim describes. The catalog is model context, never diagnostics.
 """
 
@@ -24,7 +25,6 @@ from application.ports.agent_tool_gateway import AgentToolReceipt
 
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _NUMERIC = re.compile(r"(?<!\w)[+-]?\d+(?:[.,]\d+)*(?:%)?")
-_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:T[\d:.+Z-]+)?\b")
 _EXECUTED = re.compile(
     r"已(?:成交|下单|执行|确认|买入|卖出|撤单)|"
     r"\b(?:executed|submitted|filled|purchased|sold|confirmed breakout)\b|"
@@ -83,6 +83,7 @@ _FACT_FIELDS = frozenset(
         "unrealized_pnl",
         "realized_pnl",
         "net_trading_pnl",
+        "fees",
         "dividend_income",
         "total_pnl",
         "revenue",
@@ -117,6 +118,15 @@ _FACT_FIELDS = frozenset(
         "observed_at",
         "published_at",
         "timestamp",
+        "quote_at",
+        "snapshot_at",
+        "source_as_of",
+        "period_end",
+        "period_type",
+        "unit",
+        "units",
+        "scale",
+        "adjustment",
         "basis",
         "source",
         "url",
@@ -272,7 +282,7 @@ def _catalog_entries(
             leaf = path.rsplit("/", 1)[-1]
             if leaf.isdigit() and path.rsplit("/", 2)[-2] == "source_urls":
                 leaf = "source_url"
-            scalar = _scalar(value)
+            scalar = "null" if value is None else _scalar(value)
             ref = f"{request_id}/{path}"
             if scalar is None or leaf not in _FACT_FIELDS or len(ref) > 160:
                 continue
@@ -280,16 +290,21 @@ def _catalog_entries(
             is_web = receipt.capability == "agent_web_search"
             if is_web and leaf not in {"url", "source_url", "published_at"}:
                 continue
-            if leaf not in _CONTEXT_KEYS and leaf not in {
-                "status",
-                "confirmed",
-                "confirmed_at",
-                "confirmation_time",
-                "occurred_at",
-                "direction",
-                "url",
-                "source_url",
-            }:
+            if (
+                value is not None
+                and leaf not in _CONTEXT_KEYS
+                and leaf
+                not in {
+                    "status",
+                    "confirmed",
+                    "confirmed_at",
+                    "confirmation_time",
+                    "occurred_at",
+                    "direction",
+                    "url",
+                    "source_url",
+                }
+            ):
                 try:
                     number = Decimal(scalar.rstrip("%"))
                     if not number.is_finite():
@@ -379,21 +394,72 @@ def guard_research_answer(
     codes: set[str] = set()
     verified = 0
     missing = 0
-    for block in envelope.blocks:
+    for index, block in enumerate(envelope.blocks):
         code: str | None = None
         selected = [entries[ref] for ref in block.evidence_refs if ref in entries]
         required = block.kind in {AgentAnswerBlockKind.FACT, AgentAnswerBlockKind.CITATION}
         prose = re.sub(r"(?m)^\s*(?:#{1,6}\s*)?\d+[.)]\s+", "", block.text)
-        numeric = bool(_NUMERIC.search(_DATE.sub("", prose)))
+        # Known field/node paths and list labels are structure, not amounts.
+        # Unknown paths and arbitrary numbers remain subject to exact binding.
+        prose = re.sub(
+            r"(?<![\w/])(?:[A-Za-z_][\w.-]*/)+(?:\d+|[A-Za-z_][\w.-]*)(?![\w/])",
+            lambda match: (
+                "" if any(f"/{match.group()}/" in f"/{ref}/" for ref in entries) else match.group()
+            ),
+            prose,
+        )
+        prose = re.sub(r"(?:^|[\n；;。—])\s*[（(]\d+[）)]", "", prose)
+        numeric = bool(_NUMERIC.search(prose))
+        # Only explicitly negated mentions are exempt; a later affirmative
+        # assertion in the same block must still be rejected.
+        execution_prose = re.sub(
+            r"(?:不能|不可|无法|尚未|未能)(?:认定|视为|当作|判定|证明|证实)?(?:为)?[“\"']?"
+            r"(?:已确认突破|已(?:成交|下单|执行|确认|买入|卖出|撤单))|"
+            r"(?:未提供|缺少)(?:将)?(?:该)?(?:结构|突破)(?:转为|达到)已确认"
+            r"(?:所需的)?(?:确认)?(?:条件|证据)|"
+            r"\b(?:not|never) (?:executed|submitted|filled|purchased|sold|confirmed breakout)\b",
+            "",
+            block.text,
+            flags=re.IGNORECASE,
+        )
         inline_urls = re.findall(r"https?://[^\s<>]+", block.text)
         allowed_urls = [url for entry in selected for url in entry["source_urls"]]
         if any(url not in allowed_urls for url in inline_urls):
             code = "RESEARCH_SOURCE_URL_UNVERIFIED"
-        elif _EXECUTED.search(block.text):
+        elif _EXECUTED.search(execution_prose):
             code = "RESEARCH_EXECUTION_CLAIM_DENIED"
         elif len(selected) != len(block.evidence_refs):
             code = "RESEARCH_EVIDENCE_REF_MISSING"
-        elif required or numeric or selected or block.source_urls:
+        elif required and block.text == "@evidence":
+            if not selected:
+                code = "RESEARCH_FIELD_EVIDENCE_REQUIRED"
+            elif block.as_of is not None or block.basis is not None or block.source_urls:
+                code = "RESEARCH_CONTEXT_MISMATCH"
+            elif (
+                len(blocks) + len(selected) + len(envelope.blocks) - index - 1 > 32
+                or sum(len(item.text) for item in blocks)
+                + sum(len(entry["text"]) for entry in selected)
+                + sum(len(item.text) for item in envelope.blocks[index + 1 :])
+                > 64_000
+            ):
+                code = "RESEARCH_FIELD_EVIDENCE_REQUIRED"
+            else:
+                # A grouped selection renders independent facts, never merges
+                # currencies, subjects or timestamps into a model-created claim.
+                blocks.extend(
+                    AgentAnswerBlock(
+                        kind=block.kind,
+                        text=entry["text"],
+                        evidence_refs=(entry["ref"],),
+                        as_of=entry["as_of"],
+                        basis=entry["basis"],
+                        source_urls=tuple(entry["source_urls"]),
+                    )
+                    for entry in selected
+                )
+                verified += len(selected)
+                continue
+        elif required or numeric:
             if len(selected) != 1:
                 code = "RESEARCH_FIELD_EVIDENCE_REQUIRED"
             else:
@@ -406,6 +472,17 @@ def guard_research_answer(
                     code = "RESEARCH_SOURCE_URL_UNVERIFIED"
                 else:
                     verified += 1
+        elif any(url not in allowed_urls for url in block.source_urls):
+            code = "RESEARCH_SOURCE_URL_UNVERIFIED"
+        elif (block.as_of is not None or block.basis is not None) and (
+            not selected
+            or any(
+                (block.as_of is not None and block.as_of != entry["as_of"])
+                or (block.basis is not None and block.basis != entry["basis"])
+                for entry in selected
+            )
+        ):
+            code = "RESEARCH_CONTEXT_MISMATCH"
         if code:
             missing += 1
             codes.add(code)
@@ -419,7 +496,7 @@ def guard_research_answer(
             # Qualitative synthesis is explicitly interpretation, never host-verified fact.
             blocks.append(
                 block.model_copy(update={"kind": AgentAnswerBlockKind.INFERENCE})
-                if block.kind == AgentAnswerBlockKind.SUMMARY and not selected
+                if block.kind == AgentAnswerBlockKind.SUMMARY
                 else block
             )
     return ResearchEvidenceResult(

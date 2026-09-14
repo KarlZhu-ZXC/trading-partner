@@ -71,8 +71,9 @@ Research and Counter-review are explicitly selected modes on that same runtime.
 Research exposes fixed evidence questions, deterministic step progress and a bounded
 read-only tool surface. Defaults are 180 seconds, eight top-level model calls and
 24 tool calls; the server validates narrower or larger allowed choices. The ordinary
-six-tool-round limit also applies. Fallback, repair and optional critique calls count
-against the model budget. Research uses explicit web-search tools, not hidden native
+six-tool-round limit also applies. Fallback and optional critique calls count
+against the model budget; Research uses its field checker directly without an
+extra legacy prose-repair round. Research uses explicit web-search tools, not hidden native
 search or an uncounted conversation-summary call. Provider-internal retries and actual
 billing remain unknown; these controls are not a guaranteed token or dollar ceiling.
 
@@ -82,7 +83,11 @@ account, unit, time and basis context. Unverifiable numerical/factual blocks bec
 GAP entries; qualitative synthesis stays INFERENCE. Old conversation memory and web
 text cannot establish a canonical price or position. The bounded field catalog may
 omit unsupported/oversized evidence; omission is not proof of absence. Verified refs
-survive receipt compaction for later source inspection.
+survive receipt compaction for later source inspection. The host renders selected
+facts with their context; the model need not copy the catalog. Explicit null values
+can support missing-data explanations. Qualitative explanations may cite multiple
+fields but remain unverified interpretation, not fact verification. Invalid optional
+replacement answers preserve the primary.
 
 Counter-review permits one additional tool-free critique, only within the remaining
 budget. Failure preserves the primary answer and reports a gap. Completed read steps
