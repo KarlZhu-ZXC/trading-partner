@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "klinecharts": "10.0.3",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.45.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8"
