@@ -1731,6 +1731,78 @@ async def test_research_uses_field_checker_without_legacy_repair(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_research_inline_evidence_persists_context_without_verifying_interpretation():
+    class SnapshotGateway(FakeGateway):
+        async def read(self, capability, operation, arguments):
+            value = await super().read(capability, operation, arguments)
+            return replace(
+                value,
+                result={
+                    "data": {"quantity": "7", "currency": "USD", "instrument_id": "equity:US:SYNTH"}
+                },
+            )
+
+    ref = "req_test/result/data/quantity"
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                tool_calls=(
+                    ModelToolCall(
+                        id="snapshot",
+                        name="tp_read",
+                        arguments=json.dumps(
+                            {
+                                "capability": "portfolio_get",
+                                "operation": "positions",
+                                "arguments": {},
+                            }
+                        ),
+                    ),
+                )
+            ),
+            ModelResponse(
+                text=json.dumps(
+                    {
+                        "blocks": [
+                            {
+                                "kind": "INFERENCE",
+                                "text": f"持仓字段为@evidence({ref})，仍需结合风险判断。",
+                                "evidence_refs": [ref],
+                            }
+                        ]
+                    }
+                )
+            ),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model, tool_gateway=SnapshotGateway())
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research synthetic holdings",
+            research_mode="research",
+        )
+    )
+    message = repository.messages[conversation.conversation_id][-1]
+    receipt = json.loads(message.model_receipt_json)
+    assert result.text == message.content
+    assert "quantity: 7" in result.text and "currency=USD" in result.text
+    assert "仍需结合风险判断" in result.text and "@evidence" not in result.text
+    assert receipt["answer_envelope"]["blocks"][0]["kind"] == "INFERENCE"
+    assert receipt["research"]["verified_claims"] == 0
+    assert receipt["research"]["blocked_claims"] == 0
+    assert receipt["research"]["verified_refs"] == [ref]
+    assert len(model.requests) == 2
+    assert any(
+        "@evidence(目录中的完整ref)" in (message.content or "")
+        for message in model.requests[-1].messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_research_stalled_model_stops_with_durable_safe_answer(monkeypatch):
     from application.services.copilot_research_budget import ResearchBudget
 
@@ -1841,6 +1913,49 @@ async def test_malformed_or_truncated_critique_keeps_primary(text, finish_reason
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"kind": "FACT", "text": "@evidence", "evidence_refs": ["req_other/result/last"]},
+        {"kind": "INFERENCE", "text": "现在价格为999。"},
+        {"kind": "INFERENCE", "text": "已买入。"},
+    ],
+)
+async def test_evidence_invalid_critique_keeps_primary_and_counts_returned_usage(block):
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                text="Primary interpretation remains available",
+                usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            ),
+            ModelResponse(
+                text=json.dumps({"blocks": [block]}),
+                usage=ModelUsage(input_tokens=20, output_tokens=7, total_tokens=27),
+            ),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Counter review",
+            research_mode="challenge",
+        )
+    )
+    assert "Primary interpretation remains available" in result.text
+    stored = repository.messages[conversation.conversation_id][-1]
+    assert stored.content == result.text
+    receipt = json.loads(stored.model_receipt_json)
+    assert receipt["research"]["challenge_performed"] is False
+    assert "CHALLENGE_EVIDENCE_REJECTED" in receipt["research"]["gaps"]
+    assert receipt["research"]["model_calls_attempted"] == 2
+    assert receipt["usage"]["total_tokens"] == 42
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["receipt", "payload", "truncated", "effect"])
 async def test_failed_reads_are_attempts_not_completed_reads(failure):
     class FailedGateway(FakeGateway):
@@ -1945,3 +2060,47 @@ async def test_malformed_repair_preserves_primary_and_counts_usage(monkeypatch, 
     receipt = json.loads(message.model_receipt_json)
     assert receipt["model_calls"] == 2
     assert receipt["usage"]["output_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_research_normalizes_bounded_notes_in_primary_and_critique():
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                text=json.dumps(
+                    {
+                        "blocks": [{"kind": "INFERENCE", "text": "Primary interpretation"}],
+                        "note": "Primary supplemental explanation",
+                    }
+                )
+            ),
+            ModelResponse(
+                text=json.dumps(
+                    {
+                        "blocks": [{"kind": "INFERENCE", "text": "Reviewed interpretation"}],
+                        "note": "Unverified supplemental explanation",
+                    }
+                )
+            ),
+        ]
+    )
+    runtime, conversation = _runtime(repository, model)
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Research",
+            research_mode="challenge",
+        )
+    )
+    assert "Reviewed interpretation" in result.text
+    assert "Unverified supplemental explanation" in result.text
+    stored = repository.messages[conversation.conversation_id][-1]
+    receipt = json.loads(stored.model_receipt_json)
+    assert stored.content == result.text
+    assert receipt["answer_envelope"]["generated_by"] == "model"
+    assert len(receipt["answer_envelope"]["blocks"]) == 2
+    assert receipt["research"]["challenge_performed"] is True
+    assert receipt["research"]["verified_claims"] == 0

@@ -400,11 +400,11 @@ const researchReceipt = {
   steps: [{ code: "READ", status: "COMPLETED" }, { code: "SYNTHESIZE", status: "STOPPED" }, { code: "CHALLENGE", status: "SKIPPED" }, { code: "EVIDENCE_CHECK", status: "STOPPED" }],
 };
 
-async function mockResearchTurn(page: Page, failed = false) {
+async function mockResearchTurn(page: Page, failed = false, answerContent = "Research stopped at the requested budget.") {
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   let submitted = false;
   const user = { message_id: "research_user", conversation_id: CONVERSATION_ID, role: "USER", content: "Research synthetic evidence", created_at: "2026-09-15T00:00:00Z", sequence: 1, model_receipt: { research: { ...researchReceipt, phase: "QUEUED", stop_reason: null, evidence_status: "NOT_CHECKED", verified_claims: 0, blocked_claims: 0, verified_refs: [] } } };
-  const assistant = { message_id: "research_answer", conversation_id: CONVERSATION_ID, role: "ASSISTANT", content: "Research stopped at the requested budget.", created_at: "2026-09-15T00:00:01Z", sequence: 2, model_receipt: { research: researchReceipt, usage: { input_tokens: 123, output_tokens: 45 }, answer_envelope: { _truncated: true } } };
+  const assistant = { message_id: "research_answer", conversation_id: CONVERSATION_ID, role: "ASSISTANT", content: answerContent, created_at: "2026-09-15T00:00:01Z", sequence: 2, model_receipt: { research: researchReceipt, usage: { input_tokens: 123, output_tokens: 45 }, answer_envelope: { _truncated: true } } };
   await page.route("**/api/console/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/api/console", "");
     const json = (value: unknown) => route.fulfill({ json: value });
@@ -449,8 +449,9 @@ test("explicit Research budget stops visibly and restores exact report without r
   await expect(progress.getByText("123", { exact: true })).toBeVisible();
   await expect(progress.getByText("45", { exact: true })).toBeVisible();
   await expect(progress.getByText("Partial", { exact: true })).toBeVisible();
-  await expect(progress.getByText("Verified Claims", { exact: true })).toBeVisible();
-  await expect(progress.getByText("Blocked Claims", { exact: true })).toBeVisible();
+  await expect(progress.getByText("Exact Field Matches", { exact: true })).toBeVisible();
+  await expect(progress).toContainText("not the meaning of model explanations");
+  await expect(progress.getByText("Blocked Blocks", { exact: true })).toBeVisible();
   await expect(progress.getByRole("list", { name: "Research Focus" }).getByRole("listitem")).toHaveCount(3);
   expect(posts[0].body).toMatchObject({ research_mode: "research", research_max_seconds: 60, research_max_model_calls: 2, research_max_tool_calls: 3 });
   await page.getByRole("link", { name: "request_synthetic/result/last" }).click();
@@ -470,7 +471,7 @@ test("failed Research reload reconstructs saved steps without inventing usage", 
   await expect(page.getByText(/Progress and model usage unavailable after recovery/)).toBeVisible();
   await page.reload();
   await expect(page.getByText(/Progress and model usage unavailable after recovery/)).toBeVisible();
-  await expect(page.getByRole("region", { name: "Research Progress" }).getByText("Verified Claims", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Research Progress" }).getByText("Exact Field Matches", { exact: true })).toHaveCount(0);
   await page.getByText("Saved Tool Steps · 1", { exact: true }).click();
   await expect(page.getByRole("region", { name: "Research Progress" })).toContainText("market_data_get");
   expect(posts).toHaveLength(1);
@@ -491,4 +492,60 @@ test("Counter-review requires explicit selection and validates budgets before su
   await expect(page.getByText("Model call budget reached", { exact: true })).toBeVisible();
   expect(posts).toHaveLength(1);
   expect(posts[0].body.research_mode).toBe("challenge");
+});
+
+for (const width of [390, 1440]) {
+  test(`Research field presentation preserves scope and exact copy at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1100 });
+    const first = "result/quotes/0/last: 100 · instrument_id=equity:US:SYNTH · currency=USD · quote_at=2026-09-15T12:00:00Z · price_basis=last · sources=SYNTHETIC · degraded=false";
+    const second = "result/quotes/1/last: 100 · instrument_id=equity:CN:600000 · currency=CNY · quote_at=2026-09-14T03:00:00Z · price_basis=last · freshness=stale · warnings=QUOTE_STALE · sources=SYNTHETIC · degraded=true";
+    const content = `## 推断\n\n比较〔${first}〕与〔${second}〕，币种与时点不同，不能合并判断。\n\n\`evidence=req_synthetic/result/quotes/0/last, req_synthetic/result/quotes/1/last\`\n\n## 缺口\n\nresult/fees: null · currency=USD · degraded=false`;
+    const posts = await mockResearchTurn(page, false, content);
+    await page.goto("/?agent=open");
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        writeText: async (value: string) => { document.body.dataset.syntheticCopied = value; },
+      } });
+    });
+    await page.getByLabel("Message Copilot").fill("Read synthetic evidence");
+    await page.getByRole("button", { name: "Send Message", exact: true }).click();
+    const fields = page.getByRole("region", { name: "Research Evidence · Last Price", exact: true });
+    await expect(fields).toHaveCount(2);
+    await expect(fields.nth(0)).toContainText("equity:US:SYNTH");
+    await expect(fields.nth(0)).toContainText("USD");
+    await expect(fields.nth(0)).not.toContainText("CNY");
+    await expect(fields.nth(1)).toContainText("equity:CN:600000");
+    await expect(fields.nth(1)).toContainText("CNY");
+    await expect(fields.nth(1)).toContainText("2026-09-14T03:00:00Z");
+    await expect(fields.nth(1)).toContainText("QUOTE_STALE");
+    await expect(page.getByRole("heading", { name: "推断", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "事实", exact: true })).toHaveCount(0);
+    await expect(page.getByText("，币种与时点不同，不能合并判断。", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Research Evidence · Fees", exact: true })).toContainText("Unavailable (null)");
+    await expect(fields.nth(0).locator("pre")).not.toBeVisible();
+    await fields.nth(0).getByText("View Raw Evidence Field", { exact: true }).click();
+    await expect(fields.nth(0).locator("pre")).toHaveText(first);
+    await page.getByText("View Answer References", { exact: true }).click();
+    await expect(page.getByText("`evidence=req_synthetic/result/quotes/0/last, req_synthetic/result/quotes/1/last`", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Copy Message", exact: true }).last().click();
+    await expect.poll(() => page.evaluate(() => document.body.dataset.syntheticCopied)).toBe(content);
+    expect(posts).toHaveLength(1);
+    const answer = page.locator(".agent-rail-message.assistant").last();
+    expect(await answer.evaluate((node) => node.scrollWidth <= node.clientWidth + 2)).toBeTruthy();
+    if (width === 1440) {
+      await page.getByRole("button", { name: "Expand Copilot Focus View", exact: true }).click();
+      await fields.nth(0).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "../artifacts/research-evidence-preview.png" });
+    }
+  });
+}
+
+test("Research malformed field remains original prose", async ({ page }) => {
+  const content = "## 推断\n\n原文〔result/last: 100 · unknown=USD〕保留。";
+  await mockResearchTurn(page, false, content);
+  await page.goto("/?agent=open");
+  await page.getByLabel("Message Copilot").fill("Read synthetic malformed evidence");
+  await page.getByRole("button", { name: "Send Message", exact: true }).click();
+  await expect(page.getByText("原文〔result/last: 100 · unknown=USD〕保留。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: /Research Evidence/ })).toHaveCount(0);
 });

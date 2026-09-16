@@ -10,7 +10,7 @@ MCP 客户端。Trading Partner 是研究、事实和长期记忆服务；仅 Sc
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.6.0"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.7.0"
 trading-partner-init --json
 ```
 

@@ -155,6 +155,24 @@ can support missing-data explanations. Qualitative explanations may cite multipl
 fields but remain unverified interpretation, not fact verification. Invalid optional
 replacement answers preserve the primary.
 
+Explanations may embed `@evidence(ref)` for a selected current-turn field. The host
+inserts that field's full identity, time, currency and basis context instead of
+requiring the model to copy a number or date. Missing, unselected or malformed
+references, additional unbound numbers and execution claims remain blocked;
+expanded text retains the answer size limits. The explanation remains INFERENCE
+(or GAP/NEXT_STEP), never a verified fact. Console reports exact field matches
+separately from interpretation and explicitly discloses that meaning is not checked.
+Omitted reference arrays may be reconstructed from exact inline paths. Bounded
+model root notes become checked INFERENCE blocks without opening the public schema;
+coherent parenthesized lists are not treated as amounts. Evidence-invalid optional
+counter-reviews preserve the primary answer and disclose the rejected critique.
+
+Research answers present supported canonical fields with readable names and values,
+keeping identity and material context visible while full source/path text can be
+expanded. This changes presentation only: stored/copied answers keep the exact
+original text, malformed or unfamiliar field formats fall back to the full text,
+and an interpretation never becomes a verified fact through formatting.
+
 Counter-review permits one additional tool-free critique, only within the remaining
 budget. Failure preserves the primary answer and reports a gap. Completed read steps
 and receipts survive budget stops; reconnect/reload only restores records and never
@@ -171,6 +189,13 @@ The deterministic evaluation command includes 40 additional synthetic evidence c
 alongside the existing runtime catalog. These gates validate implementation behavior,
 not live model research quality, investment returns, or the correctness of every
 qualitative inference.
+
+An explicit source-checkout acceptance script can exercise the configured real
+model against four closed synthetic scenarios in an in-memory Research runtime.
+It measures field/answer retention, budgets and reported usage without private
+data, market access or writes. Automatic passing requires subsequent human semantic
+review and does not establish general model quality. See the
+[operator guide](operations/local-console-and-maintenance.md#copilot-真实模型验收显式执行).
 
 ## Charts, valuation assumptions and calibration
 
@@ -257,6 +282,7 @@ advances it after a completed review. User drafts are not auto-submitted on relo
 - Korea: Instrument resolution plus Yahoo quote/bars, shared technical analysis,
   manual Watchlist, monitoring, and XKRX post-market dispatch. DART, KR brokerage,
   fundamentals, news, sentiment, breadth, and Position Sizing are unavailable.
+  Further Korean-market expansion is excluded from future plans.
 - Cross-asset: selected Yahoo continuous metal futures, formal CME metals, DCE
   live-hog EOD facts, Dukascopy precious-metal spot feeds and rolling copper/light-oil
   CFDs. Every proxy retains its venue, units, adjustment, roll, and basis warnings.

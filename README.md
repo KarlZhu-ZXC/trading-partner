@@ -114,7 +114,7 @@ per-user runtime:
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.6.0"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.7.0"
 trading-partner-init
 ```
 

@@ -33,6 +33,7 @@ current specification, agent instructions, or an operator guide.
 | Document | Scope |
 |---|---|
 | [releases/unreleased.md](releases/unreleased.md) | Current unreleased changes |
+| [releases/v0.7.0.md](releases/v0.7.0.md) | v0.7.0 research review workspace, Copilot evidence, charts and Journal |
 | [releases/v0.6.0.md](releases/v0.6.0.md) | v0.6.0 agent runtime, decision operations, and execution controls |
 | [releases/v0.5.1.md](releases/v0.5.1.md) | v0.5.1 portable MCP onboarding release |
 | [releases/v0.5.0.md](releases/v0.5.0.md) | v0.5.0 Research Subject and monitoring release |

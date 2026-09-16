@@ -67,8 +67,6 @@ A–D 的首版已交付，当前边界见 [产品说明](../product.md) 与
 
 ## Deferred integrations
 
-- Broader Korea coverage: DART, company research, news/sentiment, broker accounts,
-  catalyst data, and Position Sizing.
 - Additional brokers and A-share account execution feeds.
 - Cross-currency consolidated performance until timestamped FX coverage and policy
   are defined.
@@ -82,6 +80,8 @@ Provider or identity.
 
 ## Non-goals
 
+- Korean-market expansion is excluded from future plans, not deferred. Existing
+  implemented support does not imply a commitment to further coverage.
 - Automated backtesting, paper-trading engines, or parameter optimization inside the
   current product.
 - Autonomous Thesis, Trade Plan, Candidate, position, or order decisions.

@@ -102,3 +102,33 @@ as verified facts. Numerical/date claims still require exact field binding. Know
 catalog paths/list labels are not amounts; affirmative execution claims stay denied.
 Malformed or unfinished optional replacement answers must preserve the primary;
 returned replacement usage counts even when the replacement is rejected.
+
+Non-fact blocks may embed `@evidence(ref)` only for exact current catalog entries.
+If `evidence_refs` is empty, the host derives it from the literal inline paths;
+an explicitly supplied array must agree with the selected paths. The host inserts full field context;
+the model must not supply bare numerical/date values around the marker. Malformed,
+missing or unselected markers fail closed. Expansion obeys per-block and total
+answer bounds and is persisted in the same final envelope/text used for display.
+Inline fields do not promote an explanation to FACT or increment verified counts.
+Console evidence labels describe field matches, not semantic verification. A valid
+citation cannot prove a qualitative or causal interpretation.
+
+A bounded string `note` at the model output root may be normalized into an
+INFERENCE block in Research only. All existing block/URL/size constraints still
+apply; other unknown root keys remain invalid, and the public DTO remains closed.
+The resulting note passes the same field checker. Parenthesized 1..N lists after
+a colon are structure, not numerical claims; isolated amounts remain checked.
+Counter-review must pass field checks before replacing the primary answer; an
+evidence-invalid critique preserves the primary, counts returned usage and exposes
+`CHALLENGE_EVIDENCE_REJECTED`. No repair model call or execution authority is added.
+
+Research field formatting in Console is presentation-only. Preserve the complete
+stored/copied answer, show material identity/units/time/basis and warning context,
+and fall back losslessly for unknown or ambiguous grammar. Disclosure or readable
+field labels cannot promote an interpretation to verified fact.
+
+`scripts/evaluate_copilot_research_live.py` is a source-only opt-in acceptance
+entry; without `--live` it makes no calls. The live path uses only fixed synthetic
+fixtures and in-memory state with the configured model. It does not build the
+business container or expose live tools. Reports distinguish automatic field and
+protocol checks from human semantic review. Ordinary tests remain model-free.

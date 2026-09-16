@@ -437,8 +437,10 @@ or model call is part of these operations.
 
 **Korea Exchange market facts**
 
-KR expansion is not current work. Retain the implemented slice below without
-adding DART, KR broker accounts, or other Korean-market integrations.
+The owner has excluded Korean-market expansion from future plans; it is not a
+deferred backlog item. Do not propose or list it as unfinished work. Retain the
+implemented slice below without adding DART, KR broker accounts, or other
+Korean-market integrations.
 
 - `Market.KR` uses canonical bare-code identities such as `equity:KR:005930`,
   `equity:KR:000660`, `index:KR:KS11`, `index:KR:KQ11`, `index:KR:KS200`, and

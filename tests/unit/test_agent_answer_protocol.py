@@ -78,3 +78,55 @@ def test_invalid_structured_url_fails_closed_to_plain_text() -> None:
     value = parse_agent_answer(raw)
     assert value.generated_by == "fallback"
     assert render_agent_answer(value) == raw
+
+
+def test_research_root_note_preserves_blocks_without_relaxing_public_schema():
+    from application.dto.agent_answer import AgentAnswerEnvelope
+    from application.services.agent_answer_protocol import parse_research_answer
+
+    payload = {
+        "blocks": [
+            {"kind": "FACT", "text": "@evidence", "evidence_refs": ["req_synthetic/result/revenue"]}
+        ],
+        "note": "This is an unverified model interpretation.",
+    }
+    import pytest
+
+    with pytest.raises(ValueError):
+        AgentAnswerEnvelope.model_validate(payload)
+    answer = parse_research_answer(json.dumps(payload))
+    assert answer.generated_by == "model"
+    assert len(answer.blocks) == 2
+    assert answer.blocks[0].kind == "FACT"
+    assert answer.blocks[1].kind == "INFERENCE"
+    assert answer.blocks[1].text == payload["note"]
+    assert parse_agent_answer(json.dumps(payload)).generated_by == "fallback"
+
+
+def test_research_note_cannot_bypass_fields_urls_or_size_limits():
+    from application.services.agent_answer_protocol import parse_research_answer
+    from application.services.copilot_research_evidence import guard_research_answer
+
+    for note in ("价格为999。", "已买入。", "https://example.test/unverified"):
+        envelope = parse_research_answer(
+            json.dumps(
+                {
+                    "blocks": [{"kind": "INFERENCE", "text": "Primary explanation"}],
+                    "note": note,
+                }
+            )
+        )
+        guarded = guard_research_answer(envelope, receipts=[], tool_payloads=[])
+        assert guarded.summary["missing_count"] == 1
+        assert guarded.envelope.blocks[0].text == "Primary explanation"
+        assert guarded.envelope.blocks[1].kind == "GAP"
+    base = {"blocks": [{"kind": "INFERENCE", "text": "Primary explanation"}]}
+    for payload in (
+        {**base, "note": {}},
+        {**base, "note": ""},
+        {**base, "note": "x" * 4001},
+        {**base, "note": "note", "unknown": "unsafe"},
+        {"blocks": base["blocks"] * 32, "note": "extra"},
+        {"blocks": [{"kind": "INFERENCE", "text": "x" * 4000}] * 16, "note": "extra"},
+    ):
+        assert parse_research_answer(json.dumps(payload)).generated_by == "fallback"

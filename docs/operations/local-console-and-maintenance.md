@@ -87,6 +87,36 @@ fingerprint。真实 Provider smoke 由操作者单独以有界只读请求执�
 模型与档位按浏览器保存，不会更改 Monitor 或私人笔记分析的共享服务配置。
 Research 事实由程序按引用生成，解释保持推断；精确数值和日期应放在事实块。
 
+### Copilot 真实模型验收（显式执行）
+
+开发验证默认使用无模型调用的回归测试。需要检查已配置模型对 Research 引用协议的
+实际遵循情况时，在源码目录运行：
+
+```bash
+uv run python scripts/evaluate_copilot_research_live.py
+uv run python scripts/evaluate_copilot_research_live.py --live
+uv run python scripts/evaluate_copilot_research_live.py --live --reasoning-effort high
+```
+
+第一条只列出案例；`--live` 才调用配置的 Agent 模型，可能产生模型费用。
+`--case inline_quote` 可只选一个案例，也可重复 `--case` 选择多个。四个固定场景覆盖
+内联价格/日期、跨币种持仓、费用缺失和年度财务反方审查。每个案例最多五次顶层模型
+调用、六次工具调用及一百八十秒；Provider 内部尝试和实际费用不由这些上限保证。
+
+验收使用内存会话和封闭的合成数据读取，不构建业务容器、不读取私人笔记/账户数据、
+不连接市场 Provider 或网页搜索，也不能写入业务记录或下单。配置通过正常设置加载，
+凭据不写入输出。报告默认写入被 Git 忽略的 `artifacts/copilot-research-live.json`，
+可用 `--output` 指定本地位置；报告保留合成回答、调用/用量信息与代码指纹。
+报告还区分每次调用的耗时、工具调用、返回或中断状态；中断调用的用量仍为未知。
+`--reasoning-effort` 只选择本次验收的推理强度，不修改配置或用户偏好。
+DeepSeek Flash 在显式 `high` 下已通过这四个合成场景；继承配置的 `max` 曾在最终
+回答前耗尽默认预算。该小样本只能说明所测场景的完成情况，不代表通用模型质量排名。
+
+自动通过只表示必需字段与解释保留、引用检查通过且流程完成。仍需人工核对回答是否
+混淆标的、币种、时点、费前/净收益及年度/单季口径；报告不会把这些语义标成自动验证。
+失败案例保留安全错误码，不记录 Provider 原始错误内容。它是小样本验收，不是研究
+质量排名或投资效果证明。
+
 ### OpenCode Zen / Go Provider（可选）
 
 OpenCode Zen 与 Go 在 Console 中是两个独立 Provider，拥有不同的模型目录、Base URL

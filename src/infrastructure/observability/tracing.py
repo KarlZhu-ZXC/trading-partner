@@ -162,7 +162,7 @@ def configure_tracing(
             resource=Resource.create(
                 {
                     "service.name": settings.otel_service_name,
-                    "service.version": "0.6.0",
+                    "service.version": "0.7.0",
                 }
             ),
             sampler=ParentBased(TraceIdRatioBased(settings.otel_trace_sample_ratio)),

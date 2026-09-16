@@ -27,10 +27,10 @@ export function CopilotResearchProgress({ research, recoveredStatus, receipts = 
       { label: "Reported Output Tokens", value: outputTokens ?? "Unavailable" },
       { label: "Usage Coverage", value: usageCoverage },
       { label: "Completed Reads", value: recovered ? "See saved receipts" : research.completed_reads },
-      { label: "Evidence", value: recovered ? "Unavailable" : research.evidence_status.replaceAll("_", " ") },
+      { label: "Field Evidence", value: recovered ? "Unavailable" : research.evidence_status.replaceAll("_", " ") },
     ]} />
-    {!recovered && research.phase === "FINISHED" && research.evidence_status !== "NOT_CHECKED" && <DescriptionList columns={2} items={[{ label: "Verified Claims", value: research.verified_claims }, { label: "Blocked Claims", value: research.blocked_claims }]} />}
-    <p>Token values include only reported usage. Claim counts describe the evidence check; they do not establish that every statement is verified. Provider internal attempts and cost are unavailable.</p>
+    {!recovered && research.phase === "FINISHED" && research.evidence_status !== "NOT_CHECKED" && <DescriptionList columns={2} items={[{ label: "Exact Field Matches", value: research.verified_claims }, { label: "Blocked Blocks", value: research.blocked_claims }]} />}
+    <p>Field checks verify source values and context, not the meaning of model explanations. Cited interpretations may still misread scope. Token values include only reported usage; Provider internal attempts and cost are unavailable.</p>
     {research.stop_reason && !recovered && <p role="status"><strong>{labels[research.stop_reason]}</strong></p>}
     {research.gaps.length > 0 && !recovered && <p>Evidence gaps: {research.gaps.join(" · ")}</p>}
     {recovered && receipts.length > 0 && <Disclosure title={`Saved Tool Steps · ${receipts.length}`} variant="compact"><ol>{receipts.map((receipt) => <li key={receipt.receipt_id}>{receipt.capability} · {receipt.operation} · {receipt.error_codes.length ? receipt.error_codes.join(" · ") : "Recorded"}</li>)}</ol></Disclosure>}

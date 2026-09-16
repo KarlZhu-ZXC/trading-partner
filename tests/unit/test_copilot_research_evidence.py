@@ -5,6 +5,7 @@ import json
 import pytest
 
 from application.dto.agent_answer import AgentAnswerBlock, AgentAnswerEnvelope
+from application.ports.agent_tool_gateway import AgentToolReceipt
 from application.services.copilot_research_evidence import guard_research_answer
 from interfaces.cli.copilot_research_evaluation import (
     CATALOG_PATH,
@@ -35,6 +36,27 @@ def test_no_facts_does_not_claim_verified() -> None:
     )
     assert guarded.summary["status"] == "NOT_CHECKED"
     assert guarded.summary["verified_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "text,missing",
+    [
+        ("缺少的证据：（1）单季收入；（2）可比基线；（3）多期序列。", 0),
+        ("Evidence: (1) quarterly revenue; (2) comparable periods.", 0),
+        ("价格：（100）美元。", 1),
+        ("缺少的证据：（1）单季收入；（2）价格为999。", 1),
+        ("证据：（2）单季收入；（4）可比基线。", 1),
+    ],
+)
+def test_colon_introduced_list_labels_are_not_amounts(text, missing):
+    result = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind="GAP", text=text),)),
+        receipts=[],
+        tool_payloads=[],
+    )
+    assert result.summary["missing_count"] == missing
+    if not missing:
+        assert result.envelope.blocks[0].text == text
 
 
 @pytest.mark.parametrize(
@@ -330,3 +352,160 @@ def test_unconfirmed_structure_explanation_is_not_an_execution_claim(suffix: str
     assert guarded.summary["missing_count"] == bool(suffix)
     if not suffix:
         assert guarded.envelope.blocks[0].text == text
+
+
+@pytest.fixture
+def inline_evidence():
+    receipt = AgentToolReceipt(
+        capability="portfolio_get",
+        operation="positions",
+        request_id="req_inline",
+        effect="READ_DURABLE",
+        source_codes=("SYNTHETIC",),
+    )
+    payload = {
+        "receipt": receipt.as_dict(),
+        "result": {
+            "positions": [
+                {
+                    "instrument_id": "equity:US:SYNTH",
+                    "account_ref": "synthetic_account",
+                    "currency": "USD",
+                    "quantity": "100",
+                    "snapshot_at": "2026-09-15T12:00:00Z",
+                    "basis": "broker_snapshot",
+                },
+                {
+                    "instrument_id": "equity:US:OTHER",
+                    "currency": "JPY",
+                    "quantity": "100",
+                    "snapshot_at": "2026-09-14T12:00:00Z",
+                },
+            ],
+            "fees": None,
+        },
+    }
+    return receipt, payload
+
+
+@pytest.mark.parametrize("kind", ["INFERENCE", "SUMMARY", "GAP", "NEXT_STEP"])
+def test_inline_fields_keep_explanation_and_each_fields_full_scope(inline_evidence, kind):
+    receipt, payload = inline_evidence
+    refs = (
+        "req_inline/result/positions/0/quantity",
+        "req_inline/result/positions/1/quantity",
+        "req_inline/result/positions/0/snapshot_at",
+        "req_inline/result/fees",
+    )
+    text = (
+        f"观察到@evidence({refs[0]})与@evidence({refs[1]})；"
+        f"快照日期为@evidence({refs[2]})，费用字段为@evidence({refs[3]})。"
+        "币种与时点不同，不能合并判断。"
+    )
+    result = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind=kind, text=text, evidence_refs=refs),)),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    block = result.envelope.blocks[0]
+    assert "币种与时点不同，不能合并判断。" in block.text
+    assert "@evidence" not in block.text
+    for expected in (
+        "quantity: 100",
+        "equity:US:SYNTH",
+        "equity:US:OTHER",
+        "currency=USD",
+        "currency=JPY",
+        "2026-09-15T12:00:00Z",
+        "2026-09-14T12:00:00Z",
+        "account_ref=synthetic_account",
+        "basis=broker_snapshot",
+        "fees: null",
+    ):
+        assert expected in block.text
+    assert block.kind == ("INFERENCE" if kind == "SUMMARY" else kind)
+    assert result.summary["verified_count"] == 0  # Interpretation is not a verified fact.
+    assert result.summary["missing_count"] == 0
+    AgentAnswerEnvelope.model_validate(result.envelope.model_dump())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "数量为 100，@evidence(req_inline/result/positions/0/quantity)",
+        "数量为100，@evidence(req_inline/result/positions/0/quantity)",
+        "数量为@evidence(req_inline/result/positions/0/quantity)999",
+        "截至 2030-01-01，@evidence(req_inline/result/positions/0/quantity)",
+        "已买入@evidence(req_inline/result/positions/0/quantity)",
+        "@evidence(req_inline/result/positions/99/quantity)",
+        "@evidence(req_inline/result/positions/1/quantity)",  # Not selected by this block.
+        "@evidence(req_old/result/positions/0/quantity)",
+        "@evidence(req_inline/result/positions/0/quantity",  # Malformed.
+        "@evidence()",
+        "@evidence(req_inline/result/positions/0/quantity) https://example.test/forged",
+    ],
+)
+def test_inline_fields_do_not_authorize_unbound_claims(inline_evidence, text):
+    receipt, payload = inline_evidence
+    result = guard_research_answer(
+        AgentAnswerEnvelope(
+            blocks=(
+                AgentAnswerBlock(
+                    kind="INFERENCE",
+                    text=text,
+                    evidence_refs=("req_inline/result/positions/0/quantity",),
+                ),
+            )
+        ),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    assert result.summary["missing_count"] == 1
+    assert result.envelope.blocks[0].kind == "GAP"
+    assert "@evidence" not in result.envelope.blocks[0].text
+
+
+@pytest.mark.parametrize("total_limit", [False, True])
+def test_inline_expansion_respects_block_and_envelope_bounds(inline_evidence, total_limit):
+    receipt, payload = inline_evidence
+    ref = "req_inline/result/positions/0/quantity"
+    text = f"@evidence({ref})" + "解释" * (20 if total_limit else 1950)
+    blocks = [AgentAnswerBlock(kind="INFERENCE", text=text, evidence_refs=(ref,))]
+    if total_limit:
+        blocks.extend(AgentAnswerBlock(kind="INFERENCE", text="解释" * 2000) for _ in range(15))
+        blocks.append(
+            AgentAnswerBlock(kind="INFERENCE", text="解释" * ((64_000 - 60_000 - len(text)) // 2))
+        )
+    result = guard_research_answer(
+        AgentAnswerEnvelope(blocks=tuple(blocks)),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    assert result.summary["missing_count"] == 1
+    AgentAnswerEnvelope.model_validate(result.envelope.model_dump())
+
+
+@pytest.mark.parametrize("request_id,missing", [("req_inline", 0), ("req_old", 1)])
+def test_inline_path_is_an_exact_selection_without_redundant_ref_array(
+    inline_evidence, request_id, missing
+):
+    receipt, payload = inline_evidence
+    ref = f"{request_id}/result/positions/0/quantity"
+    result = guard_research_answer(
+        AgentAnswerEnvelope(
+            blocks=(
+                AgentAnswerBlock(
+                    kind="INFERENCE",
+                    text=f"持仓字段为@evidence({ref})，需结合风险判断。",
+                ),
+            )
+        ),
+        receipts=[receipt],
+        tool_payloads=[payload],
+    )
+    assert result.summary["missing_count"] == missing
+    if not missing:
+        block = result.envelope.blocks[0]
+        assert block.evidence_refs == (ref,)
+        assert "quantity: 100" in block.text and "currency=USD" in block.text
+        assert block.kind == "INFERENCE"

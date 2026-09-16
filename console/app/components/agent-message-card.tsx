@@ -13,6 +13,7 @@ import type { AgentImageAttachment, AgentMessage, AgentReceipt } from "../lib/ag
 import { parseCopilotResearch } from "../lib/agent-api";
 import { CopilotResearchProgress } from "./copilot-research-progress";
 import { AgentMessageContent } from "./agent-message-content";
+import { ResearchAnswerContent } from "./research-answer-content";
 import { Disclosure } from "./ui";
 import { IconButton, TextLink } from "./ui/controls";
 
@@ -278,7 +279,11 @@ export function AgentMessageCard({
         </div>
       </header>
       <AgentImageGallery attachments={message.attachments} />
-      <AgentMessageContent content={message.content} />
+      {!isUser && research ? (
+        <ResearchAnswerContent content={message.content} />
+      ) : (
+        <AgentMessageContent content={message.content} />
+      )}
       {research && (!isUser || recoveredStatus) && <CopilotResearchProgress research={research} recoveredStatus={isUser ? recoveredStatus : undefined} receipts={receipts} usage={isUser ? undefined : asRecord(modelReceipt.usage)} />}
       {evidenceRefs.length > 0 && <div aria-label="Answer Evidence">{evidenceRefs.map(({ ref, receipt }) => receipt ? <TextLink key={ref} href={`#copilot-receipt-${receipt.receipt_id}`} onClick={(event) => { event.preventDefault(); const target = document.getElementById(`copilot-receipt-${receipt.receipt_id}`); const disclosure = target?.closest("details"); if (disclosure) disclosure.open = true; window.requestAnimationFrame(() => target?.scrollIntoView({ block: "nearest", behavior: "auto" })); }}>{ref}</TextLink> : <span key={ref}>{ref} · receipt unavailable</span>)}</div>}
       <AgentArtifactGallery urls={artifactUrls} />

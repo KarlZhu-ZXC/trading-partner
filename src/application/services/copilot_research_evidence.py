@@ -24,7 +24,11 @@ from application.dto.agent_answer import (
 from application.ports.agent_tool_gateway import AgentToolReceipt
 
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_.:-]+$")
-_NUMERIC = re.compile(r"(?<!\w)[+-]?\d+(?:[.,]\d+)*(?:%)?")
+# Chinese prose does not require whitespace before an amount. ASCII identifier
+# suffixes remain distinct from amounts (for example a model's version name).
+_NUMERIC = re.compile(r"(?<![A-Za-z0-9_])[+-]?\d+(?:[.,]\d+)*(?:%)?")
+_INLINE_EVIDENCE = re.compile(r"@evidence\(([A-Za-z0-9][A-Za-z0-9_.:/-]{0,159})\)")
+_PAREN_LIST = re.compile(r"(?:^|[\n；;。—:：])\s*[（(](\d+)[）)]")
 _EXECUTED = re.compile(
     r"已(?:成交|下单|执行|确认|买入|卖出|撤单)|"
     r"\b(?:executed|submitted|filled|purchased|sold|confirmed breakout)\b|"
@@ -396,9 +400,16 @@ def guard_research_answer(
     missing = 0
     for index, block in enumerate(envelope.blocks):
         code: str | None = None
-        selected = [entries[ref] for ref in block.evidence_refs if ref in entries]
         required = block.kind in {AgentAnswerBlockKind.FACT, AgentAnswerBlockKind.CITATION}
-        prose = re.sub(r"(?m)^\s*(?:#{1,6}\s*)?\d+[.)]\s+", "", block.text)
+        inline_refs = _INLINE_EVIDENCE.findall(block.text) if not required else []
+        if not block.evidence_refs and inline_refs and len(set(inline_refs)) <= 20:
+            # The literal current-turn path is itself an exact selection. Model
+            # output need not repeat the same selection in a parallel array.
+            # Explicit conflicting arrays and unknown paths still fail closed.
+            block = block.model_copy(update={"evidence_refs": tuple(dict.fromkeys(inline_refs))})
+        selected = [entries[ref] for ref in block.evidence_refs if ref in entries]
+        explanation = _INLINE_EVIDENCE.sub("", block.text) if not required else block.text
+        prose = re.sub(r"(?m)^\s*(?:#{1,6}\s*)?\d+[.)]\s+", "", explanation)
         # Known field/node paths and list labels are structure, not amounts.
         # Unknown paths and arbitrary numbers remain subject to exact binding.
         prose = re.sub(
@@ -408,7 +419,16 @@ def guard_research_answer(
             ),
             prose,
         )
-        prose = re.sub(r"(?:^|[\n；;。—])\s*[（(]\d+[）)]", "", prose)
+        # A colon can introduce a numbered list inside a paragraph. Only strip
+        # such labels when the complete sequence is unambiguously 1..N; a lone
+        # parenthesized amount after a colon is still a numerical assertion.
+        labels = list(_PAREN_LIST.finditer(prose))
+        if 2 <= len(labels) <= 32 and [m.group(1) for m in labels] == [
+            str(n) for n in range(1, len(labels) + 1)
+        ]:
+            prose = _PAREN_LIST.sub("", prose)
+        else:
+            prose = re.sub(r"(?:^|[\n；;。—])\s*[（(]\d+[）)]", "", prose)
         numeric = bool(_NUMERIC.search(prose))
         # Only explicitly negated mentions are exempt; a later affirmative
         # assertion in the same block must still be rejected.
@@ -419,12 +439,17 @@ def guard_research_answer(
             r"(?:所需的)?(?:确认)?(?:条件|证据)|"
             r"\b(?:not|never) (?:executed|submitted|filled|purchased|sold|confirmed breakout)\b",
             "",
-            block.text,
+            explanation,
             flags=re.IGNORECASE,
         )
         inline_urls = re.findall(r"https?://[^\s<>]+", block.text)
         allowed_urls = [url for entry in selected for url in entry["source_urls"]]
-        if any(url not in allowed_urls for url in inline_urls):
+        if not required and (
+            "@evidence" in explanation
+            or any(ref not in block.evidence_refs or ref not in entries for ref in inline_refs)
+        ):
+            code = "RESEARCH_EVIDENCE_REF_MISSING"
+        elif any(url not in allowed_urls for url in inline_urls):
             code = "RESEARCH_SOURCE_URL_UNVERIFIED"
         elif _EXECUTED.search(execution_prose):
             code = "RESEARCH_EXECUTION_CLAIM_DENIED"
@@ -483,6 +508,22 @@ def guard_research_answer(
             )
         ):
             code = "RESEARCH_CONTEXT_MISMATCH"
+        if code is None and inline_refs:
+            # Insert complete host-owned field context, never a bare matching
+            # number. The surrounding explanation remains unverified inference.
+            rendered = _INLINE_EVIDENCE.sub(
+                lambda match: f"〔{entries[match.group(1)]['text']}〕", block.text
+            )
+            if (
+                len(rendered) > 4_000
+                or sum(len(item.text) for item in blocks)
+                + len(rendered)
+                + sum(len(item.text) for item in envelope.blocks[index + 1 :])
+                > 64_000
+            ):
+                code = "RESEARCH_FIELD_EVIDENCE_REQUIRED"
+            else:
+                block = block.model_copy(update={"text": rendered})
         if code:
             missing += 1
             codes.add(code)
