@@ -22,7 +22,7 @@ async function mock(page: Page, mode: "normal" | "partial" | "failed" = "normal"
   return { reads, writes, failDigest: () => { mode = "failed"; }, failOverview: () => { failOverview = true; } };
 }
 test("Today Review groups instruments, preserves scope links and hides deferred/reviewed rows", async ({ page }) => {
-  const api = await mock(page); await page.goto("/");
+  const api = await mock(page); await page.goto("/?review_window=today");
   const card = page.locator("#today-review");
   await expect(card.getByRole("heading", { name: "Today Review", exact: true })).toBeVisible();
   const single = card.locator("article").filter({ has: page.getByText("Single Scope Instrument", { exact: true }) });
@@ -42,13 +42,13 @@ test("Today Review groups instruments, preserves scope links and hides deferred/
   await expect(page.getByRole("heading", { name: "Action & Review Inbox", exact: true })).toHaveCount(0);
 });
 test("Partial digest never implies the review queue is clear", async ({ page }) => {
-  await mock(page, "partial"); await page.goto("/");
+  await mock(page, "partial"); await page.goto("/?review_window=today");
   const card = page.locator("#today-review");
   await expect(card.getByText(/Some review sources are incomplete or unavailable/)).toBeVisible();
   await expect(card.getByText("No active review items in the available sources.")).toHaveCount(0);
 });
 test("Digest read failure offers refresh without an all-clear claim", async ({ page }) => {
-  await mock(page, "failed"); await page.goto("/");
+  await mock(page, "failed"); await page.goto("/?review_window=today");
   const card = page.locator("#today-review");
   await expect(card.getByText("Synthetic review source unavailable")).toBeVisible();
   await expect(card.getByRole("button", { name: "Refresh Today Review" })).toBeEnabled();
@@ -56,7 +56,7 @@ test("Digest read failure offers refresh without an all-clear claim", async ({ p
 });
 
 test("Daily filters retain exact scope links and keep operational actions visible", async ({ page }) => {
-  const api = await mock(page); await page.goto("/");
+  const api = await mock(page); await page.goto("/?review_window=today");
   const card = page.locator("#today-review");
   await card.getByLabel("Search Reviews", { exact: true }).fill("Multiple Scope");
   await expect(card.getByText("Single Scope Instrument", { exact: true })).not.toBeVisible();
@@ -72,7 +72,7 @@ test("Daily filters retain exact scope links and keep operational actions visibl
 });
 
 test("Refresh failures preserve filtered reviews and overview with retry controls", async ({ page }) => {
-  const api = await mock(page); await page.goto("/");
+  const api = await mock(page); await page.goto("/?review_window=today");
   const card = page.locator("#today-review");
   await card.getByLabel("Search Reviews", { exact: true }).fill("Multiple Scope");
   api.failDigest();
@@ -96,7 +96,7 @@ test("Weekly Review selection survives reload without losing unrelated URL conte
   expect(new URL(page.url()).hash).toBe("#review-queue");
   await page.reload();
   await expect(page.getByRole("tab", { name: "Weekly Review", exact: true })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Today Review", exact: true }).click();
-  expect(new URL(page.url()).searchParams.has("review_window")).toBe(false);
+  await page.getByRole("tab", { name: "Changes and Risks", exact: true }).click();
+  expect(new URL(page.url()).searchParams.get("review_window")).toBe("today");
   expect(api.writes).toEqual([]);
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import { NoteDesk } from "./components/note-desk";
 import { TodayReview } from "./components/today-review";
 import { WeeklyReview } from "./components/weekly-review";
 import { useState, useSyncExternalStore } from "react";
@@ -13,6 +14,7 @@ import {
   HorizontalTabs,
   Card,
   DataBoundary,
+  LinkButton,
   Disclosure,
   QuickLink,
   Empty,
@@ -33,7 +35,8 @@ import { monitorRunPresentation } from "./lib/monitor-runs";
 type Dict = Record<string, unknown>;
 
 function reviewWindow() {
-  return new URLSearchParams(window.location.search).get("review_window") === "week" ? "week" : "today";
+  const mode = new URLSearchParams(window.location.search).get("review_window");
+  return mode === "week" || mode === "today" ? mode : "notes";
 }
 function subscribeReviewWindow(onChange: () => void) {
   window.addEventListener("popstate", onChange);
@@ -45,7 +48,7 @@ function subscribeReviewWindow(onChange: () => void) {
 }
 function setReviewMode(value: string) {
   const url = new URL(window.location.href);
-  if (value === "week") url.searchParams.set("review_window", "week");
+  if (value === "week" || value === "today") url.searchParams.set("review_window", value);
   else url.searchParams.delete("review_window");
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   window.dispatchEvent(new Event("review-window-change"));
@@ -61,7 +64,7 @@ function durationLabel(value: unknown): string {
 }
 
 export default function OverviewPage() {
-  const reviewMode = useSyncExternalStore(subscribeReviewWindow, reviewWindow, () => "today");
+  const reviewMode = useSyncExternalStore(subscribeReviewWindow, reviewWindow, () => "notes");
   const [updatingQueue, setUpdatingQueue] = useState(false);
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
   const [submittedReceipt, setSubmittedReceipt] = useState<Dict | null>(null);
@@ -143,19 +146,24 @@ export default function OverviewPage() {
     qualityActivity,
     qualityRoutes,
   });
+  const pendingOperationalReviews = [...new Map([...reviewItems, ...listOf<Dict>(result.data, "workflow_attention_projection")]
+    .filter(item => ["BROKER_ORDER_INTENT", "AGENT_PENDING_ACTION"].includes(String(item.source_type)) && !["RESOLVED", "AUTO_RESOLVED", "CANCELLED"].includes(String(item.status)))
+    .map(item => [`${String(item.source_type)}:${String(item.source_ref ?? item.source_key ?? item.review_item_id)}`, item])).values()];
   const operationalActions = notices.actionItems.filter((item) => item.href.startsWith("/operations") || item.key === "outbox-dead");
   const groupedInboxCount = notices.actionItems.length + (otherReviewCount > 0 ? 1 : 0);
   const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   return (
     <ConsoleShell active="overview">
-      <HorizontalTabs items={[{id:"today",label:"Today Review"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={setReviewMode} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
-      <section id={`review-window-panel-${reviewMode}`} role="tabpanel" aria-labelledby={`review-window-${reviewMode}`}>{reviewMode === "today" ? <TodayReview /> : <WeeklyReview />}</section>
+      <HorizontalTabs items={[{id:"notes",label:"Your Notes"},{id:"today",label:"Changes and Risks"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={setReviewMode} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
+      <section id={`review-window-panel-${reviewMode}`} role="tabpanel" aria-labelledby={`review-window-${reviewMode}`}>{reviewMode === "notes" ? <NoteDesk /> : reviewMode === "today" ? <TodayReview /> : <WeeklyReview />}</section>
       {result.error && <div role="status">
         {result.data && <><ErrorNote>{result.error}</ErrorNote><p>Showing the last loaded overview. Refresh to check for newer items.</p></>}
         <Button disabled={result.loading} onClick={result.refresh}>Retry Overview</Button>
       </div>}
       {result.loading && result.data && <p role="status">Refreshing overview. Current items remain visible.</p>}
+      {reviewMode === "notes" && (operationalActions.length > 0 || pendingOperationalReviews.length > 0 || triggered > 0 || blindMonitorCount > 0) && <Card kicker="EXCEPTIONS" title="Risk and Operations"><p>Risk and operational signals remain separate from note discussions.</p>{triggered > 0 && <LinkButton href="/monitors">Inspect {triggered} Triggered Rules</LinkButton>}{blindMonitorCount > 0 && <LinkButton href="/monitors">Inspect Unavailable Monitor Facts</LinkButton>}{operationalActions.map(item => <p key={item.key}><LinkButton href={item.href}>{item.title}</LinkButton></p>)}{pendingOperationalReviews.map(item => <p key={String(item.review_item_id ?? item.source_key)}><LinkButton href={String(item.href ?? "/decision-workbench")}>{String(item.title ?? "Inspect Pending Operational Action")}</LinkButton></p>)}</Card>}
+      <Disclosure key={reviewMode} title="Background Workspace Details" defaultOpen={reviewMode !== "notes"}>
       <DataBoundary loading={result.loading && result.data === null} error={result.data ? null : result.error}>
         <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
           <div className="agenda-summary-grid">
@@ -356,6 +364,7 @@ export default function OverviewPage() {
           </Card>
         </div>
       </DataBoundary>
+      </Disclosure>
     </ConsoleShell>
   );
 }

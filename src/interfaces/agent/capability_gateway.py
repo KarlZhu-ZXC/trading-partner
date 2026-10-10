@@ -115,10 +115,11 @@ _SEARCH_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "subject",
         ),
     ),
-    ("笔记", ("view_get", "inbox", "review", "current")),
-    ("观点", ("view_get", "inbox", "review", "current")),
-    ("当前看法", ("view_get", "current")),
-    ("当前观点", ("view_get", "current")),
+    ("笔记", ("view_get", "notes", "note")),
+    ("观点", ("view_get", "notes", "note", "current")),
+    ("当前看法", ("view_get", "notes", "note")),
+    ("当前观点", ("view_get", "notes", "note")),
+    ("正式观点", ("view_get", "current")),
     (
         "工作台",
         ("decision_workbench_review_queue", "open_items", "summary", "subject"),
@@ -791,6 +792,17 @@ class AgentCapabilityGateway(AgentToolGateway):
     ) -> AgentToolResult:
         """Policy-check, exact-validate, and execute one read operation."""
 
+        request = arguments.get("request", arguments)
+        if (
+            capability == "view_get"
+            and operation == "note"
+            and isinstance(request, Mapping)
+            and request.get("include_content")
+        ):
+            raise AgentCapabilityAccessDeniedError(
+                "Private note text requires an owner-directed external host read; "
+                "built-in Agent note reads are metadata-only."
+            )
         if capability == _REVIEW_QUEUE_CAPABILITY:
             return await self._read_review_queue(operation or "", arguments)
         try:

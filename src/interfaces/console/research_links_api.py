@@ -151,3 +151,39 @@ async def retro_detail(request: Request, run_id: str) -> JSONResponse:
             },
         ) from None
     return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/note-desk")
+async def note_desk(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> JSONResponse:
+    container = cast(ApplicationContainer, request.app.state.container)
+    data = await asyncio.to_thread(container.services.note_desk.inbox, limit=limit)
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/note-desk/{revision_id}")
+async def note_desk_detail(
+    request: Request,
+    revision_id: str,
+    include_content: bool = False,
+    block_index: int = Query(default=0, ge=0),
+    text_offset: int = Query(default=0, ge=0),
+) -> JSONResponse:
+    container = cast(ApplicationContainer, request.app.state.container)
+    try:
+        data = await asyncio.to_thread(
+            container.services.note_desk.note,
+            revision_id,
+            include_content=include_content,
+            private_content_authorized=include_content,
+            block_index=block_index,
+            text_offset=text_offset,
+        )
+    except TradingPartnerError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": error.code,
+                "message": "This exact note revision is unavailable. Reload the note list.",
+            },
+        ) from None
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})

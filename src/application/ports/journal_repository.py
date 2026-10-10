@@ -21,6 +21,14 @@ class JournalRepository(Protocol):
 
     def get_by_idempotency_key(self, idempotency_key: str) -> JournalEntry | None: ...
 
+    def list_related(
+        self,
+        entity_type: str,
+        entity_ids: tuple[str, ...],
+        *,
+        limit: int = 50,
+    ) -> tuple[JournalEntry, ...]: ...
+
     def list(
         self,
         *,

@@ -38,7 +38,7 @@ async function mockWorkflowPreview(page: Page) {
 
 test("Today Review opens the same Subject in Quick Review and Evidence", async ({ page }) => {
   const api = await mockWorkflowPreview(page);
-  await page.goto("/");
+  await page.goto("/?review_window=today");
   const today = page.locator("#today-review");
   const apple = today.locator("article").filter({ hasText: "Apple" }).first();
   await expect(apple).toContainText("Review the earnings assumptions");

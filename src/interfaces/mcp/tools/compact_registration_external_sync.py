@@ -13,6 +13,7 @@ def _register_external_sync(
     registry: CapabilityRegistrar,
     portfolio: SimpleNamespace,
     watchlist: SimpleNamespace,
+    view_review: SimpleNamespace,
 ) -> None:
     """Register the explicit account/transaction/Watchlist sync capability."""
 
@@ -24,9 +25,10 @@ def _register_external_sync(
         name="external_state_sync",
         description=(
             "Explicitly fetch and persist broker accounts, transactions, or the active "
-            "Watchlist upstream."
+            "Watchlist upstream, or Moomoo notes without model analysis or account refresh."
         ),
         variants=(
+            _spec("notes", view_review.notes_sync),
             _spec(
                 "accounts",
                 portfolio.account_get,

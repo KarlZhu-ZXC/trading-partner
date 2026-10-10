@@ -223,13 +223,13 @@ async def test_capability_discover_returns_one_exact_operation_schema() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_covers_all_106_exact_operations_without_invoking_services() -> None:
+async def test_discovery_covers_all_109_exact_operations_without_invoking_services() -> None:
     container = _container()
     registry = create_capability_registry(container)
     server = create_mcp_server(container)
     container.services.reset_mock()
     descriptors = registry.operation_descriptors()
-    assert len(descriptors) == 106
+    assert len(descriptors) == 109
     for descriptor in descriptors:
         arguments = {"tool": descriptor.capability}
         if descriptor.operation is not None:
@@ -599,7 +599,7 @@ async def test_technical_snapshot_description_discloses_cross_market_support() -
 async def test_compact_grouped_tools_publish_closed_discriminated_request_unions() -> None:
     tools = {tool.name: tool for tool in create_capability_registry(_container()).list_tools()}
     expected_variants = {
-        "external_state_sync": 3,
+        "external_state_sync": 4,
         "research_judgment_confirm": 2,
         "monitor_read": 4,
     }
@@ -869,7 +869,7 @@ async def test_system_health_discloses_the_active_surface_profile() -> None:
         },
         "mcp_surface_profile": "mcp_vnext_shadow",
         "public_tool_count": len(PUBLIC_TOOL_NAMES),
-        "surface_schema_version": "mcp-vnext-shadow-v14",
+        "surface_schema_version": "mcp-vnext-shadow-v15",
         "attention_summary": {
             "generated_at": "2026-08-17T12:00:00+00:00",
             "basis": "materialized_review_items",

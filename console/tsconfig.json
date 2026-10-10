@@ -39,7 +39,9 @@
     ".next-design-preview/types/**/*.ts",
     ".next-design-preview/dev/types/**/*.ts",
     ".next-integration/types/**/*.ts",
-    ".next-integration/dev/types/**/*.ts"
+    ".next-integration/dev/types/**/*.ts",
+    ".next-release-v090/types/**/*.ts",
+    ".next-release-v090/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

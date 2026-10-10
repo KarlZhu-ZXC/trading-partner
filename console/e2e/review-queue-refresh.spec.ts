@@ -34,10 +34,12 @@ test("Overview reads are passive and queue updates require an explicit click", a
     return route.fulfill({ json: {} });
   });
   await page.goto("/");
+  await page.getByText("Background Workspace Details", { exact: true }).click();
   const update = page.getByRole("button", { name: "Update Review Queue", exact: true });
   await expect(update).toBeVisible();
   expect(writes).toEqual([]);
   await page.reload();
+  await page.getByText("Background Workspace Details", { exact: true }).click();
   await expect(update).toBeVisible();
   expect(writes).toEqual([]);
   const priorReads = overviewReads;
@@ -49,6 +51,7 @@ test("Overview reads are passive and queue updates require an explicit click", a
   await expect(page.getByText(/Sources were checked independently/)).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "DECISION REVIEW DUE" })).toContainText("102");
   await page.reload();
+  await page.getByText("Background Workspace Details", { exact: true }).click();
   await page.getByText("Last Queue Refresh", { exact: true }).click();
   await expect(page.getByRole("row").filter({ hasText: "DECISION REVIEW DUE" })).toContainText("102");
   expect(writes).toHaveLength(1);

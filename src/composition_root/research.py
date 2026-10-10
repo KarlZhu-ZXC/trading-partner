@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.challenge_review_repository import ChallengeReviewRepository
 from application.ports.clock import Clock
+from application.ports.external_note_repository import ExternalNoteRepository
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services._research_support import UowFactory
@@ -51,6 +52,7 @@ def build_research_services(
     clock: Clock,
     id_generator: IdGenerator,
     secret_redactor: SecretRedactor,
+    external_notes: ExternalNoteRepository | None = None,
 ) -> ResearchServices:
     """Construct all research services from one shared dependency set."""
 
@@ -103,6 +105,7 @@ def build_research_services(
             clock,
             id_generator,
             secret_redactor,
+            external_notes=external_notes,
         ),
         decisions=DecisionRecordService(
             uow_factory,

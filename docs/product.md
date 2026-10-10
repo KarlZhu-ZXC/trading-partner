@@ -7,18 +7,43 @@ schemas and operating procedures remain in their dedicated guides.
 
 ## Product loop
 
-Trading Partner is a local-first investment judgment companion. Moomoo is the
-owner's main note-authoring and analysis surface. Trading Partner keeps the durable
-chain that connects an observation to reviewed judgment and later evidence:
+Trading Partner is a local-first, note-led investment companion. The owner writes
+in Moomoo and discusses those notes with Codex. Research Subjects are background
+archives, not a daily state-maintenance checklist.
 
 ```text
-Observation → Research Subject → Thesis / Trade Plan → Decision / NO_ACTION
-            → Broker activity → Trade Cycle → Performance / Behavior Review
+Moomoo note revision → attributed reading / changes → Codex conversation
+                     → explicitly requested note-linked Journal conclusion
+                     → optional formal Thesis / Trade Plan / Decision review
 ```
 
-Provider facts, portfolio snapshots, technical analysis, monitoring, and the Agent
-support this loop. They do not replace user judgment or independently authorize an
-order.
+Reading or retaining an ordinary discussion requires neither a Research Subject,
+model interpretation nor a live Thesis. A recorded conversation is not a formal
+Decision, Observation adoption, order or instruction to update every archive.
+Formal judgment and execution changes retain exact scope and separate confirmation.
+
+The default Console tab is Your Notes. It shows changed owner text, folds exact
+revisions with saved discussions and folds unchanged/quoted-only text by default;
+Show All Recent Notes retains those records. No automatic status writes are made.
+Risk/operational exceptions remain visible outside the collapsed background
+workspace. Existing Today/Weekly and structured research workflows remain optional.
+
+`view_get/notes` returns bounded synced metadata. `view_get/note` reads an exact
+revision without an interpretation or Subject, with attributed, paginated text only
+after explicit owner private-content authorization. Summary-only notes never supply
+full text; secret and URL redaction happens before pagination. MCP text pages are
+bounded separately from context metadata and retain accurate cursors after transport
+compaction. Saved discussion previews
+remain bounded, with exact Journal IDs for separately paginated reads. The built-in
+Agent may read note metadata, but its raw-note-text path is blocked; external Codex
+must follow the owner-directed host contract.
+
+`external_state_sync/notes` is an explicit Moomoo-only sync with `analyze=false`:
+it neither refreshes accounts nor calls a model. Reads never sync implicitly.
+`research_memory_append/journal` can link `external_note_revision` without a Subject.
+The source must be FULL and visible at write time; any optional Subject must match
+the note Instrument. Existing actor, idempotency, indexing and audit gates apply.
+No new table, migration, reminder scheduler or autonomous judgment is introduced.
 
 ## Core records
 
@@ -50,7 +75,7 @@ workspace. The chart supports six candle/bar styles, common overlay and pane
 indicators, zoom/crosshair interaction, SMC overlays, drawing tools, and PNG export.
 Console reads complete local results and does not implicitly refresh a broker.
 
-The public `mcp_vnext_shadow` v14 surface has nine entry tools over 24 business
+The public `mcp_vnext_shadow` v15 surface has nine entry tools over 24 business
 capabilities. `capability_discover` reveals operations and exact schemas on demand;
 read and write gateways preserve the original capability validation. Identity,
 judgment confirmation, sync, broker-order, and chart operations keep dedicated
@@ -71,7 +96,7 @@ fact.
 
 ## Today and weekly review
 
-Overview defaults to Today Review: durable note reviews, Monitor transitions,
+The optional Changes and Risks tab contains Today Review: durable note reviews, Monitor transitions,
 Agenda and due Decisions are grouped by exact Instrument. Multiple Research
 Subjects keep separate links and judgments. Unmapped sources and broker/Agent
 pending actions stay explicit rather than inheriting another Subject's decision.

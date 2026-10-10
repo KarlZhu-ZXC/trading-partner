@@ -186,7 +186,12 @@ entitlement、地域限制与上游故障会保留为 typed Provider error，
 适配器发送前统一做不可逆散列，所以这些内部 ID 不会原样离开进程。同一工具循环、重试或
 结构修复复用同一值，不同工作流不会有意共用会话。该要求仅适用于 Go，Zen 请求不附加此头。
 
-Journal 的 `Refresh Sources` 只读扫描本机 Moomoo 缓存并快速返回；新 revision 的私有正文会在
+日常入口是首页 **Your Notes**：先在 Moomoo 写笔记，再按 **Sync Moomoo Notes**
+同步。该入口只捕获笔记，不解释正文、不刷新券商；无需先创建研究档案。随后可在 Codex
+明确请求读取并讨论指定笔记，需要留存时再请求记录本次结论。升级后请重连 MCP。
+
+Journal 的 `Refresh Sources` 是另行授权的解释流程：扫描本机 Moomoo 缓存并快速返回；
+在已有私人正文处理授权下，新 revision 的正文会在
 后台发送给单独配置的 OpenCode Go `deepseek-flash`（DeepSeek V4.1 Flash），使用 `max` 推理强度与
 120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
 创建 Monitor 或授权订单。未署名段落确定性视为本人观点，明确姓名前缀保留为外部观点。

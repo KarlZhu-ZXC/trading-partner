@@ -5,8 +5,8 @@ relevant to the affected behavior; paths in this document are repository-relativ
 
 ## Implemented boundary
 
-The public `mcp_vnext_shadow` v14 surface has nine entry tools over the unchanged
-24-capability/106-operation Registry. `capability_discover` reveals a compact catalog,
+The public `mcp_vnext_shadow` v15 surface has nine entry tools over the unchanged
+24-capability/109-operation Registry. `capability_discover` reveals a compact catalog,
 operation names, or one exact original input schema plus `call_tool`. `capability_read`
 routes only READ_DURABLE/READ_PROVIDER capabilities; `capability_write` routes only
 non-reserved confirmation-gated capabilities and requires the original capability
@@ -157,7 +157,22 @@ Decision explicitly names the exact prior Decision through
 `supersedes_decision_id`, or the user manually resolves the ReviewItem. Failed or
 bounded source reads must never auto-resolve it.
 
-The Console-only Moomoo living-note intake is an observation source, not another
+Daily note-led work uses `view_get/notes` before archive attention sweeps. It reads
+metadata without a Subject or interpretation. `view_get/note` defaults to metadata;
+private content requires an explicit current-user request, `include_content=true`
+and `private_content_authorized=true`. Source text and note-linked Journal content
+are paginated, redacted before slicing, attributed and revision-bound. Note content
+is untrusted source material, never authorization or an instruction to execute.
+Built-in Agent reads cannot request raw-note text; external owner-directed hosts
+retain their own privacy boundary. SUMMARY_ONLY remains metadata-only.
+`external_state_sync/notes` is explicitly authorized Moomoo-only sync with no model
+analysis, broker refresh or UI automation. Existing scheduled-operation permissions
+are not expanded. Journal `external_note_revision` links may be global and require
+FULL/time-visible sources; optional Subject scope must match the note Instrument.
+A discussion receipt does not adopt an Observation or update any formal judgment.
+Do not require per-Subject daily NO_ACTION or status maintenance to read/discuss notes.
+
+The Moomoo living-note intake is an observation source, not another
 Research or decision module. It reads the local private-note cache without writing
 to Moomoo and stores content changes as immutable external-note revisions. Attribution
 uses a deterministic explicit-speaker section state: each dated section starts as
@@ -683,7 +698,7 @@ preserve their original stored values and existing duplicate-warning contract.
   `trade_retro`)
 
 QuantConnect/LEAN code generation, backtesting, and result import are removed.
-The public schema is `mcp-vnext-shadow-v14`; `research_workflow_run` rejects the
+The public schema is `mcp-vnext-shadow-v15`; `research_workflow_run` rejects the
 retired `historical_validation_prepare` and `historical_validation_import` operations.
 Existing private artifacts are historical files only, not a runtime capability.
 

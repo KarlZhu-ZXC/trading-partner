@@ -139,6 +139,26 @@ class SqlAlchemyJournalRepository:
             return None
         return _to_domain(row)
 
+    def list_related(
+        self,
+        entity_type: str,
+        entity_ids: tuple[str, ...],
+        *,
+        limit: int = 50,
+    ) -> tuple[JournalEntry, ...]:
+        if not entity_ids:
+            return ()
+        stmt = (
+            select(JournalEntryRow)
+            .where(
+                JournalEntryRow.related_entity_type == entity_type,
+                JournalEntryRow.related_entity_id.in_(entity_ids),
+            )
+            .order_by(JournalEntryRow.created_at.desc(), JournalEntryRow.journal_id)
+            .limit(limit)
+        )
+        return tuple(_to_domain(row) for row in self._session.scalars(stmt).all())
+
     def list(
         self,
         *,

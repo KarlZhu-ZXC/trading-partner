@@ -3,7 +3,10 @@
 ## Product intent
 
 Trading Partner is a long-horizon investment judgment companion and the durable
-system of record for the owner's reviewed investment views. Moomoo is the owner's
+system of record for the owner's reviewed investment views. Daily work is note-led:
+Research Subjects are background archives, not a daily state-maintenance checklist.
+Owner-requested conversations may be recorded as note-linked global Journal entries
+without creating a Subject or changing a formal judgment. Moomoo is the owner's
 primary analysis and note-authoring surface; Trading Partner ingests immutable
 Observation revisions, drafts a non-authoritative interpretation, compares it with
 confirmed judgment and portfolio context, and records a Decision or `NO_ACTION` only

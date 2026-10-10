@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Annotated, Any
 
@@ -14,7 +16,7 @@ from interfaces.mcp.validation import unexpected_failure as _unexpected_failure
 
 
 def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespace:
-    """Build bounded structured reads without returning private full note bodies."""
+    """Build note-led reads with explicit private-text authorization."""
 
     def success(data: object) -> dict[str, Any]:
         return envelope_success(
@@ -22,6 +24,69 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
             clock=container.context.clock,
             data=data,
         ).model_dump(mode="json")
+
+    def notes_inbox(
+        limit: Annotated[int, Field(ge=1, le=100)] = 30,
+        observed_after: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Read Moomoo note metadata without model or Subject prerequisites."""
+        try:
+            return success(
+                container.services.note_desk.inbox(limit=limit, observed_after=observed_after)
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    def note_read(
+        note_revision_id: Annotated[str, Field(min_length=1, max_length=128)],
+        include_content: bool = False,
+        private_content_authorized: bool = False,
+        block_index: Annotated[int, Field(ge=0)] = 0,
+        text_offset: Annotated[int, Field(ge=0)] = 0,
+        max_chars: Annotated[int, Field(ge=1, le=2000)] = 2000,
+        journal_id: Annotated[str | None, Field(min_length=1, max_length=128)] = None,
+    ) -> dict[str, Any]:
+        """Read attributed text after the owner's explicit private-content request."""
+        try:
+            data = container.services.note_desk.note(
+                note_revision_id,
+                include_content=include_content,
+                private_content_authorized=private_content_authorized,
+                block_index=block_index,
+                text_offset=text_offset,
+                max_chars=max_chars,
+                journal_id=journal_id,
+            )
+            if include_content:
+                # Keep a full text page below the MCP transport byte budget. Context
+                # and history are obtained by the separate metadata read.
+                data = {
+                    key: data[key]
+                    for key in (
+                        "note_id",
+                        "note_revision_id",
+                        "version",
+                        "title",
+                        "coverage",
+                        "observed_at",
+                        "content",
+                        "discussion_content",
+                        "formal_judgment_updated",
+                    )
+                }
+            return success(data)
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
+
+    async def notes_sync() -> dict[str, Any]:
+        """Sync Moomoo notes only, without accounts or model calls."""
+        try:
+            receipt = await container.services.external_notes.sync(
+                analyze=False, source_code="MOOMOO_NOTE"
+            )
+            return success(asdict(receipt))
+        except Exception as exc:  # noqa: BLE001
+            return _unexpected_failure(container, exc)
 
     def view_inbox(
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
@@ -80,6 +145,9 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
 
     return SimpleNamespace(
         view_inbox=view_inbox,
+        notes_inbox=notes_inbox,
+        note_read=note_read,
+        notes_sync=notes_sync,
         view_review_get=view_review_get,
         view_review_run=view_review_run,
         current_view_get=current_view_get,

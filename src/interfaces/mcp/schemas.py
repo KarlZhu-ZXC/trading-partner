@@ -59,8 +59,10 @@ JournalRelatedEntityType = Literal[
     "event",
     "decision",
     "journal",
+    "external_note_revision",
 ]
 _JOURNAL_RELATED_ID_PATTERNS: dict[str, re.Pattern[str]] = {
+    "external_note_revision": re.compile(EXTERNAL_NOTE_REVISION_ID_UUID7_PATTERN),
     "case": re.compile(CASE_ID_UUID7_PATTERN),
     "thesis": re.compile(THESIS_ID_UUID7_PATTERN),
     "thesis_revision": re.compile(REV_ID_UUID7_PATTERN),

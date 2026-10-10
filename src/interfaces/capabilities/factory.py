@@ -63,7 +63,7 @@ def create_capability_registry(
             container,
             surface_profile="mcp_vnext_shadow",
             public_tool_count=len(PUBLIC_TOOL_NAMES),
-            surface_schema_version="mcp-vnext-shadow-v14",
+            surface_schema_version="mcp-vnext-shadow-v15",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),
@@ -82,7 +82,8 @@ def create_capability_registry(
         view_review=build_view_review_adapters(container),
     )
     registry = CompactCapabilityRegistry(
-        getattr(container.context, "capability_usage", None), source=source,
+        getattr(container.context, "capability_usage", None),
+        source=source,
     )
 
     _copy_handler(
@@ -101,9 +102,18 @@ def create_capability_registry(
         description=(
             "Read the Moomoo-first judgment intake: list pending note changes, compare "
             "one exact revision with durable context, or restore a Subject's latest "
-            "confirmed view. Never returns private full note bodies or calls a Provider."
+            "confirmed view. Notes need no Subject or interpretation. Private text requires "
+            "an explicit owner request; reads never call a Provider or a model."
         ),
         variants=(
+            _spec(
+                "notes",
+                adapters.view_review.notes_inbox,
+                _all_fields(adapters.view_review.notes_inbox),
+            ),
+            _spec(
+                "note", adapters.view_review.note_read, _all_fields(adapters.view_review.note_read)
+            ),
             _spec(
                 "inbox",
                 adapters.view_review.view_inbox,
@@ -325,7 +335,7 @@ def create_capability_registry(
     )
 
     _register_portfolio_get(registry, adapters.portfolio)
-    _register_external_sync(registry, adapters.portfolio, adapters.watchlist)
+    _register_external_sync(registry, adapters.portfolio, adapters.watchlist, adapters.view_review)
     _register_dispatch_tool(
         registry,
         name="broker_order_manage",

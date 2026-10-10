@@ -15,6 +15,7 @@ from application.dto.research_memory import (
 )
 from application.dto.tool_envelope import DUPLICATE_IDEMPOTENCY_KEY, ToolEnvelope
 from application.ports.clock import Clock
+from application.ports.external_note_repository import ExternalNoteRepository
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
 from application.services._research_memory_write_support import (
@@ -47,8 +48,10 @@ class JournalService:
         clock: Clock,
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
+        external_notes: ExternalNoteRepository | None = None,
     ) -> None:
         self._uow_factory = uow_factory
+        self._external_notes = external_notes
         self._clock = clock
         self._id_generator = id_generator
         self._redactor = secret_redactor
@@ -176,6 +179,7 @@ class JournalService:
                     created_at=created_at,
                     related_entity_type=rel_type,
                     related_entity_id=rel_id,
+                    external_notes=self._external_notes,
                 )
                 validate_journal_supersedes(
                     uow,

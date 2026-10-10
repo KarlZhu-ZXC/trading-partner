@@ -1,6 +1,6 @@
 {
-  "surface_schema_version": "mcp-vnext-shadow-v9",
-  "operation_count": 106,
+  "surface_schema_version": "mcp-vnext-shadow-v15",
+  "operation_count": 109,
   "tool_renames": {
     "investment_case_read": "research_get",
     "research_judgment_get": "research_get",
@@ -1423,6 +1423,42 @@
         true,
         false,
         true
+      ]
+    ],
+    [
+      "view_get",
+      "note",
+      "view_get",
+      "45189d1cd2b2e880c8921a40e8dc401c39c47b912fa7777e21bdfad8941f13e8",
+      [
+        "READ_DURABLE",
+        false,
+        true,
+        false
+      ]
+    ],
+    [
+      "view_get",
+      "notes",
+      "view_get",
+      "7e28be432bd068fa0fa357512e5d9654b279e23fce70dba66f57dd14b1b1ca3a",
+      [
+        "READ_DURABLE",
+        false,
+        true,
+        false
+      ]
+    ],
+    [
+      "external_state_sync",
+      "notes",
+      "external_state_sync",
+      "e2ed6a3e2ca048a87ff268b681befaa9171ce4a2e9aaefbdf3dc294f05ed7590",
+      [
+        "SYNC",
+        true,
+        false,
+        false
       ]
     ]
   ]

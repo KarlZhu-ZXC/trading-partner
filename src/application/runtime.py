@@ -36,6 +36,7 @@ from application.services.judgment_calibration_service import JudgmentCalibratio
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
+from application.services.note_desk_service import NoteDeskService
 from application.services.plan_workflow_query_service import PlanWorkflowQueryService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
 from application.services.question_research_service import QuestionResearchService
@@ -113,6 +114,7 @@ class ApplicationServices:
     external_note_reviews: ExternalNoteReviewService
     external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
+    note_desk: NoteDeskService
     research_changes: ResearchChangesService
     research_links: ResearchLinksQueryService
     question_research: QuestionResearchService

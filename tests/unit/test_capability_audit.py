@@ -24,13 +24,13 @@ def test_audit_uses_only_graph_metadata_and_covers_the_canonical_inventory(monke
     report = audit._build_report(ROOT)
 
     assert report["inventory"]["capability_count"] == 24
-    assert report["inventory"]["operation_count"] == 106
+    assert report["inventory"]["operation_count"] == 109
     assert report["surface"]["entrypoint_count"] == 9
     operation_keys = {
         (item["capability"], item["operation"])
         for item in report["inventory"]["operations"]
     }
-    assert len(operation_keys) == 106
+    assert len(operation_keys) == 109
     assert all(
         item["status"] == "NOT_OBSERVED"
         for item in report["inventory"]["operations"]

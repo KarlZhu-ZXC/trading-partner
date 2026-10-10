@@ -28,7 +28,11 @@
   order authorization. An elapsed due time uses the existing durable ReviewItem
   path; a later Decision closes it automatically only when it explicitly
   supersedes that exact Decision. Failed/bounded reads never prove closure.
-- Moomoo living notes are Console-only observation revisions. Attribution is a
+- Moomoo living notes are immutable observation revisions, readable via the note-led
+  `view_get/notes` and owner-authorized `view_get/note` operations without a Subject
+  or interpretation. `external_state_sync/notes` explicitly syncs only Moomoo notes
+  with no model analysis. A requested Journal conclusion may link the exact FULL
+  revision with `case_id=null`; no archive or formal judgment is created by it. Attribution is a
   deterministic dated-section state machine: each date starts as USER. A line-leading
   `@speaker` marker may introduce any bounded new speaker. Legacy bare prefixes recognize
   only boss墨、宝总、姜汁汽水; other bare `heading:` prefixes inherit the current speaker

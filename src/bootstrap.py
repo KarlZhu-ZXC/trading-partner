@@ -46,6 +46,7 @@ from application.services.judgment_scorecard_service import JudgmentScorecardSer
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
+from application.services.note_desk_service import NoteDeskService
 from application.services.notification_service import NotificationService
 from application.services.operational_job_runtime import DurableOperationalJobRuntime
 from application.services.peer_comparison_service import PeerComparisonService
@@ -656,6 +657,7 @@ def build_application(
         engine
     )
     research_services = build_research_services(
+        external_notes=persistence.external_notes,
         uow_factory=research_unit_of_work_factory,
         account_snapshot_repository=account_snapshot_repository,
         challenge_review_repository=challenge_review_repository,
@@ -834,6 +836,9 @@ def build_application(
             external_note_reviews=external_notes.reviews,
             external_note_review_drafts=external_notes.review_drafts,
             view_reviews=external_notes.view_reviews,
+            note_desk=NoteDeskService(
+                persistence.external_notes, research_unit_of_work_factory, clock, secret_redactor
+            ),
             judgment_calibration=review_workspace.calibration,
             valuation=review_workspace.valuation,
             research_changes=review_workspace.changes,

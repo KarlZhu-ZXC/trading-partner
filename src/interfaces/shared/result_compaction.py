@@ -139,9 +139,7 @@ def _safe_error_details(value: object) -> object:
                         field = entry.get("name")
                         reason = entry.get("reason_code")
                         if isinstance(field, str) and isinstance(reason, str):
-                            cleaned.append(
-                                {"name": field[:128], "reason_code": reason[:32]}
-                            )
+                            cleaned.append({"name": field[:128], "reason_code": reason[:32]})
                 details[name] = cleaned
         return details
     return None
@@ -209,8 +207,10 @@ def serialized_size(value: Any) -> int:
 
 
 def looks_like_envelope(value: object) -> bool:
-    return isinstance(value, Mapping) and "ok" in value and (
-        "as_of" in value or "fetched_at" in value or "request_id" in value
+    return (
+        isinstance(value, Mapping)
+        and "ok" in value
+        and ("as_of" in value or "fetched_at" in value or "request_id" in value)
     )
 
 
@@ -282,11 +282,15 @@ def _compact_quote_batch(projected: object, *, original: bytes, max_bytes: int) 
         ):
             quote_facts["last"] = quote["last"]
         sources = result.get("sources")
-        source_codes = [
-            f"{source.get('role', 'unknown')}:{source.get('name', 'unknown')}"
-            for source in sources
-            if isinstance(source, Mapping)
-        ] if isinstance(sources, list) else []
+        source_codes = (
+            [
+                f"{source.get('role', 'unknown')}:{source.get('name', 'unknown')}"
+                for source in sources
+                if isinstance(source, Mapping)
+            ]
+            if isinstance(sources, list)
+            else []
+        )
         compact_item = {
             "instrument_id": raw_item.get("instrument_id"),
             "result": {key: result[key] for key in ("ok", "freshness") if key in result},
@@ -454,7 +458,37 @@ def compact_tool_result(
     if max_bytes < MIN_RESULT_MAX_BYTES:
         raise ValueError(f"max_bytes must be at least {MIN_RESULT_MAX_BYTES}")
     projected = safe_projection(value)
+    if capability == "view_get" and operation == "note" and isinstance(value, Mapping):
+        raw_data = value.get("data")
+        safe_data = projected.get("data") if isinstance(projected, dict) else None
+        if isinstance(raw_data, Mapping) and isinstance(safe_data, dict):
+            for field in ("content", "discussion_content"):
+                original = raw_data.get(field)
+                target = safe_data.get(field)
+                if isinstance(original, Mapping) and isinstance(target, dict):
+                    body = original.get("text")
+                    if isinstance(body, str):
+                        # Dedicated note adapters return at most 2,000 redacted
+                        # display characters. Do not advance a page cursor after
+                        # silently applying the generic 1,024-character limit.
+                        target["text"] = _safe_string(body, max_chars=2000)
     encoded = encode_result(projected)
+    if capability == "view_get" and operation == "note" and isinstance(projected, dict):
+        data = projected.get("data")
+        if isinstance(data, dict):
+            for field in ("content", "discussion_content"):
+                page = data.get(field)
+                while (
+                    isinstance(page, dict)
+                    and isinstance(page.get("text"), str)
+                    and len(encoded) > max_bytes
+                    and len(page["text"]) > 16
+                ):
+                    page["text"] = page["text"][: len(page["text"]) // 2]
+                    page["next_text_offset"] = int(page.get("text_offset", 0)) + len(page["text"])
+                    page["next_block_index"] = None
+                    page["transport_page_bounded"] = True
+                    encoded = encode_result(projected)
     if len(encoded) <= max_bytes:
         return projected
     if capability == "market_data_get" and operation == "quotes":
@@ -578,9 +612,7 @@ def compact_mcp_result(
     if is_content_block_list(value):
         compacted_blocks: list[object] = []
         remaining_bytes = max_bytes
-        remaining_text_blocks = sum(
-            _content_type(item) == "text" for item in value
-        )
+        remaining_text_blocks = sum(_content_type(item) == "text" for item in value)
         for item in value:
             if _content_type(item) != "text":
                 compacted_blocks.append(item)

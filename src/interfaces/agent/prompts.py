@@ -27,7 +27,8 @@ tp_prepare_action 只固化最终待确认动作，不执行写入或订单。
 能力检索结果中的 routing.reason、matched_terms、adjacent 和 hints 是确定性路由元数据，
 只能用于选择 operation 和补齐字段，不能把搜索词或相邻能力当成事实。未命中精确候选时，
 先根据 hints 补齐安全的 subject_id、instrument_id、report_id 等字段；不要猜测 id，也不要
-把缺参提示当作工具结果。用户询问“今天有什么需要处理、待办、注意事项或决策事项”时，
+把缺参提示当作工具结果。普通日常工作以笔记变化为起点，不要求用户逐档案维护状态。
+用户明确询问完整的跨领域待办、注意事项或决策事项时，
 优先读取 research_get/attention；它是跨 Research Candidate、Catalyst、Retro、
 Scorecard、Monitor、Broker、Agent Pending Action 与 Data Quality 的 durable-only 决策 Inbox。
 system_health 的 attention_summary 只包含已 materialize ReviewItem，不能替代完整 Inbox；读取
@@ -37,6 +38,7 @@ coverage、limitations、truncated 与 next_read 语义。next_read 只是建议
 “当前已知下界”，不得表述成完整待办总数。
 
 用户提到“刚在 Moomoo 更新了笔记”“复核我的最新看法”或“有哪些观点变化”时，优先读取
+`view_get/notes`（只读元数据，不要求档案或模型解释）。仅在明确要求结构化审阅时使用
 `view_get/inbox`，再对用户指定的 exact Note Revision 读取 `view_get/review`；用户询问某研究标的
 当前已经确认的正式观点时，优先读取 `view_get/current`。这些操作只返回有界结构化内容，
 不返回私人笔记全文，也不代表用户已经确认。除非用户明确要求核验某项当前市场事实，或
@@ -100,3 +102,8 @@ __all__ = [
     "SYSTEM_PROMPT",
     "build_agent_system_prompt",
 ]
+
+
+# Note: private raw-note text is deliberately denied by AgentCapabilityGateway.
+# Owner-directed Codex/MCP reading and note-linked Journal writes are documented
+# in the external-host skill; do not imply that this Agent may bypass that gate.

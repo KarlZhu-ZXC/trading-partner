@@ -1,5 +1,29 @@
 # Reviewed evidence links and research questions
 
+## Daily work starts in Moomoo and Codex
+
+Write normally in Moomoo. In Codex, request a note sync only when fresh source data
+is needed, then ask to read/discuss the exact notes. The host uses `view_get/notes`
+for metadata and the owner-authorized `view_get/note` for attributed source text.
+This does not require an archive or a successful interpretation model. Named
+speakers remain quoted viewpoints, never silently attributed to the owner.
+
+When you say to retain a specific conclusion, Codex can append a note-linked
+Journal entry without a Research Subject. The saved receipt identifies the exact
+note revision and discussion entry. It does not change an existing Thesis, Plan,
+Decision or Observation adoption. Ask for those formal changes explicitly when
+needed; there is no daily obligation to maintain archive states or save NO_ACTION.
+
+Console now starts at Your Notes. Open Note first reads metadata, and Read Private
+Note Text explicitly retrieves the selected section. Sync Moomoo Notes only syncs
+notes, without account refresh or model analysis. Exact revisions with a recorded
+discussion, unchanged owner text and quoted-only changes are folded by default;
+Show All Recent Notes keeps them accessible. New revisions remain distinct. Risk
+and operational exceptions are separate, while archive dashboards live under
+Background Workspace Details. Source/read failures never mean an empty or cleared
+inbox. This workflow does not automate Moomoo's UI.
+
+
 These features extend the existing Research Subject, Candidate and Review Queue
 workflows. They do not infer semantic truth, change Thesis conviction or execute
 orders. The first release is user-selected, explicitly reviewed association.

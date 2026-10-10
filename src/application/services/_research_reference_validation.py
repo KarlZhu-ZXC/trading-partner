@@ -11,9 +11,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
+from application.ports.external_note_repository import ExternalNoteRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
 from domain.common.errors import HistoricalVisibilityViolation, InvalidResearchLink
 from domain.common.time import require_aware_datetime
+from domain.external_note.enums import NoteCoverage
 
 # Frozen Event related-entity wire types (Phase 1C C4a §8.2).
 # The historical case token denotes a Research Subject and remains wire ABI.
@@ -42,8 +44,10 @@ JOURNAL_RELATED_ENTITY_TYPES: Final[frozenset[str]] = frozenset(
         "event",
         "decision",
         "journal",
+        "external_note_revision",
     }
 )
+
 
 def validate_report_references(
     uow: ResearchUnitOfWork,
@@ -450,12 +454,14 @@ def validate_journal_related_entity(
     created_at: datetime,
     related_entity_type: str | None,
     related_entity_id: str | None,
+    external_notes: ExternalNoteRepository | None = None,
 ) -> None:
     """Typed registry for Journal generic related pair (design §8.5).
 
     Research Subject-scoped Journal: related entity must share the subject and be visible at
     ``created_at``. Global Journal (``subject_id is None``) may only relate to
-    another global Journal. Evidence also requires a visible Research Subject link.
+    another global Journal or a visible FULL note revision. Evidence also requires
+    a visible Research Subject link.
     """
     require_aware_datetime(created_at, field_name="created_at")
     rel_type, rel_id = _normalize_related_pair(related_entity_type, related_entity_id)
@@ -471,6 +477,30 @@ def validate_journal_related_entity(
                 "allowed": sorted(JOURNAL_RELATED_ENTITY_TYPES),
             },
         )
+
+    if rel_type == "external_note_revision":
+        note_revision = external_notes.revision_by_id(rel_id) if external_notes else None
+        identity = (
+            external_notes.get(note_revision.note_id) if note_revision and external_notes else None
+        )
+        if (
+            note_revision is None
+            or identity is None
+            or note_revision.coverage is not NoteCoverage.FULL
+        ):
+            raise InvalidResearchLink(
+                "A FULL note note_revision is required for a discussion record"
+            )
+        if note_revision.observed_at > created_at:
+            raise HistoricalVisibilityViolation("Discussion cannot precede the note note_revision")
+        if subject_id is not None:
+            subject = uow.subjects.get(subject_id)
+            if (
+                not identity.primary_instrument_id
+                or subject.primary_instrument_id != identity.primary_instrument_id
+            ):
+                raise InvalidResearchLink("Note and Research Subject instruments do not match")
+        return
 
     # Global journal: only other global journals are allowed.
     if subject_id is None:
@@ -828,5 +858,3 @@ def validate_decision_references(
                     "supersedes_decision_id": supersedes_decision_id,
                 },
             )
-
-

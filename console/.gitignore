@@ -49,3 +49,6 @@ tsconfig.tsbuildinfo
 /.next-design-preview/
 
 /.next-integration/
+
+# Isolated release builds and rollback copies
+/.next-release-*/

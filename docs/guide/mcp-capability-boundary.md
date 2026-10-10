@@ -93,18 +93,18 @@ v13 增加可选的 `category`：`research`、`portfolio`、`market`、`monitori
 例如 `capability_discover(category="portfolio")` 只返回组合相关的 5 个业务能力，
 不增加发现轮次。无参数调用仍返回完整 24 项；已知能力与操作时继续直接获取精确 schema。
 `category` 不能与 `tool` / `operation` 混用；分类仅筛选目录，不改变可调用范围或授权。
-9 个首层入口和 106 个操作保持不变。本次没有根据缺少调用记录删除任何操作。
+9 个首层入口保持不变；当前 v15 共 109 个操作。没有根据缺少调用记录删除操作。
 
 不知道操作名时，仅传 `tool` 获取操作列表。同一会话复用已有 schema，不重复发现。
 `capability_write` 另外要求 `confirmation` 等于原业务 capability 名称和用户明确授权；
 底层继续检查 actor、版本、幂等键与业务授权。两个路由均拒绝上述六个独立工具，
 查询入口拒绝任何写入，发现不触发任何业务操作。标的解析参数较短，直接完整发布。
 
-当前 schema 为 `mcp-vnext-shadow-v14`：9 个入口、24 个业务能力、106 个业务操作。
+当前 schema 为 `mcp-vnext-shadow-v15`：9 个入口、24 个业务能力、109 个业务操作。
 原业务名称不再全部是公开 MCP 工具；历史记录及 next-read 提示保留原能力名，调用前
 根据发现返回的 `call_tool` 路由。Console 和内置 Agent 仍使用完整 Registry。
 完整 schema 的 `$ref` 在同一结果内可解析，绝不为了压缩而截断 schema。
-重新连接 MCP 客户端获取 v14；不需要迁移数据库或改写历史记录。
+重新连接 MCP 客户端获取 v15；不需要迁移数据库或改写历史记录。
 
 v14 在现有 `research_judgment_propose/research_state` 中加入 `evidence_impact` 的
 create/revise/retract，以及 `open_question` 的 update_research/link_decision。
@@ -112,6 +112,17 @@ create/revise/retract，以及 `open_question` 的 update_research/link_decision
 `research_get/state` 返回已确认关联和扩展的问题元数据；数量仍为 9/24/106。
 这没有新增自动判断、订单或通用证据导入权限。参见
 [证据关联与研究问题闭环](evidence-links-and-research-questions.md)。
+
+v15 新增笔记驱动的日常入口：`view_get/notes` 读已同步元数据，`view_get/note`
+读精确笔记版本与关联讨论，`external_state_sync/notes` 显式仅同步 Moomoo 笔记。
+原文读取要求本轮用户明确授权，使用 `include_content=true` 与
+`private_content_authorized=true`；按 `block_index` / `text_offset` / `max_chars`
+读取归属明确的分段（MCP 每页最多 2,000 字符），遵循返回游标，不把 SUMMARY_ONLY 当正文。
+先脱敏再分页；若传输预算进一步缩页，游标只前进到实际返回的文本末尾。需要读取完整讨论时，
+在同一 note 请求中提供已有 `journal_id`，仍遵守正文授权和分页。
+`research_memory_append/journal` 可用 `case_id=null`、
+`related_entity_type=external_note_revision` 与 exact revision ID 保存用户明确要求记下的
+讨论结论；不得自动复制聊天、建立档案、关闭审阅或修改正式判断。已有判断确认与订单授权不变。
 
 业务能力保留此前合并结果：
 

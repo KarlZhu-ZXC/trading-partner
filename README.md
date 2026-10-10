@@ -16,17 +16,15 @@ Most AI investment chats can summarize today's market. They do not remember why 
 bought, what would invalidate the idea, how the plan changed, or whether new evidence
 contradicts last month's judgment.
 
-Trading Partner makes Moomoo the analysis and note-authoring edge, then gives Console,
-Codex, and other [Model Context Protocol](https://modelcontextprotocol.io/) hosts the
-missing review layer: immutable note revisions, model-assisted drafts, durable
-research memory, read-only portfolio context, and transition-aware monitoring—without
-giving a model permission to confirm a judgment or trade.
+Trading Partner starts with your Moomoo notes and conversations with Codex or another
+[Model Context Protocol](https://modelcontextprotocol.io/) host. It retains exact
+source revisions and explicitly requested discussion conclusions. Research archives,
+portfolio context and monitoring support that work in the background.
 
-> **Write in Moomoo:** update the view where you already inspect price and charts.
->
-> **Review in Trading Partner:** see exactly what changed, compare it with the
-> confirmed Thesis, Decision, Trade Plan, Position, and Monitors, then explicitly
-> record a Decision or `NO_ACTION` tied to that exact note revision.
+> **Write in Moomoo. Discuss in Codex.** Ask to keep a conclusion when it matters.
+> Reading notes and recording an ordinary discussion require no Research Subject
+> or daily status maintenance. Formal investment judgments, plans and orders keep
+> their separate confirmation rules.
 
 <p align="center">
   <a href="#product-tour"><strong>See the product flow</strong></a>
@@ -44,17 +42,15 @@ giving a model permission to confirm a judgment or trade.
 ## <img src="docs/assets/readme/sections/why.svg" alt="" width="24" /> 60-second product tour
 
 ```text
-You update a view in Moomoo
+Write or update your Moomoo note
     ↓
-Trading Partner stores one immutable FULL Observation revision
+Explicit sync stores immutable source revisions (no model or account refresh required)
     ↓
-Flash produces a non-authoritative first-pass structure; critical changes may receive an escalated review draft
+Read attributed text and discuss changes with Codex
     ↓
-Deterministic rules compare it with confirmed Thesis, Plan, Decision, Position, and Monitors
+When you ask to retain a conclusion, save it against the exact note revision
     ↓
-You review the meaning once and explicitly confirm Decision / NO_ACTION
-    ↓
-Current View is derived from that exact Observation Review + Decision; follow-up Thesis/Plan/Monitor changes remain separately confirmed
+Only when needed: formalize a Thesis, Trade Plan or Decision through its own review gate
 ```
 
 | Built for | What it changes |
@@ -114,7 +110,7 @@ per-user runtime:
 
 ```bash
 uv tool install --python 3.13 \
-  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.8.0"
+  "git+https://github.com/KarlZhu-ZXC/trading-partner.git@v0.9.0"
 trading-partner-init
 ```
 

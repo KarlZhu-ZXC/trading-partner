@@ -141,9 +141,9 @@ def test_v7_retains_every_operation_schema_default_and_policy() -> None:
     descriptors = registry.operation_descriptors()
     expected_operations = contracts["operations"]
 
-    assert contracts["operation_count"] == 106
+    assert contracts["operation_count"] == 109
     assert len(expected_operations) == contracts["operation_count"]
-    assert len({(item[0], item[1]) for item in expected_operations}) == 106
+    assert len({(item[0], item[1]) for item in expected_operations}) == 109
     assert len(descriptors) == contracts["operation_count"]
 
     actual = {
