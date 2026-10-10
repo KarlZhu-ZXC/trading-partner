@@ -1,5 +1,7 @@
 "use client";
 
+import { asObject as asDict, textTrimmed as text, numberOrZero as number } from "../lib/coerce";
+
 import { Button, Select, SelectableRow, Tag } from "../components/ui/controls";
 
 import { ObservationContext } from "./observation-context";
@@ -37,6 +39,10 @@ export type NoteDeferReviewHandler = (
   item: Dict,
   matchingSubjectId: string | null,
 ) => void | Promise<void>;
+export type ManualNoteDecisionHandler = (
+  item: Dict,
+  matchingSubjectId: string | null,
+) => void | Promise<void>;
 
 export type ObservationInboxProps = {
   items: Dict[];
@@ -48,6 +54,8 @@ export type ObservationInboxProps = {
   onRefresh: () => void;
   onSelectSubject: (subjectId: string) => void;
   onReviewDecision: NoteReviewDecisionHandler;
+  onManualDecision?: ManualNoteDecisionHandler;
+  manualDecisionDisabled?: boolean;
   onDeferReview: NoteDeferReviewHandler;
   analysisBusyId: string | null;
   reviewBusyId: string | null;
@@ -65,14 +73,6 @@ const SCENARIOS = [
   "INVALIDATION",
 ] as const;
 
-function asDict(value: unknown): Dict {
-  return value && typeof value === "object" ? (value as Dict) : {};
-}
-
-function text(value: unknown, fallback = "—"): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
 function upper(value: unknown, fallback = "UNKNOWN"): string {
   return text(value, fallback).toUpperCase();
 }
@@ -84,11 +84,6 @@ function canonicalSpeakerLabel(value: unknown, speakerKind?: unknown): string | 
   if (label.toLocaleLowerCase() === bossMo.toLocaleLowerCase()) return bossMo;
   if (["\u5b9d\u603b", "\u59dc\u6c41\u6c7d\u6c34"].includes(label)) return label;
   return upper(speakerKind, "") === "NAMED_PERSON" && label ? label : null;
-}
-
-function number(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function noteKey(item: Dict, index: number): string {
@@ -278,6 +273,8 @@ export function ObservationInbox({
   onRefresh,
   onSelectSubject,
   onReviewDecision,
+  onManualDecision,
+  manualDecisionDisabled = false,
   onDeferReview,
   analysisBusyId,
   reviewBusyId,
@@ -386,6 +383,9 @@ export function ObservationInbox({
     : selectedMatchingSubjects.length === 1
       ? text(selectedMatchingSubjects[0].subject?.subject_id, "")
       : null;
+  const manualSubjectReady = selectedMatchingSubjects.some((item) =>
+    text(item.subject?.subject_id, "") === selectedMatchingSubjectId && upper(item.subject?.status) === "ACTIVE"
+  );
   const selectedResearchHref = researchHref(
     selectedIdentity,
     selectedMatchingSubjectId,
@@ -676,7 +676,7 @@ export function ObservationInbox({
                 {selectedReady && selectedReview.status ? <ObservationContext key={selectedRevisionId} revisionId={selectedRevisionId} /> : null}
 
                 <div className="portfolio-form-actions notes-actions">
-                  {selectedMatchingSubjects.length > 1 ? <label className="research-field"><span><b className="required-mark" aria-hidden="true">*</b>Research Subject</span><Select value={selectedMatchingSubjectId ?? ""} onChange={(event) => { const value = event.target.value; setSubjectOverrides((current) => ({ ...current, [selectedNoteId]: value })); if (value) onSelectSubject(value); }}><option value="">Choose the exact Research Subject</option>{selectedMatchingSubjects.map((item) => { const candidate = asDict(item.subject); const candidateId = text(candidate.subject_id, ""); return <option key={candidateId} value={candidateId}>{text(candidate.title, "Untitled Research Subject")} · {upper(candidate.status)}</option>; })}</Select><small>More than one Research Subject uses this Instrument. Selection is required; the system will not guess.</small></label> : null}
+                  {selectedMatchingSubjects.length > 1 ? <label className="research-field"><span><b className="required-mark" aria-hidden="true">*</b>Research Subject</span><Select required aria-label="Research Subject for This Note" value={selectedMatchingSubjectId ?? ""} onChange={(event) => { const value = event.target.value; setSubjectOverrides((current) => ({ ...current, [selectedNoteId]: value })); if (value) onSelectSubject(value); }}><option value="">Choose the exact Research Subject</option>{selectedMatchingSubjects.map((item) => { const candidate = asDict(item.subject); const candidateId = text(candidate.subject_id, ""); return <option key={candidateId} value={candidateId}>{text(candidate.title, "Untitled Research Subject")} · {upper(candidate.status)}</option>; })}</Select><small>More than one Research Subject uses this Instrument. Selection is required; the system will not guess.</small></label> : null}
                   <LinkButton
                     href={selectedResearchHref}
                     onClick={() => {
@@ -695,6 +695,21 @@ export function ObservationInbox({
                     >
                       Review View Change
                     </ActionButton>
+                  ) : null}
+                  {selectedHasFullText && manualSubjectReady && onManualDecision ? (
+                    <ActionButton
+                      disabled={manualDecisionDisabled}
+                      onClick={() => { void onManualDecision(selected, selectedMatchingSubjectId); }}
+                    >
+                      Record Independent Decision
+                    </ActionButton>
+                  ) : null}
+                  {selectedHasFullText && selectedMatchingSubjectId && !selectedReady ? (
+                    <small>
+                      Manual Source Review records an independent Decision from
+                      this exact FULL revision; the Observation review keeps its
+                      current status.
+                    </small>
                   ) : null}
                   {selectedReady && !["ADOPTED", "NO_ACTION"].includes(upper(selectedReview.status, "PENDING")) ? (
                     <Button type="button" onClick={() => { void onDeferReview(selected, selectedMatchingSubjectId); }}>

@@ -195,3 +195,75 @@ def test_combined_large_answer_and_links_keep_receipt_within_bound():
     assert len(encoded.encode()) <= 16_384
     stored = json.loads(encoded)
     assert stored["research"]["verified_refs"] == research["verified_refs"]
+
+
+@pytest.mark.parametrize("presentation_chars", [100, 20_000])
+def test_optional_presentation_never_displaces_core_receipt(presentation_chars):
+    import json
+
+    from application.dto.research_presentation import (
+        ResearchAnswerPresentation,
+        ResearchTextSegment,
+    )
+    from application.ports.agent_model_provider import ModelResponse, ModelUsage
+    from application.services.agent_runtime_receipts import model_receipt_json
+
+    response = ModelResponse(
+        text="Durable original", model="synthetic", usage=ModelUsage(10, 5, 15)
+    )
+    summary = (
+        budget()
+        .snapshot(
+            phase="FINISHED", stop_reason="COMPLETED", verified_refs=["req_synthetic/result/last"]
+        )
+        .model_dump()
+    )
+    args = dict(research=summary, answer_envelope='{"schema_version":1,"blocks":[]}')
+    original = json.loads(model_receipt_json(response, [response], 1, [], **args))
+    projection = ResearchAnswerPresentation(
+        segments=(ResearchTextSegment(text="x" * presentation_chars),)
+    )
+    encoded = model_receipt_json(
+        response,
+        [response],
+        1,
+        [],
+        research_presentation=projection,
+        **args,
+    )
+    restored = json.loads(encoded)
+    rendered = restored.pop("research_presentation")
+    assert restored == original
+    assert len(encoded.encode()) <= 16_384
+    if presentation_chars > 16_384:
+        assert rendered == {"schema_version": 1, "truncated": True}
+    else:
+        assert rendered == projection.model_dump(mode="json")
+
+
+def test_structured_field_context_order_survives_sorted_receipt_json():
+    import json
+
+    from application.dto.research_presentation import (
+        ResearchAnswerPresentation,
+        ResearchFieldSegment,
+    )
+    from application.ports.agent_model_provider import ModelResponse
+    from application.services.agent_runtime_receipts import model_receipt_json
+
+    field = ResearchFieldSegment(
+        ref="req_synthetic/result/last",
+        path="result/last",
+        scalar="123.45",
+        is_null=False,
+        context=(("source", "Synthetic · Provider=Official"), ("currency", "USD")),
+        inline=True,
+    )
+    projection = ResearchAnswerPresentation(segments=(field,))
+    response = ModelResponse(text=projection.rendered_text())
+    stored = json.loads(
+        model_receipt_json(response, [response], 0, [], research_presentation=projection)
+    )
+    restored = ResearchAnswerPresentation.model_validate(stored["research_presentation"])
+    assert restored.rendered_text() == response.text
+    assert restored.segments[0].context == field.context

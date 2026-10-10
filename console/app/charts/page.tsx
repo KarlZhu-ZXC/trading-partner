@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ConsoleShell } from "../components/console-shell";
 import { InteractiveTechnicalChart, type InteractiveTechnicalScene } from "../components/interactive-technical-chart";
-import { ActionButton, Button, Card, ErrorNote, FieldLabel, Input, LinkButton, Select, Textarea } from "../components/ui";
+import { ActionButton, Button, Card, Disclosure, ErrorNote, FieldLabel, Input, LinkButton, Select, Textarea } from "../components/ui";
 import { postApi, useApi } from "../lib/api";
 import { chartSceneMatches, stageChartResearchContext, type ChartStructure } from "../lib/chart-research-context";
+import { chartWarningDisclosures, smcDisclosures, type ChartDisclosure, type TechnicalChartWarning } from "../lib/technical-disclosures";
 import styles from "../styles/technical-chart.module.css";
 
 export default function ChartsPage() {
@@ -13,6 +14,7 @@ export default function ChartsPage() {
   const [subject, setSubject] = useState("");
   const [interval, setInterval] = useState<"1d" | "1w">("1d");
   const [scene, setScene] = useState<InteractiveTechnicalScene | null>(null);
+  const [sourceNotes, setSourceNotes] = useState<ChartDisclosure[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ structure: ChartStructure; cutoff: string | null } | null>(null);
@@ -31,7 +33,7 @@ export default function ChartsPage() {
     return () => { generation.current += 1; controller.current?.abort(); };
   }, []);
   function reset() {
-    generation.current += 1; controller.current?.abort(); setBusy(false); setScene(null); setSelection(null); setNote(""); setError(null);
+    generation.current += 1; controller.current?.abort(); setBusy(false); setScene(null); setSourceNotes([]); setSelection(null); setNote(""); setError(null);
   }
   async function openChart() {
     const identity = instrument.trim();
@@ -39,7 +41,7 @@ export default function ChartsPage() {
     reset(); const requestId = generation.current;
     const abort = new AbortController(); controller.current = abort; setBusy(true);
     try {
-      const response = await postApi<{ result?: { ok?: boolean; data?: InteractiveTechnicalScene } }>("/api/tools/invoke", {
+      const response = await postApi<{ result?: { ok?: boolean; data?: InteractiveTechnicalScene; warnings?: TechnicalChartWarning[] } }>("/api/tools/invoke", {
         tool_name: "technical_get_snapshot", preserve_full_result: true,
         arguments: { instrument_id: identity, intervals: [interval], lookback_sessions: interval === "1w" ? 1000 : 500, include_bars: true },
       }, { signal: abort.signal });
@@ -47,12 +49,14 @@ export default function ChartsPage() {
       const data = response.result?.data;
       if (!response.result?.ok || !data || !Array.isArray(data.bars) || !Array.isArray(data.timeframes) || !chartSceneMatches(data, identity, interval) || !data.price_basis) throw new Error("No matching chart snapshot is available. Retry Open Chart.");
       setScene(data);
+      setSourceNotes(chartWarningDisclosures(response.result?.warnings ?? []));
     } catch (cause) { if (requestId === generation.current) setError(cause instanceof Error ? cause.message : "Chart unavailable"); }
     finally { if (requestId === generation.current) setBusy(false); }
   }
   function stage() {
     if (!scene || !selection || !subject || !scene.as_of || !scene.algorithm_version) return;
-    const smcVersion = scene.timeframes.find((frame) => frame.interval === scene.bars_interval)?.smart_money?.algorithm_version;
+    const smc = scene.timeframes.find((frame) => frame.interval === scene.bars_interval)?.smart_money;
+    const smcVersion = smc?.algorithm_version;
     if (!smcVersion) { setError("Missing SMC algorithm provenance."); return; }
     try {
       const url = stageChartResearchContext(window.sessionStorage, {
@@ -60,6 +64,7 @@ export default function ChartsPage() {
         subject_id: subject, snapshot_as_of: scene.as_of, algorithm_version: scene.algorithm_version,
         smc_algorithm_version: smcVersion, interval: scene.bars_interval, price_basis: scene.price_basis,
         target, ...selection, note,
+        disclosures: [...smcDisclosures(smc?.limitations ?? []), ...sourceNotes],
       });
       window.location.assign(url);
     } catch { setError("Unable to stage this session context. Check browser storage availability."); }
@@ -72,6 +77,13 @@ export default function ChartsPage() {
       <ActionButton busy={busy} onClick={() => { void openChart(); }}>Open Chart</ActionButton>
     </div>
     <ErrorNote>{error}</ErrorNote>
+    {scene && sourceNotes.length > 0 && <div className={styles.help} role="note" aria-label="Chart Source Notes">
+      <p>Chart Source Notes</p>
+      <ul>{sourceNotes.map((notice) => <li key={notice.code}>
+        <span>{notice.message}</span>
+        <Disclosure title="Source Detail" variant="compact"><code>{notice.code}</code></Disclosure>
+      </li>)}</ul>
+    </div>}
     {scene && <InteractiveTechnicalChart key={`${scene.instrument_id}:${scene.bars_interval}:${scene.price_basis}:${scene.algorithm_version}:${scene.as_of}`} scene={scene} onContextReset={() => { setSelection(null); setNote(""); }} onSelectStructure={(structure, cutoff) => { setSelection({ structure, cutoff }); setNote(""); }} />}
     {subject && <Card kicker="REVIEWED INTENT" title="Formal Trade Plan">
       <p>Separate from derived SMC. Plan prices have no comparable adjustment basis in this contract, so they are not drawn on the chart.</p>

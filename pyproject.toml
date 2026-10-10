@@ -36,7 +36,7 @@ path = "src/application/__init__.py"
 accounts-moomoo = ["moomoo-api>=10.9,<11"]
 accounts-schwab = ["schwab-py>=1.5,<2"]
 chart = ["matplotlib>=3.10,<4"]
-company-pdf = ["pypdf>=6.16.1,<7"]
+company-pdf = ["pypdf>=6.20.0,<7"]
 semantic-search = ["fastembed>=0.7,<1"]
 console = [
     "fastapi>=0.115,<1",
@@ -46,7 +46,7 @@ all = [
     "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
-    "pypdf>=6.16.1,<7",
+    "pypdf>=6.20.0,<7",
     "fastapi>=0.115,<1",
     "uvicorn>=0.32,<1",
 ]
@@ -85,6 +85,40 @@ trading-partner-agent = "interfaces.cli.agent:main"
 [tool.hatch.build]
 dev-mode-dirs = ["src"]
 
+# A source release must not copy owner runtime state or local Console builds.
+# Explicit exclusions apply even when a local tree lacks useful Git ignore rules.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/data",
+    # Match descendants directly so VCS !data/.gitkeep cannot override a
+    # directory-only match in Hatchling's GitIgnoreSpec priority rules.
+    "/data/**",
+    "**/.env",
+    "**/.env.*",
+    "!**/.env.example",
+    "!**/.env.*.example",
+    "**/runtime.env",
+    "**/runtime.env.*",
+    "**/account_basis_checkpoints.yaml",
+    "**/node_modules",
+    "/console/.pnp*",
+    "/console/.yarn",
+    "/console/.next*",
+    "/console/.vinext",
+    "/console/.wrangler",
+    "/console/.vercel",
+    "/console/out",
+    "/console/dist",
+    "/console/build",
+    "/console/outputs",
+    "/console/work",
+    "/console/coverage",
+    "/console/test-results",
+    "/console/playwright-report",
+    "/console/blob-report",
+    "**/*.tsbuildinfo",
+]
+
 # Standard wheel: only-include + sources ships bootstrap.py and the five
 # top-level packages at the distribution root (no trading_partner package layer).
 [tool.hatch.build.targets.wheel]
@@ -119,7 +153,7 @@ dev = [
     "moomoo-api>=10.9,<11",
     "schwab-py>=1.5,<2",
     "matplotlib>=3.10,<4",
-    "pypdf>=6.16.1,<7",
+    "pypdf>=6.20.0,<7",
     "fastapi>=0.115,<1",
     "uvicorn>=0.32,<1",
     "pip-audit>=2.9,<3",

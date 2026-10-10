@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { syntheticCycleOverridePreview, syntheticCycleOverrideReceipt } from "../dev/trade-cycle-override-fixtures";
 
 const SUBJECT = "case_00000000-0000-7000-8000-000000000001";
 const DECISION = "decision_00000000-0000-7000-8000-000000000001";
@@ -281,8 +282,8 @@ async function mockApi(page: Page, includeReturnMetrics = true, legacySampleGate
       if (path.endsWith("/review/ensure")) return json({ data: { review_id: "external_note_review_aapl_2", version: 1, status: "PENDING" } });
       if (path.endsWith("/deep-review")) { deepReviewed = true; return json({ data: { status: "SUCCEEDED", model: "qwen3.8-max" } }); }
       if (path === "/api/observation-reviews/external_note_review_aapl_2") return json({ data: { review_id: "external_note_review_aapl_2", version: 2, status: "NO_ACTION", decision_id: "decision_note_review" } });
-      if (path === "/api/trade-cycle-overrides/preview") return json({ impacts: [{ operation: "SPLIT" }] });
-      if (path === "/api/trade-cycle-overrides") return json({ version: 1 });
+      if (path === "/api/trade-cycle-overrides/preview") return json(syntheticCycleOverridePreview(request.postDataJSON()));
+      if (path === "/api/trade-cycle-overrides") return json(syntheticCycleOverrideReceipt(request.postDataJSON()));
       if (path === "/api/behavior-reviews") return json({ status: "COMPLETE" });
     }
     return json({ items: [] });
@@ -486,6 +487,28 @@ test("Journal Console connects Decision, Timeline, Cycle preview, and Review", a
   ]));
 });
 
+test("Behavior rejects inconsistent rates and counts the supplied numerator", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+    const payload = workbench();
+    payload.behavior.data.win_rate = {
+      availability: "AVAILABLE", numerator: 1, denominator: 4, value: "0.9",
+    };
+    payload.behavior.data.closed_active_trade_cycles = {
+      availability: "AVAILABLE", numerator: 3, denominator: 5, value: "99",
+    };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(payload) });
+  });
+  await page.goto("/decision-workbench#behavior");
+  const rate = page.getByRole("article").filter({ hasText: "Win Rate" });
+  await expect(rate).toContainText("INCONSISTENT");
+  await expect(rate).toContainText("payload value does not match");
+  await expect(rate.getByText("—", { exact: true })).toBeVisible();
+  const count = page.getByRole("article").filter({ hasText: "Closed Active Cycles" });
+  await expect(count.getByText("3", { exact: true })).toBeVisible();
+  await expect(count).toContainText("3 counted ÷ 5 selected");
+});
+
 test("Behavior marks the return payoff unavailable when percent facts are absent", async ({ page }) => {
   await mockApi(page, false);
   await page.goto("/decision-workbench#behavior");
@@ -545,3 +568,301 @@ test("Trade Cycle numeric counts align with P/L and preserve unavailable data", 
   await expect(counts).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+async function prepareCycleSplit(page: Page) {
+  await page.goto("/decision-workbench#cycles");
+  await page.getByText("Cycle Adjustments", { exact: true }).click();
+  await page.getByRole("combobox", { name: "Source Cycle" }).fill("08/18");
+  await page.getByRole("option", { name: /AAPL · 08\/18/ }).click();
+  const assignments = page.locator(".cycle-assignment-buttons");
+  await assignments.nth(0).getByRole("button", { name: "Earlier Cycle" }).click();
+  await assignments.nth(1).getByRole("button", { name: "Later Cycle" }).click();
+  await page.getByLabel("Revision Note").fill("Reviewed structural correction");
+}
+
+for (const edit of ["note", "operation", "scope"] as const) {
+  test(`Cycle Preview discards a delayed response after ${edit} changes`, async ({ page }) => {
+    const writes = await mockApi(page);
+    let releasePreview: (() => void) | undefined;
+    let previewReceived = false;
+    let contextChanged = false;
+    let changedContextReads = 0;
+    const gate = new Promise<void>((resolve) => { releasePreview = resolve; });
+    await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides/preview", async (route) => {
+      previewReceived = true;
+      await gate;
+      await route.fulfill({ json: syntheticCycleOverridePreview(route.request().postDataJSON()) });
+    });
+    if (edit === "scope") {
+      await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+        const response = workbench();
+        if (contextChanged) {
+          const cycles = response.trade_cycles.data.cycles as Array<{ activity_ids: string[] }>;
+          cycles[0].activity_ids.push("scope-added-fill");
+          changedContextReads += 1;
+        }
+        await route.fulfill({ json: response });
+      });
+    }
+    await prepareCycleSplit(page);
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+    await expect.poll(() => previewReceived).toBe(true);
+    if (edit === "note") await page.getByLabel("Revision Note").fill("Changed without a preview");
+    else if (edit === "operation") await page.getByRole("tab", { name: "Merge", exact: true }).click();
+    else {
+      contextChanged = true;
+      await page.evaluate(() => window.dispatchEvent(new Event("tp-observation-data-changed")));
+      await expect.poll(() => changedContextReads).toBeGreaterThan(0);
+      await expect(page.locator(".cycle-assignment-buttons")).toHaveCount(3);
+    }
+    expect(writes.filter((write) => write.path === "/api/trade-cycle-overrides")).toEqual([]);
+    releasePreview?.();
+    await expect(page.getByRole("button", { name: "Preview Impact", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+    await expect(page.getByText("Proposed Effective Projection", { exact: true })).toHaveCount(0);
+    if (edit === "note") await expect(page.getByLabel("Revision Note")).toHaveValue("Changed without a preview");
+    if (edit === "operation") await expect(page.getByRole("tab", { name: "Merge", exact: true })).toHaveAttribute("aria-selected", "true");
+  });
+}
+
+test("Cycle Apply uses the exact previewed request and blocks duplicate clicks", async ({ page }) => {
+  const writes = await mockApi(page);
+  const applies: Record<string, unknown>[] = [];
+  let releaseApply: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseApply = resolve; });
+  await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+    applies.push(route.request().postDataJSON());
+    await gate;
+    await route.fulfill({ json: syntheticCycleOverrideReceipt(route.request().postDataJSON()) });
+  });
+  await prepareCycleSplit(page);
+  expect(applies).toEqual([]);
+  await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+  expect(applies).toEqual([]);
+  const reviewed = writes.find((write) => write.path === "/api/trade-cycle-overrides/preview")?.body;
+  expect(reviewed).toBeDefined();
+  const applyButton = await page.getByRole("button", { name: "Apply Revision", exact: true }).elementHandle();
+  await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+  await expect.poll(() => applies.length).toBe(1);
+  expect(applies[0]).toEqual(reviewed);
+  expect(await applyButton?.isDisabled()).toBe(true);
+  await applyButton?.evaluate((button) => (button as HTMLButtonElement).click());
+  expect(applies).toHaveLength(1);
+  await expect(page.getByRole("button", { name: "Preview Impact", exact: true })).toBeDisabled();
+  releaseApply?.();
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Revision Note")).toHaveValue("");
+});
+
+test("Cycle Apply preserves a later edited draft when its original response completes", async ({ page }) => {
+  await mockApi(page);
+  const applies: Record<string, unknown>[] = [];
+  let releaseApply: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseApply = resolve; });
+  await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+    applies.push(route.request().postDataJSON());
+    await gate;
+    await route.fulfill({ json: syntheticCycleOverrideReceipt(route.request().postDataJSON()) });
+  });
+  await prepareCycleSplit(page);
+  await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+  await expect.poll(() => applies.length).toBe(1);
+  await page.getByLabel("Revision Note").fill("A later draft stays editable");
+  releaseApply?.();
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Revision Note")).toHaveValue("A later draft stays editable");
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+  expect(applies).toHaveLength(1);
+});
+
+test("Cycle Apply failure retains the reviewed draft and its original request key", async ({ page }) => {
+  await mockApi(page);
+  const applies: Record<string, unknown>[] = [];
+  await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+    applies.push(route.request().postDataJSON());
+    await route.fulfill(applies.length === 1 ? { status: 503, json: { detail: "Synthetic response unavailable" } } : { json: syntheticCycleOverrideReceipt(route.request().postDataJSON()) });
+  });
+  await prepareCycleSplit(page);
+  await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+  await expect(page.getByText("Synthetic response unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Revision Note")).toHaveValue("Reviewed structural correction");
+  expect(applies).toHaveLength(1);
+  await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+  await expect.poll(() => applies.length).toBe(2);
+  expect(applies[1]).toEqual(applies[0]);
+  await expect(page.getByLabel("Revision Note")).toHaveValue("");
+});
+
+for (const receiptKind of ["empty", "foreign root", "foreign key", "wrong version", "preview identity", "wrong note", "wrong authorization"] as const) {
+  test(`Cycle Apply preserves its draft and key after a ${receiptKind} receipt`, async ({ page }) => {
+    await mockApi(page);
+    let contextReads = 0;
+    const applies: Record<string, unknown>[] = [];
+    await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+      contextReads += 1;
+      await route.fulfill({ json: workbench() });
+    });
+    await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+      const request = route.request().postDataJSON();
+      applies.push(request);
+      const overrides = receiptKind === "foreign root" ? { root_cycle_id: "cycle_foreign" }
+        : receiptKind === "foreign key" ? { idempotency_key: "different-synthetic-key" }
+          : receiptKind === "wrong version" ? { version: 99 }
+            : receiptKind === "wrong note" ? { note: "An unreviewed rationale" }
+              : receiptKind === "wrong authorization" ? { authorization_note: "Unreviewed authorization" }
+                : { override_id: "trade_cycle_override_preview" };
+      await route.fulfill({ json: applies.length === 1
+        ? receiptKind === "empty" ? {} : syntheticCycleOverrideReceipt(request, overrides)
+        : syntheticCycleOverrideReceipt(request) });
+    });
+    await prepareCycleSplit(page);
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+    const readsBeforeApply = contextReads;
+    await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+    await expect(page.getByText(/The saved revision could not be verified/)).toBeVisible();
+    const notice = page.getByRole("alert", { name: "Apply Result Unconfirmed" });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText(String(applies[0].idempotency_key), { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview Impact", exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Revision Note")).toHaveValue("Reviewed structural correction");
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+    expect(contextReads).toBe(readsBeforeApply);
+    expect(applies).toHaveLength(1);
+    // The user explicitly retries the original reviewed request. No new key,
+    // additional preview, refresh, or automatic submission has been generated.
+    await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+    await expect.poll(() => applies.length).toBe(2);
+    expect(applies[1]).toEqual(applies[0]);
+    await expect(page.getByLabel("Revision Note")).toHaveValue("");
+    await expect.poll(() => contextReads).toBeGreaterThan(readsBeforeApply);
+  });
+}
+
+for (const previewKind of ["empty", "foreign revision", "missing projection"] as const) {
+  test(`Cycle Preview refuses a ${previewKind} response without enabling Apply`, async ({ page }) => {
+    const writes = await mockApi(page);
+    await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides/preview", async (route) => {
+      const preview = syntheticCycleOverridePreview(route.request().postDataJSON());
+      if (previewKind === "foreign revision") preview.applied_revisions[0].root_cycle_id = "cycle_foreign";
+      if (previewKind === "missing projection") preview.effective_projection.cycles = [];
+      await route.fulfill({ json: previewKind === "empty" ? {} : preview });
+    });
+    await prepareCycleSplit(page);
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+    await expect(page.getByText(/The preview did not match/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+    await expect(page.getByText("Proposed Effective Projection", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Revision Note")).toHaveValue("Reviewed structural correction");
+    expect(writes.filter((write) => write.path === "/api/trade-cycle-overrides")).toEqual([]);
+  });
+}
+
+for (const failure of ["empty receipt", "503"] as const) {
+  test(`Cycle Apply retains its original request after editing and ${failure}`, async ({ page }) => {
+    const writes = await mockApi(page);
+    const applies: Record<string, unknown>[] = [];
+    let contextReads = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+      contextReads += 1;
+      await route.fulfill({ json: workbench() });
+    });
+    await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+      applies.push(route.request().postDataJSON());
+      if (applies.length === 1) {
+        await gate;
+        await route.fulfill(failure === "503" ? { status: 503, json: { detail: "Synthetic response unavailable" } } : { json: {} });
+      } else await route.fulfill({ json: syntheticCycleOverrideReceipt(route.request().postDataJSON()) });
+    });
+    await prepareCycleSplit(page);
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+    const readsBeforeApply = contextReads;
+    await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+    await expect.poll(() => applies.length).toBe(1);
+    await page.getByLabel("Revision Note").fill("A newer draft must survive original-request recovery");
+    release?.();
+    const notice = page.getByRole("alert", { name: "Apply Result Unconfirmed" });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText(String(applies[0].idempotency_key), { exact: true })).toBeVisible();
+    await expect(notice).toContainText("Original Revision Note: Reviewed structural correction");
+    await expect(page.getByLabel("Revision Note")).toHaveValue("A newer draft must survive original-request recovery");
+    await expect(page.getByRole("button", { name: "Preview Impact", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).evaluate((button) => (button as HTMLButtonElement).click());
+    expect(writes.filter((write) => write.path === "/api/trade-cycle-overrides/preview")).toHaveLength(1);
+    expect(applies).toHaveLength(1);
+    expect(contextReads).toBe(readsBeforeApply);
+    await page.getByRole("button", { name: "Retry Original Request", exact: true }).click();
+    await expect.poll(() => applies.length).toBe(2);
+    expect(applies[1]).toEqual(applies[0]);
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByLabel("Revision Note")).toHaveValue("A newer draft must survive original-request recovery");
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeDisabled();
+  });
+}
+
+for (const receipt of ["foreign", "wrong note", "wrong authorization", "exact"] as const) {
+  test(`Cycle unconfirmed Apply with changed context resolves only a ${receipt} durable receipt`, async ({ page }) => {
+    await mockApi(page);
+    const applies: Record<string, unknown>[] = [];
+    let contextChanged = false;
+    let includeReceipt = false;
+    let changedContextReads = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/{console,design-preview}/api/decision-workbench**", async (route) => {
+      const payload = workbench();
+      if (contextChanged) {
+        const cycles = payload.trade_cycles.data.cycles as Array<{ activity_ids: string[] }>;
+        cycles[0].activity_ids.push("scope-added-fill");
+        changedContextReads += 1;
+      }
+      if (includeReceipt) {
+        Object.assign(payload.trade_cycles.data, { override_revisions: [syntheticCycleOverrideReceipt(applies[0] as Parameters<typeof syntheticCycleOverrideReceipt>[0], receipt === "foreign" ? { cycle_ids: ["foreign"] } : receipt === "wrong note" ? { note: "An unreviewed durable rationale" } : receipt === "wrong authorization" ? { authorization_note: "Unreviewed durable authorization" } : {})] });
+      }
+      await route.fulfill({ json: payload });
+    });
+    await page.route("**/api/{console,design-preview}/api/trade-cycle-overrides", async (route) => {
+      applies.push(route.request().postDataJSON());
+      await gate;
+      await route.fulfill({ json: {} });
+    });
+    await prepareCycleSplit(page);
+    await page.getByRole("button", { name: "Preview Impact", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Apply Revision", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Apply Revision", exact: true }).click();
+    await expect.poll(() => applies.length).toBe(1);
+    await page.getByLabel("Revision Note").fill("A newer draft survives changed durable context");
+    contextChanged = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("tp-observation-data-changed")));
+    await expect.poll(() => changedContextReads).toBeGreaterThan(0);
+    await expect(page.locator(".cycle-assignment-buttons")).toHaveCount(3);
+    release?.();
+    const notice = page.getByRole("alert", { name: "Apply Result Unconfirmed" });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText(String(applies[0].idempotency_key), { exact: true })).toBeVisible();
+    await expect(notice).toContainText("Durable Cycle context changed");
+    await expect(page.getByRole("button", { name: "Retry Original Request", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Retry Original Request", exact: true }).evaluate((button) => (button as HTMLButtonElement).click());
+    expect(applies).toHaveLength(1);
+    includeReceipt = true;
+    const readsBeforeReceipt = changedContextReads;
+    await page.evaluate(() => window.dispatchEvent(new Event("tp-observation-data-changed")));
+    await expect.poll(() => changedContextReads).toBeGreaterThan(readsBeforeReceipt);
+    if (receipt === "exact") await expect(notice).toHaveCount(0);
+    else {
+      await expect(notice).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry Original Request", exact: true })).toBeDisabled();
+    }
+    await expect(page.getByLabel("Revision Note")).toHaveValue("A newer draft survives changed durable context");
+    expect(applies).toHaveLength(1);
+  });
+}

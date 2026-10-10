@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
+from application.dto.research_presentation import ResearchAnswerPresentation
 from application.ports.agent_model_provider import ModelResponse, ModelUsage
 
 
@@ -92,6 +93,7 @@ def model_receipt_json(
     additional_web_search_used: bool = False,
     additional_web_source_urls: tuple[str, ...] = (),
     research: dict[str, object] | None = None,
+    research_presentation: ResearchAnswerPresentation | None = None,
 ) -> str:
     usage = aggregate_usage(responses)
     latency_ms = aggregate_latency(responses)
@@ -143,9 +145,19 @@ def model_receipt_json(
         "trace_id": trace_id,
         "research": research,
     }
+    if research_presentation is not None:
+        value["research_presentation"] = research_presentation.model_dump(mode="json")
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded.encode("utf-8")) <= 16_384:
         return encoded
+
+    # Rich presentation is optional. Never evict evidence/usage/stop receipts to
+    # accommodate it; the complete original answer remains on AgentMessage.
+    if research_presentation is not None:
+        value["research_presentation"] = {"schema_version": 1, "truncated": True}
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) <= 16_384:
+            return encoded
 
     manifest = value.get("evidence_manifest")
     if manifest is not None:
@@ -214,6 +226,8 @@ def model_receipt_json(
             "research",
         )
     }
+    if "research_presentation" in value:
+        compact["research_presentation"] = value["research_presentation"]
     encoded = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > 16_384:
         # Final answer prose is durable on the message. Keep research identity,

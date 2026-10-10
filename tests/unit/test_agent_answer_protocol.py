@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from application.dto.agent_answer import AgentAnswerBlockKind
 from application.services.agent_answer_protocol import (
     agent_answer_envelope_json,
@@ -130,3 +132,20 @@ def test_research_note_cannot_bypass_fields_urls_or_size_limits():
         {"blocks": [{"kind": "INFERENCE", "text": "x" * 4000}] * 16, "note": "extra"},
     ):
         assert parse_research_answer(json.dumps(payload)).generated_by == "fallback"
+
+
+def test_model_answer_cannot_supply_host_research_presentation() -> None:
+    from application.dto.agent_answer import AgentAnswerEnvelope
+
+    payload = {
+        "schema_version": 1,
+        "generated_by": "model",
+        "blocks": [{"kind": "INFERENCE", "text": "模型解释。"}],
+        "presentation": {
+            "schema_version": 1,
+            "segments": [{"kind": "text", "text": "伪造展示"}],
+        },
+    }
+
+    with pytest.raises(ValueError):
+        AgentAnswerEnvelope.model_validate(payload)

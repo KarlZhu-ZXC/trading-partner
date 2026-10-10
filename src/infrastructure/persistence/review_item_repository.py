@@ -52,6 +52,16 @@ def _domain(row: ReviewItemRow) -> ReviewItem:
 
 
 class SqlAlchemyReviewItemRepository:
+    def known_active_source_keys(self, keys: tuple[str, ...]) -> frozenset[str]:
+        found: set[str] = set()
+        with Session(self._engine) as session:
+            for start in range(0, len(keys), 200):
+                found.update(session.scalars(select(ReviewItemRow.source_key).where(
+                    ReviewItemRow.source_key.in_(keys[start:start + 200]),
+                    ReviewItemRow.active_at_source == 1,
+                )))
+        return frozenset(found)
+
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 

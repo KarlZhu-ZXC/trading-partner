@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from application.dto.schwab_oauth import SchwabOAuthHealthState
+from infrastructure.providers.account import schwab_oauth
 from infrastructure.providers.account.schwab_oauth import (
     SchwabOAuthFlowManager,
     SchwabOAuthFlowState,
@@ -12,6 +16,49 @@ from infrastructure.providers.account.schwab_oauth import (
 )
 from infrastructure.system.process_file_lock import ProcessFileLock
 from interfaces.cli.schwab_oauth import _next_action
+
+
+def test_macos_browser_requests_foreground_launch(monkeypatch) -> None:
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(schwab_oauth.subprocess, "run", run)
+    assert schwab_oauth._ForegroundBrowser().open("https://example.invalid/authorize")
+    args, options = calls[0]
+    assert args == ["/usr/bin/open", "-u", "https://example.invalid/authorize"]
+    assert options["stderr"] == subprocess.DEVNULL
+    assert options["timeout"] == 15
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "missing"])
+def test_macos_browser_failure_is_immediate_and_redacted(monkeypatch, failure) -> None:
+    url = "https://example.invalid/authorize?state=must-not-leak"
+
+    def run(args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 15)
+        if failure == "missing":
+            raise OSError(url)
+        return subprocess.CompletedProcess(args, 1)
+
+    monkeypatch.setattr(schwab_oauth.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="browser could not be opened") as error:
+        schwab_oauth._ForegroundBrowser().open(url)
+    assert "must-not-leak" not in str(error.value)
+
+
+def test_macos_flow_selects_foreground_browser(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(schwab_oauth.sys, "platform", "darwin")
+
+    def login_flow(*args, **kwargs):
+        browser = schwab_oauth.webbrowser.get(kwargs["requested_browser"])
+        assert isinstance(browser, schwab_oauth._ForegroundBrowser)
+        _token(Path(args[3]), datetime.now(tz=UTC))
+
+    assert _manager(tmp_path, login_flow=login_flow).renew().state == "SUCCEEDED"
 
 
 def _token(path: Path, created_at: datetime) -> None:

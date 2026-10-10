@@ -68,6 +68,9 @@ class ReviewItemService:
         )
         return tuple(ReviewItemDTO.from_domain(item) for item in values)
 
+    def known_active_source_keys(self, keys: tuple[str, ...]) -> frozenset[str]:
+        return self._repository.known_active_source_keys(keys)
+
     def list_open(
         self,
         *,

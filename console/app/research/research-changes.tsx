@@ -12,6 +12,7 @@ type Change = {
   thesis_id: string | null; plan_id: string | null; plan_version: number | null;
   note_revision_id: string | null; monitor_id: string | null; event_id: string | null;
   agenda_item_id: string | null; warning_codes: string[];
+  reviewed_impacts?: { impact_id: string; version: number; thesis_revision_id: string; assumption_id: string; stance: string; rationale: string; confirmed_at: string; confirmed_by: string; baseline_match: boolean }[];
   previous_occurred_at?: string | null; previous_source_id?: string | null; source_names?: string[];
 };
 type Changes = {
@@ -128,6 +129,15 @@ export function ResearchChanges({ subjectId }: { subjectId: string }) {
       {selection && !selected && <p role="status">The selected change is outside this page or no longer available in this window. Browse the pages or select another change.</p>}
       {selected && <section className={styles.detail} aria-label="Selected Change">
         <h3>{selected.title}</h3><p>{selected.relation_detail}</p>
+        {(selected.reviewed_impacts?.length ?? 0) > 0 && <section aria-label="Reviewed Assumption Links">
+          <h4>User-Reviewed Assumption Links</h4>
+          <p>These are recorded interpretations of this exact source, not automatic changes to a Thesis.</p>
+          <ul>{selected.reviewed_impacts?.map((impact) => <li key={`${impact.impact_id}:${impact.version}`}>
+            <strong>{impact.stance.toUpperCase()}</strong><p>{impact.rationale}</p>
+            <small>Assumption {impact.assumption_id} · Thesis revision {impact.thesis_revision_id} · confirmed {formatDate(impact.confirmed_at)}</small>
+            <p>{impact.baseline_match ? "Matches this reviewed baseline." : current.baseline ? "Targets a different pinned Thesis revision." : "Pinned link; no reviewed Decision baseline selected."}</p>
+          </li>)}</ul>
+        </section>}
         <div className={styles.columns}><div><h4>Previous Value</h4><small>{selected.previous_occurred_at ? formatDate(selected.previous_occurred_at) : "Previous fact time unavailable"} · {selected.previous_source_id ?? "Previous source unavailable"}</small><pre>{readable(selected.old_value)}</pre></div><div><h4>New Value</h4><small>{formatDate(selected.occurred_at)} · {(selected.source_names ?? []).join(", ") || "Source provenance unavailable"}</small><pre>{readable(selected.new_value)}</pre></div></div>
         <DescriptionList columns={3} items={[{ label: "Source", value: `${selected.kind} · ${selected.source_id}${selected.source_version === null ? "" : ` · v${selected.source_version}`}` }, { label: "Occurred", value: formatDate(selected.occurred_at) }, { label: "Recorded", value: formatDate(selected.recorded_at) }, { label: "Instrument", value: selected.instrument_id ?? "Unlinked" }, { label: "Thesis", value: selected.thesis_id ?? "No exact Thesis link" }, { label: "Trade Plan", value: selected.plan_id ? `${selected.plan_id} · v${selected.plan_version}` : "No exact Plan link" }]} />
         {selected.warning_codes.length > 0 && <p role="status">{selected.warning_codes.join(" · ")}</p>}

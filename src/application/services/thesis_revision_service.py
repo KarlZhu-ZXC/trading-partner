@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import NoReturn
 
 from application.dto.research import (
@@ -18,7 +19,8 @@ from application.dto.research import (
     kind_from_payload,
     parse_candidate_payload,
 )
-from application.dto.tool_envelope import ToolEnvelope
+from application.dto.research_links import EvidenceImpactCandidatePayload
+from application.dto.tool_envelope import DUPLICATE_IDEMPOTENCY_KEY, ToolEnvelope
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.research_unit_of_work import ResearchUnitOfWork
@@ -35,7 +37,10 @@ from application.services._research_support import (
     propose_candidate,
     require_confirm_reviewer,
 )
+from application.services.research_impact_rules import validate_impact
 from application.services.research_link_invariants import validate_linked_subject_ids
+from application.services.research_link_replay import replay_research_work
+from application.services.research_question_rules import prepare_question, validate_question
 from application.services.subject_metadata_policy import validate_subject_metadata
 from application.services.thesis_revision_appliers import ThesisRevisionAppliers
 from domain.common.actor import ActorContext
@@ -240,8 +245,24 @@ class ThesisRevisionService:
         payload: object,
         *,
         confirmation: bool,
+        now: datetime,
     ) -> None:
         """Revalidate references carried by a persisted candidate payload."""
+
+        if isinstance(payload, EvidenceImpactCandidatePayload):
+            if candidate.subject_id is None:
+                raise DataContractError("Evidence impact requires a Research Subject")
+            validate_impact(uow, candidate.subject_id, payload, now)
+            if payload.action != "retract":
+                revision = uow.revisions.get(payload.thesis_revision_id or "")
+                if (
+                    candidate.thesis_id != revision.thesis_id
+                    or candidate.target_revision_no != revision.revision_no
+                ):
+                    raise DataContractError(
+                        "Evidence impact candidate target does not match its revision"
+                    )
+            return
 
         if isinstance(payload, AssumptionCandidatePayload):
             subject_id = candidate.subject_id
@@ -339,6 +360,7 @@ class ThesisRevisionService:
                     question_id=payload.question_id,
                     confirmation=confirmation,
                 )
+            validate_question(uow, subject_id, payload, now)
             return
 
         if isinstance(payload, SubjectUpdateCandidatePayload):
@@ -611,6 +633,7 @@ class ThesisRevisionService:
             | AssumptionCandidatePayload
             | InvalidationCandidatePayload
             | OpenQuestionCandidatePayload
+            | EvidenceImpactCandidatePayload
             | WatchlistCandidatePayload
             | SubjectUpdateCandidatePayload
             | TradePlanCandidatePayload
@@ -656,6 +679,25 @@ class ThesisRevisionService:
 
             with self._uow_factory() as uow:
                 subject = uow.subjects.get(subject_id) if subject_id is not None else None
+                if isinstance(
+                    payload, OpenQuestionCandidatePayload | EvidenceImpactCandidatePayload
+                ):
+                    prior = replay_research_work(
+                        uow,
+                        subject_id=subject_id,
+                        payload=payload,
+                        proposed_by=proposed_by,
+                        confirmation_mode=confirmation_mode,
+                        idempotency_key=idempotency_key,
+                    )
+                    if prior is not None:
+                        return envelope_success(
+                            request_id=request_id,
+                            clock=self._clock,
+                            data=candidate_to_dto(prior),
+                            warnings=(DUPLICATE_IDEMPOTENCY_KEY,),
+                            degraded=True,
+                        )
                 if (
                     isinstance(payload, SubjectUpdateCandidatePayload)
                     and payload.action == "update"
@@ -710,7 +752,26 @@ class ThesisRevisionService:
                         relaxes_invalidation_id=payload.relaxes_invalidation_id,
                         confirmation=False,
                     )
+                elif isinstance(payload, EvidenceImpactCandidatePayload):
+                    assert subject_id is not None
+                    try:
+                        validate_impact(uow, subject_id, payload, self._clock.now())
+                    except DataContractError as error:
+                        raise InputValidationError(str(error), details=error.details) from error
+                    if payload.action == "retract":
+                        prior_impact = uow.evidence_impacts.get(payload.impact_id or "")
+                        assert prior_impact is not None
+                        revision = uow.revisions.get(prior_impact.thesis_revision_id)
+                    else:
+                        revision = uow.revisions.get(payload.thesis_revision_id or "")
+                    resolved_thesis = revision.thesis_id
+                    target_revision_no = revision.revision_no
                 elif isinstance(payload, OpenQuestionCandidatePayload):
+                    assert subject_id is not None
+                    try:
+                        payload = prepare_question(uow, subject_id, payload, self._clock.now())
+                    except DataContractError as error:
+                        raise InputValidationError(str(error), details=error.details) from error
                     if payload.action != "create":
                         if subject_id is None:
                             raise InputValidationError(
@@ -852,6 +913,7 @@ class ThesisRevisionService:
                     candidate,
                     payload,
                     confirmation=True,
+                    now=now,
                 )
                 affected_type, affected_id = self._appliers.apply(
                     uow,

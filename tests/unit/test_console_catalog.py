@@ -1,6 +1,23 @@
 from mcp.types import Tool, ToolAnnotations
 
-from interfaces.console.catalog import capability_catalog
+from interfaces.capabilities import READ_DURABLE, CompactCapabilityRegistry
+from interfaces.console.catalog import capability_catalog, registry_catalog
+
+
+def test_console_catalog_reads_full_neutral_registration_without_mcp_listing() -> None:
+    def read_notes(limit: int = 5) -> dict[str, int]:
+        """Read bounded durable observations."""
+        return {"limit": limit}
+
+    registry = CompactCapabilityRegistry()
+    registry.add_capability(read_notes, name="read_notes", policy=READ_DURABLE)
+    result = registry_catalog(registry)
+    schema = result[0]["input_schema"]
+    assert schema == registry.registered_capabilities[0].tool.parameters
+    assert schema["properties"]["limit"]["title"] == "Limit"
+    assert schema["properties"]["limit"]["default"] == 5
+    assert result[0]["read_only"] is True
+    assert result[0]["confirmation_required"] is False
 
 
 def test_capability_catalog_extracts_closed_operations_and_hints() -> None:

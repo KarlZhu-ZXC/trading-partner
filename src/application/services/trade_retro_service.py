@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
+from typing import Any
 
 from application.dto.error_mapper import to_error_info, to_error_info_from_exception
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
@@ -19,6 +20,7 @@ from application.dto.trade_retro import (
     TradeRetroRunDTO,
 )
 from application.ports.account_transaction_repository import AccountTransactionRepository
+from application.ports.activity_annotation_repository import ActivityAnnotationRepository
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
@@ -29,8 +31,10 @@ from application.ports.trade_retro_narrative_provider import (
 )
 from application.ports.trade_retro_repository import TradeRetroRepository
 from application.services._research_support import UowFactory
+from application.services.retro_workflow_query import retro_workflow
 from domain.common.enums import DecisionType, Freshness, ResearchSubjectStatus
 from domain.common.errors import (
+    DataContractError,
     IdempotencyConflict,
     TradeRetroReviewVersionConflict,
     TradeRetroRunNotFound,
@@ -84,6 +88,7 @@ class TradeRetroService:
         id_generator: IdGenerator,
         secret_redactor: SecretRedactor,
         narrative_provider: TradeRetroNarrativeProvider | None = None,
+        annotations: ActivityAnnotationRepository | None = None,
     ) -> None:
         self._repository = repository
         self._transactions = transactions
@@ -93,6 +98,17 @@ class TradeRetroService:
         self._ids = id_generator
         self._redactor = secret_redactor
         self._narrative = narrative_provider
+        self._annotations = annotations
+
+    def workflow(self, run_id: str) -> dict[str, Any]:
+        return retro_workflow(
+            run_id,
+            self._repository,
+            self._transactions,
+            self._research_uow_factory,
+            self._annotations,
+            self._clock.now(),
+        )
 
     def prepare(
         self, *, start: datetime, end: datetime, idempotency_key: str
@@ -268,7 +284,7 @@ class TradeRetroService:
                                 },
                                 ensure_ascii=False,
                                 separators=(",", ":"),
-                            )
+                            ),
                         )
                     )
                     summary = response.summary_markdown
@@ -367,12 +383,20 @@ class TradeRetroService:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, generated_at, exc)
 
-    def history(self, request: TradeRetroHistoryInput) -> ToolEnvelope[TradeRetroHistoryDTO]:
+    def history(
+        self, request: TradeRetroHistoryInput, *, offset: int = 0
+    ) -> ToolEnvelope[TradeRetroHistoryDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         as_of = self._clock.now()
         try:
+            if type(offset) is not int or offset < 0:
+                raise DataContractError("Trade Retro history offset must be non-negative")
             if request.run_id is None:
-                runs = self._repository.list_runs(request.limit)
+                runs = (
+                    self._repository.list_runs(request.limit)
+                    if offset == 0
+                    else self._repository.list_runs(request.limit, offset)
+                )
             else:
                 run = self._repository.get_run(request.run_id)
                 runs = () if run is None else (run,)
@@ -406,6 +430,24 @@ class TradeRetroService:
             )
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, as_of, exc)
+
+    def detail(self, run_id: str) -> TradeRetroRunDTO:
+        run = self._repository.get_run(run_id)
+        if run is None:
+            raise TradeRetroRunNotFound("Trade Retro run was not found")
+        return self._run_dto(run)
+
+    def review_receipt(
+        self,
+        run_id: str,
+        idempotency_key: str,
+    ) -> TradeRetroReviewRevisionDTO | None:
+        value = self._repository.get_review_by_idempotency_key(idempotency_key)
+        if value is None:
+            return None
+        if value.run_id != run_id:
+            raise DataContractError("Review receipt does not belong to this run")
+        return TradeRetroReviewRevisionDTO.from_domain(value)
 
     def review(self, request: TradeRetroReviewInput) -> ToolEnvelope[TradeRetroReviewRevisionDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
@@ -450,6 +492,24 @@ class TradeRetroService:
                     details={"run_id": request.run_id, "finding_keys": unknown_keys},
                     code="TRADE_RETRO_FINDING_NOT_FOUND",
                 )
+            with self._research_uow_factory() as uow:
+                for item in request.finding_reviews:
+                    if item.followup != "QUESTION":
+                        continue
+                    assert item.question_id is not None
+                    question = uow.questions.get(item.question_id)
+                    if question.version != item.question_version or question.asked_at > as_of:
+                        raise DataContractError("Follow-up question changed; reload the review")
+                    subject = uow.subjects.get(question.subject_id)
+                    finding = next(
+                        f for f in run.findings if trade_retro_finding_key(f) == item.finding_key
+                    )
+                    plan = uow.trade_plans.get_current_by_subject(subject.subject_id)
+                    if not (
+                        finding.instrument_id is not None
+                        and subject.primary_instrument_id == finding.instrument_id
+                    ) and not (finding.plan_id and plan and plan.plan_id == finding.plan_id):
+                        raise DataContractError("Follow-up question is outside the finding scope")
             value = TradeRetroReviewRevision(
                 review_id=self._ids.new(EntityIdPrefix.RETRO_REVIEW),
                 run_id=request.run_id,
@@ -462,6 +522,9 @@ class TradeRetroService:
                         finding_key=item.finding_key,
                         status=TradeRetroFindingReviewStatus(item.status),
                         note=item.note,
+                        followup=item.followup,
+                        question_id=item.question_id,
+                        question_version=item.question_version,
                     )
                     for item in request.finding_reviews
                 ),
@@ -767,7 +830,14 @@ class TradeRetroService:
             and existing.note_markdown == request.note_markdown.strip()
             and existing.action_items == request.action_items
             and tuple(
-                (item.finding_key, item.status.value, item.note)
+                (
+                    item.finding_key,
+                    item.status.value,
+                    item.note,
+                    item.followup,
+                    item.question_id,
+                    item.question_version,
+                )
                 for item in existing.finding_reviews
             )
             == tuple(
@@ -775,6 +845,9 @@ class TradeRetroService:
                     item.finding_key,
                     item.status,
                     item.note.strip() if item.note and item.note.strip() else None,
+                    item.followup,
+                    item.question_id,
+                    item.question_version,
                 )
                 for item in request.finding_reviews
             )

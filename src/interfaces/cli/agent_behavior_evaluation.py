@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, cast
 
 from application.dto.agent import AgentTurnRequest, EphemeralContext
@@ -34,192 +32,25 @@ from application.services.agent_pending_action_service import (
 )
 from application.services.agent_runtime_service import AgentRuntimeService
 from domain.agent.enums import AgentChannel, AgentPendingActionStatus, AgentTurnStatus
-from domain.agent.models import (
-    AgentConversation,
-    AgentMessage,
-    AgentPendingAction,
-    AgentTurn,
-    arguments_digest,
-)
-from domain.agent.models import (
-    AgentToolReceipt as DurableToolReceipt,
-)
+from domain.agent.models import AgentPendingAction, arguments_digest
 from domain.common.ids import EntityIdPrefix
 from interfaces.agent.action_gateway import AgentActionGateway
 from interfaces.agent.prompts import AGENT_SYSTEM_PROMPT
+from interfaces.cli.agent_evaluation_support import (
+    EVALUATION_PROJECT_ROOT,
+    EvaluationClock,
+    EvaluationIds,
+    MemoryConversationRepository,
+    ScriptedModelProvider,
+    evaluation_fingerprint_manifest,
+)
 from interfaces.cli.copilot_research_evaluation import run_research_evidence_evaluations
 from interfaces.console.agent_api import _reconcile_orphaned_agent_turns
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-CATALOG_PATH = PROJECT_ROOT / "evals" / "agent-behavior.v1.json"
-_MANIFEST_FILES = (
-    "evals/agent-behavior.v1.json",
-    "evals/copilot-research.v1.json",
-    "src/application/services/copilot_research_evidence.py",
-    "src/application/services/copilot_research_budget.py",
-    "src/interfaces/agent/prompts.py",
-    "src/application/services/agent_runtime_service.py",
-    "src/interfaces/agent/capability_gateway.py",
-    "src/interfaces/agent/action_gateway.py",
-    "src/application/ports/agent_model_provider.py",
-)
+CATALOG_PATH = EVALUATION_PROJECT_ROOT / "evals" / "agent-behavior.v1.json"
 
 
-class _Ids:
-    def __init__(self) -> None:
-        self._counter = 0
-
-    def new(self, prefix: EntityIdPrefix) -> str:
-        self._counter += 1
-        return f"{prefix.value}_eval_{self._counter:04d}"
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self._now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
-
-    def now(self) -> datetime:
-        return self._now
-
-
-class _Repository:
-    def __init__(self) -> None:
-        self.conversations: dict[str, AgentConversation] = {}
-        self.messages: dict[str, list[AgentMessage]] = {}
-        self.turns: dict[str, AgentTurn] = {}
-        self.receipts: list[DurableToolReceipt] = []
-
-    def create_conversation(self, value: AgentConversation) -> AgentConversation:
-        self.conversations[value.conversation_id] = value
-        self.messages[value.conversation_id] = []
-        return value
-
-    def get_conversation(self, conversation_id: str) -> AgentConversation | None:
-        return self.conversations.get(conversation_id)
-
-    def list_conversations(
-        self,
-        owner_principal: str | None = None,
-        *,
-        include_archived: bool = False,
-        limit: int = 100,
-    ) -> tuple[AgentConversation, ...]:
-        _ = include_archived
-        values = tuple(
-            item
-            for item in self.conversations.values()
-            if owner_principal is None or item.owner_principal == owner_principal
-        )
-        return values[:limit]
-
-    def list_messages(
-        self,
-        conversation_id: str,
-        *,
-        after_sequence: int = 0,
-        limit: int = 100,
-        newest_first: bool = False,
-    ) -> tuple[AgentMessage, ...]:
-        values = tuple(
-            item
-            for item in self.messages.get(conversation_id, ())
-            if item.sequence > after_sequence
-        )
-        ordered = tuple(reversed(values)) if newest_first else values
-        return ordered[:limit]
-
-    def append_message(self, value: AgentMessage) -> AgentMessage:
-        conversation = self.conversations[value.conversation_id]
-        stored = replace(value, sequence=conversation.next_message_sequence)
-        self.messages[value.conversation_id].append(stored)
-        self.conversations[value.conversation_id] = replace(
-            conversation,
-            next_message_sequence=conversation.next_message_sequence + 1,
-            updated_at=value.created_at,
-            version=conversation.version + 1,
-        )
-        return stored
-
-    def append_tool_receipt(self, value: DurableToolReceipt) -> DurableToolReceipt:
-        self.receipts.append(value)
-        return value
-
-    def create_turn(self, value: AgentTurn) -> AgentTurn:
-        self.turns[value.turn_id] = value
-        return value
-
-    def get_turn(self, turn_id: str) -> AgentTurn | None:
-        return self.turns.get(turn_id)
-
-    def latest_turn(self, conversation_id: str) -> AgentTurn | None:
-        values = [item for item in self.turns.values() if item.conversation_id == conversation_id]
-        return max(values, key=lambda item: item.started_at) if values else None
-
-    def list_turns(
-        self, conversation_id: str, *, limit: int = 100, newest_first: bool = True
-    ) -> tuple[AgentTurn, ...]:
-        values = tuple(
-            item for item in self.turns.values() if item.conversation_id == conversation_id
-        )
-        return tuple(sorted(values, key=lambda item: item.started_at, reverse=newest_first))[:limit]
-
-    def update_turn(
-        self,
-        turn_id: str,
-        *,
-        status: AgentTurnStatus,
-        expected_version: int,
-        assistant_message_id: str | None = None,
-        error_code: str | None = None,
-        error_http_status: int | None = None,
-        error_retryable: bool | None = None,
-        error_attempts: int | None = None,
-        completed_at: datetime | None = None,
-        now: datetime | None = None,
-    ) -> AgentTurn:
-        current = self.turns[turn_id]
-        if current.version != expected_version:
-            raise RuntimeError("version mismatch")
-        updated = replace(
-            current,
-            status=status,
-            assistant_message_id=assistant_message_id,
-            error_code=error_code,
-            error_http_status=error_http_status,
-            error_retryable=error_retryable,
-            error_attempts=error_attempts,
-            completed_at=completed_at,
-            updated_at=now or current.updated_at,
-            version=current.version + 1,
-        )
-        self.turns[turn_id] = updated
-        return updated
-
-    def update_summary(self, conversation_id: str, *args: Any, **kwargs: Any) -> AgentConversation:
-        return self.conversations[conversation_id]
-
-    def list_tool_receipts(
-        self, conversation_id: str, *, limit: int = 100
-    ) -> tuple[DurableToolReceipt, ...]:
-        return tuple(item for item in self.receipts if item.conversation_id == conversation_id)[
-            :limit
-        ]
-
-
-class _Model:
-    def __init__(self, responses: list[ModelResponse]) -> None:
-        self.responses = list(responses)
-        self.requests: list[ModelRequest] = []
-
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        self.requests.append(request)
-        return self.responses.pop(0)
-
-    async def aclose(self) -> None:
-        return None
-
-
-class _DisconnectModel(_Model):
+class _DisconnectModel(ScriptedModelProvider):
     """A model that leaves a durable turn active when the browser task dies."""
 
     def __init__(self) -> None:
@@ -375,7 +206,7 @@ class _Gateway(AgentToolGateway):
 
 
 class _PendingGateway:
-    def __init__(self, clock: _Clock, ids: _Ids) -> None:
+    def __init__(self, clock: EvaluationClock, ids: EvaluationIds) -> None:
         self.clock = clock
         self.ids = ids
         self.proposals: list[PendingActionProposal] = []
@@ -534,7 +365,9 @@ class _PendingRepository:
         ]
         return tuple(values[:limit])
 
-    def list_unresolved(self, *, now: datetime, limit: int = 100) -> tuple[AgentPendingAction, ...]:
+    def list_unresolved(
+        self, *, now: datetime, limit: int = 100, offset: int = 0
+    ) -> tuple[AgentPendingAction, ...]:
         _ = now
         terminal = {
             AgentPendingActionStatus.SUCCEEDED,
@@ -544,7 +377,7 @@ class _PendingRepository:
             AgentPendingActionStatus.UNKNOWN,
         }
         return tuple(value for value in self.actions.values() if value.status not in terminal)[
-            :limit
+            offset : offset + limit
         ]
 
     def expire_due(self, *, now: datetime | None = None, limit: int = 100) -> int:
@@ -837,7 +670,7 @@ async def _run_case(case: dict[str, Any]) -> EvaluationCaseResult:
     if case_id == "agent_disconnect_turn_recovery":
         return await _run_disconnect_case(case)
 
-    repository, clock, ids = _Repository(), _Clock(), _Ids()
+    repository, clock, ids = MemoryConversationRepository(), EvaluationClock(), EvaluationIds()
     repository_port = cast(AgentConversationRepository, repository)
     context = AgentContextService(repository=repository_port, clock=clock, id_generator=ids)
     conversation = context.create_conversation(owner_principal="eval", title=case_id)
@@ -857,7 +690,7 @@ async def _run_case(case: dict[str, Any]) -> EvaluationCaseResult:
             id_generator=ids,
         )
         pending_gateway = AgentActionGateway(pending_service)
-    model = _Model(_responses(case_id))
+    model = ScriptedModelProvider(_responses(case_id))
     runtime = AgentRuntimeService(
         repository=repository_port,
         context_service=context,
@@ -1006,7 +839,7 @@ def _assert_case_contract(
     *,
     result: Any,
     gateway: _Gateway,
-    model: _Model,
+    model: ScriptedModelProvider,
     receipt: Mapping[str, Any],
     assistant_content: str,
     pending_repo: _PendingRepository | None,
@@ -1154,7 +987,7 @@ def _assert_case_contract(
 async def _run_pending_reload_case(case: Mapping[str, Any]) -> EvaluationCaseResult:
     """Exercise durable Pending Action reissue/CAS semantics after a reload."""
 
-    repository, clock, ids = _Repository(), _Clock(), _Ids()
+    repository, clock, ids = MemoryConversationRepository(), EvaluationClock(), EvaluationIds()
     context = AgentContextService(
         repository=cast(AgentConversationRepository, repository),
         clock=clock,
@@ -1233,7 +1066,7 @@ async def _run_pending_reload_case(case: Mapping[str, Any]) -> EvaluationCaseRes
     # Run the real runtime for the user-facing recovery turn as well.  It must
     # not invent a tool call or silently confirm the pending action.
     gateway = _Gateway()
-    model = _Model(_responses("agent_pending_action_reload"))
+    model = ScriptedModelProvider(_responses("agent_pending_action_reload"))
     runtime = AgentRuntimeService(
         repository=cast(AgentConversationRepository, repository),
         context_service=context,
@@ -1264,7 +1097,7 @@ async def _run_pending_reload_case(case: Mapping[str, Any]) -> EvaluationCaseRes
 async def _run_disconnect_case(case: Mapping[str, Any]) -> EvaluationCaseResult:
     """Create a real RUNNING turn, cancel it, then converge it via recovery."""
 
-    repository, clock, ids = _Repository(), _Clock(), _Ids()
+    repository, clock, ids = MemoryConversationRepository(), EvaluationClock(), EvaluationIds()
     context = AgentContextService(
         repository=cast(AgentConversationRepository, repository),
         clock=clock,
@@ -1332,14 +1165,14 @@ async def _run_disconnect_case(case: Mapping[str, Any]) -> EvaluationCaseResult:
 async def _run_schema_repair_smoke() -> dict[str, Any]:
     """Run one malformed tool call through the real repair loop."""
 
-    repository, clock, ids = _Repository(), _Clock(), _Ids()
+    repository, clock, ids = MemoryConversationRepository(), EvaluationClock(), EvaluationIds()
     context = AgentContextService(
         repository=cast(AgentConversationRepository, repository),
         clock=clock,
         id_generator=ids,
     )
     conversation = context.create_conversation(owner_principal="eval", title="schema-repair")
-    model = _Model(
+    model = ScriptedModelProvider(
         [
             ModelResponse(
                 tool_calls=(
@@ -1408,8 +1241,8 @@ async def run_catalog(*, live: bool = False) -> dict[str, Any]:
     research_results = run_research_evidence_evaluations()
     return {
         "schema_version": 1,
-        "catalog": str(CATALOG_PATH.relative_to(PROJECT_ROOT)),
-        "fingerprint_manifest": _fingerprint_manifest(),
+        "catalog": str(CATALOG_PATH.relative_to(EVALUATION_PROJECT_ROOT)),
+        "fingerprint_manifest": evaluation_fingerprint_manifest(),
         "live": False,
         "passed": all(item.passed for item in results)
         and schema_repair["passed"]
@@ -1421,19 +1254,5 @@ async def run_catalog(*, live: bool = False) -> dict[str, Any]:
         "results": [item.as_dict() for item in results],
         "schema_repair": schema_repair,
     }
-
-
-def _fingerprint_manifest() -> dict[str, str]:
-    """Hash the safety-critical prompt/model/capability inputs for CI gates."""
-
-    manifest: dict[str, str] = {}
-    for relative in _MANIFEST_FILES:
-        path = PROJECT_ROOT / relative
-        if not path.is_file():
-            raise ValueError(f"evaluation manifest file is missing: {relative}")
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        manifest[relative] = digest
-    return manifest
-
 
 __all__ = ["EvaluationCaseResult", "run_catalog"]

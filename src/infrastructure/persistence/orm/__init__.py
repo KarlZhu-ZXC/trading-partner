@@ -104,6 +104,7 @@ from infrastructure.persistence.orm.research import (
     WatchlistMembershipRow,
     WatchlistMutationRow,
 )
+from infrastructure.persistence.orm.research_links import EvidenceImpactRow
 from infrastructure.persistence.orm.research_memory import (
     DecisionRecordRow,
     EvidenceAssessmentRow,
@@ -170,6 +171,7 @@ __all__ = [
     "WatchlistMembershipRow",
     "WatchlistMutationRow",
     "CandidateThesisRevisionRow",
+    "EvidenceImpactRow",
     "InstrumentRow",
     "InstrumentAliasRow",
     "ProviderCacheRow",

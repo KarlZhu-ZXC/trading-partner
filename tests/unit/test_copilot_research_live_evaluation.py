@@ -6,7 +6,7 @@ import pytest
 
 from application.ports.agent_model_provider import ModelResponse, ModelToolCall
 from domain.common.errors import DataContractError
-from interfaces.cli.agent_behavior_evaluation import _Model
+from interfaces.cli.agent_evaluation_support import ScriptedModelProvider
 from interfaces.cli.copilot_research_live_evaluation import (
     CASES,
     SyntheticResearchGateway,
@@ -41,7 +41,7 @@ async def test_acceptance_requires_retained_fields_and_explanation(variant):
     )
     if variant == "missing_inline_price":
         text = f"价格需复查，时点为@evidence({prefix}quote_at)。"
-    provider = _Model(
+    provider = ScriptedModelProvider(
         [
             ModelResponse(
                 tool_calls=(

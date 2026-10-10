@@ -20,7 +20,9 @@ from infrastructure.persistence.research_unit_of_work import SqlAlchemyResearchU
 from infrastructure.system.redactor import DefaultSecretRedactor
 
 
-def test_quick_decision_versions_and_retry_use_existing_durable_gates(migrated_sqlite_url):
+def test_quick_decision_versions_and_retry_use_existing_durable_gates(
+    migrated_sqlite_url, monkeypatch
+):
     engine = create_engine(migrated_sqlite_url)
     now = datetime(2026, 9, 15, tzinfo=UTC)
     clock, ids, redactor = FixedClock(now), SequentialIdGenerator(), DefaultSecretRedactor()
@@ -120,13 +122,22 @@ def test_quick_decision_versions_and_retry_use_existing_durable_gates(migrated_s
         confirmed=True,
     )
     saved = svc.submit(subject.subject_id, request)
+    assert saved["completion"]["materials_status"] == "AVAILABLE"
+    assert saved["completion"]["observation_reviews_changed"] is False
+    assert saved["completion"]["materials"]["baseline_decision_id"] == first.data.decision_id
     assert service().submit(subject.subject_id, request) == saved
+    assert service().submission_status(subject.subject_id, "once") == saved
     with factory() as uow:
         rows = uow.decisions.list_by_subject(subject.subject_id)
         assert len(rows) == 2
         current = uow.decisions.get(saved["decision_id"])
         assert current.supersedes_decision_id == first.data.decision_id
         assert current.decided_at == clock.now()
+        material_entries = uow.journal.list(
+            subject_id=subject.subject_id, as_of=None, limit=50, offset=0
+        )
+        assert len(material_entries) == 1
+        assert material_entries[0].related_entity_id == saved["decision_id"]
     card = svc.get(subject.subject_id)
     follow = svc.submit(
         subject.subject_id,
@@ -145,5 +156,32 @@ def test_quick_decision_versions_and_retry_use_existing_durable_gates(migrated_s
         current = uow.decisions.get(follow["decision_id"])
         assert current.decision_type is DecisionType.RESEARCH_MORE
         assert current.review_due_at == now + timedelta(days=2)
+        assert len(uow.decisions.list_by_subject(subject.subject_id)) == 3
+    # A companion reference write fails inside the same UoW: no orphan Decision.
+    import pytest
+
+    from domain.common.errors import DataContractError
+    from infrastructure.persistence.repositories.journal import SqlAlchemyJournalRepository
+
+    card = svc.get(subject.subject_id)
+    with monkeypatch.context() as patch:
+
+        def fail_material_write(*args, **kwargs):
+            raise RuntimeError("Synthetic material persistence failure")
+
+        patch.setattr(SqlAlchemyJournalRepository, "add", fail_material_write)
+        with pytest.raises(DataContractError):
+            svc.submit(
+                subject.subject_id,
+                request.model_copy(
+                    update={
+                        "review_token": card["review_token"],
+                        "baseline_decision_id": card["baseline"]["decision_id"],
+                        "idempotency_key": "failed-materials",
+                    }
+                ),
+            )
+    assert svc.submission_status(subject.subject_id, "failed-materials") == {"status": "NOT_FOUND"}
+    with factory() as uow:
         assert len(uow.decisions.list_by_subject(subject.subject_id)) == 3
     engine.dispose()

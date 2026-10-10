@@ -28,6 +28,7 @@ class ExternalNoteReviewRepository(Protocol):
         statuses: frozenset[ExternalNoteReviewStatus] | None = None,
         subject_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[ExternalNoteReview, ...]: ...
 
     def append_draft(self, value: ExternalNoteReviewDraft) -> ExternalNoteReviewDraft: ...

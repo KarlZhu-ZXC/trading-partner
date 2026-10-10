@@ -1399,3 +1399,134 @@ async def test_supports_errors_stop_or_fallback_as_expected() -> None:
             assert len(result.attempts) == 1
             assert primary.call_count == 0
             assert secondary.call_count == 0
+
+
+def _open_fixture_circuit(clock: FixedClock, *vendors: VendorId) -> CircuitBreaker:
+    circuit = CircuitBreaker(clock, failure_threshold=1, recovery_timeout_seconds=60.0)
+    for vendor in vendors:
+        circuit.record_failure(circuit.before_call(vendor, DataCategory.MARKET_SNAPSHOT))
+    return circuit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_state", ["open", "not_configured", "unsupported", "missing"])
+async def test_open_circuit_exhaustion_is_retryable_unavailability(other_state: str) -> None:
+    clock = FixedClock(AS_OF)
+    open_vendors = (
+        (VendorId.MOCK_US, VendorId.NULL) if other_state == "open" else (VendorId.MOCK_US,)
+    )
+    circuit = _open_fixture_circuit(clock, *open_vendors)
+    engine, _, health, _, registry = _engine(clock=clock, circuit=circuit)
+    primary = _register(registry, VendorId.MOCK_US)
+    secondary = None
+    if other_state != "missing":
+        secondary = _register(
+            registry,
+            VendorId.NULL,
+            configured=other_state != "not_configured",
+            supported=other_state != "unsupported",
+        )
+
+    result = await _run(engine, chain=(VendorId.MOCK_US, VendorId.NULL), cache_codec=None)
+
+    assert result.ok is False
+    assert isinstance(result.error, ProviderUnavailableError)
+    assert result.error.retryable is True
+    assert result.error.details == {
+        "vendor": (VendorId.NULL if other_state == "open" else VendorId.MOCK_US).value,
+        "category": DataCategory.MARKET_SNAPSHOT.value,
+        "circuit_state": CircuitState.OPEN.value,
+    }
+    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_CIRCUIT_OPEN
+    assert result.attempts[0].error_code == ProviderUnavailableError.default_code
+    if other_state == "open":
+        assert result.attempts[1].outcome is ProviderAttemptOutcome.SKIPPED_CIRCUIT_OPEN
+        assert result.attempts[1].error_code == ProviderUnavailableError.default_code
+    assert "CIRCUIT_OPEN_SKIPPED" in _codes(result)
+    assert primary.call_count == 0
+    assert secondary is None or secondary.call_count == 0
+    assert health.failures == []
+
+
+@pytest.mark.asyncio
+async def test_open_circuit_can_fallback_without_changing_success() -> None:
+    clock = FixedClock(AS_OF)
+    circuit = _open_fixture_circuit(clock, VendorId.MOCK_US)
+    engine, _, health, _, registry = _engine(clock=clock, circuit=circuit)
+    primary = _register(registry, VendorId.MOCK_US)
+    secondary = _register(registry, VendorId.NULL)
+
+    result = await _run(engine, chain=(VendorId.MOCK_US, VendorId.NULL), cache_codec=None)
+
+    assert result.ok is True
+    assert result.error is None
+    assert result.meta is not None and result.meta.vendor is VendorId.NULL
+    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_CIRCUIT_OPEN
+    assert result.attempts[0].error_code == ProviderUnavailableError.default_code
+    assert result.attempts[1].outcome is ProviderAttemptOutcome.SUCCESS
+    assert "FALLBACK_VENDOR_USED" in _codes(result)
+    assert primary.call_count == 0 and secondary.call_count == 1
+    assert health.failures == []
+
+
+@pytest.mark.asyncio
+async def test_open_circuit_expiry_recovers_normal_success() -> None:
+    clock = FixedClock(AS_OF)
+    circuit = _open_fixture_circuit(clock, VendorId.MOCK_US)
+    engine, _, health, _, registry = _engine(clock=clock, circuit=circuit)
+    adapter = _register(registry, VendorId.MOCK_US)
+
+    blocked = await _run(engine, cache_codec=None)
+    assert isinstance(blocked.error, ProviderUnavailableError)
+    assert blocked.error.retryable is True
+    assert adapter.call_count == 0
+    clock.advance(60)
+    recovered = await _run(engine, cache_codec=None)
+
+    assert recovered.ok is True
+    assert recovered.error is None
+    assert adapter.call_count == 1
+    assert circuit.state(VendorId.MOCK_US, DataCategory.MARKET_SNAPSHOT) is CircuitState.CLOSED
+    assert health.failures == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_class", [ProviderAuthenticationError, DataContractError])
+async def test_open_circuit_error_preserves_authentication_and_contract_priority(
+    error_class: type[TradingPartnerError],
+) -> None:
+    clock = FixedClock(AS_OF)
+    circuit = _open_fixture_circuit(clock, VendorId.MOCK_US)
+    engine, _, _, _, registry = _engine(clock=clock, circuit=circuit)
+    primary = _register(registry, VendorId.MOCK_US)
+    expected = error_class("Fixture provider failure")
+
+    async def fail() -> ProviderSuccess[VerifiedMarketSnapshot]:
+        raise expected
+
+    secondary = _register(registry, VendorId.NULL, handler=fail)
+    result = await _run(engine, chain=(VendorId.MOCK_US, VendorId.NULL), cache_codec=None)
+
+    assert result.ok is False
+    assert result.error is expected
+    assert result.error.retryable is False
+    assert result.attempts[0].outcome is ProviderAttemptOutcome.SKIPPED_CIRCUIT_OPEN
+    assert result.attempts[0].error_code == ProviderUnavailableError.default_code
+    assert primary.call_count == 0 and secondary.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_true_unconfigured_chain_remains_nonretryable_not_configured() -> None:
+    engine, _, health, _, registry = _engine()
+    primary = _register(registry, VendorId.MOCK_US, configured=False)
+    secondary = _register(registry, VendorId.NULL, configured=False)
+
+    result = await _run(engine, chain=(VendorId.MOCK_US, VendorId.NULL), cache_codec=None)
+
+    assert result.ok is False
+    assert isinstance(result.error, ProviderNotConfigured)
+    assert result.error.retryable is False
+    assert all(a.outcome is ProviderAttemptOutcome.SKIPPED_NOT_CONFIGURED for a in result.attempts)
+    assert all(a.error_code is None for a in result.attempts)
+    assert primary.call_count == 0 and secondary.call_count == 0
+    assert health.failures == []

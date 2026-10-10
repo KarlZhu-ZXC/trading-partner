@@ -27,9 +27,19 @@ class TradeRetroFindingReviewInput(_DTO):
     finding_key: str = Field(pattern=r"^finding_[0-9a-f]{64}$")
     status: Literal["ACCEPTED", "DISPUTED", "RESOLVED"]
     note: str | None = Field(default=None, max_length=2_000)
+    followup: Literal["QUESTION", "NO_FOLLOWUP", "DEFER"] | None = None
+    question_id: str | None = Field(default=None, min_length=1, max_length=128)
+    question_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def disputed_note(self) -> TradeRetroFindingReviewInput:
+        if self.followup == "QUESTION":
+            if self.question_id is None or self.question_version is None:
+                raise ValueError("question follow-up requires exact question version")
+        elif self.question_id is not None or self.question_version is not None:
+            raise ValueError("question reference requires QUESTION follow-up")
+        if self.followup == "NO_FOLLOWUP" and not (self.note and self.note.strip()):
+            raise ValueError("no follow-up requires a rationale")
         if self.status == "DISPUTED" and (self.note is None or not self.note.strip()):
             raise ValueError("a disputed finding requires a note")
         return self
@@ -204,6 +214,9 @@ class TradeRetroFindingReviewDTO(_DTO):
     finding_key: str
     status: str
     note: str | None
+    followup: str | None = None
+    question_id: str | None = None
+    question_version: int | None = None
 
     @classmethod
     def from_domain(cls, value: TradeRetroFindingReview) -> TradeRetroFindingReviewDTO:
@@ -211,6 +224,9 @@ class TradeRetroFindingReviewDTO(_DTO):
             finding_key=value.finding_key,
             status=value.status.value,
             note=value.note,
+            followup=value.followup,
+            question_id=value.question_id,
+            question_version=value.question_version,
         )
 
 

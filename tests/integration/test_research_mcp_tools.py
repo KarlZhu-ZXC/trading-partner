@@ -40,11 +40,10 @@ def _migrate(database_url: str, project_root: Path, monkeypatch: pytest.MonkeyPa
     command.upgrade(_alembic_config(project_root), "head")
 
 
-def _stdio_env(database_path: Path, project_root: Path) -> dict[str, str]:
-    # Editable install + hatch dev-mode-dirs put src/ on sys.path; do not inject PYTHONPATH.
-    _ = project_root
+def _stdio_settings(database_path: Path) -> dict[str, str]:
+    """Explicit disposable runtime; never load the checkout owner's .env."""
     return {
-        **os.environ,
+        "RUNTIME_ROOT": str(database_path.parent),
         "APP_NAME": "trading-partner-research-stdio-test",
         "APP_ENV": "test",
         "LOG_LEVEL": "INFO",
@@ -154,11 +153,17 @@ async def test_research_mcp_tools_stdio_full_lifecycle(
     database_url = f"sqlite:///{database_path}"
     _migrate(database_url, project_root, monkeypatch)
 
+    settings = _stdio_settings(database_path)
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "\n".join(f"{key}={value}" for key, value in settings.items()) + "\n",
+        encoding="utf-8",
+    )
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "interfaces.mcp.server"],
+        args=["-m", "interfaces.mcp.server", "--env-file", str(runtime_env)],
         cwd=str(project_root),
-        env=_stdio_env(database_path, project_root),
+        env={**os.environ, **settings},
     )
 
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:

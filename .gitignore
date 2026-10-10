@@ -70,3 +70,7 @@ docs/archive
 docs/progress
 docs/design
 /data/console/
+
+# Machine-local capability diagnostics, including SQLite sidecars
+/data/diagnostics/
+/data/diagnostics/**

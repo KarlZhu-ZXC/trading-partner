@@ -289,7 +289,7 @@ def test_s1_catalyst_dimension_is_not_evaluated_without_agenda() -> None:
     )
     assert result.ok and result.data is not None
     assert result.data.schema_version == 1
-    assert result.data.algorithm_version == "judgment-scorecard-s1-v1"
+    assert result.data.algorithm_version == "judgment-scorecard-s1-v3"
     dimension = result.data.dimensions[-1]
     assert dimension.code == "CATALYST_OUTCOME_CALIBRATION"
     assert dimension.status == ScorecardDimensionStatus.NOT_EVALUATED.value

@@ -637,3 +637,36 @@ async def test_request_id_and_effective_as_of_sampled_once() -> None:
     assert envelope2.request_id != envelope.request_id
     assert data.get_quote.await_args is not None
     assert data.get_quote.await_args.args[1] == explicit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "required_guidance"),
+    [
+        ("FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND", ("17:00", "not a proven", "holiday")),
+        (
+            "FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN",
+            ("date labels", "next local date", "unknown"),
+        ),
+        (
+            "FUTURES_DAILY_QUOTE_TIME_UNAVAILABLE",
+            ("cannot establish", "timestamped", "previous close"),
+        ),
+        ("FUTURES_DAILY_DERIVED_QUOTE_TIME", ("daily-derived", "does not prove", "executable")),
+    ],
+)
+async def test_market_snapshot_explains_futures_time_uncertainty(
+    code: str, required_guidance: tuple[str, ...]
+) -> None:
+    data = MagicMock()
+    data.get_quote = AsyncMock(return_value=_ok(_quote(), _meta(warnings=(code,))))
+    coordinator, _, _, _, _ = _coordinator(data=data)
+    envelope = await coordinator.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id=_INSTRUMENT_ID, as_of=AS_OF)
+    )
+    assert envelope.ok
+    warning = next(warning for warning in envelope.warnings if warning.code == code)
+    for phrase in required_guidance:
+        assert phrase in warning.message
+    assert envelope.data is not None
+    assert envelope.data.quote_at == QUOTE_AT

@@ -1,4 +1,8 @@
 "use client";
+
+import { asRecord } from "../lib/coerce";
+
+import { displayDate } from "../lib/coerce";
 import { ResizeHandle } from "./ui/controls";
 
 import {
@@ -69,6 +73,7 @@ import {
   updateAgentPreferences,
 } from "../lib/agent-api";
 import { authenticatedFetch } from "../lib/api";
+import { QUESTION_RESEARCH_EVENT, validQuestionContext, type PreparedQuestionResearch } from "../lib/question-research";
 import { CopilotResearchControls } from "./copilot-research-controls";
 import { CopilotResearchProgress, CopilotResearchProfiles } from "./copilot-research-progress";
 import researchStyles from "./copilot-research-progress.module.css";
@@ -201,19 +206,6 @@ type AgentRailProps = {
   onCollapsedChange: (collapsed: boolean) => void;
 };
 
-function displayDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -307,12 +299,14 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
+  const [questionPrepared, setQuestionPrepared] = useState<PreparedQuestionResearch | null>(null);
   const [composerImages, setComposerImages] = useState<ComposerImage[]>([]);
   const [composerComposing, setComposerComposing] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerCatalogs, setProviderCatalogs] = useState<Record<string, AgentProviderModelCatalog>>({});
   const [providerModelsLoading, setProviderModelsLoading] = useState(false);
   const [providerModelsError, setProviderModelsError] = useState<string | null>(null);
+  const [modelCatalogRetry, setModelCatalogRetry] = useState(0);
   const [selectedModelName, setSelectedModelName] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
   const [researchConfig, setResearchConfig] = useState<CopilotResearchConfig>({ research_mode: "standard", research_max_seconds: 180, research_max_model_calls: 8, research_max_tool_calls: 24 });
@@ -582,6 +576,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     setProviderModelsError(null);
     void fetchAgentProviderModels(selectedProviderId, false, controller.signal)
       .then((catalog) => {
+        if (controller.signal.aborted) return;
         setProviderCatalogs((current) => ({ ...current, [selectedProviderId]: catalog }));
         const stored = readAgentStorage(
           scopedAgentStorageKey(AGENT_MODEL_STORAGE_KEY, selectedProviderId),
@@ -596,7 +591,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         );
       })
       .catch((error) => {
-        if (isAbortError(error)) return;
+        if (controller.signal.aborted || isAbortError(error)) return;
         setProviderModelsError("Live model list unavailable; using the configured default.");
         setProviderCatalogs((current) => {
           const next = { ...current };
@@ -609,7 +604,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
         if (!controller.signal.aborted) setProviderModelsLoading(false);
       });
     return () => controller.abort();
-  }, [selectedProvider, selectedProviderId]);
+  }, [selectedProvider, selectedProviderId, modelCatalogRetry]);
 
   useEffect(() => {
     const stored = readAgentStorage(
@@ -703,6 +698,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
   }
 
   async function editMessage(message: AgentMessage) {
+    if (asRecord(asRecord(message.model_receipt).research).question_context) { setActionError("Reopen the saved question to prepare a version-bound prompt."); return; }
+    setQuestionPrepared(null);
     setComposer(message.content);
     setComposerImages([]);
     setEditingMessageId(message.message_id);
@@ -790,6 +787,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       const candidate = selectedMessages[index];
       if (candidate.role === "USER") {
         if (candidate.attachments.length === 0) {
+          if (asRecord(asRecord(candidate.model_receipt).research).question_context) { setActionError("Use the failed-turn retry or reopen the saved question to retain its exact context."); return; }
           void sendMessage(candidate.content, undefined, researchConfigFromReceipt(candidate.model_receipt));
           return;
         }
@@ -797,6 +795,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
           const attachments = await Promise.all(
             candidate.attachments.map(restoreImageAttachment),
           );
+          if (asRecord(asRecord(candidate.model_receipt).research).question_context) { setActionError("Use the failed-turn retry or reopen the saved question to retain its exact context."); return; }
           void sendMessage(candidate.content, attachments, researchConfigFromReceipt(candidate.model_receipt));
         } catch (error) {
           setActionError(errorText(error, "Unable to reload the attached image."));
@@ -994,12 +993,30 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
     reloadDurableConversation,
     selectedId,
   ]);
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const value = (event as CustomEvent<PreparedQuestionResearch>).detail;
+      if (!value || !validQuestionContext(value.context) || typeof value.prompt !== "string" || value.prompt.length > 64000 || !value.question_context_token || composer.trim() || composerImages.length || selectedStreaming || durableTurnActive || actionBusy || editingMessageId) return;
+      event.preventDefault();
+      setQuestionPrepared(value); setComposer(value.prompt);
+      setResearchConfig((current) => ({ ...current, research_mode: current.research_mode === "challenge" ? "challenge" : "research" }));
+      onCollapsedChange(false);
+    };
+    window.addEventListener(QUESTION_RESEARCH_EVENT, receive);
+    return () => window.removeEventListener(QUESTION_RESEARCH_EVENT, receive);
+  }, [composer, composerImages.length, selectedStreaming, durableTurnActive, actionBusy, editingMessageId, onCollapsedChange]);
+
   async function sendMessage(
     contentOverride?: string,
     attachmentsOverride?: AgentImageInput[],
     researchOverride?: CopilotResearchConfig,
   ) {
-    const outgoingResearch = contentOverride !== undefined ? researchOverride : researchConfig;
+    if (contentOverride === undefined && questionPrepared && Date.now() >= Date.parse(questionPrepared.expires_at)) {
+      setActionError("Prepared question expired. Clear it and prepare Research again."); return;
+    }
+    const outgoingResearch = contentOverride !== undefined ? researchOverride : questionPrepared
+      ? { ...researchConfig, question_context_token: questionPrepared.question_context_token }
+      : researchConfig;
     if (outgoingResearch && outgoingResearch.research_mode !== "standard" && (
       !Number.isInteger(outgoingResearch.research_max_seconds) || outgoingResearch.research_max_seconds < 30 || outgoingResearch.research_max_seconds > 600 ||
       !Number.isInteger(outgoingResearch.research_max_model_calls) || outgoingResearch.research_max_model_calls < 1 || outgoingResearch.research_max_model_calls > 16 ||
@@ -1035,7 +1052,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       }
     }
     if (!conversationId || isStreaming(conversationId)) return;
-    if (contentOverride === undefined) {
+    if (contentOverride === undefined && !questionPrepared) {
       setComposer("");
       setComposerImages([]);
     }
@@ -1517,7 +1534,8 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
             </div>
 
             <form className={`agent-rail-composer ${researchStyles.composer}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-              <CopilotResearchControls config={researchConfig} disabled={Boolean(selectedStreaming || durableTurnActive || actionBusy)} onChange={setResearchConfig} />
+              <CopilotResearchControls config={researchConfig} disabled={Boolean(selectedStreaming || durableTurnActive || actionBusy)} onChange={(value) => { if (questionPrepared && value.research_mode === "standard") { setActionError("Clear the prepared question before switching to Chat."); return; } setResearchConfig(value); }} />
+              {questionPrepared && <div role="status"><p>Prepared Question · v{questionPrepared.context.question_version} · cutoff {questionPrepared.context.evidence_cutoff}</p><p>The exact question is read-only here. Send starts Research; it will not answer or close the saved question.</p><Button type="button" disabled={Boolean(selectedStreaming || durableTurnActive)} onClick={() => { setQuestionPrepared(null); setComposer(""); }}>Clear Prepared Question</Button></div>}
               {editingMessageId && (
                 <div className="agent-composer-editing" role="status">
                   Editing an earlier prompt. Send creates a new durable turn.
@@ -1544,6 +1562,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                 <Textarea
                   appearance="embedded"
                   aria-label="Message Copilot"
+                  readOnly={Boolean(questionPrepared)}
                   disabled={Boolean(disabledReason) || selectedStreaming || durableTurnActive || actionBusy !== null}
                   onChange={(event) => setComposer(event.target.value)}
                   onCompositionEnd={() => setComposerComposing(false)}
@@ -1556,7 +1575,17 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
                   value={composer}
                 />
                 {providerModelsError && (
-                  <div className="agent-model-catalog-error" role="status">{providerModelsError}</div>
+                  <div className="agent-model-catalog-error" role="status">
+                    {providerModelsError}{" "}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={providerModelsLoading}
+                      onClick={() => setModelCatalogRetry((current) => current + 1)}
+                    >
+                      Retry Model List
+                    </Button>
+                  </div>
                 )}
                 <div className="agent-rail-composer-footer">
                   <div className="agent-composer-options">

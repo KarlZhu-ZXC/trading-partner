@@ -124,6 +124,9 @@ def _review(row: TradeRetroReviewRevisionRow) -> TradeRetroReviewRevision:
                 finding_key=item["finding_key"],
                 status=TradeRetroFindingReviewStatus(item["status"]),
                 note=item.get("note"),
+                followup=item.get("followup"),
+                question_id=item.get("question_id"),
+                question_version=item.get("question_version"),
             )
             for item in json.loads(row.finding_reviews_json)
         ),
@@ -259,11 +262,20 @@ class SqlAlchemyTradeRetroRepository:
             )
             return _run(row) if row is not None else None
 
-    def list_runs(self, limit: int) -> tuple[TradeRetroRun, ...]:
+    def list_runs(self, limit: int, offset: int = 0) -> tuple[TradeRetroRun, ...]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise DataContractError("Trade Retro run limit must be between 1 and 100")
+        if type(offset) is not int or offset < 0:
+            raise DataContractError("Trade Retro run offset must be non-negative")
         with Session(self._engine) as session:
             rows = session.scalars(
                 select(TradeRetroRunRow)
-                .order_by(TradeRetroRunRow.period_end.desc(), TradeRetroRunRow.generated_at.desc())
+                .order_by(
+                    TradeRetroRunRow.period_end.desc(),
+                    TradeRetroRunRow.generated_at.desc(),
+                    TradeRetroRunRow.run_id.desc(),
+                )
+                .offset(offset)
                 .limit(limit)
             )
             return tuple(_run(row) for row in rows)
@@ -290,6 +302,9 @@ class SqlAlchemyTradeRetroRepository:
                                     "finding_key": item.finding_key,
                                     "status": item.status.value,
                                     "note": item.note,
+                                    "followup": item.followup,
+                                    "question_id": item.question_id,
+                                    "question_version": item.question_version,
                                 }
                                 for item in value.finding_reviews
                             ]

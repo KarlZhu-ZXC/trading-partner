@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import Status, StatusCode
 
+from application import __version__
 from application.ports.telemetry import (
     NOOP_TELEMETRY,
     Telemetry,
@@ -162,7 +163,7 @@ def configure_tracing(
             resource=Resource.create(
                 {
                     "service.name": settings.otel_service_name,
-                    "service.version": "0.7.0",
+                    "service.version": __version__,
                 }
             ),
             sampler=ParentBased(TraceIdRatioBased(settings.otel_trace_sample_ratio)),

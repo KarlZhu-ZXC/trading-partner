@@ -18,6 +18,10 @@ const FENCE = /^\s*(?:```|~~~)/;
 const ANSWER_METADATA_KEYS = new Set(["as_of", "basis", "evidence"]);
 const ANSWER_METADATA_LINE = /^`([^`\r\n]+)`$/;
 const SAFE_EVIDENCE_REF = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$/;
+const MAX_PRESENTATION_SEGMENTS = 512;
+const MAX_PRESENTATION_TEXT = 200_000;
+const MAX_CONTEXT_PAIRS = 48;
+const MAX_CONTEXT_KEY = 80;
 const MAX_FIELD_TEXT = 4_000;
 const MAX_FIELD_VALUE = 160;
 
@@ -152,12 +156,45 @@ export type ResearchEvidenceSegment =
   | { kind: "field"; field: ResearchEvidenceField; inline: boolean }
   | { kind: "metadata"; metadata: ResearchAnswerMetadata };
 
+type Dict = Record<string, unknown>;
+
 function fieldKeyFromPath(path: string): string {
   const parts = path.split("/");
   const last = parts[parts.length - 1];
   if (last !== undefined && !/^\d+$/.test(last)) return last;
   if (parts[parts.length - 2] === "source_urls") return "source_url";
   return "field";
+}
+
+function asRecord(value: unknown): Dict | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Dict
+    : null;
+}
+
+function hasExactKeys(value: Dict, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function boundedText(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum;
+}
+
+function typedField(
+  path: string,
+  scalar: string,
+  isNull: boolean,
+  context: Readonly<Record<string, string>>,
+): ResearchEvidenceField | null {
+  if (!FIELD_PATH.test(path)) return null;
+  const fieldKey = fieldKeyFromPath(path);
+  const label = FIELD_LABELS[fieldKey];
+  if (!label) return null;
+  const rawContext = Object.entries(context);
+  const raw = `${path}: ${scalar}${rawContext.length > 0 ? ` · ${rawContext.map(([key, value]) => `${key}=${value}`).join(" · ")}` : ""}`;
+  if (raw.length > MAX_FIELD_TEXT) return null;
+  return { raw, path, fieldKey, label, scalar, isNull, metadata: context };
 }
 
 function validScalar(value: string): boolean {
@@ -249,6 +286,82 @@ export function parseResearchAnswerMetadata(value: string): ResearchAnswerMetada
     metadata[key] = item;
   }
   return { raw: value, metadata };
+}
+
+function parseTypedField(value: unknown): ResearchEvidenceSegment | null {
+  const item = asRecord(value);
+  if (!item || !hasExactKeys(item, ["kind", "ref", "path", "scalar", "is_null", "context", "inline"])) return null;
+  if (item.kind !== "field"
+    || !boundedText(item.ref, 160)
+    || !SAFE_EVIDENCE_REF.test(item.ref)
+    || !boundedText(item.path, 160)
+    || !FIELD_PATH.test(item.path)
+    || !boundedText(item.scalar, MAX_FIELD_VALUE)
+    || typeof item.is_null !== "boolean"
+    || typeof item.inline !== "boolean"
+    || (item.is_null && item.scalar !== "null")
+    || !item.ref.endsWith(`/${item.path}`)
+    || !Array.isArray(item.context)
+    || item.context.length > MAX_CONTEXT_PAIRS) return null;
+  const context: Record<string, string> = {};
+  for (const pair of item.context) {
+    if (!Array.isArray(pair) || pair.length !== 2) return null;
+    const [key, value] = pair;
+    if (!boundedText(key, MAX_CONTEXT_KEY)
+      || !RESEARCH_EVIDENCE_CONTEXT_KEYS.has(key)
+      || Object.prototype.hasOwnProperty.call(context, key)
+      || !boundedText(value, 4_000)) return null;
+    context[key] = value;
+  }
+  const field = typedField(item.path, item.scalar, item.is_null, context);
+  return field ? { kind: "field", field, inline: item.inline } : null;
+}
+
+function parseTypedSegment(value: unknown): ResearchEvidenceSegment | null {
+  const item = asRecord(value);
+  if (!item || typeof item.kind !== "string") return null;
+  if (item.kind === "text") {
+    return hasExactKeys(item, ["kind", "text"]) && boundedText(item.text, MAX_PRESENTATION_TEXT)
+      ? { kind: "text", text: item.text }
+      : null;
+  }
+  if (item.kind === "metadata") {
+    if (!hasExactKeys(item, ["kind", "text"])
+      || !boundedText(item.text, MAX_FIELD_TEXT)
+      || !/^`[^`\r\n]+`$/.test(item.text)) return null;
+    return { kind: "metadata", metadata: { raw: item.text, metadata: {} } };
+  }
+  if (item.kind === "field") return parseTypedField(item);
+  return null;
+}
+
+/**
+ * Validate and project the host-only `model_receipt.research_presentation`
+ * envelope. The reconstructed contribution must match the stored message
+ * byte-for-byte before typed presentation can affect rendering.
+ */
+export function parseResearchPresentation(
+  value: unknown,
+  content: string,
+): ResearchEvidenceSegment[] | null {
+  const item = asRecord(value);
+  if (!item
+    || !hasExactKeys(item, ["schema_version", "segments"])
+    || item.schema_version !== 1
+    || !Array.isArray(item.segments)
+    || item.segments.length < 1
+    || item.segments.length > MAX_PRESENTATION_SEGMENTS) return null;
+  const segments: ResearchEvidenceSegment[] = [];
+  for (const rawSegment of item.segments) {
+    const segment = parseTypedSegment(rawSegment);
+    if (!segment) return null;
+    segments.push(segment);
+  }
+  const rendered = segments.map((segment) => {
+    if (segment.kind === "field") return segment.inline ? `〔${segment.field.raw}〕` : segment.field.raw;
+    return segment.kind === "metadata" ? segment.metadata.raw : segment.text;
+  }).join("");
+  return rendered === content ? segments : null;
 }
 
 function lineRanges(value: string): Array<{ start: number; end: number; text: string; code: boolean }> {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -142,3 +143,88 @@ def test_missing_atr_200_is_disclosed_without_blocking_price_structure() -> None
         "SMC_ATR_200_UNAVAILABLE_ORDER_BLOCK_FILTER_AND_EQH_EQL",
     )
     assert result.swings
+
+
+def _price_bars(rows: list[tuple[str, str, str, str]]) -> tuple[MarketBar, ...]:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    return tuple(
+        MarketBar(
+            timestamp=start + timedelta(days=index),
+            open=Decimal(open_),
+            high=Decimal(high),
+            low=Decimal(low),
+            close=Decimal(close),
+            volume=Decimal("1000"),
+        )
+        for index, (open_, high, low, close) in enumerate(rows)
+    )
+
+
+def test_zero_open_discloses_fvg_limitation_without_blocking_structure() -> None:
+    bars = list(_bars())
+    bars[189] = replace(bars[189], open=Decimal("0"), low=Decimal("0"))
+
+    result = analyze_smart_money(bars, atr=np.full(len(bars), 2.0))
+
+    assert result.limitations == ("SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",)
+    assert result.atr_200_ready is True
+    assert result.swings
+    assert result.structure_events
+    assert result.order_blocks
+    assert result.value_zones
+
+
+def test_negative_open_cannot_reverse_displacement_direction() -> None:
+    # A falling middle candle at negative prices produces a positive ratio
+    # if divided by its signed open. It must not create a bullish FVG.
+    bars = _price_bars([
+        ("-120", "-119", "-121", "-120"),
+        ("-120", "-119", "-121", "-120"),
+        ("-100", "-99", "-111", "-110"),
+        ("-110", "-109", "-111", "-110"),
+    ])
+
+    result = analyze_smart_money(bars, atr=np.full(len(bars), 2.0))
+
+    assert result.fair_value_gaps == ()
+    assert result.limitations == ("SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",)
+
+
+def _bearish_gap_with_zero_open() -> tuple[MarketBar, ...]:
+    return _price_bars([
+        ("100", "101", "99", "100"),
+        ("100", "101", "99", "100"),
+        ("100", "101", "89", "90"),
+        ("90", "91", "89", "90"),
+        ("0", "91", "0", "90"),
+        ("100", "101", "99", "100"),
+    ])
+
+
+def test_existing_gap_can_fill_when_middle_open_skips_new_gap_detection() -> None:
+    bars = _bearish_gap_with_zero_open()
+    before = analyze_smart_money(bars[:5], atr=np.full(5, 2.0))
+    after = analyze_smart_money(bars, atr=np.full(len(bars), 2.0))
+
+    assert [(gap.direction, gap.low, gap.high) for gap in before.fair_value_gaps] == [
+        ("bearish", Decimal("91"), Decimal("99")),
+    ]
+    assert after.fair_value_gaps == ()
+    assert after.limitations == ("SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",)
+
+
+def test_nonpositive_open_limitation_and_gap_confirmation_do_not_look_ahead() -> None:
+    bars = _bearish_gap_with_zero_open()
+    unconfirmed = analyze_smart_money(bars[:3], atr=np.full(3, 2.0))
+    confirmed = analyze_smart_money(bars[:4], atr=np.full(4, 2.0))
+    zero_open_is_last = analyze_smart_money(bars[:5], atr=np.full(5, 2.0))
+
+    assert unconfirmed.fair_value_gaps == ()
+    assert len(confirmed.fair_value_gaps) == 1
+    gap = confirmed.fair_value_gaps[0]
+    assert gap.created_at == bars[2].timestamp
+    assert gap.confirmed_at == bars[3].timestamp
+    assert confirmed.limitations == ()
+    # The zero-open bar has not become the middle of a three-bar window yet.
+    assert zero_open_is_last.limitations == ()
+    assert zero_open_is_last.fair_value_gaps == confirmed.fair_value_gaps

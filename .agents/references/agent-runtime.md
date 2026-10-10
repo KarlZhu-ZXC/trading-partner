@@ -3,7 +3,7 @@
 Maintained agent-facing detail owned by the root `AGENTS.md`. Read the sections
 relevant to the affected behavior; paths in this document are repository-relative.
 
-## Shared Agent Runtime (Agent-A–D)
+## Shared Agent Runtime
 
 The Shared Agent Runtime is disabled by default and provider-neutral. It persists durable
 conversations, explicit channel bindings, append-only messages, bounded model/tool
@@ -17,6 +17,9 @@ were persisted as financing usage before `debtCash` became the semantics. Termin
 failures persist only bounded safe error codes. The single Console Agent Rail
 is the only built-in Agent channel; Telegram is outbound notifications only;
 Agent broker orders remain unavailable and are not authorized by a research action.
+A disconnected Console SSE consumer releases pending delivery events and drops
+later delivery events. The durable turn continues to its original terminal state
+and receipts; browser disconnect does not cancel it.
 
 The model sees only private `tp_capability_search`, `tp_read`, `tp_propose`,
 confirmation-preparing `tp_prepare_action`, and read-only `tp_web_search`; these names
@@ -25,10 +28,12 @@ model through the server-owned Tavily Search sidecar when configured. The sideca
 bounded structured results directly, performs no additional Bailian model call, and
 never sends the Tavily key to an answer model. Queries persist only as hashes and
 durable receipts retain the actual `tavily` provenance. Search summaries and webpages
-are untrusted background and cannot override canonical Trading Partner facts. Agent-A may
+are untrusted background and cannot override canonical Trading Partner facts. Copilot may
 auto-run durable/provider reads, instrument discovery/cache, and explicitly non-executing
-technical artifacts. All other writes remain denied unless Agent-D's explicit operation
-allowlist creates a Pending Action that the same channel/principal confirms using the
+technical artifacts. An explicitly requested non-effective proposal may use `tp_propose`;
+its Candidate still requires the user's final decision. Effective writes remain denied
+unless the private operation allowlist creates a Pending Action that the same
+channel/principal confirms using the
 exact hash, version, expiry, and single-use opaque token. Sync/evaluate, accounts, risk
 policy, and every broker write remain denied. Exact grouped-operation DTO validation and
 the public MCP inventory remain unchanged. Conversation memory is continuity context,
@@ -41,11 +46,11 @@ list a durable `PRESENTED` action but must not persist its raw token or automati
 confirmation authority. Only an explicit user resume may rotate the token under exact
 conversation/channel/principal/expiry/version CAS; the old token becomes invalid and the
 arguments plus expiry remain unchanged. Navigation-only Console context is untrusted and
-must never substitute for a capability read. The default Bailian Agent endpoint publishes
-bounded native Web Search and extractor support; usage plus source URLs must remain explicit,
-and webpages cannot override canonical Trading Partner price, position, level, return, or
-quantity facts. Endpoints without native support remain search-disabled. Agent broker orders
-remain closed unless a later explicit product decision changes that separate gate.
+must never substitute for a capability read. Selectable Agent endpoints use the configured
+Tavily sidecar and disable provider-native search. An explicitly configured generic
+endpoint may advertise native search for standard Chat; Research always disables it.
+Search usage and source URLs remain explicit whichever route is available. Web text
+cannot override canonical Trading Partner price, position, level, return or quantity facts.
 
 The Console Agent composer links Provider, model, and reasoning-effort selection. Selecting a
 Provider asks the backend to fetch and briefly cache its standard model directory with
@@ -67,6 +72,12 @@ not disabled thinking. Do not group it with Zen free chat models that reject rea
 parameters.
 
 
+The application-only `AgentModelExecution` collaborator owns stream assembly and
+completion fallback through explicit event/cancellation callbacks. It must not
+access repositories, pending actions, or infrastructure. The runtime retains
+conversation serialization, retry routing, the single final assistant append and
+terminal transition; extraction must preserve the partial-stream retry barrier.
+
 ## Copilot research modes
 
 Console user-facing name is Copilot. Agent symbols/routes/storage keys remain
@@ -84,6 +95,23 @@ never hidden reasoning, prompts, URLs or exception payloads. Reconnect may recon
 completed reads; unavailable model progress/usage must remain explicitly unavailable.
 Explicit retry restores the original policy, failing closed on corrupt policy.
 
+Question-scoped Research uses a server-prepared, twenty-minute read-context token,
+never an authorization token. Send must preserve the exact visible prepared prompt;
+the runtime revalidates question scope/version/content and optional current
+revision/assumption before model selection and again before user-message append.
+Closed progress adds reference-only `question_context` metadata, while the question
+text and requirements remain in the explicitly sent user message. No private prose
+is added to progress/telemetry. The original cutoff filters both the model field
+catalog and final/critique checks; unknown or later field times are unavailable.
+
+Durable user and assistant receipts preserve the binding and at most eight eligible
+EVIDENCE/FULL OBSERVATION/evaluated MONITOR references. Explicit failed-turn retry
+can restore a token from the owned original receipt with the same cutoff; it cannot
+retarget a changed question or assumption. Source handoff reads require the owned
+assistant message and exact Subject. Research never ingests a tool/Web field as
+Evidence, answers a question, or confirms an association. A host-owned completion
+summary explains stop/gap/reviewable states; it does not verify interpretation.
+
 Only current-turn canonical field evidence can verify a research FACT/CITATION.
 Preserve query cutoff independently from underlying fact time; a nested timestamp
 must not widen it. Source web text cannot establish a price/position. Unbound claims
@@ -91,6 +119,10 @@ become GAP, qualitative prose remains INFERENCE. The prompt and checker share on
 bounded evidence catalog; a truncated reference is not treated as verified. Final
 safe text and stored answer envelope must agree. No live model call is implied by
 software verification; use the synthetic evaluation catalog by default.
+
+The bounded Research finalization step assembles checked text, presentation and budget
+summary without model or persistence access. All modes retain the runtime’s single
+assistant-message append and terminal turn transition.
 
 Research uses the field checker directly, without a legacy prose-repair round.
 FACT/CITATION may select current catalog refs using the literal `@evidence`
@@ -122,10 +154,18 @@ Counter-review must pass field checks before replacing the primary answer; an
 evidence-invalid critique preserves the primary, counts returned usage and exposes
 `CHALLENGE_EVIDENCE_REJECTED`. No repair model call or execution authority is added.
 
-Research field formatting in Console is presentation-only. Preserve the complete
-stored/copied answer, show material identity/units/time/basis and warning context,
-and fall back losslessly for unknown or ambiguous grammar. Disclosure or readable
-field labels cannot promote an interpretation to verified fact.
+Research field formatting in Console is presentation-only. New answers carry a
+host-owned `research_presentation` alongside the closed model answer envelope.
+Fields come directly from the validated catalog scalar/context, not reparsed prose.
+Ordered context pairs reconstruct the exact stored answer; Console uses the typed
+projection only when that reconstruction matches `message.content`. Model output
+cannot supply this metadata. The optional projection is discarded before core
+receipt data when the 16 KiB bound is reached; original text and verified refs stay
+available. Legacy text formatting remains only for historical/compacted messages.
+Preserve identity/units/time/basis/warnings and exact Copy Message behavior; neither
+projection nor readable labels promote an interpretation to verified fact.
+Explicit definitions that missing/null is not literal zero are not financial
+amount assertions; unrelated amounts in the same block still require field binding.
 
 `scripts/evaluate_copilot_research_live.py` is a source-only opt-in acceptance
 entry; without `--live` it makes no calls. The live path uses only fixed synthetic

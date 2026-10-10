@@ -31,11 +31,10 @@ from application.services.catalyst_agenda_notification_service import (
 )
 from application.services.catalyst_agenda_service import CatalystAgendaService
 from application.services.catalyst_agenda_sync_service import CatalystAgendaSyncService
-from application.services.challenge_review_service import ChallengeReviewService
 from application.services.commodity_spot_service import CommoditySpotService
 from application.services.criticality_policy import CriticalityPolicy
 from application.services.data_quality_service import DataQualityService
-from application.services.decision_record_service import DecisionRecordService
+from application.services.decision_replay_service import DecisionReplayService
 from application.services.futures_contract_service import FuturesContractService
 from application.services.futures_curve_service import FuturesCurveService
 from application.services.futures_instrument_directory import FuturesInstrumentDirectory
@@ -43,7 +42,6 @@ from application.services.health_service import HealthService
 from application.services.instrument_access_service import InstrumentAccessService
 from application.services.instrument_master_service import InstrumentMasterService
 from application.services.instrument_resolve_service import InstrumentResolveService
-from application.services.journal_service import JournalService
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.monitor_dispatch_service import MonitorDispatchService
 from application.services.monitor_evaluation_service import MonitorEvaluationService
@@ -54,6 +52,7 @@ from application.services.peer_comparison_service import PeerComparisonService
 from application.services.performance_reconciliation_service import (
     PerformanceReconciliationService,
 )
+from application.services.plan_workflow_query_service import PlanWorkflowQueryService
 from application.services.portfolio_enrichment_calculator import PortfolioEnrichmentCalculator
 from application.services.portfolio_review_fact_service import PortfolioReviewFactService
 from application.services.portfolio_risk_calculator import PortfolioRiskCalculator
@@ -62,28 +61,26 @@ from application.services.portfolio_tool_coordinator import PortfolioToolCoordin
 from application.services.position_sizing_service import PositionSizingService
 from application.services.post_market_sync_service import PostMarketSyncService
 from application.services.provider_router import ProviderRouter
-from application.services.research_archive_service import ResearchArchiveService
-from application.services.research_context_builder import ResearchContextBuilder
-from application.services.research_search_service import ResearchSearchService
-from application.services.research_state_query_service import ResearchStateQueryService
-from application.services.research_subject_service import ResearchSubjectService
-from application.services.research_timeline_service import ResearchTimelineService
+from application.services.question_research_service import QuestionResearchService
+from application.services.research_links_query_service import ResearchLinksQueryService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
+from application.services.review_item_refresh_service import ReviewItemRefreshService
 from application.services.review_item_service import ReviewItemService
+from application.services.review_workspace_query_service import ReviewWorkspaceQueryService
 from application.services.risk_engine_service import RiskEngineService
 from application.services.risk_policy_service import RiskPolicyService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.routed_futures_provider import RoutedFuturesProvider
 from application.services.sgov_shadow_plan_service import SgovShadowPlanService
-from application.services.thesis_revision_service import ThesisRevisionService
 from application.services.trade_retro_service import TradeRetroService
 from application.services.watchlist_hub_service import WatchlistHubService
 from composition_root.external_notes import build_external_note_services
 from composition_root.market_facts import build_market_facts_services
 from composition_root.monitoring import build_monitoring_services
 from composition_root.phase4 import build_phase4_services
+from composition_root.research import build_research_services
 from composition_root.review_workspace import build_review_workspace
-from domain.common.enums import DataCategory, Market, VendorId
+from domain.common.enums import AppEnvironment, DataCategory, Market, VendorId
 from domain.company_comparison.calculator import PeerComparisonCalculator
 from infrastructure.artifacts.trade_retro import ObsidianTradeRetroExporter
 from infrastructure.composition import (
@@ -100,6 +97,7 @@ from infrastructure.composition import (
 )
 from infrastructure.config.account_basis_checkpoints import load_account_basis_checkpoints
 from infrastructure.config.settings import AppSettings
+from infrastructure.observability.capability_usage import SqliteCapabilityUsageStore
 from infrastructure.observability.tracing import configure_tracing
 from infrastructure.persistence.audit_log_writer import SqlAlchemyAuditLogWriter
 from infrastructure.persistence.catalyst_agenda_outcome_reader import (
@@ -113,6 +111,10 @@ from infrastructure.persistence.instrument_unit_of_work import (
 )
 from infrastructure.persistence.monitor_repository import SqlAlchemyMonitorRepository
 from infrastructure.persistence.operational_maintenance import SqliteOperationalMaintenance
+from infrastructure.persistence.research_attention_reader import SqlAlchemyResearchAttentionReader
+from infrastructure.persistence.review_scan_receipt_store import (
+    SqlAlchemyReviewScanReceiptStore,
+)
 from infrastructure.persistence.risk_policy_repository import (
     SqlAlchemyRiskPolicyRepository,
 )
@@ -300,11 +302,13 @@ def build_application(
         id_generator,
         secret_redactor,
     )
+    audit_log_writer = SqlAlchemyAuditLogWriter(engine, clock, id_generator, secret_redactor)
+    review_scan_receipt_store = SqlAlchemyReviewScanReceiptStore(engine, audit_log_writer)
     broker_order_service = BrokerOrderService(
         persistence.broker_orders,
         schwab_order_provider,
         schwab_quote_provider,
-        SqlAlchemyAuditLogWriter(engine, clock, id_generator, secret_redactor),
+        audit_log_writer,
         clock,
         id_generator,
         secret_redactor,
@@ -335,18 +339,6 @@ def build_application(
     def instrument_unit_of_work_factory() -> InstrumentUnitOfWork:
         return SqlAlchemyInstrumentUnitOfWork(engine, clock)
 
-    research_subject_service = ResearchSubjectService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-    thesis_revision_service = ThesisRevisionService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     watchlist_hub_service = WatchlistHubService(
         provider=watchlist_source_provider,
         uow_factory=watchlist_hub_unit_of_work_factory,
@@ -355,12 +347,6 @@ def build_application(
         clock=clock,
         id_generator=id_generator,
         secret_redactor=secret_redactor,
-    )
-    research_state_query_service = ResearchStateQueryService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
     )
     instrument_master_service = InstrumentMasterService(
         instrument_unit_of_work_factory,
@@ -437,36 +423,6 @@ def build_application(
         },
     )
     access_service = InstrumentAccessService(instrument_master_service, instrument_resolve_service)
-    research_archive_service = ResearchArchiveService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-    research_search_service = ResearchSearchService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-    research_timeline_service = ResearchTimelineService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-    journal_service = JournalService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
-    decision_record_service = DecisionRecordService(
-        research_unit_of_work_factory,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     market_facts = build_market_facts_services(
         settings=settings,
         engine=engine,
@@ -582,6 +538,7 @@ def build_application(
         id_generator,
         secret_redactor,
         trade_retro_narrative_provider,
+        annotations=persistence.activity_annotations,
     )
     judgment_scorecard_service = JudgmentScorecardService(
         persistence.scorecards,
@@ -695,23 +652,27 @@ def build_application(
             token_path=settings.schwab_token_path,
         )
     post_market_sync_lock = ProcessFileLock(settings.post_market_sync_lock_path)
-    research_context_builder = ResearchContextBuilder(
-        research_unit_of_work_factory,
-        account_snapshot_repository,
-        clock,
-        id_generator,
-        secret_redactor,
-    )
     challenge_review_repository: ChallengeReviewRepository = SqlAlchemyChallengeReviewRepository(
         engine
     )
-    challenge_review_service = ChallengeReviewService(
-        challenge_review_repository,
-        research_context_builder,
-        clock,
-        id_generator,
-        secret_redactor,
+    research_services = build_research_services(
+        uow_factory=research_unit_of_work_factory,
+        account_snapshot_repository=account_snapshot_repository,
+        challenge_review_repository=challenge_review_repository,
+        clock=clock,
+        id_generator=id_generator,
+        secret_redactor=secret_redactor,
     )
+    research_subject_service = research_services.research_subjects
+    thesis_revision_service = research_services.thesis_revisions
+    research_state_query_service = research_services.research_state
+    research_archive_service = research_services.research_archive
+    research_search_service = research_services.research_search
+    research_timeline_service = research_services.research_timeline
+    journal_service = research_services.journal
+    decision_record_service = research_services.decisions
+    research_context_builder = research_services.research_context
+    challenge_review_service = research_services.challenge
     reconciliation_root = settings.paths.reconciliation
     performance_reconciliation_service = PerformanceReconciliationService(
         SchwabRealizedGainLossCsvParser(reconciliation_root),
@@ -757,6 +718,25 @@ def build_application(
         id_generator,
         secret_redactor,
     )
+    review_item_refresh = ReviewItemRefreshService(
+        clock,
+        decision_record_service,
+        external_notes.reviews,
+        persistence.agent_pending_actions,
+        broker_order_service,
+        review_item_service,
+        research_uow_factory=research_unit_of_work_factory,
+    )
+    review_workspace_query = ReviewWorkspaceQueryService(
+        clock=clock,
+        research=SqlAlchemyResearchAttentionReader(engine),
+        agenda=catalyst_agenda_service,
+        retro=trade_retro_service,
+        scorecards=judgment_scorecard_service,
+        refresh=review_item_refresh,
+        review_items=review_item_service,
+        receipt_store=review_scan_receipt_store,
+    )
     review_workspace = build_review_workspace(
         notes=persistence.external_notes,
         note_reviews=persistence.external_note_reviews,
@@ -781,6 +761,13 @@ def build_application(
             id_generator=id_generator,
             secret_redactor=secret_redactor,
             telemetry=telemetry,
+            capability_usage=(
+                SqliteCapabilityUsageStore(
+                    settings.paths.data / "diagnostics" / "capability-usage.sqlite3"
+                )
+                if settings.app_env is not AppEnvironment.TEST
+                else None
+            ),
         ),
         resources=RuntimeResources(
             database=database,
@@ -840,6 +827,8 @@ def build_application(
             broker_order_preview=cash_sweep_shadow_service,
             broker_orders=broker_order_service,
             review_items=review_item_service,
+            review_item_refresh=review_item_refresh,
+            review_workspace_query=review_workspace_query,
             attention=attention_query_service,
             external_notes=external_notes.service,
             external_note_reviews=external_notes.reviews,
@@ -848,6 +837,12 @@ def build_application(
             judgment_calibration=review_workspace.calibration,
             valuation=review_workspace.valuation,
             research_changes=review_workspace.changes,
+            research_links=ResearchLinksQueryService(research_unit_of_work_factory, clock),
+            question_research=QuestionResearchService(research_unit_of_work_factory, clock),
+            plan_workflow=PlanWorkflowQueryService(
+                research_unit_of_work_factory, monitor_repository, clock
+            ),
+            decision_replay=DecisionReplayService(research_unit_of_work_factory, clock),
             quick_review=review_workspace.quick_review,
             today_review=review_workspace.today_review,
             weekly_review=review_workspace.weekly_review,

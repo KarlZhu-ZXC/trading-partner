@@ -62,12 +62,87 @@ def setup(tmp_path: Path):
         return item.interpretation
 
     notes.analyze_revision = AsyncMock(side_effect=analyze)
+    prepared_packages = []
+
+    def prepare_review(revision_id):
+        package = SimpleNamespace(
+            note_revision_id=revision_id,
+            requires_deep_review=True,
+        )
+        prepared_packages.append(package)
+        return package
+
     reviews = SimpleNamespace(
         review_enabled=True,
-        requires_deep_review=lambda _: True,
-        review=AsyncMock(return_value=SimpleNamespace(status="SUCCEEDED")),
+        prepared_packages=prepared_packages,
+        prepare_review=prepare_review,
+        review_prepared=AsyncMock(return_value=SimpleNamespace(status="SUCCEEDED")),
     )
     return ObservationRefreshService(notes, reviews, jobs), notes, reviews, items
+
+
+@pytest.mark.asyncio
+async def test_review_stage_passes_each_exact_prepared_package_once(tmp_path):
+    service, notes, reviews, items = setup(tmp_path)
+    for item in items:
+        item.interpretation = SimpleNamespace(status="SUCCEEDED")
+
+    outcome = await service._stage("review")
+
+    assert outcome.result_code == "OBSERVATION_STAGE_SUCCEEDED"
+    assert len(reviews.prepared_packages) == 2
+    assert reviews.review_prepared.await_count == 2
+    for call, package in zip(
+        reviews.review_prepared.await_args_list,
+        reviews.prepared_packages,
+        strict=True,
+    ):
+        assert call.args == (package,)
+
+
+@pytest.mark.asyncio
+async def test_review_stage_skips_model_for_rows_without_deep_review(tmp_path):
+    service, notes, reviews, items = setup(tmp_path)
+    for item in items:
+        item.interpretation = SimpleNamespace(status="SUCCEEDED")
+
+    def prepare_review(revision_id):
+        package = SimpleNamespace(
+            note_revision_id=revision_id,
+            requires_deep_review=revision_id != "revision_0",
+        )
+        reviews.prepared_packages.append(package)
+        return package
+
+    reviews.prepare_review = prepare_review
+    outcome = await service._stage("review")
+
+    assert outcome.result_code == "OBSERVATION_STAGE_SUCCEEDED"
+    assert reviews.review_prepared.await_count == 1
+    assert reviews.review_prepared.await_args.args == (reviews.prepared_packages[1],)
+
+
+@pytest.mark.asyncio
+async def test_review_stage_caps_deep_review_requests_at_one_hundred(tmp_path):
+    service, notes, reviews, items = setup(tmp_path)
+    items.extend(
+        SimpleNamespace(
+            revision=SimpleNamespace(
+                note_revision_id=f"revision_{index}",
+                coverage=NoteCoverage.FULL,
+            ),
+            interpretation=SimpleNamespace(status="SUCCEEDED"),
+        )
+        for index in range(2, 102)
+    )
+    for item in items[:2]:
+        item.interpretation = SimpleNamespace(status="SUCCEEDED")
+
+    outcome = await service._stage("review")
+
+    assert outcome.result_code == "OBSERVATION_STAGE_DEGRADED"
+    assert reviews.review_prepared.await_count == 100
+    assert len(reviews.prepared_packages) == 101
 
 
 @pytest.mark.asyncio
@@ -99,16 +174,16 @@ async def test_refresh_preserves_success_and_resumes_failed_stage(tmp_path):
     assert notes.sync.await_count == 1
     assert notes.analyze_revision.await_count == 1
     assert notes.analyze_revision.await_args.args == ("revision_1",)
-    assert reviews.review.await_count == 2
+    assert reviews.review_prepared.await_count == 2
     # Replaying an already successful request does no work.
     await service.run("request-1", on_claim=claims.append)
-    assert reviews.review.await_count == 2
+    assert reviews.review_prepared.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_rejected_draft_is_quality_degradation_not_execution_success_green(tmp_path):
     service, _, reviews, _ = setup(tmp_path)
-    reviews.review.return_value = SimpleNamespace(status="FAILED")
+    reviews.review_prepared.return_value = SimpleNamespace(status="FAILED")
     await service.run("request-2", on_claim=lambda _: None)
     value = await service.status("request-2")
     assert value["run"]["status"] == "SUCCEEDED"
@@ -125,7 +200,7 @@ async def test_capture_failure_never_runs_model_stages(tmp_path):
     assert value["run"]["status"] == "FAILED"
     assert value["stages"]["interpret"] is None
     notes.analyze_revision.assert_not_awaited()
-    reviews.review.assert_not_awaited()
+    reviews.review_prepared.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -138,7 +213,7 @@ async def test_summary_only_never_reaches_model(tmp_path):
     value = await service.status("request-4")
     assert value["run"]["result_code"] == "OBSERVATION_REFRESH_DEGRADED"
     notes.analyze_revision.assert_not_awaited()
-    reviews.review.assert_not_awaited()
+    reviews.review_prepared.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -180,13 +255,12 @@ async def test_capture_cancellation_keeps_lock_until_worker_stops():
 async def test_required_review_without_provider_is_degraded(tmp_path):
     service, _, reviews, _ = setup(tmp_path)
     reviews.review_enabled = False
-    reviews.review.return_value = None
-    reviews.requires_deep_review = lambda _: True
+    reviews.review_prepared.return_value = None
     await service.run("disabled-review", on_claim=lambda _: None)
     assert (await service.status("disabled-review"))["run"][
         "result_code"
     ] == "OBSERVATION_REFRESH_DEGRADED"
-    assert reviews.review.await_count == 2
+    assert reviews.review_prepared.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -198,7 +272,7 @@ async def test_disabled_interpretation_is_explicitly_skipped(tmp_path):
     assert value["run"]["result_code"] == "OBSERVATION_REFRESH_DEGRADED"
     assert value["stages"]["interpret"]["status"] == "SKIPPED"
     notes.analyze_revision.assert_not_awaited()
-    reviews.review.assert_not_awaited()
+    reviews.review_prepared.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -229,7 +303,7 @@ async def test_running_child_never_allows_parent_to_report_completion(tmp_path):
         value = await service.status("busy-child")
         assert value["run"]["status"] == "FAILED"
         assert value["run"]["error_code"] == "OBSERVATION_REFRESH_STAGE_BUSY"
-        reviews.review.assert_not_awaited()
+        reviews.review_prepared.assert_not_awaited()
     finally:
         release.set()
         await child

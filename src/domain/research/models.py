@@ -5,6 +5,11 @@ This module deliberately re-exports the historical public names so existing
 application, persistence, and test imports do not need to change.
 """
 
+from domain.research.evidence_impact import (
+    EvidenceImpact,
+    ResearchSourceRef,
+    ResearchSourceSnapshot,
+)
 from domain.research.memory_models import (
     DecisionRecord,
     Evidence,
@@ -44,6 +49,9 @@ __all__ = [
     "DecisionRecord",
     "Evidence",
     "EvidenceAssessment",
+    "EvidenceImpact",
+    "ResearchSourceRef",
+    "ResearchSourceSnapshot",
     "InvalidationCondition",
     "JournalEntry",
     "OpenQuestion",

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compact import CapabilityRegistrar
+    from interfaces.capabilities.registry import CapabilityRegistrar
 
 
 def _register_watchlist_risk_monitoring(
@@ -17,13 +17,15 @@ def _register_watchlist_risk_monitoring(
 ) -> None:
     """Register durable Watchlist, Risk, and Monitor operations in order."""
 
-    from .compact import (
+    from interfaces.capabilities.policy import (
         APPEND,
         EVALUATE,
         MANAGE,
         MANAGE_OPEN_WORLD,
         READ_DURABLE,
         READ_PROVIDER,
+    )
+    from interfaces.capabilities.registration import (
         _all_fields,
         _copy_handler,
         _register_dispatch_tool,

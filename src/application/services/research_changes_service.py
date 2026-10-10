@@ -1,10 +1,10 @@
 """Read-only projection; each source fails independently without hiding its failure."""
 
 from bisect import bisect_left
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from functools import cache
-from typing import Literal
+from typing import Literal, cast
 
 from application.dto.research_changes import (
     BaselinePlanDTO,
@@ -12,6 +12,7 @@ from application.dto.research_changes import (
     ResearchChangeDTO,
     ResearchChangesBaselineDTO,
     ResearchChangesDTO,
+    ReviewedImpactDTO,
 )
 from application.ports.catalyst_agenda_repository import CatalystAgendaRepository
 from application.ports.clock import Clock
@@ -25,6 +26,7 @@ from domain.external_note.enums import NoteCoverage, NoteSpeakerKind
 from domain.external_note.models import ExternalNoteRevision
 from domain.monitoring.enums import MonitorRuleType
 from domain.monitoring.models import MonitorDefinition, MonitorEvent, MonitorRunObservation
+from domain.research.evidence_impact import EvidenceImpact
 from domain.research.models import DecisionRecord
 from domain.trade_plan.enums import TradePlanConditionMode
 from domain.trade_plan.models import TradePlan
@@ -90,6 +92,9 @@ class ResearchChangesService:
             raise DataContractError("Invalid changes pagination")
         now = self._clock.now()
         require_aware_datetime(now, field_name="as_of")
+        reviewed_impacts: tuple[EvidenceImpact, ...] = ()
+        impact_links_partial = False
+        impact_links_available = True
         with self._uow() as uow:
             subject = uow.subjects.get(subject_id)
             if subject is None:
@@ -108,9 +113,28 @@ class ResearchChangesService:
                     raise DataContractError("Reviewed baseline does not belong to this Subject")
             decision = max(eligible, key=lambda d: (d.recorded_at, d.decision_id), default=None)
             baseline = self._baseline(uow, decision) if decision is not None else None
+            try:
+                raw_impacts = uow.evidence_impacts.list_by_subject(subject_id, limit=501)
+                impact_links_partial = len(raw_impacts) > 500
+                reviewed_impacts = _latest_active_impacts(
+                    raw_impacts[:500],
+                    subject_id=subject_id,
+                    now=now,
+                )
+            except Exception:
+                # A link projection failure must never hide otherwise readable
+                # Observation/Monitor/Agenda changes.
+                impact_links_available = False
         after = baseline.recorded_at if baseline else None
         coverage: dict[str, Literal["COMPLETE", "PARTIAL", "UNAVAILABLE", "NOT_APPLICABLE"]] = {}
         warnings = [] if baseline else ["NO_REVIEWED_BASELINE"]
+        if impact_links_available:
+            coverage["IMPACT_LINKS"] = "PARTIAL" if impact_links_partial else "COMPLETE"
+            if impact_links_partial:
+                warnings.append("IMPACT_LINKS_HISTORY_PARTIAL")
+        else:
+            coverage["IMPACT_LINKS"] = "UNAVAILABLE"
+            warnings.append("IMPACT_LINKS_SOURCE_UNAVAILABLE")
         items: list[ResearchChangeDTO] = []
         sources: list[tuple[str, Callable[[], list[ResearchChangeDTO]]]] = [
             ("OBSERVATION", lambda: self._observations(subject.primary_instrument_id, after, now)),
@@ -139,6 +163,8 @@ class ResearchChangesService:
                 if coverage[name] == "PARTIAL":
                     warnings.append(f"{name}_HISTORY_PARTIAL")
                 items.extend(source_items)
+        if impact_links_available and reviewed_impacts:
+            items = _attach_reviewed_impacts(items, reviewed_impacts, baseline)
         unique = {item.change_id: item for item in items}
         ordered = sorted(unique.values(), key=lambda i: (i.recorded_at, i.change_id), reverse=True)
         if change_id is not None:
@@ -189,6 +215,12 @@ class ResearchChangesService:
                 for x in invalidations
             ):
                 raise DataContractError("Invalid reviewed Thesis references")
+            visible_assumptions = [
+                x for x in assumptions if x.confirmed_at <= decision.recorded_at
+            ]
+            visible_invalidations = [
+                x for x in invalidations if x.confirmed_at <= decision.recorded_at
+            ]
             theses.append(
                 BaselineThesisDTO(
                     thesis_id=revision.thesis_id,
@@ -196,11 +228,11 @@ class ResearchChangesService:
                     statement=revision.statement,
                     assumptions=[
                         {"assumption_id": x.assumption_id, "statement": x.statement}
-                        for x in assumptions
+                        for x in visible_assumptions
                     ],
                     invalidations=[
                         {"invalidation_id": x.invalidation_id, "description": x.description}
-                        for x in invalidations
+                        for x in visible_invalidations
                     ],
                 )
             )
@@ -569,6 +601,99 @@ class ResearchChangesService:
                 )
             )
         return result
+
+
+def _latest_active_impacts(
+    rows: Iterable[EvidenceImpact],
+    *,
+    subject_id: str,
+    now: datetime,
+) -> tuple[EvidenceImpact, ...]:
+    """Keep one current, visible ACTIVE version for each impact identity."""
+
+    latest: dict[str, EvidenceImpact] = {}
+    for row in rows:
+        if row.subject_id != subject_id:
+            raise DataContractError("Invalid reviewed impact Subject scope")
+        prior = latest.get(row.impact_id)
+        if prior is None or row.version > prior.version:
+            latest[row.impact_id] = row
+    return tuple(
+        sorted(
+            (
+                row
+                for row in latest.values()
+                if row.state == "ACTIVE" and row.confirmed_at <= now
+            ),
+            key=lambda row: (row.confirmed_at, row.impact_id, row.version),
+            reverse=True,
+        )
+    )
+
+
+def _reviewed_impact_dto(
+    impact: EvidenceImpact,
+    *,
+    baseline_assumption_refs: frozenset[tuple[str, str]],
+) -> ReviewedImpactDTO:
+    return ReviewedImpactDTO(
+        impact_id=impact.impact_id,
+        version=impact.version,
+        thesis_revision_id=impact.thesis_revision_id,
+        assumption_id=impact.assumption_id,
+        stance=cast(Literal["supports", "contradicts", "uncertain"], impact.stance),
+        rationale=impact.rationale,
+        confirmed_at=impact.confirmed_at,
+        confirmed_by=impact.confirmed_by,
+        baseline_match=(impact.thesis_revision_id, impact.assumption_id)
+        in baseline_assumption_refs,
+    )
+
+
+def _impact_matches_change(item: ResearchChangeDTO, impact: EvidenceImpact) -> bool:
+    source = impact.source
+    if item.kind == "OBSERVATION":
+        return source.kind == "OBSERVATION" and item.note_revision_id == source.source_id
+    if item.kind == "MONITOR":
+        return (
+            source.kind == "MONITOR"
+            and item.monitor_id == source.monitor_id
+            and source.rule_code is not None
+            and item.source_id == f"{source.source_id}:{source.rule_code}"
+        )
+    return False
+
+
+def _attach_reviewed_impacts(
+    items: list[ResearchChangeDTO],
+    impacts: tuple[EvidenceImpact, ...],
+    baseline: ResearchChangesBaselineDTO | None,
+) -> list[ResearchChangeDTO]:
+    baseline_assumption_refs = (
+        frozenset(
+            (thesis.revision_id, assumption["assumption_id"])
+            for thesis in baseline.theses
+            for assumption in thesis.assumptions
+        )
+        if baseline is not None
+        else frozenset()
+    )
+    result: list[ResearchChangeDTO] = []
+    for item in items:
+        matches = tuple(
+            _reviewed_impact_dto(
+                impact,
+                baseline_assumption_refs=baseline_assumption_refs,
+            )
+            for impact in impacts
+            if _impact_matches_change(item, impact)
+        )
+        result.append(
+            item.model_copy(update={"reviewed_impacts": list(matches)})
+            if matches
+            else item
+        )
+    return result
 
 
 def _user_excerpt(revision: ExternalNoteRevision | None) -> str | None:

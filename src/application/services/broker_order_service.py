@@ -116,7 +116,19 @@ class BrokerOrderService:
             self._validate_account(request, account)
             _, _, symbol = parse_instrument_id(request.instrument_id)
             payload = self._build_payload(request, symbol=symbol)
-            price = quote.ask or quote.last or quote.bid
+            preferred_basis = "ask" if request.instruction is BrokerOrderInstruction.BUY else "bid"
+            preferred_price = quote.ask if preferred_basis == "ask" else quote.bid
+            opposite_price = quote.bid if preferred_basis == "ask" else quote.ask
+            price = preferred_price or quote.last or opposite_price
+            reference_basis = (
+                preferred_basis
+                if preferred_price is not None
+                else "last"
+                if quote.last is not None
+                else "bid"
+                if preferred_basis == "ask"
+                else "ask"
+            )
             if price is None:
                 raise DataContractError("Schwab quote has no usable price")
             estimated = self._estimated_notional(request, quote_price=price)
@@ -179,8 +191,22 @@ class BrokerOrderService:
             )
             age = max(0, int((now - quote.quote_at).total_seconds()))
             warnings: tuple[WarningInfo, ...] = ()
+            if reference_basis != preferred_basis:
+                warnings += (
+                    WarningInfo(
+                        code="BROKER_QUOTE_REFERENCE_FALLBACK",
+                        message=(
+                            "The order-side quote is unavailable; the fallback reference is "
+                            "context only and does not guarantee an executable price."
+                        ),
+                        details={
+                            "preferred_side": preferred_basis,
+                            "reference_basis": reference_basis,
+                        },
+                    ),
+                )
             if age > 60:
-                warnings = (
+                warnings += (
                     WarningInfo(
                         code="BROKER_QUOTE_STALE_FOR_CONTEXT",
                         message=(
@@ -195,7 +221,7 @@ class BrokerOrderService:
                 market=Market.US,
                 as_of=now,
                 fetched_at=self._clock.now(),
-                freshness=Freshness.FRESH if not warnings else Freshness.STALE,
+                freshness=Freshness.STALE if age > 60 else Freshness.FRESH,
                 sources=(
                     SourceReference(
                         name=VendorId.SCHWAB.value,
@@ -505,13 +531,16 @@ class BrokerOrderService:
         except Exception as exc:  # noqa: BLE001
             return self._failure(request_id, now, exc)
 
-    def list_unresolved(self, *, limit: int = 100) -> tuple[BrokerOrderIntentDTO, ...]:
+    def list_unresolved(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> tuple[BrokerOrderIntentDTO, ...]:
         """Read durable order intents that require operator reconciliation."""
 
-        return tuple(
-            BrokerOrderIntentDTO.from_domain(value)
-            for value in self._repository.list_unresolved(limit=limit)
-        )
+        if offset == 0:
+            values = self._repository.list_unresolved(limit=limit)
+        else:
+            values = self._repository.list_unresolved(limit=limit, offset=offset)
+        return tuple(BrokerOrderIntentDTO.from_domain(value) for value in values)
 
     def list_recent(self, *, limit: int = 100) -> tuple[BrokerOrderIntentDTO, ...]:
         """Read complete bounded order-intent history without Provider access."""

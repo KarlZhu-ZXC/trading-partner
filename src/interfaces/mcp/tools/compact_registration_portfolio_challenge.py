@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compact import CapabilityRegistrar
+    from interfaces.capabilities.registry import CapabilityRegistrar
 
 
 def _register_portfolio_get(
@@ -15,7 +15,12 @@ def _register_portfolio_get(
 ) -> None:
     """Register durable account and portfolio reads as one grouped capability."""
 
-    from .compact import READ_DURABLE, _all_fields, _register_flat_dispatch_tool, _spec
+    from interfaces.capabilities.policy import READ_DURABLE
+    from interfaces.capabilities.registration import (
+        _all_fields,
+        _register_flat_dispatch_tool,
+        _spec,
+    )
 
     _register_flat_dispatch_tool(
         registry,
@@ -120,8 +125,8 @@ def _register_portfolio_challenge_workflows(
 ) -> None:
     """Register durable workflow operations in order."""
 
-    from .compact import (
-        APPEND_OPEN_WORLD,
+    from interfaces.capabilities.policy import APPEND_OPEN_WORLD
+    from interfaces.capabilities.registration import (
         _all_fields,
         _register_flat_dispatch_tool,
         _spec,

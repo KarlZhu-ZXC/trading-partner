@@ -107,7 +107,7 @@ def test_backup_restore_round_trip_isolated_destination(
     assert backup != restored
     assert backup_receipt.alembic_revision == restored_receipt.alembic_revision
     assert backup_receipt.schema_versions == restored_receipt.schema_versions
-    assert backup_receipt.alembic_revision == "0072_external_note_review_drafts"
+    assert backup_receipt.alembic_revision == "0073_research_evidence_links"
     assert restored.is_file()
 
     restored_engine = create_engine_from_url(f"sqlite:///{restored}")

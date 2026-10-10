@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from io import BytesIO
+from textwrap import fill
 
 import numpy as np
 import talib
@@ -12,6 +13,24 @@ import talib
 from domain.common.errors import ProviderNotConfigured
 from domain.market.models import MarketBar
 from domain.technical.models import TechnicalTimeframe
+
+_SMC_LIMITATION_MESSAGES = {
+    "SMC_FUTURES_DATE_LABEL_CONFIRMATION_TIME_UNKNOWN": (
+        "Futures bar and SMC occurrence/confirmation timestamps are source date labels, "
+        "not verified availability times. Historical cutoff filtering is unavailable."
+    ),
+    "SMC_CALENDAR_WEEK_BOUNDARIES_MAY_BE_PARTIAL": (
+        "First and last calendar weeks may be partial. SMC confirmation uses the "
+        "available bars; structures involving an unfinished week remain provisional."
+    ),
+    "SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE": (
+        "FVG percentage calculations with nonpositive opening prices are unavailable."
+    ),
+    "SMC_ATR_200_UNAVAILABLE_ORDER_BLOCK_FILTER_AND_EQH_EQL": (
+        "ATR200 is unavailable: the order-block volatility filter and equal-high/low "
+        "tolerance are limited by history."
+    ),
+}
 
 
 class MatplotlibChartRenderer:
@@ -221,7 +240,22 @@ class MatplotlibChartRenderer:
             rotation=25,
             ha="right",
         )
-        figure.tight_layout()
+        if smart_money is not None and smart_money.limitations:
+            notes = [
+                _SMC_LIMITATION_MESSAGES.get(code, code.replace("_", " "))
+                for code in dict.fromkeys(smart_money.limitations)
+            ]
+            if not smart_money.historically_validated:
+                notes.append("Derived SMC has not been historically validated.")
+            footer = "\n".join(fill(note, width=130) for note in notes)
+            footer_height = 0.04 + len(footer.splitlines()) * 0.021
+            figure.text(
+                0.02, 0.02, footer, color="#fbbf24", fontsize=8.5,
+                ha="left", va="bottom",
+            )
+            figure.tight_layout(rect=(0, footer_height, 1, 1))
+        else:
+            figure.tight_layout()
         output = BytesIO()
         figure.savefig(output, format="png", dpi=140, facecolor=figure.get_facecolor())
         plt.close(figure)

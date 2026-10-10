@@ -94,6 +94,29 @@ _UNIT_BY_INSTRUMENT: dict[str, str] = {
 }
 
 
+def _require_completed_bars(
+    bars: tuple[MarketBar, ...], *, interval: USBarInterval, as_of: datetime
+) -> tuple[MarketBar, ...]:
+    # Native candles retain their UTC opening timestamps. A historical cutoff
+    # can expose final OHLC only after the full native interval has elapsed.
+    duration = {
+        USBarInterval.ONE_MINUTE: timedelta(minutes=1),
+        USBarInterval.SIXTY_MINUTES: timedelta(hours=1),
+        USBarInterval.ONE_DAY: timedelta(days=1),
+    }[interval]
+    completed = tuple(bar for bar in bars if as_of - bar.timestamp >= duration)
+    if not completed:
+        raise NoMarketData(
+            "Dukascopy returned no completed bars under as_of cutoff",
+            details={
+                "vendor": VendorId.DUKASCOPY.value,
+                "operation": "historical_bars",
+                "code": "NO_MARKET_DATA",
+            },
+        )
+    return completed
+
+
 def _meta(
     *,
     category: DataCategory,
@@ -433,11 +456,8 @@ class _LegacyDukascopySpotAdapter:
             operation="currentPrices",
         )
         rows = decode_current_prices(payload)
-        match = next((row for row in rows if row.instrument_code == duka_code), None)
-        if match is None and len(rows) == 1:
-            # Some responses omit the instrument label when a single code is requested.
-            match = rows[0]
-        if match is None:
+        matches = tuple(row for row in rows if row.instrument_code == duka_code)
+        if not matches:
             raise NoMarketData(
                 "Dukascopy currentPrices returned no matching quote",
                 details={
@@ -446,6 +466,16 @@ class _LegacyDukascopySpotAdapter:
                     "code": "NO_MARKET_DATA",
                 },
             )
+        if len(matches) != 1:
+            raise DataContractError(
+                "Dukascopy currentPrices returned ambiguous matching quotes",
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": "currentPrices",
+                    "rule": "unique_instrument",
+                },
+            )
+        match = matches[0]
         bid = match.bid
         ask = match.ask
         last = match.last
@@ -821,6 +851,10 @@ class DukascopySpotAdapter:
             )
         payload = loads_dukascopy_json(response.body, operation=operation)
         if not request_spec.mutable:
+            # Parseable JSON may still contain invalid OHLC/columns/timestamps.
+            # Only validated candles may enter the immutable bucket cache.
+            if operation == "jetta_candles":
+                decode_jetta_candles(payload)
             self._completed_bucket_cache[request_spec.url] = response.body
             self._completed_bucket_cache.move_to_end(request_spec.url)
             while len(self._completed_bucket_cache) > _JETTA_CACHE_MAX_ITEMS:
@@ -1117,6 +1151,7 @@ class DukascopySpotAdapter:
                         "code": "NO_MARKET_DATA",
                     },
                 )
+            bars = _require_completed_bars(bars, interval=interval, as_of=as_of)
             series = CommoditySpotBarSeries(
                 instrument_id=instrument.instrument_id,
                 interval=interval,
@@ -1143,16 +1178,18 @@ class DukascopySpotAdapter:
         except (DataContractError, NoMarketData, ProviderRateLimitError, ProviderUnavailableError):
             if self._legacy is None:
                 raise
+            legacy = await self._legacy.get_bars(
+                instrument,
+                start=start,
+                end=end,
+                interval=interval,
+                adjustment=adjustment,
+                as_of=as_of,
+                offer_side=offer_side,
+            )
+            bars = _require_completed_bars(legacy.value.bars, interval=interval, as_of=as_of)
             return self._legacy_result(
-                await self._legacy.get_bars(
-                    instrument,
-                    start=start,
-                    end=end,
-                    interval=interval,
-                    adjustment=adjustment,
-                    as_of=as_of,
-                    offer_side=offer_side,
-                )
+                ProviderSuccess(value=replace(legacy.value, bars=bars), meta=legacy.meta)
             )
 
 

@@ -11,6 +11,7 @@ from application.dto.copilot_research import (
     ResearchStep,
     ResearchStopReason,
 )
+from application.dto.question_research import QuestionResearchContext
 
 T = TypeVar("T")
 
@@ -30,6 +31,7 @@ class ResearchBudget:
         max_model_calls: int,
         max_tool_calls: int,
         monotonic: Callable[[], float] = time.monotonic,
+        question_context: QuestionResearchContext | None = None,
     ) -> None:
         self._now = monotonic
         self._started = monotonic()
@@ -42,6 +44,7 @@ class ResearchBudget:
         ]
         self._receipt = CopilotResearchReceipt(
             mode=mode,
+            question_context=question_context,
             phase="QUEUED",
             max_seconds=max_seconds,
             max_model_calls=max_model_calls,
@@ -51,6 +54,10 @@ class ResearchBudget:
             tool_calls_attempted=0,
             completed_reads=0,
         )
+
+    @property
+    def question_context(self) -> QuestionResearchContext | None:
+        return self._receipt.question_context
 
     @property
     def remaining_seconds(self) -> float:

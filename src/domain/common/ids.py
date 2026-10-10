@@ -19,6 +19,7 @@ class EntityIdPrefix(StrEnum):
     THESIS = "thesis"
     REV = "rev"
     EVIDENCE = "evidence"
+    EVIDENCE_IMPACT = "impact"
     REPORT = "report"
     EVENT = "event"
     DECISION = "decision"

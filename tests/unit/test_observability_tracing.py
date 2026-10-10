@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from application import __version__
 from domain.common.enums import AppEnvironment, LogLevel
 from infrastructure.config.settings import AppSettings
 from infrastructure.observability.tracing import (
@@ -57,6 +58,7 @@ def test_tracing_exports_only_allowlisted_safe_attributes(tmp_path: Path) -> Non
     assert telemetry.force_flush()
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
+    assert spans[0].resource.attributes["service.version"] == __version__
     attributes = dict(spans[0].attributes)
     assert trace_id is not None and len(trace_id) == 32
     assert attributes == {

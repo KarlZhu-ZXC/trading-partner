@@ -464,6 +464,7 @@ class SqlAlchemyAgentPendingActionRepository:
         *,
         now: datetime,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[AgentPendingAction, ...]:
         """Return pending actions requiring operator attention without mutation.
 
@@ -477,6 +478,8 @@ class SqlAlchemyAgentPendingActionRepository:
         timestamp = require_aware_datetime(now, field_name="now")
         if type(limit) is not int or not 1 <= limit <= 500:
             raise DataContractError("limit must be an integer in [1,500]")
+        if type(offset) is not int or offset < 0:
+            raise DataContractError("offset must be a non-negative integer")
         with Session(self._engine) as session:
             rows = tuple(
                 session.scalars(
@@ -504,7 +507,7 @@ class SqlAlchemyAgentPendingActionRepository:
             key=lambda action: (action.updated_at, action.created_at, action.action_id),
             reverse=True,
         )
-        return tuple(unresolved[:limit])
+        return tuple(unresolved[offset : offset + limit])
 
     def _expire_if_current(self, current: AgentPendingAction, timestamp: datetime) -> None:
         with Session(self._engine) as session:

@@ -33,6 +33,7 @@ from application.ports.provider_router_settings import ProviderRouterSettings
 from application.ports.reddit_state_store import RedditStateStore
 from application.ports.research_subject_repository import ResearchSubjectRepository
 from application.ports.research_unit_of_work import ResearchUnitOfWork
+from application.ports.review_scan_receipt_store import ReviewScanReceiptStore
 from application.ports.risk_policy_repository import RiskPolicyRepository
 from application.ports.secret_redactor import SecretRedactor
 from application.ports.settings import AppSettingsView
@@ -86,6 +87,7 @@ __all__ = [
     "RedditStateStore",
     "ResearchUnitOfWork",
     "RiskPolicyRepository",
+    "ReviewScanReceiptStore",
     "SecretRedactor",
     "ThesisRepository",
     "ThesisRevisionRepository",

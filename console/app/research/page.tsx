@@ -43,8 +43,11 @@ import { chartResearchProvenance, readChartResearchContext, consumeChartResearch
 import { ResearchContinuity } from "./research-continuity";
 import { ResearchChanges } from "./research-changes";
 import { ObservationResearchSource } from "./observation-research-source";
-import { textDash as text } from "../lib/coerce";
+import { asObject as asDict, textDash as text } from "../lib/coerce";
 import { EntityBrowser } from "../components/entity-browser";
+import { EvidenceImpactPanel } from "./evidence-impact-panel";
+import { QuestionResearchPanel } from "./question-research-panel";
+import { DecisionReplayPanel } from "./decision-replay-panel";
 
 type Dict = Record<string, unknown>;
 type SubjectAggregate = { subject?: Dict; state?: Dict };
@@ -87,10 +90,6 @@ const RESEARCH_PAGE_SIZE = {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function asDict(value: unknown): Dict {
-  return value && typeof value === "object" ? value as Dict : {};
 }
 
 function stateData(item: SubjectAggregate): Dict | null {
@@ -424,6 +423,8 @@ function candidateFieldLabel(value: string): string {
 function candidateTitle(kind: string, payload: Dict): string {
   if (kind === "trade_plan") return `Trade Plan · ${shortId(payload.instrument_id)}`;
   if (kind === "thesis_revision") return `Thesis Revision · ${text(payload.title, "Untitled Thesis")}`;
+  if (kind === "evidence_impact") return `Evidence Impact · ${text(payload.action, "proposal").toUpperCase()}`;
+  if (kind === "open_question") return `Research Question · ${text(payload.action, "proposal").toUpperCase()}`;
   if (kind === "watchlist_item") return `Instrument · ${text(payload.display_name, shortId(payload.instrument_id))}`;
   if (kind === "subject_status_change" || kind === "case_status_change") return `Research Subject Status · ${text(payload.new_status, "UNKNOWN").toUpperCase()}`;
   return candidateFieldLabel(kind || "Candidate Proposal");
@@ -433,19 +434,42 @@ function CandidateCollection({ name, items }: { name: string; items: unknown[] }
   return <Disclosure className="research-candidate-collection" variant="compact" defaultOpen title={<>{candidateFieldLabel(name)} · {items.length}</>}><div>{items.map((item, index) => {
     const value = item && typeof item === "object" ? item as Dict : null;
     if (!value) return <article key={`${name}-${index}`}><strong>{text(item)}</strong></article>;
-    const description = text(value.description, text(value.statement, text(value.condition_code, `${candidateFieldLabel(name)} ${index + 1}`)));
+    const description = text(value.title, text(value.description, text(value.statement, text(value.source_id, text(value.condition_code, `${candidateFieldLabel(name)} ${index + 1}`)))));
     const condition = [value.metric_key, value.comparator, value.threshold].filter((entry) => entry !== null && entry !== undefined && entry !== "").map(String).join(" ");
-    const context = [value.phase, value.mode, value.fact_type, value.instrument_id, value.observable, value.severity].filter((entry) => entry !== null && entry !== undefined && entry !== "").map(String).join(" · ");
+    const context = [value.kind, value.source_id, value.monitor_id, value.rule_code, value.phase, value.mode, value.fact_type, value.instrument_id, value.observable, value.severity].filter((entry) => entry !== null && entry !== undefined && entry !== "").map(String).join(" · ");
     return <article key={`${name}-${index}`}><strong>{description}</strong>{context && <small>{context}</small>}{condition && <code>{condition}</code>}{value.basis ? <p><span>Basis</span>{text(value.basis)}</p> : null}{value.falsifiability ? <p><span>Falsifiability</span>{text(value.falsifiability)}</p> : null}</article>;
   })}</div></Disclosure>;
 }
 
-function CandidateReviewDetails({ candidate, payload, kind }: { candidate: Dict; payload: Dict; kind: string }) {
+function CandidateReviewDetails({ candidate, payload, kind, context }: { candidate: Dict; payload: Dict; kind: string; context: Dict }) {
   const collectionEntries = Object.entries(payload).filter(([, value]) => Array.isArray(value) && value.length > 0) as Array<[string, unknown[]]>;
   const scalarItems = Object.entries(payload)
     .filter(([key, value]) => key !== "kind" && !CANDIDATE_NARRATIVE_FIELDS.includes(key) && !Array.isArray(value) && (value === null || typeof value !== "object"))
     .map(([key, value]) => ({ label: candidateFieldLabel(key), value: value === null || value === "" ? "—" : typeof value === "boolean" ? (value ? "Yes" : "No") : String(value) }));
   const narratives = CANDIDATE_NARRATIVE_FIELDS.map((key) => [key, payload[key]] as const).filter(([, value]) => typeof value === "string" && value.trim());
+  const impactSource = payload.source && typeof payload.source === "object" ? asDict(payload.source) : null;
+  const targetContext = listOf<Dict>(context, "targets").find((target) => target.assumption_id === payload.assumption_id && target.thesis_revision_id === payload.thesis_revision_id);
+  const sourceContext = listOf<Dict>(context, "sources").find((item) => {
+    const source = asDict(item.source);
+    return impactSource && source.kind === impactSource.kind && source.source_id === impactSource.source_id && (source.monitor_id ?? null) === (impactSource.monitor_id ?? null) && (source.rule_code ?? null) === (impactSource.rule_code ?? null);
+  });
+  const questionContext = listOf<Dict>(context, "questions").find((question) => question.question_id === payload.question_id);
+  const evidenceImpactFacts = kind === "evidence_impact" ? [
+    { label: "Action", value: text(payload.action, "UNKNOWN").toUpperCase() },
+    { label: "Target Statement", value: text(targetContext?.statement, "See pinned target identifiers") },
+    { label: "Source Title", value: text(sourceContext?.title, "Source metadata unavailable in current page") },
+    { label: "Impact ID", value: text(payload.impact_id, "New impact") },
+    { label: "Expected Version", value: payload.expected_version == null ? "New" : `v${String(payload.expected_version)}` },
+    { label: "Thesis Revision", value: text(payload.thesis_revision_id) },
+    { label: "Assumption", value: text(payload.assumption_id) },
+    { label: "Stance", value: text(payload.stance, "uncertain").toUpperCase() },
+    ...(impactSource ? [
+      { label: "Source Kind", value: text(impactSource.kind) },
+      { label: "Source ID", value: text(impactSource.source_id) },
+      ...(impactSource.monitor_id ? [{ label: "Monitor ID", value: text(impactSource.monitor_id) }] : []),
+      ...(impactSource.rule_code ? [{ label: "Rule Code", value: text(impactSource.rule_code) }] : []),
+    ] : []),
+  ] : [];
   return <section className="research-candidate-review" aria-label="Candidate Review Details">
     <DescriptionList columns={4} items={[
       { label: "Candidate ID", value: text(candidate.candidate_id) },
@@ -457,15 +481,17 @@ function CandidateReviewDetails({ candidate, payload, kind }: { candidate: Dict;
       { label: "Subject", value: shortId(candidate.subject_id) },
       { label: "Thesis", value: shortId(candidate.thesis_id) },
     ]} />
+    {kind === "open_question" && <p>{text(payload.text, text(questionContext?.text, "See exact question identifier"))}</p>}
+    {evidenceImpactFacts.length > 0 && <DescriptionList columns={4} className="research-candidate-payload-facts" items={evidenceImpactFacts} />}
     {text(candidate.proposed_by_rationale, "") ? <div className="research-candidate-rationale"><span>Why This Change Was Proposed</span><p>{text(candidate.proposed_by_rationale, "")}</p></div> : null}
-    {scalarItems.length > 0 && <DescriptionList columns={4} className="research-candidate-payload-facts" items={scalarItems} />}
+    {kind !== "evidence_impact" && scalarItems.length > 0 && <DescriptionList columns={4} className="research-candidate-payload-facts" items={scalarItems} />}
     {narratives.length > 0 && <div className="research-candidate-narratives">{narratives.map(([key, value]) => <section key={key}><span>{candidateFieldLabel(key)}</span><p>{String(value)}</p></section>)}</div>}
     {collectionEntries.map(([name, items]) => <CandidateCollection key={name} name={name} items={items} />)}
     <Disclosure className="research-candidate-raw" variant="code" title="Complete Proposal Payload"><pre>{displayJson(payload)}</pre></Disclosure>
   </section>;
 }
 
-function PendingCandidate({ candidate, subjectStatus, onDecision, busy }: { candidate: Dict; subjectStatus: string; onDecision: (candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) => Promise<void>; busy: boolean }) {
+function PendingCandidate({ candidate, subjectStatus, onDecision, busy, context }: { candidate: Dict; context: Dict; subjectStatus: string; onDecision: (candidate: Dict, action: "confirm" | "reject" | "withdraw", reason?: string) => Promise<void>; busy: boolean }) {
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectionError, setRejectionError] = useState<string | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -492,7 +518,7 @@ function PendingCandidate({ candidate, subjectStatus, onDecision, busy }: { cand
       setDecisionError(cause instanceof Error ? cause.message : "Candidate decision failed.");
     }
   }
-  return <article className="research-candidate"><header><div><strong>{candidateTitle(kind, payload)}</strong><small>{text(candidate.candidate_id)} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><CandidateReviewDetails candidate={candidate} payload={payload} kind={kind} /><ErrorNote role="alert">{decisionError}</ErrorNote><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => { void submit("confirm"); }} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><Input ref={rejectionInputRef} required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { void submit("reject"); }} busy={busy}>Reject Candidate</ActionButton><Button className="research-withdraw-button" type="button" disabled={busy} onClick={() => { void submit("withdraw"); }}>Withdraw Proposal</Button></div></section></div></article>;
+  return <article className="research-candidate"><header><div><strong>{candidateTitle(kind, payload)}</strong><small>{text(candidate.candidate_id)} · proposed by {text(candidate.proposed_by, "unknown")}</small></div><Badge value={text(candidate.status, "PROPOSED").toUpperCase()} /></header><p>{summary}</p><CandidateReviewDetails candidate={candidate} payload={payload} kind={kind} context={context} /><ErrorNote role="alert">{decisionError}</ErrorNote><div className="research-candidate-decision"><section className="research-candidate-confirm"><div><strong>Approve This Exact Proposal</strong><small>{isInstrumentCandidate ? "Approval adds this Instrument directly to Instruments." : "Confirmation creates the next durable state or revision."}</small></div><ActionButton onClick={() => { void submit("confirm"); }} busy={busy}>{isInstrumentCandidate ? "Approve Instrument" : "Confirm Candidate"}</ActionButton></section><section className="research-candidate-decline"><label><span><b className="required-mark" aria-hidden="true">*</b>Reject with Rationale</span><Input ref={rejectionInputRef} required value={rejectionReason} onChange={(event) => { setRejectionReason(event.target.value); setRejectionError(null); }} placeholder="Explain why this proposal should not proceed" aria-label="Candidate Rejection Reason" /></label><ErrorNote role="alert">{rejectionError}</ErrorNote><div><ActionButton tone="warning" onClick={() => { void submit("reject"); }} busy={busy}>Reject Candidate</ActionButton><Button className="research-withdraw-button" type="button" disabled={busy} onClick={() => { void submit("withdraw"); }}>Withdraw Proposal</Button></div></section></div></article>;
 }
 
 function ResearchSubjectDetail({
@@ -526,6 +552,15 @@ function ResearchSubjectDetail({
   const assumptions = listOf<Dict>(state, "assumptions");
   const invalidations = listOf<Dict>(state, "invalidations");
   const openQuestions = listOf<Dict>(state, "open_questions");
+  const unresolvedQuestionCount = openQuestions.filter((q) => text(q.status).toUpperCase() === "OPEN").length;
+  const evidenceLinksRequest = useApi<Dict>(`/api/research/${encodeURIComponent(text(researchSubject.subject_id))}/evidence-links`);
+  const linksScopeMatches = evidenceLinksRequest.data != null
+    && asDict(evidenceLinksRequest.data.data).subject_id === researchSubject.subject_id;
+  const evidenceLinksRead = {
+    ...evidenceLinksRequest,
+    data: linksScopeMatches ? evidenceLinksRequest.data : null,
+    error: evidenceLinksRequest.error ?? (evidenceLinksRequest.data && !linksScopeMatches && !evidenceLinksRequest.loading ? "Source choices do not match the selected Research Subject." : null),
+  };
   const instrumentCandidates = listOf<Dict>(state, "watchlist_items").filter((candidate) => ATTACHED_INSTRUMENT_STATUSES.has(text(candidate.status, "")));
   const primaryInstrumentId = text(researchSubject.primary_instrument_id, "");
   const sourceMatches = Boolean(observationSeed?.ready && observationSeed.source.instrument_id && primaryInstrumentId === observationSeed.source.instrument_id);
@@ -554,8 +589,8 @@ function ResearchSubjectDetail({
     ...(liveTheses.length > 0 && invalidations.length === 0
       ? [{ key: "invalidations", severity: "GAP", title: "Invalidation is not explicit", detail: "Add a falsifiable condition that would retire or weaken the judgment." }]
       : []),
-    ...(openQuestions.length > 0
-      ? [{ key: "questions", severity: "OPEN", title: `${openQuestions.length} open question${openQuestions.length === 1 ? "" : "s"}`, detail: "Resolve these with new evidence before increasing conviction." }]
+    ...(unresolvedQuestionCount > 0
+      ? [{ key: "questions", severity: "OPEN", title: `${unresolvedQuestionCount} open question${unresolvedQuestionCount === 1 ? "" : "s"}`, detail: "Resolve these with new evidence before increasing conviction." }]
       : []),
     ...(pendingCandidates.length > 0
       ? [{ key: "candidates", severity: "REVIEW", title: `${pendingCandidates.length} candidate${pendingCandidates.length === 1 ? "" : "s"} awaiting review`, detail: "Confirm, reject, or withdraw each exact proposal." }]
@@ -870,6 +905,7 @@ function ResearchSubjectDetail({
     if (action === "reject") request.rejection_reason = reason;
     else request.review_note = action === "withdraw" ? "User withdrew the candidate from the local Research workspace" : "Confirmed from the local Research workspace";
     await onWrite("research_judgment_confirm", request, "research_judgment_confirm");
+    evidenceLinksRead.refresh();
     onRefresh();
   }
 
@@ -966,7 +1002,7 @@ function ResearchSubjectDetail({
       <Card id="research-section-continuity" className="research-continuity-check" kicker="RESEARCH HEALTH" title="Health Check" action={continuitySignals.length > 0 ? <Badge value={`${continuitySignals.length} OPEN`} /> : undefined}>
         {continuitySignals.length === 0 ? <div className="attention-clear"><span aria-hidden="true">✓</span><div><strong>Core Judgment Controls Are Present</strong><small>Continue checking current facts and Catalyst outcomes separately.</small></div></div> : <div className="continuity-checklist">{continuitySignals.map((signal) => signal.key === "candidates" ? <Button className="continuity-checklist-action" type="button" key={signal.key} onClick={() => goToSection("research-section-review")}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div><span className="continuity-action-copy">Open Queue <ArrowDown aria-hidden="true" /></span></Button> : <article key={signal.key}><Badge value={signal.severity} /><div><strong>{signal.title}</strong><span>{signal.detail}</span></div></article>)}</div>}
       </Card>
-      {pendingCandidates.length > 0 && <Card id="research-section-review" className="research-candidates-card" kicker="DECISION REQUIRED" title="Pending Candidates" description="Review the complete proposed change, then confirm, reject, or withdraw that exact Candidate." action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onDecision={decideCandidate} />)}</Card>}
+      {pendingCandidates.length > 0 && <Card id="research-section-review" className="research-candidates-card" kicker="DECISION REQUIRED" title="Pending Candidates" description="Review the complete proposed change, then confirm, reject, or withdraw that exact Candidate." action={<Badge value={`${pendingCandidates.length} PROPOSED`} />}>{pendingCandidates.map((candidate) => <PendingCandidate key={text(candidate.candidate_id)} candidate={candidate} context={{ ...asDict(evidenceLinksRead.data?.data), questions: openQuestions }} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} onDecision={decideCandidate} />)}</Card>}
       <Disclosure className="research-raw" variant="code" title={<>View This Research Subject&apos;s Durable State</>}><pre>{displayJson(state)}</pre></Disclosure>
       </section>
       <section id="research-panel-instruments" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-instruments" hidden={activeModule !== "instruments"}>
@@ -989,11 +1025,15 @@ function ResearchSubjectDetail({
         {instrumentInventory.length === 0 ? <Empty>No Instruments are attached to this Research Subject.</Empty> : <div className="research-selection-list">{primaryInstrumentId && <article className="research-selection-item status-primary"><div><strong>{shortId(primaryInstrumentId)}</strong><small>{primaryInstrumentId}</small></div><div className="research-selection-actions"><Badge value="PRIMARY" /></div></article>}{additionalInstrumentCandidates.map((candidate) => <article className="research-selection-item" key={text(candidate.item_id)}><div><strong>{text(candidate.display_name)}</strong><small>{text(candidate.instrument_id, `${text(candidate.market)}:${text(candidate.symbol)}`)}</small>{text(candidate.thesis_hint, "") ? <p>{text(candidate.thesis_hint)}</p> : null}</div><div className="research-selection-actions"><Badge value="INSTRUMENT" /></div></article>)}</div>}
       </Card>
       </section>
+      <section id="research-panel-evidence" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-evidence" hidden={activeModule !== "evidence"}>
+        <EvidenceImpactPanel subjectId={text(researchSubject.subject_id)} onWrite={onWrite} onRefresh={onRefresh} busy={busy} linksRead={evidenceLinksRead} />
+        <DecisionReplayPanel key={text(researchSubject.subject_id)} subjectId={text(researchSubject.subject_id)} linksRead={evidenceLinksRead} />
+      </section>
       <section id="research-panel-thesis" className="research-module-panel" role="tabpanel" aria-labelledby="research-tab-thesis" hidden={activeModule !== "thesis"}>
       <Card id="research-section-thesis" className="research-theses-card" kicker="CURRENT JUDGMENT" title="Thesis" description="Versioned, falsifiable research judgments." action={!thesisEditor ? <ActionButton onClick={() => startThesisEditor(undefined, true)}>Create Thesis</ActionButton> : <Badge value="EDITING" />}>
         {thesisEditor ? <ThesisEditor draft={thesisDraft} thesisId={thesisId} availableTheses={theses} statusExplicit={thesisStatusExplicit} subjectStatus={String(researchSubject.status).toLowerCase()} busy={busy} error={detailError} onChange={setThesisDraft} onStatusExplicitChange={setThesisStatusExplicit} onCancel={() => { setThesisEditor(false); setThesisSourceRevisionId(null); }} onSave={() => { void saveThesis(); }} /> : theses.length === 0 ? <div className="research-no-thesis"><p>This Research Subject has no Thesis yet. Create a new Thesis candidate; Draft Research Subjects default to DRAFT Thesis.</p><ActionButton onClick={() => startThesisEditor(undefined, true)}>Create Thesis</ActionButton></div> : <ThesisRelationshipList theses={theses} revisions={revisions} assumptions={assumptions} invalidations={invalidations} onEdit={startThesisEditor} />}
       </Card>
-      <Card className="research-context-card" kicker="OPEN ENDS" title="Judgment Context" description="Questions that remain unresolved."><div className="research-context-grid research-context-single"><div><span>Open Questions · {openQuestions.length}</span>{openQuestions.length === 0 ? <p className="muted">No open questions.</p> : <ul>{openQuestions.map((question) => <li key={text(question.question_id)}>{text(question.text)}</li>)}</ul>}</div></div></Card>
+      <QuestionResearchPanel subjectId={text(researchSubject.subject_id)} questions={openQuestions} onWrite={onWrite} onRefresh={onRefresh} busy={busy} linksRead={evidenceLinksRead} />
       </section>
       <ResearchContinuity key={text(researchSubject.subject_id)} chartSeed={acceptedChartSeed} chartReviewRequest={chartReviewRequest} activeModule={activeModule} subject={researchSubject} state={state} onWrite={onWrite} onRefresh={onRefresh} busy={busy} observationSeed={observationSeed} planReviewRequest={planReviewRequest} onPlanEditingChange={setPlanEditorOpen} />
       {activeModule === "valuation" && <section id="research-panel-valuation" role="tabpanel" aria-labelledby="research-tab-valuation"><ValuationLedger subjectId={text(researchSubject.subject_id)} instrumentId={primaryInstrumentId} /></section>}
@@ -1204,7 +1244,8 @@ export default function ResearchPage() {
       { id: "create", label: subjectEditor ? "Close Create" : "Create Research Subject", description: "Open the Research Subject editor", icon: <Plus aria-hidden="true" />, onSelect: () => { subjectEditorTouchedRef.current = true; setSubjectDraft(EMPTY_SUBJECT_DRAFT); setSubjectEditorError(null); setSubjectEditor((value) => !value); } },
       { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload durable Research data", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
     ]} />}>
-      <DataBoundary loading={result.loading} error={result.error}>
+      <DataBoundary loading={result.loading && result.data === null} error={result.data ? null : result.error}>
+        {result.data && result.error ? <ErrorNote role="alert">Refresh failed; the last loaded view and your draft are preserved. {result.error}</ErrorNote> : null}
         <div className="research-page">
           <div className="research-master-detail">
             <aside className="research-index" aria-label="Research Library">

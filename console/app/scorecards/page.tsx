@@ -7,7 +7,7 @@ import { ErrorNote, Paginator, Badge, Card, DataBoundary, Disclosure, Empty, Pag
 } from "../components/ui";
 import { ConsoleShell } from "../components/console-shell";
 import { listOf, postApi, useApi } from "../lib/api";
-import { textDash as text } from "../lib/coerce";
+import { asObject as asDict, textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 
@@ -18,10 +18,6 @@ type SubjectAggregate = {
 
 const ALL_SUBJECTS = "all";
 const TARGET_DIMENSION_OUTCOMES = ["NOT_EVALUATED", "EVALUATED", "PARTIAL", "PASS", "FAIL"];
-
-function asDict(value: unknown): Dict {
-  return value && typeof value === "object" ? (value as Dict) : {};
-}
 
 function asList(value: unknown): Dict[] {
   if (Array.isArray(value)) return value.filter((item): item is Dict => item !== null && typeof item === "object");
@@ -226,6 +222,7 @@ function ScorecardCard({
                     </span>
                   </header>
                   <p>{text(dimension.title, text(dimension.summary, "No dimension summary"))}</p>
+                  {dimension.code === "REVISION_EVIDENCE_BALANCE" && <p>Assessment evidence and reviewed Impact links have separate denominators. Overlap is disclosed, never added. Older runs without Impact counts leave that cohort unknown.</p>}
                   <dl>
                     <dt>Summary</dt>
                     <dd>{text(dimension.summary, "—")}</dd>

@@ -6,6 +6,13 @@ notes.
 
 ## Direction
 
+Current priority is improving the reliability and maintainability of existing workflows.
+The future capabilities below are deferred directions, not authorization to add features.
+
+The [workflow evolution proposal](workflow-evolution.md) develops this direction into
+user journeys, phased delivery, concrete work packages and acceptance criteria. It
+is a proposal, not an expansion of the implemented product boundary.
+
 Trading Partner remains a local-first, long-horizon investment judgment companion.
 New work must strengthen the loop from Observation through reviewed judgment,
 portfolio evidence, and later calibration. It is not becoming a generic market
@@ -64,6 +71,10 @@ A–D 的首版已交付，当前边界见 [产品说明](../product.md) 与
 
 保留 [解释核验的边界](../operations/known-issues.md)。沿用免费事实路线；不增加通用
 新闻流、同质化 Agent、自动基金、独立移动客户端或未经授权的付费数据订阅。
+
+已补齐首版人工审阅的证据—假设关联，以及 OpenQuestion 的证据要求、截止时间、
+进展、答案来源和后续 Decision 关联。后续的模型关联建议、字段级事实定位和更多
+来源适配仍需独立验证需求与来源契约；当前不会自动解释或确认关联。
 
 ## Deferred integrations
 

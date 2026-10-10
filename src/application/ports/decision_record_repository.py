@@ -31,4 +31,5 @@ class DecisionRecordRepository(Protocol):
         now: datetime,
         subject_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[DecisionRecord, ...]: ...

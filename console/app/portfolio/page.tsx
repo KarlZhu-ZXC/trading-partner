@@ -33,7 +33,7 @@ import {
 import { listOf, postApi, useApi } from "../lib/api";
 import { useAgentPageContext } from "../lib/agent-page-context";
 import { CYCLE_ACTIVITY_COUNTS_HELP, cycleActivityCounts } from "../lib/trade-cycle-counts";
-import { textDash as text } from "../lib/coerce";
+import { asObject as asDict, textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 type Tab = "holdings" | "activity" | "performance" | "risk";
@@ -88,10 +88,6 @@ const DATA_NOTE_COPY: Record<string, { title: string; detail: string }> = {
     detail: "Values in different currencies are kept separate because no verified FX conversion was available.",
   },
 };
-
-function asDict(value: unknown): Dict {
-  return value && typeof value === "object" ? (value as Dict) : {};
-}
 
 function cyclePnlDisplay(cycle: Dict): {
   label: string;

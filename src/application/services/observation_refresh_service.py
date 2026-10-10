@@ -151,15 +151,16 @@ class ObservationRefreshService:
                                 item.revision.note_revision_id
                             ):
                                 continue
-                            if not self.reviews.requires_deep_review(
+                            package = self.reviews.prepare_review(
                                 item.revision.note_revision_id
-                            ):
+                            )
+                            if not package.requires_deep_review:
                                 continue
                             if requests >= 100:
                                 degraded = True
                                 break
                             requests += 1
-                            draft = await self.reviews.review(item.revision.note_revision_id)
+                            draft = await self.reviews.review_prepared(package)
                             degraded |= draft is not None and draft.status != "SUCCEEDED"
                             degraded |= draft is None and not self.reviews.review_enabled
         return OperationalJobOutcome(

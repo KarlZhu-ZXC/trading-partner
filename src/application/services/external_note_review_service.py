@@ -221,16 +221,25 @@ class ExternalNoteReviewService:
         value = self._reviews.latest_for_revision(note_revision_id.strip())
         return ExternalNoteReviewDTO.from_domain(value) if value is not None else None
 
-    def pending_projections(self, *, limit: int = 100) -> tuple[ReviewItemProjection, ...]:
-        values = self._reviews.list_latest(
-            statuses=frozenset(
-                {
-                    ExternalNoteReviewStatus.PENDING,
-                    ExternalNoteReviewStatus.DEFERRED,
-                }
-            ),
-            limit=limit,
+    def pending_projections(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> tuple[ReviewItemProjection, ...]:
+        if type(offset) is not int or offset < 0:
+            raise DataContractError("Observation review offset must be non-negative")
+        statuses = frozenset(
+            {
+                ExternalNoteReviewStatus.PENDING,
+                ExternalNoteReviewStatus.DEFERRED,
+            }
         )
+        if offset == 0:
+            values = self._reviews.list_latest(statuses=statuses, limit=limit)
+        else:
+            values = self._reviews.list_latest(
+                statuses=statuses,
+                limit=limit,
+                offset=offset,
+            )
         result: list[ReviewItemProjection] = []
         for value in values:
             revision = self._notes.revision_by_id(value.note_revision_id)

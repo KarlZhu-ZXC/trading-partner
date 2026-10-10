@@ -1,5 +1,7 @@
 """Durable, version-pinned changes alongside a reviewed Decision."""
 
+from __future__ import annotations
+
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -33,6 +35,20 @@ class ResearchChangesBaselineDTO(_DTO):
     plan: BaselinePlanDTO | None
 
 
+class ReviewedImpactDTO(_DTO):
+    """A confirmed, source-pinned impact attached to one visible change."""
+
+    impact_id: str
+    version: int
+    thesis_revision_id: str
+    assumption_id: str
+    stance: Literal["supports", "contradicts", "uncertain"]
+    rationale: str
+    confirmed_at: AwareDatetime
+    confirmed_by: str
+    baseline_match: bool
+
+
 class ResearchChangeDTO(_DTO):
     change_id: str
     kind: Literal["OBSERVATION", "MONITOR", "AGENDA"]
@@ -57,6 +73,7 @@ class ResearchChangeDTO(_DTO):
     event_id: str | None = None
     agenda_item_id: str | None = None
     warning_codes: list[str] = Field(default_factory=list)
+    reviewed_impacts: list[ReviewedImpactDTO] = Field(default_factory=list)
 
 
 class ResearchChangesDTO(_DTO):

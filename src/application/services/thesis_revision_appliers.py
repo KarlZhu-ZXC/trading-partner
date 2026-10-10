@@ -19,8 +19,11 @@ from application.dto.research import (
     WatchlistCandidatePayload,
     parse_candidate_payload,
 )
+from application.dto.research_links import EvidenceImpactCandidatePayload
 from application.ports.id_generator import IdGenerator
 from application.ports.research_unit_of_work import ResearchUnitOfWork
+from application.services.research_impact_rules import apply_impact
+from application.services.research_question_rules import apply_question
 from application.services.research_state_invariants import (
     ensure_active_trade_plan_dependencies,
     ensure_no_live_monitors,
@@ -38,7 +41,6 @@ from domain.common.enums import (
     InvalidationSeverity,
     InvalidationStatus,
     Market,
-    OpenQuestionStatus,
     ResearchSubjectStatus,
     ThesisRole,
     ThesisStatus,
@@ -57,7 +59,6 @@ from domain.research.models import (
     Assumption,
     CandidateThesisRevision,
     InvalidationCondition,
-    OpenQuestion,
     ResearchSubject,
     Thesis,
     ThesisRevision,
@@ -108,6 +109,9 @@ class ThesisRevisionAppliers:
             return self._apply_invalidation(
                 uow, candidate, payload, reviewed_by=reviewed_by, now=now
             )
+        if kind is CandidateKind.EVIDENCE_IMPACT:
+            assert isinstance(payload, EvidenceImpactCandidatePayload)
+            return apply_impact(uow, candidate, payload, reviewed_by, now, self._id_generator)
         if kind is CandidateKind.OPEN_QUESTION:
             assert isinstance(payload, OpenQuestionCandidatePayload)
             return self._apply_open_question(
@@ -269,9 +273,7 @@ class ThesisRevisionAppliers:
                 severity=item.severity,
                 fact_type=(TradePlanFactType(item.fact_type) if item.fact_type else None),
                 metric_key=item.metric_key,
-                comparator=(
-                    TradePlanComparator(item.comparator) if item.comparator else None
-                ),
+                comparator=(TradePlanComparator(item.comparator) if item.comparator else None),
                 threshold=item.threshold,
                 unit=item.unit,
                 instrument_id=item.instrument_id,
@@ -630,52 +632,10 @@ class ThesisRevisionAppliers:
         reviewed_by: str,
         now: datetime,
     ) -> tuple[str, str | None]:
-        subject_id = candidate.subject_id
-        if subject_id is None:
-            raise DataContractError("open_question candidate requires subject_id")
-
-        if payload.action == "create":
-            qid = self._id_generator.new(EntityIdPrefix.REV)
-            uow.questions.add(
-                OpenQuestion(
-                    question_id=qid,
-                    subject_id=subject_id,
-                    text=payload.text or "",
-                    status=OpenQuestionStatus.OPEN,
-                    asked_at=now,
-                    answered_at=None,
-                    answer_summary=None,
-                    closed_without_answer_reason=None,
-                    proposed_by=candidate.proposed_by,
-                )
-            )
-            self._touch_subject(uow, subject_id, now)
-            return "open_question", qid
-        if payload.action == "answer":
-            assert payload.question_id is not None
-            assert payload.answer_summary is not None
-            uow.questions.answer(
-                payload.question_id,
-                answered_at=now,
-                answer_summary=payload.answer_summary,
-            )
-            self._touch_subject(uow, subject_id, now)
-            return "open_question", payload.question_id
-        if payload.action == "mark_stale":
-            assert payload.question_id is not None
-            uow.questions.mark_stale(payload.question_id)
-            self._touch_subject(uow, subject_id, now)
-            return "open_question", payload.question_id
-        if payload.action == "close":
-            assert payload.question_id is not None
-            assert payload.closed_reason is not None
-            uow.questions.close_without_answer(
-                payload.question_id,
-                closed_reason=payload.closed_reason,
-            )
-            self._touch_subject(uow, subject_id, now)
-            return "open_question", payload.question_id
-        raise DataContractError(f"unknown open_question action: {payload.action}")
+        result = apply_question(uow, candidate, payload, reviewed_by, now, self._id_generator)
+        if candidate.subject_id is not None:
+            self._touch_subject(uow, candidate.subject_id, now)
+        return result
 
     def _apply_watchlist(
         self,
@@ -693,9 +653,7 @@ class ThesisRevisionAppliers:
                 market_value = instrument_market
                 symbol = instrument_symbol
             if market_value is None:
-                raise DataContractError(
-                    "create watchlist payload requires market or instrument_id"
-                )
+                raise DataContractError("create watchlist payload requires market or instrument_id")
             item_id = self._id_generator.new(EntityIdPrefix.SNAPSHOT)
             item = WatchlistItem(
                 item_id=item_id,
@@ -705,9 +663,7 @@ class ThesisRevisionAppliers:
                 thesis_hint=(payload.thesis_hint or "").strip(),
                 triggers=payload.triggers,
                 subject_id=(
-                    payload.subject_id
-                    if payload.subject_id is not None
-                    else candidate.subject_id
+                    payload.subject_id if payload.subject_id is not None else candidate.subject_id
                 ),
                 status=WatchlistItemStatus.WATCHING,
                 created_at=now,

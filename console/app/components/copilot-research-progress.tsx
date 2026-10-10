@@ -1,13 +1,16 @@
 "use client";
 
-import { Badge, DescriptionList, Disclosure } from "./ui";
+import { researchOutcome, navigateQuestionResearch } from "../lib/question-research";
+import { Badge, DescriptionList, Disclosure, LinkButton } from "./ui";
 import type { AgentReceipt, CopilotResearch, CopilotResearchProfile } from "../lib/agent-api";
 import styles from "./copilot-research-progress.module.css";
 
 const labels: Record<string, string> = { READ: "Gather Evidence", SYNTHESIZE: "Build Answer", CHALLENGE: "Counter-review", EVIDENCE_CHECK: "Check Evidence", COMPLETED: "Completed", TIME_BUDGET: "Time budget reached", MODEL_BUDGET: "Model call budget reached", TOOL_BUDGET: "Tool call budget reached", ROUND_LIMIT: "Round limit reached", EVIDENCE_GAP: "Evidence gap", CANCELLED: "Cancelled", FAILED: "Failed" };
 
-export function CopilotResearchProgress({ research, recoveredStatus, receipts = [], usage }: { research: CopilotResearch; recoveredStatus?: string; receipts?: AgentReceipt[]; usage?: { input_tokens?: unknown; output_tokens?: unknown } }) {
+export function CopilotResearchProgress({ research, recoveredStatus, receipts = [], usage, conversationId, messageId }: { conversationId?: string; messageId?: string; research: CopilotResearch; recoveredStatus?: string; receipts?: AgentReceipt[]; usage?: { input_tokens?: unknown; output_tokens?: unknown } }) {
   const recovered = Boolean(recoveredStatus);
+  const questionHref = research.question_context ? `/research?subject_id=${encodeURIComponent(research.question_context.subject_id)}&section=thesis#question-${encodeURIComponent(research.question_context.question_id)}` : "";
+  const sourcesHref = research.question_context && conversationId && messageId ? `/research?subject_id=${encodeURIComponent(research.question_context.subject_id)}&section=evidence&research_conversation_id=${encodeURIComponent(conversationId)}&research_message_id=${encodeURIComponent(messageId)}` : "";
   const modelUnknown = recovered || research.gaps.includes("MODEL_USAGE_UNAVAILABLE") || research.gaps.includes("MODEL_PROGRESS_UNAVAILABLE");
   const progressUnknown = recovered || research.gaps.includes("MODEL_PROGRESS_UNAVAILABLE");
   const tokenCount = (value: unknown) => !recovered && typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -31,6 +34,8 @@ export function CopilotResearchProgress({ research, recoveredStatus, receipts = 
     ]} />
     {!recovered && research.phase === "FINISHED" && research.evidence_status !== "NOT_CHECKED" && <DescriptionList columns={2} items={[{ label: "Exact Field Matches", value: research.verified_claims }, { label: "Blocked Blocks", value: research.blocked_claims }]} />}
     <p>Field checks verify source values and context, not the meaning of model explanations. Cited interpretations may still misread scope. Token values include only reported usage; Provider internal attempts and cost are unavailable.</p>
+    {(research.stop_reason || recovered) && <div aria-label="Research Outcome"><strong>{researchOutcome(recoveredStatus ?? research.stop_reason, research.verified_claims, recovered ? [...research.gaps, "MODEL_PROGRESS_UNAVAILABLE"] : research.gaps).title}</strong><p>{researchOutcome(recoveredStatus ?? research.stop_reason, research.verified_claims, recovered ? [...research.gaps, "MODEL_PROGRESS_UNAVAILABLE"] : research.gaps).next}</p><p>The saved question and judgment have not been changed.</p></div>}
+    {research.question_context && <div><p>Question v{research.question_context.question_version} · evidence cutoff {research.question_context.evidence_cutoff} · prepared sources {research.question_context.source_coverage}</p><LinkButton href={questionHref} onClick={(event) => navigateQuestionResearch(event, questionHref)}>Return to Research Question</LinkButton>{conversationId && messageId && !recovered && research.phase === "FINISHED" && <LinkButton href={sourcesHref} onClick={(event) => navigateQuestionResearch(event, sourcesHref)}>Review Prepared Sources</LinkButton>}</div>}
     {research.stop_reason && !recovered && <p role="status"><strong>{labels[research.stop_reason]}</strong></p>}
     {research.gaps.length > 0 && !recovered && <p>Evidence gaps: {research.gaps.join(" · ")}</p>}
     {recovered && receipts.length > 0 && <Disclosure title={`Saved Tool Steps · ${receipts.length}`} variant="compact"><ol>{receipts.map((receipt) => <li key={receipt.receipt_id}>{receipt.capability} · {receipt.operation} · {receipt.error_codes.length ? receipt.error_codes.join(" · ") : "Recorded"}</li>)}</ol></Disclosure>}

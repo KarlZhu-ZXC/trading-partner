@@ -27,7 +27,7 @@ from infrastructure.persistence.orm import (
     ThesisRevisionRow,
     ThesisRow,
 )
-from infrastructure.persistence.repositories._mapping import dt_to_db
+from infrastructure.persistence.repositories._mapping import dt_from_db, dt_to_db
 
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDEM_KEY_MAX = 128
@@ -315,8 +315,8 @@ def require_external_note_revision_visible(
     and the Research Subject expose the same primary instrument.  This is the
     existing observation-to-Subject ownership boundary and deliberately fails
     closed for unscoped notes.  The revision must also have been visible by
-    the Decision's recorded time, preserving the point-in-time contract used
-    by the other Decision source links.
+    the Decision time, and FULL content is required. No interpretation row is
+    required: an independent human Decision is distinct from source adoption.
     """
 
     if external_note_revision_id is None:
@@ -332,6 +332,8 @@ def require_external_note_revision_visible(
                 "subject_id": subject_id,
             },
         )
+    if revision.coverage != "FULL":
+        raise InvalidResearchLink("Only FULL Observation revisions can support a Decision")
     identity = session.get(ExternalNoteIdentityRow, revision.note_id)
     subject = session.get(ResearchSubjectRow, subject_id)
     if identity is None or subject is None:
@@ -358,8 +360,7 @@ def require_external_note_revision_visible(
                 "subject_id": subject_id,
             },
         )
-    visible_text = dt_to_db(visible_at)
-    if revision.observed_at > visible_text:
+    if dt_from_db(revision.observed_at, field_name="observed_at") > visible_at:
         raise InvalidResearchLink(
             "external note revision is not yet visible at record time",
             details={

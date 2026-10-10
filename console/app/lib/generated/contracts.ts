@@ -417,6 +417,7 @@ export namespace AgentSendMessageRequestTypes {
   export type ExternalMessageRef = string | null;
   export type Model = string | null;
   export type ModelId = string | null;
+  export type QuestionContextToken = string | null;
   export type ReasoningEffort = ("low" | "medium" | "high" | "max") | null;
   export type ResearchMaxModelCalls = number;
   export type ResearchMaxSeconds = number;
@@ -430,6 +431,7 @@ export namespace AgentSendMessageRequestTypes {
     external_message_ref?: ExternalMessageRef;
     model?: Model;
     model_id?: ModelId;
+    question_context_token?: QuestionContextToken;
     reasoning_effort?: ReasoningEffort;
     research_max_model_calls?: ResearchMaxModelCalls;
     research_max_seconds?: ResearchMaxSeconds;

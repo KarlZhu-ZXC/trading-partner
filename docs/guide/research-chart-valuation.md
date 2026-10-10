@@ -24,6 +24,24 @@ Changes from Previous Thinking 展开上一同步版本的用户段落变化，�
 输入。提交失败可使用同一请求重试恢复结果；刷新页面只读，不会自动再提交。通用
 NO_ACTION 不会隐式采纳或关闭笔记的独立审阅，复杂观点修改仍保留原有提议/确认步骤。
 
+卡片会列出本次准备的材料引用、时间和覆盖缺口；准备材料不表示每条资料都已读或采纳。
+确认后，Decision 与材料引用一起保存。完成回执中的待审笔记数量是准备时的已知数量，
+并非当前队列计数；需要继续处理时点 Open Remaining Notes。材料过多导致引用清单部分
+可用时，先逐项检查或记录补证安排，不能使用维持快捷动作。
+
+提交结果不确定时先点 Check Submission。刷新页面也只查原请求回执，查到已记录结果
+便展示原材料，不用新资料替换它。Retry Same Review 保留原请求；只有明确未找到回执
+后才可放弃该次尝试并重新读取。材料回执缺失不表示 Decision 未保存。
+
+## 不依赖模型的笔记审阅
+
+在 Journal → Notes 阅读 FULL 原文及作者归属，选择确切的 ACTIVE 研究档案后，点
+Record Independent Decision。即使解释失败或尚未运行，也能打开确认框；理由初始为空，
+需要由你填写。确认只记录引用该版本的独立 Decision，原笔记审阅仍保留自己的状态。
+SUMMARY_ONLY 资料不能走此路径；同一股票有多个档案时必须明确选择。已有决定草稿
+不会被新的来源替换；Notes 中明确选择档案后，后台上下文刷新不会清掉这次选择。
+浏览器重载后的原请求恢复适用于 Quick Review；普通 Journal 决定草稿仍限当前页面。
+
 ## 今日队列与每周回顾
 
 Today Review 默认只展开当前待办。相同标的的笔记、监控、催化事件和到期复查聚合显示，
@@ -101,3 +119,41 @@ Calibration 默认选择最近的用户 Decision，也支持 API 按精确 Decis
 四组不合成为胜率。Agenda 同属一个 Subject 不代表因果链接；未到复查日期、NO_ACTION、
 未交易及无证据均不等于失败。每个来源独立披露不可用和有界历史的 PARTIAL 状态。
 刷新只读持久数据，不生成 Scorecard、Monitor、Retro 或任何正式判断。
+
+
+## Plan dependency review and execution readiness
+
+After confirming a Thesis or Trade Plan change, open Research → Trade Plan →
+Dependency Review. Compare the previous Plan fields and condition definitions,
+check the current Thesis revision, and inspect each Monitor's exact Plan binding.
+An older bound Monitor remains unchanged. Review Rules or Pause opens that Monitor;
+if its version has changed since the link was created, Console warns before you
+use its existing edit/lifecycle controls. Create Monitor From Plan prepares a draft
+for the current exact Plan version and still requires its normal confirmation.
+
+Keep Existing Rules and Defer Review record only the choice in the current view.
+They do not create a durable review or reminder. MANUAL conditions link to explicit
+Journal review and Agenda entry; review before acting and when the relevant evidence
+changes. The owner chooses the actual reminder time.
+
+Coverage distinguishes unconfigured, configured without observations, usable
+observations, unavailable data and manual conditions. The same calculation supplies
+new Scorecards. The age check is conservative elapsed time against the condition's
+maximum fact age; historical observation references remain visible. A triggered
+condition can be observed and still argue against execution. A read failure is
+incomplete coverage, never proof that no dependency exists.
+
+Choose Check Sizing and Risk only when considering execution. The calculation uses
+durable account snapshots and the Plan reference price, shows missing NAV/cash/stop
+and other constraints, and rejects results for another Plan version. Use Portfolio's
+explicit Sync Accounts action if a refresh is needed; a changed price/stop goes
+through the existing Plan proposal and confirmation. Optional risk inputs remain
+available through the existing Portfolio risk workspace.
+
+Prepare Separate Order Preview opens an editable capability draft with exact Plan
+and Subject references. Fill and review the order terms before requesting a preview;
+only a separate unexpired preview plus exact authorization can submit. Nothing on
+this page grants that authorization. For UNKNOWN outcomes, inspect the existing
+order intent/status without resubmitting. Use the Journal timeline and trade cycles
+to reconcile partial fills and external activity; unlinked activity remains
+execution-only until an explicit attribution is recorded.

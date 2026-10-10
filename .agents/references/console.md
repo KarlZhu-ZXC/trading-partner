@@ -76,7 +76,10 @@ the authoritative facts. Retain the Matplotlib PNG path for MCP/Agent artifacts.
 
 Research/Monitor link to `/charts` with exact Instrument/Subject IDs. Explicit chart
 retrieval binds responses to the active selection; no Provider work on page load.
-SMC cutoff filters confirmation time, not historical invalidation status. Session
+SMC cutoff filters confirmation time, not historical invalidation status. For
+futures with date-only source labels and unknown completion, historical cutoff
+is disabled and cutoff-based handoffs fail closed. Current snapshots remain
+reviewable with explicit occurrence/confirmation label wording and caveats. Session
 handoffs expire, preserve snapshot/algorithm/price basis, and carry only opaque IDs
 in URLs. Accepting them prefills an editable DRAFT Thesis or Plan notes; it must not
 replace an open editor or infer numerical execution fields. The formal Plan panel

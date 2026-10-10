@@ -18,6 +18,7 @@ from infrastructure.persistence.repositories import (
     SqlAlchemyCandidateThesisRevisionRepository,
     SqlAlchemyDecisionRecordRepository,
     SqlAlchemyEvidenceAssessmentRepository,
+    SqlAlchemyEvidenceImpactRepository,
     SqlAlchemyEvidenceRepository,
     SqlAlchemyInvalidationConditionRepository,
     SqlAlchemyJournalRepository,
@@ -26,6 +27,7 @@ from infrastructure.persistence.repositories import (
     SqlAlchemyResearchEventRepository,
     SqlAlchemyResearchReportRepository,
     SqlAlchemyResearchSearchIndex,
+    SqlAlchemyResearchSourceRepository,
     SqlAlchemyResearchSubjectRepository,
     SqlAlchemySubjectEvidenceLinkRepository,
     SqlAlchemyThesisRepository,
@@ -61,6 +63,8 @@ class SqlAlchemyResearchUnitOfWork:
         self._assumptions: SqlAlchemyAssumptionRepository | None = None
         self._invalidations: SqlAlchemyInvalidationConditionRepository | None = None
         self._questions: SqlAlchemyOpenQuestionRepository | None = None
+        self._evidence_impacts: SqlAlchemyEvidenceImpactRepository | None = None
+        self._research_sources: SqlAlchemyResearchSourceRepository | None = None
         self._watchlist: SqlAlchemyWatchlistRepository | None = None
         self._candidates: SqlAlchemyCandidateThesisRevisionRepository | None = None
         self._evidence: SqlAlchemyEvidenceRepository | None = None
@@ -92,6 +96,8 @@ class SqlAlchemyResearchUnitOfWork:
         self._assumptions = SqlAlchemyAssumptionRepository(session)
         self._invalidations = SqlAlchemyInvalidationConditionRepository(session)
         self._questions = SqlAlchemyOpenQuestionRepository(session)
+        self._evidence_impacts = SqlAlchemyEvidenceImpactRepository(session)
+        self._research_sources = SqlAlchemyResearchSourceRepository(session)
         self._watchlist = SqlAlchemyWatchlistRepository(session, self._clock)
         self._candidates = SqlAlchemyCandidateThesisRevisionRepository(session)
         self._evidence = SqlAlchemyEvidenceRepository(session)
@@ -135,6 +141,8 @@ class SqlAlchemyResearchUnitOfWork:
             self._assumptions = None
             self._invalidations = None
             self._questions = None
+            self._evidence_impacts = None
+            self._research_sources = None
             self._watchlist = None
             self._candidates = None
             self._evidence = None
@@ -189,6 +197,18 @@ class SqlAlchemyResearchUnitOfWork:
         self._require_session()
         assert self._questions is not None
         return self._questions
+
+    @property
+    def evidence_impacts(self) -> SqlAlchemyEvidenceImpactRepository:
+        self._require_session()
+        assert self._evidence_impacts is not None
+        return self._evidence_impacts
+
+    @property
+    def research_sources(self) -> SqlAlchemyResearchSourceRepository:
+        self._require_session()
+        assert self._research_sources is not None
+        return self._research_sources
 
     @property
     def watchlist(self) -> SqlAlchemyWatchlistRepository:

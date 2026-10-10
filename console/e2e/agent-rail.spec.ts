@@ -311,6 +311,27 @@ async function mockConsoleApi(page: Page): Promise<{
   };
 }
 
+test("model directory failure can recover without losing the draft", async ({ page }) => {
+  await mockConsoleApi(page);
+  let unavailable = true;
+  await page.route("**/api/console/api/agent/providers/bailian/models", async (route) => {
+    if (unavailable) {
+      await route.fulfill({ status: 502, contentType: "application/json", body: "{}" });
+    } else {
+      await route.fallback();
+    }
+  });
+  await page.goto("/?agent=open");
+  await page.getByLabel("Message Copilot").fill("Keep this draft");
+  await expect(page.getByText("Live model list unavailable; using the configured default.")).toBeVisible();
+  unavailable = false;
+  await page.getByRole("button", { name: "Retry Model List" }).click();
+  await expect(page.getByLabel("Copilot Model")).toBeEnabled();
+  await expect(page.getByLabel("Copilot Model").locator("option")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Retry Model List" })).toHaveCount(0);
+  await expect(page.getByLabel("Message Copilot")).toHaveValue("Keep this draft");
+});
+
 test("legacy Chat opens the shared Rail and preserves Provider-scoped choices", async ({ page }) => {
   await mockConsoleApi(page);
   await page.goto("/chat");
@@ -400,11 +421,16 @@ const researchReceipt = {
   steps: [{ code: "READ", status: "COMPLETED" }, { code: "SYNTHESIZE", status: "STOPPED" }, { code: "CHALLENGE", status: "SKIPPED" }, { code: "EVIDENCE_CHECK", status: "STOPPED" }],
 };
 
-async function mockResearchTurn(page: Page, failed = false, answerContent = "Research stopped at the requested budget.") {
+async function mockResearchTurn(
+  page: Page,
+  failed = false,
+  answerContent = "Research stopped at the requested budget.",
+  answerPresentation?: Record<string, unknown>,
+) {
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   let submitted = false;
   const user = { message_id: "research_user", conversation_id: CONVERSATION_ID, role: "USER", content: "Research synthetic evidence", created_at: "2026-09-15T00:00:00Z", sequence: 1, model_receipt: { research: { ...researchReceipt, phase: "QUEUED", stop_reason: null, evidence_status: "NOT_CHECKED", verified_claims: 0, blocked_claims: 0, verified_refs: [] } } };
-  const assistant = { message_id: "research_answer", conversation_id: CONVERSATION_ID, role: "ASSISTANT", content: answerContent, created_at: "2026-09-15T00:00:01Z", sequence: 2, model_receipt: { research: researchReceipt, usage: { input_tokens: 123, output_tokens: 45 }, answer_envelope: { _truncated: true } } };
+  const assistant = { message_id: "research_answer", conversation_id: CONVERSATION_ID, role: "ASSISTANT", content: answerContent, created_at: "2026-09-15T00:00:01Z", sequence: 2, model_receipt: { research: researchReceipt, usage: { input_tokens: 123, output_tokens: 45 }, answer_envelope: { _truncated: true }, ...(answerPresentation ? { research_presentation: answerPresentation } : {}) } };
   await page.route("**/api/console/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/api/console", "");
     const json = (value: unknown) => route.fulfill({ json: value });
@@ -539,6 +565,60 @@ for (const width of [390, 1440]) {
     }
   });
 }
+
+test("typed research presentation survives reload and Copy Message keeps exact durable content", async ({ page }) => {
+  const field = {
+    kind: "field",
+    ref: "req_typed/result/quotes/0/last",
+    path: "result/quotes/0/last",
+    scalar: "100",
+    is_null: false,
+    context: [
+      ["instrument_id", "equity:US:TYPED"],
+      ["currency", "USD"],
+      ["freshness", "literal · equals=x"],
+    ],
+    inline: true,
+  };
+  const rawField = `${field.path}: ${field.scalar} · ${field.context.map(([key, value]) => `${key}=${value}`).join(" · ")}`;
+  const metadataText = "`as_of=2026-09-15T12:00:00Z · basis=literal · equals=x · evidence=req_typed/result/quotes/0/last`";
+  const content = `## 推断\n\n价格为〔${rawField}〕，原解释保留。\n\n${metadataText}`;
+  const presentation = {
+    schema_version: 1,
+    segments: [
+      { kind: "text", text: "## 推断\n\n价格为" },
+      field,
+      { kind: "text", text: "，原解释保留。\n\n" },
+      { kind: "metadata", text: metadataText },
+    ],
+  };
+  const posts = await mockResearchTurn(page, false, content, presentation);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (value: string) => { document.body.dataset.syntheticCopied = value; },
+    } });
+  });
+  await page.goto("/?agent=open");
+  await page.getByLabel("Message Copilot").fill("Read typed synthetic evidence");
+  await page.getByRole("button", { name: "Send Message", exact: true }).click();
+
+  const fieldView = page.getByRole("region", { name: "Research Evidence · Last Price", exact: true });
+  await expect(fieldView).toHaveCount(1);
+  await expect(fieldView).toContainText("equity:US:TYPED");
+  await expect(fieldView).toContainText("literal · equals=x");
+  await expect(page.getByRole("heading", { name: "推断", exact: true })).toBeVisible();
+  await expect(page.getByText("View Answer References", { exact: true })).toBeVisible();
+  await page.getByText("View Answer References", { exact: true }).click();
+  await expect(page.getByText(metadataText, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Copy Message", exact: true }).last().click();
+  await expect.poll(() => page.evaluate(() => document.body.dataset.syntheticCopied)).toBe(content);
+
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Research Evidence · Last Price", exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "Copy Message", exact: true }).last().click();
+  await expect.poll(() => page.evaluate(() => document.body.dataset.syntheticCopied)).toBe(content);
+  expect(posts).toHaveLength(1);
+});
 
 test("Research malformed field remains original prose", async ({ page }) => {
   const content = "## 推断\n\n原文〔result/last: 100 · unknown=USD〕保留。";

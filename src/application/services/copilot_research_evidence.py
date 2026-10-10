@@ -21,7 +21,19 @@ from application.dto.agent_answer import (
     AgentAnswerBlockKind,
     AgentAnswerEnvelope,
 )
+from application.dto.research_presentation import (
+    ResearchAnswerPresentation,
+    ResearchFieldSegment,
+    ResearchMetadataSegment,
+    ResearchTextSegment,
+)
 from application.ports.agent_tool_gateway import AgentToolReceipt
+from application.services.agent_answer_protocol import (
+    answer_block_heading,
+    answer_block_metadata_line,
+    answer_block_source_lines,
+    render_agent_answer,
+)
 
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_.:-]+$")
 # Chinese prose does not require whitespace before an amount. ASCII identifier
@@ -29,8 +41,22 @@ _SAFE_PATH = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _NUMERIC = re.compile(r"(?<![A-Za-z0-9_])[+-]?\d+(?:[.,]\d+)*(?:%)?")
 _INLINE_EVIDENCE = re.compile(r"@evidence\(([A-Za-z0-9][A-Za-z0-9_.:/-]{0,159})\)")
 _PAREN_LIST = re.compile(r"(?:^|[\n；;。—:：])\s*[（(](\d+)[）)]")
+# A missing-value definition compares representations, not a financial amount.
+# Recognize only literal zero in an explicit negative definition; other numbers
+# and actual fee/price assertions in the same block still need field evidence.
+_MISSING_ZERO_LITERAL = re.compile(
+    r"(?:(?<![A-Za-z_])null(?![A-Za-z_])|缺失(?:值|字段|数据|费用|手续费|数值)?)"
+    r"(?:\s*表示(?:字段|数据|数值)?缺失[，,]?)?\s*"
+    r"(?:不等于|不是|并非|而非|不代表|不应视为|!=|≠|is not|does not mean)\s*"
+    r"(?:数值|数字)?\s*0(?![A-Za-z0-9_%％]|[.,]\d)|"
+    r"(?:不能|不得|不应|不要|不可)(?:把|将)"
+    r"(?:缺失(?:的)?(?:费用|手续费|数值|数据|字段|值)?|null)"
+    r"(?:当作|视为|按|计为)\s*0(?![A-Za-z0-9_%％]|[.,]\d)(?:处理)?",
+    re.IGNORECASE,
+)
 _EXECUTED = re.compile(
     r"已(?:成交|下单|执行|确认|买入|卖出|撤单)|"
+    r"(?:订单|委托|候选|观点|判断|计划|仓位)(?:已经|已)确认|"
     r"\b(?:executed|submitted|filled|purchased|sold|confirmed breakout)\b|"
     r"(?:突破|结构)(?:已经|已)?确认",
     re.IGNORECASE,
@@ -158,9 +184,25 @@ class EvidenceCatalog(TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
+class _CatalogField:
+    entry: EvidenceEntry
+    path: str
+    scalar: str
+    is_null: bool
+    context: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResearchBlockPresentation:
+    block: AgentAnswerBlock
+    body: tuple[ResearchTextSegment | ResearchFieldSegment, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchEvidenceResult:
     envelope: AgentAnswerEnvelope
     summary: dict[str, object]
+    presentation: ResearchAnswerPresentation | None = None
 
 
 def _scalar(value: object) -> str | None:
@@ -184,7 +226,7 @@ def _aware_time(value: str) -> datetime | None:
 def _catalog_entries(
     receipts: Sequence[AgentToolReceipt],
     tool_payloads: Sequence[object],
-) -> tuple[list[EvidenceEntry], int, bool]:
+) -> tuple[list[_CatalogField], int, bool]:
     current = {
         (r.request_id, r.capability, r.operation): r
         for r in receipts[:32]
@@ -193,7 +235,7 @@ def _catalog_entries(
         and not r.result_truncated
         and (r.effect in _READ_EFFECTS or r.capability == "agent_web_search")
     }
-    entries: dict[str, EvidenceEntry] = {}
+    entries: dict[str, _CatalogField] = {}
     omitted_count = 0
     traversal_truncated = len(receipts) > 32 or len(tool_payloads) > 32
     duplicate_requests: set[str] = set()
@@ -338,8 +380,9 @@ def _catalog_entries(
             metadata["warnings"] = ",".join(receipt.warning_codes)
             metadata["degraded"] = str(receipt.degraded).lower()
             text = f"{path}: {scalar}"
+            context_pairs = tuple((key, value) for key, value in metadata.items() if value)
             if metadata:
-                text += " · " + " · ".join(f"{k}={v}" for k, v in metadata.items() if v)
+                text += " · " + " · ".join(f"{k}={v}" for k, v in context_pairs)
             if len(text) > 4000:
                 continue
             urls = (
@@ -350,16 +393,23 @@ def _catalog_entries(
             if ref not in entries and len(entries) >= _MAX_ENTRIES:
                 omitted_count += 1
                 continue
-            entries[ref] = {
+            entry: EvidenceEntry = {
                 "ref": ref,
                 "text": text,
                 "as_of": as_of,
                 "basis": basis,
                 "source_urls": urls,
             }
+            entries[ref] = _CatalogField(
+                entry=entry,
+                path=path,
+                scalar=scalar,
+                is_null=value is None,
+                context=context_pairs,
+            )
         traversal_truncated |= bool(stack)
     return (
-        [entry for ref, entry in entries.items() if ref.split("/", 1)[0] not in duplicate_requests],
+        [field for ref, field in entries.items() if ref.split("/", 1)[0] not in duplicate_requests],
         omitted_count,
         traversal_truncated,
     )
@@ -368,9 +418,32 @@ def _catalog_entries(
 def research_evidence_catalog(
     receipts: Sequence[AgentToolReceipt],
     tool_payloads: Sequence[object],
+    *,
+    evidence_cutoff: datetime | None = None,
 ) -> EvidenceCatalog:
     """Bounded field catalog for prompt context; must not be persisted as diagnostics."""
-    entries, omitted, traversal_truncated = _catalog_entries(receipts, tool_payloads)
+    return _bounded_catalog_with_fields(receipts, tool_payloads, evidence_cutoff=evidence_cutoff)[0]
+
+
+def _bounded_catalog_with_fields(
+    receipts: Sequence[AgentToolReceipt],
+    tool_payloads: Sequence[object],
+    *,
+    evidence_cutoff: datetime | None = None,
+) -> tuple[EvidenceCatalog, dict[str, _CatalogField]]:
+    catalog_fields, omitted, traversal_truncated = _catalog_entries(receipts, tool_payloads)
+    if evidence_cutoff is not None:
+        retained = [
+            field
+            for field in catalog_fields
+            if field.entry["as_of"] is not None
+            and (fact_time := _aware_time(field.entry["as_of"])) is not None
+            and fact_time <= evidence_cutoff
+        ]
+        omitted += len(catalog_fields) - len(retained)
+        catalog_fields = retained
+    fields = {field.entry["ref"]: field for field in catalog_fields}
+    entries = [field.entry for field in catalog_fields]
     catalog: EvidenceCatalog = {
         "schema_version": 1,
         "entries": entries,
@@ -380,10 +453,122 @@ def research_evidence_catalog(
     # Ensure the bound for the default escaped JSON serialization as well as the
     # UTF-8 literal prompt serializer. Removed entries cannot pass the guard.
     while len(json.dumps(catalog, ensure_ascii=True).encode("utf-8")) > _MAX_CATALOG_BYTES:
-        catalog["entries"].pop()
+        removed = catalog["entries"].pop()
+        fields.pop(removed["ref"], None)
         catalog["omitted_count"] += 1
         catalog["truncated"] = True
-    return catalog
+    retained_refs = {entry["ref"] for entry in catalog["entries"]}
+    return catalog, {ref: field for ref, field in fields.items() if ref in retained_refs}
+
+
+def _text_segment(text: str) -> ResearchTextSegment | None:
+    if not text:
+        return None
+    try:
+        return ResearchTextSegment(text=text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _field_segment(
+    field: _CatalogField,
+    *,
+    inline: bool,
+) -> ResearchFieldSegment | None:
+    try:
+        return ResearchFieldSegment(
+            ref=field.entry["ref"],
+            path=field.path,
+            scalar=field.scalar,
+            is_null=field.is_null,
+            context=field.context,
+            inline=inline,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _inline_body_segments(
+    text: str,
+    fields: Mapping[str, _CatalogField],
+) -> tuple[ResearchTextSegment | ResearchFieldSegment, ...] | None:
+    segments: list[ResearchTextSegment | ResearchFieldSegment] = []
+    cursor = 0
+    for match in _INLINE_EVIDENCE.finditer(text):
+        prefix = _text_segment(text[cursor : match.start()])
+        if prefix is not None:
+            segments.append(prefix)
+        field = fields.get(match.group(1))
+        if field is None:
+            return None
+        field_segment = _field_segment(field, inline=True)
+        if field_segment is None:
+            return None
+        segments.append(field_segment)
+        cursor = match.end()
+    suffix = _text_segment(text[cursor:])
+    if suffix is not None:
+        segments.append(suffix)
+    return tuple(segments)
+
+
+def _body_segments(
+    block: AgentAnswerBlock,
+    *,
+    original_text: str,
+    selected: Sequence[EvidenceEntry],
+    fields: Mapping[str, _CatalogField],
+    inline_refs: Sequence[str],
+) -> tuple[ResearchTextSegment | ResearchFieldSegment, ...] | None:
+    if inline_refs:
+        return _inline_body_segments(original_text, fields)
+    if len(selected) == 1 and original_text == selected[0]["text"]:
+        field = fields.get(selected[0]["ref"])
+        if field is None:
+            return None
+        field_segment = _field_segment(field, inline=False)
+        return (field_segment,) if field_segment is not None else None
+    text = _text_segment(block.text)
+    return (text,) if text is not None else None
+
+
+def _build_research_presentation(
+    envelope: AgentAnswerEnvelope,
+    block_presentations: Sequence[_ResearchBlockPresentation],
+) -> ResearchAnswerPresentation | None:
+    if len(envelope.blocks) != len(block_presentations):
+        return None
+    try:
+        segments: list[ResearchTextSegment | ResearchMetadataSegment | ResearchFieldSegment] = []
+        if envelope.generated_by == "fallback" and all(
+            block.block.kind is AgentAnswerBlockKind.SUMMARY for block in block_presentations
+        ):
+            for block_presentation in block_presentations:
+                text = _text_segment(block_presentation.block.text)
+                if text is None:
+                    return None
+                segments.append(text)
+        else:
+            for index, block_presentation in enumerate(block_presentations):
+                answer_block = block_presentation.block
+                segments.append(
+                    ResearchTextSegment(text=answer_block_heading(answer_block) + "\n\n")
+                )
+                segments.extend(block_presentation.body)
+                metadata = answer_block_metadata_line(answer_block)
+                if metadata is not None:
+                    segments.append(ResearchTextSegment(text="\n\n"))
+                    segments.append(ResearchMetadataSegment(text=metadata))
+                source_lines = answer_block_source_lines(answer_block)
+                if source_lines:
+                    segments.append(ResearchTextSegment(text="\n\n"))
+                    segments.append(ResearchTextSegment(text="\n".join(source_lines)))
+                if index < len(block_presentations) - 1:
+                    segments.append(ResearchTextSegment(text="\n\n"))
+        presentation = ResearchAnswerPresentation(segments=tuple(segments))
+    except (TypeError, ValueError):
+        return None
+    return presentation if presentation.rendered_text() == render_agent_answer(envelope) else None
 
 
 def guard_research_answer(
@@ -391,14 +576,21 @@ def guard_research_answer(
     *,
     receipts: Sequence[AgentToolReceipt],
     tool_payloads: Sequence[object],
+    evidence_cutoff: datetime | None = None,
 ) -> ResearchEvidenceResult:
     """Release exact sourced facts; replace unsupported assertions with safe gaps."""
-    entries = {e["ref"]: e for e in research_evidence_catalog(receipts, tool_payloads)["entries"]}
+    catalog, fields = _bounded_catalog_with_fields(
+        receipts, tool_payloads, evidence_cutoff=evidence_cutoff
+    )
+    entries = {entry["ref"]: entry for entry in catalog["entries"]}
     blocks: list[AgentAnswerBlock] = []
+    block_presentations: list[_ResearchBlockPresentation] = []
+    presentation_possible = True
     codes: set[str] = set()
     verified = 0
     missing = 0
     for index, block in enumerate(envelope.blocks):
+        original_text = block.text
         code: str | None = None
         required = block.kind in {AgentAnswerBlockKind.FACT, AgentAnswerBlockKind.CITATION}
         inline_refs = _INLINE_EVIDENCE.findall(block.text) if not required else []
@@ -429,7 +621,7 @@ def guard_research_answer(
             prose = _PAREN_LIST.sub("", prose)
         else:
             prose = re.sub(r"(?:^|[\n；;。—])\s*[（(]\d+[）)]", "", prose)
-        numeric = bool(_NUMERIC.search(prose))
+        numeric = bool(_NUMERIC.search(_MISSING_ZERO_LITERAL.sub("", prose)))
         # Only explicitly negated mentions are exempt; a later affirmative
         # assertion in the same block must still be rejected.
         execution_prose = re.sub(
@@ -442,6 +634,10 @@ def guard_research_answer(
             explanation,
             flags=re.IGNORECASE,
         )
+        # A narrowly identified field-certainty qualifier is not confirmation
+        # of a judgment/order. Do not exempt bare confirmations or a later
+        # affirmative execution claim, and never promote this prose to FACT.
+        execution_prose = re.sub(r"(?<=字段[为是])已确认的(?=已知值)", "", execution_prose)
         inline_urls = re.findall(r"https?://[^\s<>]+", block.text)
         allowed_urls = [url for entry in selected for url in entry["source_urls"]]
         if not required and (
@@ -471,7 +667,7 @@ def guard_research_answer(
             else:
                 # A grouped selection renders independent facts, never merges
                 # currencies, subjects or timestamps into a model-created claim.
-                blocks.extend(
+                grouped_blocks = [
                     AgentAnswerBlock(
                         kind=block.kind,
                         text=entry["text"],
@@ -481,7 +677,17 @@ def guard_research_answer(
                         source_urls=tuple(entry["source_urls"]),
                     )
                     for entry in selected
-                )
+                ]
+                blocks.extend(grouped_blocks)
+                for output_block, entry in zip(grouped_blocks, selected, strict=True):
+                    field = fields.get(entry["ref"])
+                    field_segment = _field_segment(field, inline=False) if field else None
+                    if field_segment is None:
+                        presentation_possible = False
+                    else:
+                        block_presentations.append(
+                            _ResearchBlockPresentation(output_block, (field_segment,))
+                        )
                 verified += len(selected)
                 continue
         elif required or numeric:
@@ -527,21 +733,43 @@ def guard_research_answer(
         if code:
             missing += 1
             codes.add(code)
-            blocks.append(
-                AgentAnswerBlock(
-                    kind=AgentAnswerBlockKind.GAP,
-                    text="本项陈述缺少可核对的本轮字段证据，已隐藏；请补充对应来源后复查。",
-                )
+            gap_block = AgentAnswerBlock(
+                kind=AgentAnswerBlockKind.GAP,
+                text="本项陈述缺少可核对的本轮字段证据，已隐藏；请补充对应来源后复查。",
             )
+            blocks.append(gap_block)
+            gap_text = _text_segment(gap_block.text)
+            if gap_text is None:
+                presentation_possible = False
+            else:
+                block_presentations.append(_ResearchBlockPresentation(gap_block, (gap_text,)))
         else:
             # Qualitative synthesis is explicitly interpretation, never host-verified fact.
-            blocks.append(
+            checked_block = (
                 block.model_copy(update={"kind": AgentAnswerBlockKind.INFERENCE})
                 if block.kind == AgentAnswerBlockKind.SUMMARY
                 else block
             )
+            blocks.append(checked_block)
+            body = _body_segments(
+                checked_block,
+                original_text=original_text,
+                selected=selected,
+                fields=fields,
+                inline_refs=inline_refs,
+            )
+            if body is None:
+                presentation_possible = False
+            else:
+                block_presentations.append(_ResearchBlockPresentation(checked_block, body))
+    checked_envelope = envelope.model_copy(update={"blocks": tuple(blocks)})
+    presentation = (
+        _build_research_presentation(checked_envelope, block_presentations)
+        if presentation_possible
+        else None
+    )
     return ResearchEvidenceResult(
-        envelope=envelope.model_copy(update={"blocks": tuple(blocks)}),
+        envelope=checked_envelope,
         summary={
             "schema_version": 1,
             "verified_count": verified,
@@ -549,4 +777,5 @@ def guard_research_answer(
             "codes": sorted(codes),
             "status": "GAPS" if missing else ("VERIFIED" if verified else "NOT_CHECKED"),
         },
+        presentation=presentation,
     )

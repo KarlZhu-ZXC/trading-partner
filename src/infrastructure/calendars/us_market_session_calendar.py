@@ -11,11 +11,16 @@ from application.ports.market_session_calendar import MarketSession
 from domain.common.time import require_aware_datetime
 
 _NEW_YORK = ZoneInfo("America/New_York")
+# The library's rolling 20-year default drops valid provider history. Explicitly
+# retain the application's bounded historical window, while leaving the future
+# bound at the library default. This is not a library accuracy guarantee; dates
+# outside the constructed schedule must continue to fail rather than invent hours.
+_HISTORICAL_START = "1990-01-01"
 
 
 class XnysMarketSessionCalendar:
     def __init__(self) -> None:
-        self._calendar = exchange_calendars.get_calendar("XNYS")
+        self._calendar = exchange_calendars.get_calendar("XNYS", start=_HISTORICAL_START)
 
     def session_at(self, moment: datetime) -> MarketSession | None:
         require_aware_datetime(moment, field_name="moment")

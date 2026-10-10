@@ -326,8 +326,10 @@ class OpenQuestionRow(Base):
             "answered_at IS NULL OR answered_at >= asked_at",
             name="ck_open_questions_answered_at",
         ),
+        CheckConstraint("version >= 1", name="ck_open_questions_version"),
         Index("ix_open_questions_case_id", "case_id"),
         Index("ix_open_questions_status", "status"),
+        Index("ix_open_questions_due", "status", "due_at"),
     )
 
     question_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -344,6 +346,18 @@ class OpenQuestionRow(Base):
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     closed_without_answer_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     proposed_by: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    evidence_requirements_json: Mapped[tuple[str, ...]] = mapped_column(
+        JsonStringTuple(), nullable=False, default=(), server_default="[]"
+    )
+    due_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_refs_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]", server_default="[]"
+    )
+    decision_ids_json: Mapped[tuple[str, ...]] = mapped_column(
+        JsonStringTuple(), nullable=False, default=(), server_default="[]"
+    )
 
 
 class WatchlistGroupRow(Base):
@@ -517,7 +531,7 @@ class CandidateThesisRevisionRow(Base):
         CheckConstraint(
             "kind IN ("
             "'thesis_revision','assumption','invalidation_condition',"
-            "'open_question','watchlist_item','case_status_change','trade_plan'"
+            "'open_question','evidence_impact','watchlist_item','case_status_change','trade_plan'"
             ")",
             name="ck_candidate_kind",
         ),

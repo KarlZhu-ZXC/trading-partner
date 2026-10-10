@@ -130,7 +130,7 @@ export default function OperationsPage() {
       ? "Action required"
       : "No action required";
   const oauthFlowMessage = oauthFlowState === "ACTIVE"
-    ? "A new tab is open and waiting for the Schwab callback. Do not start another flow."
+    ? "Waiting for the Schwab callback. Check the default browser on the Mac running Trading Partner; the authorization page may be in another window. Do not start another flow."
     : oauthFlowState === "SUCCEEDED"
       ? "Reauthorization succeeded and the new token was stored securely."
       : oauthFlowState === "FAILED" || oauthFlowState === "INTERRUPTED"

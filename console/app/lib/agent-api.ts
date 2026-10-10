@@ -1,8 +1,11 @@
 "use client";
 
+import { validQuestionContext, type QuestionResearchContext } from "./question-research";
+
+
 import { authenticatedFetch, getJson, responseErrorMessage, sendJsonMethod } from "./api";
 import { getAgentPageContext } from "./agent-page-context";
-import { textStrict as text } from "./coerce";
+import { asRecord, textStrict as text } from "./coerce";
 import type { AgentEphemeralContextContract } from "./generated/contracts";
 
 /**
@@ -44,12 +47,14 @@ export const AGENT_API_ROUTES = {
 } as const;
 
 export type CopilotResearchConfig = {
+  question_context_token?: string;
   research_mode: "standard" | "research" | "challenge";
   research_max_seconds: number;
   research_max_model_calls: number;
   research_max_tool_calls: number;
 };
 export type CopilotResearch = {
+  question_context?: QuestionResearchContext | null;
   mode: "research" | "challenge";
   phase: "QUEUED" | "READING" | "SYNTHESIZING" | "CHALLENGING" | "CHECKING" | "FINISHED";
   stop_reason: "COMPLETED" | "TIME_BUDGET" | "MODEL_BUDGET" | "TOOL_BUDGET" | "ROUND_LIMIT" | "EVIDENCE_GAP" | "CANCELLED" | "FAILED" | null;
@@ -63,6 +68,7 @@ export type CopilotResearch = {
 };
 export function parseCopilotResearch(value: unknown): CopilotResearch | null {
   const item = asRecord(value);
+  if (item.question_context != null && !validQuestionContext(item.question_context)) return null;
   if (!["research", "challenge"].includes(String(item.mode)) || !["QUEUED", "READING", "SYNTHESIZING", "CHALLENGING", "CHECKING", "FINISHED"].includes(String(item.phase))) return null;
   for (const key of ["max_seconds", "max_model_calls", "max_tool_calls", "elapsed_ms", "model_calls_attempted", "tool_calls_attempted", "completed_reads"]) {
     if (typeof item[key] !== "number" || !Number.isSafeInteger(item[key]) || Number(item[key]) < 0) return null;
@@ -342,12 +348,6 @@ export function collectEphemeralContext(): AgentEphemeralContext {
       ? { workbench_subject_id: safeNavigationField(pageContext?.workbench_subject_id) }
       : {}),
   };
-}
-
-function asRecord(value: unknown): AgentRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as AgentRecord)
-    : {};
 }
 
 function unwrap(value: unknown): AgentRecord {

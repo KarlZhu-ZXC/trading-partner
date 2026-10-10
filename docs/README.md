@@ -14,11 +14,15 @@ current specification, agent instructions, or an operator guide.
 | [guide/quickstart-zh.md](guide/quickstart-zh.md) | 中文安装、MCP 接入、首次验证与安全边界 |
 | [guide/mcp-host-setup.md](guide/mcp-host-setup.md) | Claude Desktop, Cursor, generic stdio, upgrade, and uninstall recipes |
 | [guide/mcp-capability-boundary.md](guide/mcp-capability-boundary.md) | Progressive MCP discovery, exact call contracts, trust model and host usage |
+| [guide/evidence-links-and-research-questions.md](guide/evidence-links-and-research-questions.md) | Reviewed source/assumption associations and research question closure |
 | [guide/research-chart-valuation.md](guide/research-chart-valuation.md) | 图表到研究草稿、估值假设版本与判断校准 |
 | [guide/console-design-system.md](guide/console-design-system.md) | Current Console hierarchy, shared controls, density, and interaction standard |
+| [guide/capability-usage-and-audit.md](guide/capability-usage-and-audit.md) | Focused MCP discovery, private aggregate usage evidence and dependency/size audits |
+| [guide/architecture-and-performance.md](guide/architecture-and-performance.md) | Module ownership, review query boundaries and synthetic performance measurement |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |
 | [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Prioritized evolution proposal, open-source evidence, acceptance gates, and deferred integrations |
+| [roadmap/workflow-evolution.md](roadmap/workflow-evolution.md) | 工作流演进提案：18 个项目对标、六条用户旅程、阶段依赖、具体任务和验收口径 |
 
 ## User and operator guides
 
@@ -33,6 +37,7 @@ current specification, agent instructions, or an operator guide.
 | Document | Scope |
 |---|---|
 | [releases/unreleased.md](releases/unreleased.md) | Current unreleased changes |
+| [releases/v0.8.0.md](releases/v0.8.0.md) | Reviewed evidence, recoverable workflows and market-data correctness |
 | [releases/v0.7.0.md](releases/v0.7.0.md) | v0.7.0 research review workspace, Copilot evidence, charts and Journal |
 | [releases/v0.6.0.md](releases/v0.6.0.md) | v0.6.0 agent runtime, decision operations, and execution controls |
 | [releases/v0.5.1.md](releases/v0.5.1.md) | v0.5.1 portable MCP onboarding release |

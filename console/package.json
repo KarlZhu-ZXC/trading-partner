@@ -1,6 +1,6 @@
 {
   "name": "trading-partner-console",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -22,7 +22,7 @@
   "dependencies": {
     "klinecharts": "10.0.3",
     "lucide-react": "^0.468.0",
-    "next": "16.3.5",
+    "next": "16.3.8",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -39,11 +39,12 @@
     "typescript-eslint": "8.65.0"
   },
   "overrides": {
-    "brace-expansion": "5.0.9",
+    "brace-expansion": "5.0.12",
     "fast-uri": "4.1.2",
     "nanoid": "3.3.18",
     "postcss": "8.5.25",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2"
   },
   "type": "module"
 }

@@ -638,3 +638,168 @@ async def test_status_refresh_persists_provider_observation_and_later_cancel_con
     assert durable_confirmed.data is not None
     assert durable_confirmed.data.intent.status == "CANCELLED"
     assert durable_confirmed.data.intent.provider_status == "CANCELED"
+
+
+class _SyntheticSideQuoteClient:
+    def __init__(self, quote: Mapping[str, object]) -> None:
+        self.quote_fields = dict(quote)
+        self.calls = 0
+
+    def quote(self, symbol: str) -> object:
+        assert symbol == "AAPL"
+        self.calls += 1
+        return {symbol: {"quote": self.quote_fields}}
+
+
+def _actual_side_quote_service(
+    tmp_path,
+    *,
+    bid: Decimal | None = Decimal("80"),
+    ask: Decimal | None = Decimal("120"),
+    last: Decimal | None = Decimal("100"),
+    age_seconds: int = 0,
+):
+    from datetime import timedelta
+    from pathlib import Path
+
+    from infrastructure.providers.account.schwab import SchwabBrokerQuoteAdapter
+
+    provider = _Provider()
+    service = _service(tmp_path, provider)
+    client = _SyntheticSideQuoteClient(
+        {
+            "quoteTime": int((NOW - timedelta(seconds=age_seconds)).timestamp() * 1000),
+            "bidPrice": bid,
+            "askPrice": ask,
+            "lastPrice": last,
+        }
+    )
+    service._quotes = SchwabBrokerQuoteAdapter(
+        enabled=True,
+        client_id="synthetic-fixture-only",
+        client_secret="synthetic-fixture-only",
+        redirect_uri="https://127.0.0.1/callback",
+        token_path=Path("unused-synthetic-quote-token"),
+        clock=FixedClock(NOW),
+        client_factory=lambda: client,
+    )
+    return service, provider, client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instruction", "order_type", "limit", "stop", "reference", "estimated"),
+    [
+        ("SELL", "MARKET", None, None, "80", "160"),
+        ("BUY", "LIMIT", "120", None, "120", "240"),
+        ("BUY", "LIMIT", "90", None, "120", "180"),
+        ("SELL", "LIMIT", "130", None, "80", "260"),
+        ("SELL", "STOP", None, "70", "80", "140"),
+        ("SELL", "STOP_LIMIT", "65", "70", "80", "130"),
+    ],
+)
+async def test_actual_schwab_preview_uses_order_side_without_changing_exact_price_estimates(
+    tmp_path, instruction, order_type, limit, stop, reference, estimated,
+) -> None:
+    service, provider, client = _actual_side_quote_service(tmp_path)
+    result = await service.preview(
+        _preview_request(
+            instruction=instruction, quantity=2, order_type=order_type,
+            limit_price=limit, stop_price=stop,
+        )
+    )
+
+    assert result.ok and result.data is not None
+    assert result.data.quote_price == Decimal(reference)
+    assert result.data.estimated_notional == Decimal(estimated)
+    assert result.warnings == ()
+    assert result.data.exact_order_payload["orderType"] == order_type
+    assert result.data.exact_order_payload["orderLegCollection"][0]["instruction"] == instruction
+    assert result.data.exact_order_payload.get("price") == limit
+    assert result.data.exact_order_payload.get("stopPrice") == stop
+    assert client.calls == 1
+    assert provider.place_calls == provider.cancel_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instruction", "bid", "ask", "last", "reference", "basis"),
+    [
+        ("SELL", None, Decimal("120"), Decimal("100"), "100", "last"),
+        ("SELL", None, Decimal("120"), None, "120", "ask"),
+        ("BUY", Decimal("80"), None, Decimal("100"), "100", "last"),
+        ("BUY", Decimal("80"), None, None, "80", "bid"),
+    ],
+)
+@pytest.mark.parametrize("age_seconds", [0, 61])
+async def test_actual_schwab_preview_discloses_fallback_without_false_staleness(
+    tmp_path, instruction, bid, ask, last, reference, basis, age_seconds,
+) -> None:
+    from domain.common.enums import Freshness
+
+    service, provider, client = _actual_side_quote_service(
+        tmp_path, bid=bid, ask=ask, last=last, age_seconds=age_seconds,
+    )
+    result = await service.preview(
+        _preview_request(instruction=instruction, order_type="LIMIT", limit_price="90", quantity=2)
+    )
+
+    assert result.ok and result.data is not None
+    assert result.data.quote_price == Decimal(reference)
+    assert result.data.estimated_notional == Decimal("180")
+    fallback = next(w for w in result.warnings if w.code == "BROKER_QUOTE_REFERENCE_FALLBACK")
+    assert fallback.details == {
+        "preferred_side": "ask" if instruction == "BUY" else "bid",
+        "reference_basis": basis,
+    }
+    assert result.degraded is True
+    assert result.freshness == (Freshness.STALE if age_seconds > 60 else Freshness.FRESH)
+    assert any(w.code == "BROKER_QUOTE_STALE_FOR_CONTEXT" for w in result.warnings) is (
+        age_seconds > 60
+    )
+    assert client.calls == 1 and provider.place_calls == provider.cancel_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bid", [Decimal("80"), None])
+async def test_duplicate_preview_preserves_original_side_reference_without_new_reads(
+    tmp_path, bid,
+) -> None:
+    service, provider, client = _actual_side_quote_service(tmp_path, bid=bid)
+    request = _preview_request(
+        instruction="SELL", order_type="MARKET", limit_price=None, quantity=2,
+    )
+    first = await service.preview(request)
+    assert first.ok and first.data is not None
+    original = Decimal("80") if bid is not None else Decimal("100")
+    assert first.data.quote_price == original
+    client.quote_fields.update({"bidPrice": Decimal("70"), "askPrice": Decimal("130")})
+
+    replay = await service.preview(request)
+
+    assert replay.ok and replay.data == first.data
+    assert replay.data.quote_price == original
+    assert replay.data.estimated_notional == original * 2
+    assert [w.code for w in replay.warnings] == ["DUPLICATE_IDEMPOTENCY_KEY"]
+    assert client.calls == 1 and provider.place_calls == provider.cancel_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "code"),
+    [
+        ({"instruction": "SELL", "quantity": 11}, "BROKER_POSITION_GUARD_FAILED"),
+        ({"order_type": "MARKET", "limit_price": None}, "BROKER_BUY_ORDER_NOTIONAL_UNBOUNDED"),
+        ({"quantity": 2, "limit_price": "6000"}, "BROKER_CASH_GUARD_FAILED"),
+    ],
+)
+async def test_side_reference_preserves_account_validation_and_never_writes_provider(
+    tmp_path, overrides, code,
+) -> None:
+    service, provider, client = _actual_side_quote_service(tmp_path)
+
+    result = await service.preview(_preview_request(**overrides))
+
+    assert result.ok is False and result.data is None
+    assert result.errors[0].code == code
+    assert client.calls == 1 and provider.place_calls == provider.cancel_calls == 0

@@ -328,7 +328,9 @@ class SqlAlchemyBrokerOrderRepository:
             **values,
         )
 
-    def list_unresolved(self, limit: int = 100) -> tuple[BrokerOrderIntent, ...]:
+    def list_unresolved(
+        self, limit: int = 100, offset: int = 0
+    ) -> tuple[BrokerOrderIntent, ...]:
         """Return unresolved durable intents, newest updates first.
 
         ``UNKNOWN`` submit outcomes and accepted-but-unconfirmed cancellation
@@ -337,6 +339,8 @@ class SqlAlchemyBrokerOrderRepository:
         """
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("limit must be an integer in [1,500]")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
         with Session(self._engine) as session:
             rows = session.scalars(
                 select(BrokerOrderIntentRow)
@@ -354,6 +358,7 @@ class SqlAlchemyBrokerOrderRepository:
                     BrokerOrderIntentRow.created_at.desc(),
                     BrokerOrderIntentRow.order_intent_id.desc(),
                 )
+                .offset(offset)
                 .limit(limit)
             ).all()
             return tuple(_intent(row) for row in rows)

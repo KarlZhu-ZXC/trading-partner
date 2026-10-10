@@ -11,6 +11,11 @@ from threading import RLock
 from typing import Any
 
 from application.dto.quick_review import QuickReviewInput
+from application.dto.review_materials import (
+    ReviewMaterialRef,
+    ReviewMaterials,
+    review_materials_key,
+)
 from application.ports.account_snapshot_repository import AccountSnapshotRepository
 from application.ports.clock import Clock
 from application.ports.external_note_review_repository import ExternalNoteReviewRepository
@@ -98,9 +103,13 @@ class QuickReviewService:
             coverage["THINKING"] = "UNAVAILABLE"
             warnings.append("LATEST_THINKING_UNAVAILABLE")
         positions = []
+        account_snapshots = []
         try:
             accounts = self._snapshots.latest_accounts()
             for account in accounts:
+                account_snapshots.append(
+                    {"snapshot_id": account.snapshot_id, "as_of": account.account_as_of.isoformat()}
+                )
                 for position in account.positions:
                     if position.instrument_id == subject.primary_instrument_id:
                         positions.append(
@@ -117,6 +126,7 @@ class QuickReviewService:
             coverage["PORTFOLIO"] = "UNAVAILABLE"
             warnings.append("PORTFOLIO_SNAPSHOT_UNAVAILABLE")
         pending = 0
+        pending_sources: dict[str, Any] = {}
         try:
             reviews = self._reviews.list_latest(
                 subject_id=subject_id,
@@ -125,7 +135,8 @@ class QuickReviewService:
                 ),
                 limit=500,
             )
-            pending_ids = {r.review_id for r in reviews}
+            pending_sources = {r.review_id: r for r in reviews}
+            pending_ids = set(pending_sources)
             for note in thinking:
                 review = self._reviews.latest_for_revision(str(note["note_revision_id"]))
                 if review and review.status in {
@@ -133,6 +144,7 @@ class QuickReviewService:
                     ExternalNoteReviewStatus.DEFERRED,
                 }:
                     pending_ids.add(review.review_id)
+                    pending_sources[review.review_id] = review
             pending = len(pending_ids)
             coverage["OBSERVATION_REVIEWS"] = "PARTIAL" if len(reviews) == 500 else "COMPLETE"
         except Exception:
@@ -149,6 +161,16 @@ class QuickReviewService:
             "coverage": coverage,
             "warnings": warnings,
             "positions": positions,
+            "account_snapshots": account_snapshots,
+            "pending_review_sources": [
+                {
+                    "review_id": r.review_id,
+                    "note_revision_id": r.note_revision_id,
+                    "version": r.version,
+                    "status": str(r.status),
+                }
+                for r in pending_sources.values()
+            ],
             "latest_thinking": thinking,
             "pending_observation_reviews": pending,
             "can_maintain": projection.baseline is not None and not more,
@@ -156,10 +178,105 @@ class QuickReviewService:
             "draft_baseline": draft_baseline,
         }
 
+    @staticmethod
+    def _materials(card: dict[str, Any], prepared_at: Any) -> ReviewMaterials:
+        refs: list[ReviewMaterialRef] = []
+        for _thesis_id, revision_id, _status in card["current_formal_versions"]["theses"]:
+            refs.append(ReviewMaterialRef(kind="THESIS", source_id=revision_id))
+        plan = card["current_formal_versions"]["plan"]
+        if plan:
+            refs.append(ReviewMaterialRef(kind="PLAN", source_id=plan[0], version=str(plan[1])))
+        for item in card["changes"]:
+            refs.append(
+                ReviewMaterialRef(
+                    kind="CHANGE",
+                    source_id=item["source_id"],
+                    version=item.get("source_version"),
+                    as_of=item["occurred_at"],
+                )
+            )
+        for item in card["latest_thinking"]:
+            refs.append(
+                ReviewMaterialRef(
+                    kind="OBSERVATION_REVISION",
+                    source_id=item["note_revision_id"],
+                    version=str(item["version"]),
+                    as_of=item["observed_at"],
+                )
+            )
+        for item in card["account_snapshots"]:
+            refs.append(
+                ReviewMaterialRef(
+                    kind="ACCOUNT_SNAPSHOT", source_id=item["snapshot_id"], as_of=item["as_of"]
+                )
+            )
+        for item in card["pending_review_sources"]:
+            refs.append(
+                ReviewMaterialRef(
+                    kind="OBSERVATION_REVIEW",
+                    source_id=item["review_id"],
+                    version=str(item["version"]),
+                )
+            )
+        # Deduplication retains exact versions; bounded manifest is explicitly partial.
+        refs = list(dict.fromkeys(refs))
+        complete = len(refs) <= 500
+        return ReviewMaterials(
+            subject_id=card["subject_id"],
+            baseline_decision_id=card["baseline"]["decision_id"] if card["baseline"] else None,
+            prepared_at=prepared_at,
+            references=tuple(refs[:500]),
+            reference_count=len(refs),
+            references_complete=complete,
+            coverage=card["coverage"],
+            warning_codes=tuple(card["warnings"])
+            + (() if complete else ("REVIEW_MATERIAL_REFERENCES_BOUNDED",)),
+            pending_observation_reviews=(
+                card["pending_observation_reviews"]
+                if card["coverage"].get("OBSERVATION_REVIEWS") != "UNAVAILABLE"
+                else None
+            ),
+        )
+
+    def _receipt(self, decision: Any, key: str) -> dict[str, Any]:
+        materials = None
+        journal_id = None
+        try:
+            with self._uow() as uow:
+                entry = uow.journal.get_by_idempotency_key(review_materials_key(key))
+            if (
+                entry is not None
+                and entry.related_entity_id == decision.decision_id
+                and entry.subject_id == decision.subject_id
+            ):
+                parsed = ReviewMaterials.model_validate_json(entry.body_markdown)
+                if parsed.subject_id == decision.subject_id:
+                    materials = parsed.model_dump(mode="json")
+                    journal_id = entry.journal_id
+        except Exception:  # noqa: BLE001 - a receipt read never retries the Decision write
+            pass
+        return {
+            "status": "RECORDED",
+            "decision_id": decision.decision_id,
+            "action": "maintain" if decision.decision_type == DecisionType.NO_ACTION else "defer",
+            "review_due_at": decision.review_due_at.isoformat() if decision.review_due_at else None,
+            "completion": {
+                "decision_recorded": True,
+                "observation_reviews_changed": False,
+                "remaining_observation_reviews_at_review": materials["pending_observation_reviews"]
+                if materials
+                else None,
+                "materials_status": "AVAILABLE" if materials else "UNAVAILABLE",
+                "materials_journal_id": journal_id,
+                "materials": materials,
+            },
+        }
+
     def get(self, subject_id: str) -> dict[str, Any]:
         card = self._collect(subject_id)
         now = self._clock.now()
         token = secrets.token_urlsafe(32)
+        materials = self._materials(card, now)
         with self._lock:
             self._cards = {k: v for k, v in self._cards.items() if v["expires"] > now}
             if len(self._cards) >= 64:
@@ -169,9 +286,11 @@ class QuickReviewService:
                 "digest": _fingerprint(card),
                 "expires": now + timedelta(minutes=20),
                 "created": now,
+                "materials": materials,
             }
         return {
             **card,
+            "review_materials": materials.model_dump(mode="json"),
             "review_token": token,
             "expires_at": (now + timedelta(minutes=20)).isoformat(),
         }
@@ -189,12 +308,7 @@ class QuickReviewService:
             return {"status": "NOT_FOUND"}
         if decision.subject_id != subject_id:
             raise DataContractError("Review receipt belongs to another Subject")
-        return {
-            "status": "RECORDED",
-            "decision_id": decision.decision_id,
-            "action": "maintain" if decision.decision_type is DecisionType.NO_ACTION else "defer",
-            "review_due_at": decision.review_due_at.isoformat() if decision.review_due_at else None,
-        }
+        return self._receipt(decision, key)
 
     def submit(self, subject_id: str, request: QuickReviewInput) -> dict[str, Any]:
         key = (
@@ -219,14 +333,7 @@ class QuickReviewService:
                     raise IdempotencyConflict(
                         "This review request was already used with different intent"
                     )
-                return {
-                    "decision_id": existing.decision_id,
-                    "action": request.action,
-                    "status": "RECORDED",
-                    "review_due_at": existing.review_due_at.isoformat()
-                    if existing.review_due_at
-                    else None,
-                }
+                return self._receipt(existing, key)
             cached = self._cards.get(request.review_token)
             if (
                 not cached
@@ -237,10 +344,13 @@ class QuickReviewService:
                     "Review expired. Refresh the card; your draft can be retained."
                 )
             card = cached["card"]
+            materials = cached["materials"]
             baseline_id = card["baseline"]["decision_id"] if card["baseline"] else None
             if baseline_id != request.baseline_decision_id:
                 raise DataContractError("The reviewed Decision does not match this card")
-            if request.action == "maintain" and not card["can_maintain"]:
+            if request.action == "maintain" and (
+                not card["can_maintain"] or not materials.references_complete
+            ):
                 raise DataContractError(
                     "A reviewed baseline and complete change listing are required"
                 )
@@ -271,7 +381,12 @@ class QuickReviewService:
                 evidence_ids=baseline.evidence_ids if baseline else (),
                 report_ids=baseline.report_ids if baseline else (),
                 supersedes_decision_id=baseline_id,
-                position_context_snapshot_id=None,
+                position_context_snapshot_id=(
+                    card["account_snapshots"][0]["snapshot_id"]
+                    if len(card["account_snapshots"]) == 1
+                    else None
+                ),
+                review_materials=materials,
                 idempotency_key=key,
                 strategy_code=baseline.strategy_code if baseline else None,
                 strategy_version=baseline.strategy_version if baseline else None,
@@ -284,11 +399,4 @@ class QuickReviewService:
                 raise DataContractError(
                     "Review could not be recorded. Retry the same request to recover safely."
                 )
-            return {
-                "decision_id": result.data.decision_id,
-                "action": request.action,
-                "status": "RECORDED",
-                "review_due_at": request.review_due_at.isoformat()
-                if request.review_due_at
-                else None,
-            }
+            return self._receipt(result.data, key)

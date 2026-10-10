@@ -1,5 +1,19 @@
 "use client";
 
+import {
+  BEHAVIOR_PRIMARY_METRICS,
+  BEHAVIOR_SECONDARY_METRICS,
+  metricInteger,
+  metricLabel,
+  exclusionLabel,
+  ratePresentation,
+  payoffPresentation,
+  countPresentation,
+  secondaryMetricPresentation,
+} from "../lib/journal-behavior";
+
+import { asObject as asDict, textTrimmed as text, numberOrZero as number } from "../lib/coerce";
+
 import { ObservationRefreshStatus, startObservationRefresh } from "../components/observation-refresh-status";
 import { Tag } from "../components/ui/controls";
 
@@ -118,21 +132,8 @@ const CYCLE_STATUS_OPTIONS: AutosuggestOption[] = [
   { value: "UNRESOLVED", label: "Unresolved", description: "Available history cannot reconstruct a valid long-only Cycle." },
 ];
 
-function asDict(value: unknown): Dict {
-  return value && typeof value === "object" ? value as Dict : {};
-}
-
-function text(value: unknown, fallback = "—"): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
 function upper(value: unknown, fallback = "UNKNOWN"): string {
   return text(value, fallback).toUpperCase();
-}
-
-function number(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function periodStart(filter: PeriodFilter): number | null {
@@ -319,216 +320,77 @@ function latestBy(items: Dict[], field: string): Dict | null {
   })[0] ?? null;
 }
 
+function buildDecisionRationale(
+  manualSourceReview: boolean,
+  decisionScenario: DecisionScenario,
+  selectedAction: string,
+  reason: string,
+  decisionReviewDate: string,
+  decisionSourceNote: string | null,
+  scenarioLines: string[],
+): string {
+  if (manualSourceReview) {
+    return [
+      "Manual Source Review",
+      `Action: ${selectedAction}`,
+      `Reason: ${reason}`,
+      `Review Due: ${decisionReviewDate || "Not Set"}`,
+      ...(decisionSourceNote ? ["", `Source Note Revision: ${decisionSourceNote}`] : []),
+      "",
+      "This independent Decision does not adopt or close the Observation review.",
+      "This Decision Record does not submit, modify, or authorize an order.",
+    ].join("\n");
+  }
+  return [
+    "Strategy: strategy_v1",
+    `Current Scenario: ${decisionScenario}`,
+    `Action: ${selectedAction}`,
+    `Reason: ${reason}`,
+    `Review Due: ${decisionReviewDate || "Not Set"}`,
+    "",
+    ...scenarioLines,
+    ...(decisionSourceNote ? ["", `Source Note Revision: ${decisionSourceNote}`] : []),
+    "",
+    "This Decision Record does not submit, modify, or authorize an order.",
+  ].join("\n");
+}
+
+function decisionDialogTitle(manualSourceReview: boolean, sourceRevisionId: string | null): string {
+  if (manualSourceReview) return "Manual Source Review";
+  return sourceRevisionId ? "Review View Change" : "Record Decision";
+}
+
+function decisionDialogDescription(
+  manualSourceReview: boolean,
+  supersedesDecisionId: string | null,
+  sourceRevisionId: string | null,
+): string {
+  if (manualSourceReview) return "Record an independent Decision from this exact FULL Observation revision. The Observation remains in its current review status; this action does not adopt or close it.";
+  if (supersedesDecisionId) return `Review and supersede ${shortId(supersedesDecisionId)} with a new durable Decision. This does not submit or authorize an order.`;
+  if (sourceRevisionId) return "Compare the imported view with the current confirmed baseline, edit the conclusion, then record one durable Decision. No position, Monitor, or order changes automatically.";
+  return "Save the current strategy decision in the existing durable Decision Record. This does not submit or authorize an order.";
+}
+
+function decisionDialogConfirmLabel(manualSourceReview: boolean, sourceRevisionId: string | null): string {
+  if (manualSourceReview) return "Confirm & Record Independent Decision";
+  return sourceRevisionId ? "Confirm & Record Decision" : "Save Decision";
+}
+
+function decisionDialogNote(
+  manualSourceReview: boolean,
+  planLinkReady: boolean,
+  planVersion: number,
+  decisionSourceNote: string | null,
+): string {
+  if (manualSourceReview) return "Manual Source Review creates an independent Decision from the exact FULL revision. The Observation review remains unchanged.";
+  return `Strategy is recorded as strategy_v1${planLinkReady ? ` and linked to Trade Plan v${planVersion}` : ""}. The selected scenario records this action; the other scenarios remain REVIEW under the current confirmed Plan.${decisionSourceNote ? " This draft came from an exact imported Note revision; review and edit it before saving." : ""}`;
+}
+
 function StepList({ items, busy, onTransition }: { items: NextStep[]; busy: string | null; onTransition: (item: Dict, status: "ACKNOWLEDGED" | "RESOLVED") => void }) {
   if (items.length === 0) {
     return <div className="decision-ready"><span aria-hidden="true">✓</span><div><strong>No Immediate Closure Gap</strong><small>Continue observing current facts and scheduled reviews.</small></div></div>;
   }
   return <div className="decision-next-list">{items.map((item) => <article key={item.key}><Link href={item.href}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div><span aria-hidden="true">→</span></Link>{item.reviewItem ? <div className="review-item-actions"><ActionButton busy={busy === item.reviewItem.review_item_id} onClick={() => onTransition(item.reviewItem!, "ACKNOWLEDGED")}>{upper(item.reviewItem.status) === "ACKNOWLEDGED" ? "Update Due" : "Acknowledge"}</ActionButton><ActionButton busy={busy === item.reviewItem.review_item_id} tone="warning" onClick={() => onTransition(item.reviewItem!, "RESOLVED")}>Resolve</ActionButton></div> : null}</article>)}</div>;
-}
-
-const BEHAVIOR_PRIMARY_METRICS = [
-  { name: "closed_active_trade_cycles", label: "Closed Active Cycles", kind: "count" },
-  { name: "win_rate", label: "Win Rate", kind: "rate" },
-  { name: "payoff_ratio", label: "Payoff Ratio · Amount", kind: "payoff_amount" },
-  { name: "return_payoff_ratio", label: "Payoff Ratio · Return %", kind: "payoff_return" },
-  { name: "plan_coverage", label: "Plan Coverage", kind: "rate" },
-  { name: "pre_fill_decision_coverage", label: "Pre-Fill Decision Coverage", kind: "rate" },
-] as const;
-
-const BEHAVIOR_SECONDARY_METRICS = [
-  "wins", "losses", "flat", "avg_win", "avg_loss", "avg_win_return", "avg_loss_return", "average_holding_duration",
-  "median_holding_duration", "turnover", "pre_fill_invalidation_proxy",
-  "invalidation_adherence", "same_day_reentry", "entry_attempt_count",
-  "same_entry_logic_attempt_count", "third_attempt_without_new_plan",
-  "add_confirmation_risk_control", "planned_holding_period_mismatch",
-  "no_action_count", "no_action_review_completion",
-];
-
-const BEHAVIOR_RATE_METRICS = new Set([
-  "win_rate", "plan_coverage", "pre_fill_decision_coverage",
-  "pre_fill_invalidation_proxy", "invalidation_adherence", "same_day_reentry",
-  "third_attempt_without_new_plan", "add_confirmation_risk_control",
-  "planned_holding_period_mismatch", "no_action_review_completion",
-]);
-const BEHAVIOR_MONEY_METRICS = new Set(["avg_win", "avg_loss"]);
-const BEHAVIOR_RETURN_METRICS = new Set(["avg_win_return", "avg_loss_return"]);
-const BEHAVIOR_DURATION_METRICS = new Set(["average_holding_duration", "median_holding_duration"]);
-const BEHAVIOR_AVERAGE_METRICS = new Set(["entry_attempt_count"]);
-
-type BehaviorMetricPresentation = {
-  result: string;
-  formula: string;
-  status: "AVAILABLE" | "UNAVAILABLE" | "NOT_SUPPORTED" | "INCONSISTENT";
-};
-
-function metricNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function metricInteger(value: unknown): string {
-  const parsed = metricNumber(value);
-  return parsed == null ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(parsed);
-}
-
-function metricLabel(name: string): string {
-  return name.replaceAll(":", " · ").split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-}
-
-function exclusionLabel(code: string): string {
-  const known: Record<string, string> = {
-    FEES_UNAVAILABLE: "Fees unavailable",
-    CYCLE_INCOMPLETE: "Incomplete Cycle",
-    CLASSIFICATION_EXCLUDED: "Classification excluded",
-    MISSING_PLAN: "No eligible pre-period Plan",
-    MISSING_DECISION: "No eligible pre-fill Decision",
-  };
-  return known[code] ?? metricLabel(code);
-}
-
-function metricCurrency(metric: Dict): string {
-  const currencies = listOf<string>(metric, "native_currencies");
-  return currencies.length === 1 ? currencies[0] : "USD";
-}
-
-function metricMoney(value: unknown, metric: Dict): string {
-  const parsed = metricNumber(value);
-  if (parsed == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: metricCurrency(metric),
-    maximumFractionDigits: 2,
-  }).format(parsed);
-}
-
-function metricPercent(value: unknown): string {
-  const parsed = metricNumber(value);
-  return parsed == null ? "—" : `${(parsed * 100).toFixed(1)}%`;
-}
-
-function metricSampleLabel(metric: Dict, singular: string): string {
-  const count = metricNumber(metric.denominator ?? metric.avg_count ?? metric.sample_count);
-  const plural = singular === "loss" ? "losses" : `${singular}s`;
-  if (count == null) return `— ${plural}`;
-  return `${metricInteger(count)} ${count === 1 ? singular : plural}`;
-}
-
-function metricDuration(value: unknown): string {
-  const seconds = metricNumber(value);
-  if (seconds == null) return "—";
-  const days = seconds / 86_400;
-  return days >= 1 ? `${days.toFixed(1)}d` : `${(seconds / 3_600).toFixed(1)}h`;
-}
-
-function metricBaseStatus(metric: Dict): BehaviorMetricPresentation["status"] {
-  const availability = upper(metric.availability, "AVAILABLE");
-  if (availability === "NOT_SUPPORTED") return "NOT_SUPPORTED";
-  if (availability !== "AVAILABLE") return "UNAVAILABLE";
-  return metric.value == null ? "UNAVAILABLE" : "AVAILABLE";
-}
-
-function combinedMetricStatus(...metrics: Dict[]): BehaviorMetricPresentation["status"] {
-  const statuses = metrics.map(metricBaseStatus);
-  if (statuses.includes("NOT_SUPPORTED")) return "NOT_SUPPORTED";
-  if (statuses.includes("UNAVAILABLE")) return "UNAVAILABLE";
-  return "AVAILABLE";
-}
-
-function ratePresentation(metric: Dict): BehaviorMetricPresentation {
-  const numerator = metricNumber(metric.numerator);
-  const denominator = metricNumber(metric.denominator);
-  const wireValue = metricNumber(metric.value);
-  const formula = `${metricInteger(metric.numerator)} ÷ ${metricInteger(metric.denominator)}`;
-  const status = metricBaseStatus(metric);
-  if (status !== "AVAILABLE" || numerator == null || denominator == null || denominator <= 0 || wireValue == null) {
-    return { result: "—", formula, status };
-  }
-  const calculated = numerator / denominator;
-  if (Math.abs(calculated - wireValue) > 1e-9) {
-    return { result: "—", formula: `${formula} · payload value does not match`, status: "INCONSISTENT" };
-  }
-  return { result: `${(calculated * 100).toFixed(1)}%`, formula: `${formula} = ${(calculated * 100).toFixed(1)}%`, status };
-}
-
-function payoffPresentation(summary: Dict, basis: "amount" | "return"): BehaviorMetricPresentation {
-  const isReturn = basis === "return";
-  const payoff = asDict(summary[isReturn ? "return_payoff_ratio" : "payoff_ratio"]);
-  const avgWin = asDict(summary[isReturn ? "avg_win_return" : "avg_win"]);
-  const avgLoss = asDict(summary[isReturn ? "avg_loss_return" : "avg_loss"]);
-  const win = metricNumber(avgWin.value);
-  const lossValue = metricNumber(avgLoss.value);
-  const loss = Math.abs(lossValue ?? 0);
-  const wireValue = metricNumber(payoff.value);
-  const winCount = metricSampleLabel(avgWin, "win");
-  const lossCount = metricSampleLabel(avgLoss, "loss");
-  const formula = isReturn
-    ? `Return %: ${metricPercent(avgWin.value)} avg win return (${winCount}) ÷ ${metricPercent(loss || null)} abs avg loss return (${lossCount})`
-    : `Amount: ${metricMoney(avgWin.value, avgWin)} avg win (${winCount}) ÷ ${metricMoney(loss || null, avgLoss)} abs avg loss (${lossCount})`;
-  const status = combinedMetricStatus(payoff, avgWin, avgLoss);
-  if (status !== "AVAILABLE" || win == null || loss <= 0 || wireValue == null) {
-    return { result: "—", formula, status };
-  }
-  const calculated = win / loss;
-  if (Math.abs(calculated - wireValue) > 1e-9) {
-    return { result: "—", formula: `${formula} · payload value does not match`, status: "INCONSISTENT" };
-  }
-  return { result: `${calculated.toFixed(2)}x`, formula: `${formula} = ${calculated.toFixed(2)}x`, status };
-}
-
-function countPresentation(metric: Dict): BehaviorMetricPresentation {
-  const status = metricBaseStatus(metric);
-  return {
-    result: metricInteger(metric.numerator),
-    formula: `${metricInteger(metric.numerator)} counted ÷ ${metricInteger(metric.denominator)} selected`,
-    status,
-  };
-}
-
-function secondaryMetricPresentation(name: string, metric: Dict): BehaviorMetricPresentation {
-  const status = metricBaseStatus(metric);
-  if (status === "NOT_SUPPORTED" || status === "UNAVAILABLE") return {
-    result: "—",
-    formula: "Not computable from current durable facts",
-    status,
-  };
-  if (BEHAVIOR_RATE_METRICS.has(name)) return ratePresentation(metric);
-  if (BEHAVIOR_RETURN_METRICS.has(name)) {
-    const side = name === "avg_win_return" ? "winning" : "losing";
-    const average = metricPercent(metric.value);
-    return {
-      result: status === "AVAILABLE" ? average : "—",
-      formula: `${metricPercent(metric.numerator)} total ${side} returns ÷ ${metricInteger(metric.denominator)} ${side} Cycles${average === "—" ? "" : ` = ${average}`}`,
-      status,
-    };
-  }
-  if (BEHAVIOR_MONEY_METRICS.has(name)) return {
-    result: status === "AVAILABLE" ? metricMoney(metric.value, metric) : "—",
-    formula: `${metricMoney(metric.numerator, metric)} total ÷ ${metricInteger(metric.denominator)} Cycles`,
-    status,
-  };
-  if (BEHAVIOR_DURATION_METRICS.has(name)) return {
-    result: status === "AVAILABLE" ? metricDuration(metric.value) : "—",
-    formula: name === "median_holding_duration"
-      ? `Median of ${metricInteger(metric.denominator)} Cycles`
-      : `${metricDuration(metric.numerator)} total ÷ ${metricInteger(metric.denominator)} Cycles`,
-    status,
-  };
-  if (BEHAVIOR_AVERAGE_METRICS.has(name)) {
-    const average = metricNumber(metric.value);
-    return {
-      result: status === "AVAILABLE" && average != null ? average.toFixed(2) : "—",
-      formula: `${metricInteger(metric.numerator)} attempts ÷ ${metricInteger(metric.denominator)} Cycles${average == null ? "" : ` = ${average.toFixed(2)}`}`,
-      status,
-    };
-  }
-  return {
-    result: status === "AVAILABLE" ? metricInteger(metric.value) : "—",
-    formula: metric.denominator == null
-      ? `${metricInteger(metric.numerator)} observations`
-      : `${metricInteger(metric.numerator)} ÷ ${metricInteger(metric.denominator)}`,
-    status,
-  };
 }
 
 function BehaviorPanel({ value }: { value: Dict }) {
@@ -591,6 +453,10 @@ function CurrentViewCard({
   return <Card kicker="JUDGMENT SYSTEM OF RECORD" title="Current Confirmed View" description={text(currentView.subject_title, text(subject.title, "Select a Research Subject"))} action={currentView.review ? <Badge value={upper(asDict(currentView.review).status, "CONFIRMED")} tone="good" /> : undefined}>{content}</Card>;
 }
 
+function initialJournalLoading(workbenchLoading: boolean, workbenchData: unknown, notesLoading: boolean, notesData: unknown, notesSelected: boolean, pinned: string | null) {
+  return (workbenchLoading && workbenchData === null) || (notesSelected && !pinned && notesLoading && notesData === null);
+}
+
 export default function DecisionWorkbenchPage() {
   const accountLabel = useAccountLabel();
   const [requestedSubjectId, setRequestedSubjectId] = useState("");
@@ -607,6 +473,7 @@ export default function DecisionWorkbenchPage() {
   const [decisionSourceNote, setDecisionSourceNote] = useState<string | null>(null);
   const [decisionSourceRevisionId, setDecisionSourceRevisionId] = useState<string | null>(null);
   const [decisionSourceReview, setDecisionSourceReview] = useState<{ reviewId: string; version: number } | null>(null);
+  const [manualSourceReview, setManualSourceReview] = useState(false);
   const [decisionReviewPackage, setDecisionReviewPackage] = useState<Dict | null>(null);
   const [observationDefer, setObservationDefer] = useState<{ reviewId: string; version: number; title: string; dueDate: string } | null>(null);
   const [observationDeferBusy, setObservationDeferBusy] = useState(false);
@@ -1175,6 +1042,7 @@ export default function DecisionWorkbenchPage() {
     setDecisionSourceNote(null);
     setDecisionSourceRevisionId(null);
     setDecisionSourceReview(null);
+    setManualSourceReview(false);
     setDecisionReviewPackage(null);
     setDecisionDraftScenarios([]);
     setDecisionOpen(true);
@@ -1498,18 +1366,15 @@ export default function DecisionWorkbenchPage() {
         ? `${scenario}: ${selectedAction} · ${reason}`
         : `${scenario}: REVIEW · Follow the current confirmed Trade Plan; this record authorizes no new action for that scenario.`
     ));
-    const rationale = [
-      "Strategy: strategy_v1",
-      `Current Scenario: ${decisionScenario}`,
-      `Action: ${selectedAction}`,
-      `Reason: ${reason}`,
-      `Review Due: ${decisionReviewDate || "Not Set"}`,
-      "",
-      ...scenarioLines,
-      ...(decisionSourceNote ? ["", `Source Note Revision: ${decisionSourceNote}`] : []),
-      "",
-      "This Decision Record does not submit, modify, or authorize an order.",
-    ].join("\n");
+    const rationale = buildDecisionRationale(
+      manualSourceReview,
+      decisionScenario,
+      selectedAction,
+      reason,
+      decisionReviewDate,
+      decisionSourceNote,
+      scenarioLines,
+    );
     const revisionId = text(primaryRevision?.revision_id, "");
     try {
       const response = await postApi<Dict>("/api/tools/invoke", {
@@ -1519,7 +1384,7 @@ export default function DecisionWorkbenchPage() {
             operation: "decision",
             case_id: subjectId,
             decision_type: decisionAction,
-            title: `${decisionScenario} · ${selectedAction.replaceAll("_", " ")}`,
+            title: `${manualSourceReview ? "Manual Source Review" : decisionScenario} · ${selectedAction.replaceAll("_", " ")}`,
             rationale,
             decided_at: new Date().toISOString(),
             decided_by: "user",
@@ -1553,7 +1418,7 @@ export default function DecisionWorkbenchPage() {
       const decision = asDict(result.data);
       const decisionId = text(decision.decision_id, "");
       let reviewClosureWarning: string | null = null;
-      if (decisionSourceReview && decisionSourceRevisionId) {
+      if (decisionSourceReview && decisionSourceRevisionId && !manualSourceReview) {
         if (!decisionId) {
           reviewClosureWarning = "Decision recorded, but its Observation review could not be linked because the write response omitted the Decision identity.";
         } else {
@@ -1580,6 +1445,7 @@ export default function DecisionWorkbenchPage() {
       setDecisionSourceNote(null);
       setDecisionSourceRevisionId(null);
       setDecisionSourceReview(null);
+      setManualSourceReview(false);
       setDecisionReviewPackage(null);
       setDecisionDraftScenarios([]);
       setDecisionReviewDate(futureDateInput(7));
@@ -1618,6 +1484,7 @@ export default function DecisionWorkbenchPage() {
     setDecisionSourceReview(
       reviewId && reviewVersion >= 1 ? { reviewId, version: reviewVersion } : null,
     );
+    setManualSourceReview(false);
     setDecisionDraftScenarios(scenarios);
     setDecisionError(null);
     setSupersedesDecisionId(null);
@@ -1625,6 +1492,27 @@ export default function DecisionWorkbenchPage() {
     if (sideways && ["HOLD", "NO_ACTION"].includes(upper(sideways.action))) {
       setDecisionAction(upper(sideways.action) === "HOLD" ? "hold" : "no_action");
     }
+  }
+
+  function primeManualNoteDecision(item: Dict) {
+    const identity = asDict(item.identity);
+    const revision = asDict(item.revision);
+    const revisionId = text(revision.note_revision_id, "");
+    setManualSourceReview(true);
+    setDecisionAction("no_action");
+    setDecisionScenario("SIDEWAYS");
+    setDecisionReason("");
+    setDecisionSourceNote(
+      `${text(identity.title, text(revision.title, "Source Note"))} · v${number(revision.version) || 1}`,
+    );
+    setDecisionSourceRevisionId(revisionId || null);
+    setDecisionSourceReview(null);
+    setDecisionReviewPackage(null);
+    setDecisionDraftScenarios([]);
+    setDecisionReviewDate(futureDateInput(7));
+    setDecisionError(null);
+    setSupersedesDecisionId(null);
+    setDecisionOpen(true);
   }
 
   async function reviewNoteAsDecision(item: Dict, matchingSubjectId: string | null) {
@@ -1695,6 +1583,29 @@ export default function DecisionWorkbenchPage() {
     primeNoteDecision(reviewItem);
   }
 
+  function manualNoteAsDecision(item: Dict, matchingSubjectId: string | null) {
+    if (decisionOpen || decisionBusy) {
+      setDecisionError("A Decision draft is already open. Finish or cancel it before opening Manual Source Review.");
+      return;
+    }
+    const identity = asDict(item.identity);
+    const revision = asDict(item.revision);
+    const revisionId = text(revision.note_revision_id, "");
+    const sourceInstrument = text(identity.primary_instrument_id, "");
+    const candidate = activeSubjects.find((entry) => text(entry.subject?.subject_id, "") === matchingSubjectId);
+    if (!matchingSubjectId || !revisionId || upper(revision.coverage) !== "FULL" || !sourceInstrument || !candidate || sourceInstrument !== text(candidate.subject?.primary_instrument_id, "") || upper(candidate.subject?.status) !== "ACTIVE") {
+      setDecisionError("Manual Source Review requires an exact active Research Subject and a FULL source revision with a canonical Instrument.");
+      return;
+    }
+    const pending = { ...item, _decision_mode: "manual", _matching_subject_id: matchingSubjectId };
+    if (matchingSubjectId !== subjectId || !selected) {
+      setPendingNoteDecision(pending);
+      selectSubjectContext(matchingSubjectId);
+      return;
+    }
+    primeManualNoteDecision(item);
+  }
+
   async function deferNoteReview(item: Dict, matchingSubjectId: string | null) {
     const revision = asDict(item.revision);
     const revisionId = text(revision.note_revision_id, "");
@@ -1755,9 +1666,24 @@ export default function DecisionWorkbenchPage() {
 
   useEffect(() => {
     if (!pendingNoteDecision || !selected || text(subject.subject_id, "") !== subjectId) return;
-    primeNoteDecision(pendingNoteDecision);
+    const pendingSubjectId = text(pendingNoteDecision._matching_subject_id, "");
+    if (pendingSubjectId && pendingSubjectId !== subjectId) return;
+    if (pendingNoteDecision._decision_mode === "manual") {
+      if (decisionOpen || decisionBusy) {
+        setPendingNoteDecision(null);
+        setDecisionError("A Decision draft is already open. The pending manual source was not imported.");
+        return;
+      }
+      if (upper(subject.status) !== "ACTIVE" || text(subject.primary_instrument_id, "") !== text(asDict(pendingNoteDecision.identity).primary_instrument_id, "")) {
+        setPendingNoteDecision(null);
+        setDecisionError("The selected Research Subject changed. Review its scope before importing the manual source.");
+        return;
+      }
+      primeManualNoteDecision(pendingNoteDecision);
+    }
+    else primeNoteDecision(pendingNoteDecision);
     setPendingNoteDecision(null);
-  }, [pendingNoteDecision, selected, subject, subjectId]);
+  }, [pendingNoteDecision, selected, subject, subjectId, decisionOpen, decisionBusy]);
 
   useEffect(() => {
     const reload = () => { observationApi.refresh(); workbenchApi.refresh(); };
@@ -1816,7 +1742,7 @@ export default function DecisionWorkbenchPage() {
     }
   }
 
-  const loading = workbenchApi.loading || (journalTab === "notes" && !pinnedRevisionId && observationApi.loading);
+  const loading = initialJournalLoading(workbenchApi.loading, workbenchApi.data, observationApi.loading, observationApi.data, journalTab === "notes", pinnedRevisionId);
   const error = workbenchApi.error || (journalTab === "notes" && !pinnedRevisionId ? observationApi.error : null);
   const readyNotes = filteredExternalNotes.filter((item) => {
     const revision = asDict(item.revision);
@@ -1834,14 +1760,14 @@ export default function DecisionWorkbenchPage() {
   }));
 
   return <ConsoleShell active="decision-workbench" pageActions={<PageActionMenu ariaLabel="Journal Page Actions" items={[
-    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
+    { id: "record-decision", label: "Record Decision", description: "Reuse the current Thesis and Trade Plan context", icon: <ClipboardPenLine aria-hidden="true" />, disabled: !selected || loading, onSelect: () => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setManualSourceReview(false); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); } },
     { id: "refresh", label: loading ? "Refreshing…" : "Refresh", description: "Reload durable workflow context", icon: <RefreshCw aria-hidden="true" className={loading ? "spin" : undefined} />, disabled: loading, onSelect: workbenchApi.refresh },
   ]} />}>
     <div className={`${journalStyles.root} decision-workbench`}>
         <ResearchChangeReview context={researchReview} subjectId={subjectId} canRecord={Boolean(selected)} onRecord={(reviewedChange, baselineId) => {
               setDecisionAction("no_action"); setDecisionScenario("SIDEWAYS");
               setDecisionReason(`Review recorded change ${text(reviewedChange.change_id)}: ${text(reviewedChange.title)}`);
-              setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null);
+              setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setManualSourceReview(false);
               setDecisionReviewPackage(null); setDecisionDraftScenarios([]);
               setSupersedesDecisionId(baselineId?.startsWith("decision_") ? baselineId : null);
               setDecisionError(null); setDecisionOpen(true);
@@ -1874,7 +1800,8 @@ export default function DecisionWorkbenchPage() {
 
           <HorizontalTabs items={journalTabs} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
 
-          {!activeWindowValid ? <Empty>Correct the date range to view Journal results.</Empty> : <DataBoundary loading={loading} error={error}>
+          {!activeWindowValid ? <Empty>Correct the date range to view Journal results.</Empty> : <DataBoundary loading={loading} error={workbenchApi.data ? null : error}>
+      {error && workbenchApi.data && <ErrorNote>{error} · Showing the last loaded context; retry before recording a Decision.</ErrorNote>}
           <section id="journal-panel-overview" role="tabpanel" aria-labelledby="journal-tab-overview" hidden={journalTab !== "overview"} className="journal-panel-stack">
           <CurrentViewCard subjectId={subjectId} currentView={currentView} subject={subject} loading={currentViewApi.loading} error={currentViewApi.error} />
           <Card title="Data Confidence" action={<Badge value={partialFailures.length || transactionWindowLimited || tradeCycleProjectionIncomplete ? "PARTIAL" : "AVAILABLE"} />}>
@@ -1928,7 +1855,7 @@ export default function DecisionWorkbenchPage() {
           <Card className="decision-next-card" title="Needs Review" action={<Badge value={partialFailures.length ? "INCOMPLETE" : compactNextSteps.length ? `${compactNextSteps.length} GROUPS` : "READY"} />}><StepList items={compactNextSteps.slice(0, 4)} busy={reviewBusy} onTransition={(item, status) => { void transitionReviewItem(item, status); }} /><ErrorNote>{reviewError}</ErrorNote>{decisionMessage ? <div className="inline-success">{decisionMessage}</div> : null}</Card>
 
           {selected ? <div className="decision-stage-grid journal-research-context">
-            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><QuickLink href={`/research#subject-${subjectId}`}>Open Research</QuickLink></div>}>
+            <Card kicker="1 · DECIDE" title="Judgment & Plan" action={<div className="workflow-card-actions"><ActionButton onClick={() => { setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setManualSourceReview(false); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); setDecisionError(null); setDecisionOpen(true); }}>Record Decision</ActionButton><QuickLink href={`/research#subject-${subjectId}`}>Open Research</QuickLink></div>}>
               <div className="decision-stage-lead"><Badge value={researchUnavailable || timelineUnavailable ? "INCOMPLETE" : latestDecision ? "DECISION" : primaryThesis ? upper(primaryThesis.status) : "MISSING"} /><strong>{researchUnavailable ? "Research state read unavailable" : timelineUnavailable ? "Decision Timeline unavailable" : text(latestDecision?.title, text(primaryThesis?.title, "No live Thesis"))}</strong><ScenarioDigest value={researchUnavailable || timelineUnavailable ? "Retry the missing durable read before interpreting the decision chain." : text(latestDecision?.summary, text(primaryRevision?.statement, "Create a falsifiable judgment before defining execution intent."))} /></div>
               <div className="workflow-support-line"><span>Trade Plan</span><Badge value={researchUnavailable ? "UNAVAILABLE" : plan ? upper(plan.status) : "MISSING"} /><strong>{plan ? `${shortId(plan.instrument_id)} · v${number(plan.version) || "—"}` : "No Current Plan"}</strong></div>
               <div className="decision-metrics"><span>Recent Decisions<strong>{decisionItems.length}</strong></span><span>Plan Conditions<strong>{listOf<Dict>(plan, "conditions").length}</strong></span><span>Pending Reviews<strong>{pendingCandidates.length + openQuestions.length}</strong></span></div>
@@ -2010,6 +1937,8 @@ export default function DecisionWorkbenchPage() {
               onRefresh={() => { if (pinnedRevisionId) pinnedObservationApi.refresh(); else void refreshObservationSources(); }}
               onSelectSubject={selectSubjectContext}
               onReviewDecision={reviewNoteAsDecision}
+              onManualDecision={manualNoteAsDecision}
+              manualDecisionDisabled={decisionOpen || decisionBusy || noteReviewBusyId !== null}
               onDeferReview={deferNoteReview}
               analysisBusyId={noteAnalysisBusyId}
               reviewBusyId={noteReviewBusyId}
@@ -2088,12 +2017,12 @@ export default function DecisionWorkbenchPage() {
         </ConfirmationDialog>
         <ConfirmationDialog
           open={decisionOpen}
-          title={decisionSourceRevisionId ? "Review View Change" : "Record Decision"}
-          description={supersedesDecisionId ? `Review and supersede ${shortId(supersedesDecisionId)} with a new durable Decision. This does not submit or authorize an order.` : decisionSourceRevisionId ? "Compare the imported view with the current confirmed baseline, edit the conclusion, then record one durable Decision. No position, Monitor, or order changes automatically." : "Save the current strategy decision in the existing durable Decision Record. This does not submit or authorize an order."}
-          confirmLabel={decisionSourceRevisionId ? "Confirm & Record Decision" : "Save Decision"}
+          title={decisionDialogTitle(manualSourceReview, decisionSourceRevisionId)}
+          description={decisionDialogDescription(manualSourceReview, supersedesDecisionId, decisionSourceRevisionId)}
+          confirmLabel={decisionDialogConfirmLabel(manualSourceReview, decisionSourceRevisionId)}
           busy={decisionBusy}
           onConfirm={() => { void saveDecision(); }}
-          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); } }}
+          onCancel={() => { if (!decisionBusy) { setDecisionOpen(false); setSupersedesDecisionId(null); setDecisionSourceNote(null); setDecisionSourceRevisionId(null); setDecisionSourceReview(null); setManualSourceReview(false); setDecisionReviewPackage(null); setDecisionDraftScenarios([]); } }}
         >
           <div className="journal-capture-form">
             <div className="confirmation-facts journal-capture-wide"><span>Research Subject<strong>{text(subject.title, "No Subject")}</strong><small>{upper(subject.status, "UNKNOWN")}</small></span><span>Trade Plan<strong>{planLinkReady ? `${shortId(plan?.instrument_id)} · v${planVersion}` : "No exact Plan linked"}</strong></span><span>Source Note Revision<strong>{decisionSourceNote || "None"}</strong></span><span>Current Position<strong>{relatedPositions.length ? `${heldQuantity} across ${relatedPositions.length} account snapshot row(s)` : "No durable position row in current snapshot"}</strong></span></div>
@@ -2104,7 +2033,7 @@ export default function DecisionWorkbenchPage() {
             <FormField label="Reason" required className="journal-capture-wide"><Textarea required value={decisionReason} onChange={(event) => { setDecisionReason(event.target.value); setDecisionError(null); }} placeholder="What fact, structure, or risk constraint supports this decision?" /></FormField>
             {decisionDraftScenarios.length ? <div className="notes-scenario-grid journal-capture-wide" aria-label="Imported Note Scenario Draft">{DECISION_SCENARIOS.map((scenario) => { const draft = decisionDraftScenarios.find((item) => upper(item.scenario) === scenario); return <article className="notes-scenario-card" key={scenario}><header><strong>{scenario}</strong><Badge value={upper(draft?.action, "REVIEW")} /></header><p>{text(draft?.condition, "No imported condition.")}</p></article>; })}</div> : null}
             <FormField label="Review Date" className="journal-capture-wide"><Input type="date" value={decisionReviewDate} onChange={(event) => setDecisionReviewDate(event.target.value)} /></FormField>
-            <p className="card-note journal-capture-wide">Strategy is recorded as strategy_v1{planLinkReady ? ` and linked to Trade Plan v${planVersion}` : ""}. The selected scenario records this action; the other scenarios remain REVIEW under the current confirmed Plan.{decisionSourceNote ? " This draft came from an exact imported Note revision; review and edit it before saving." : ""}</p>
+            <p className="card-note journal-capture-wide">{decisionDialogNote(manualSourceReview, planLinkReady, planVersion, decisionSourceNote)}</p>
             <ErrorNote role="alert">{decisionError}</ErrorNote>
           </div>
         </ConfirmationDialog>

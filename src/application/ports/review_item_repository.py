@@ -10,6 +10,10 @@ from domain.review_item.models import ReviewItem, ReviewItemMetrics, ReviewItemP
 
 
 class ReviewItemRepository(Protocol):
+    def known_active_source_keys(self, keys: tuple[str, ...]) -> frozenset[str]:
+        """Keys still active at source, including explicitly resolved items."""
+        ...
+
     def reconcile(
         self,
         *,

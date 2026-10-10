@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compact import CapabilityRegistrar
+    from interfaces.capabilities.registry import CapabilityRegistrar
 
 
 def _register_external_sync(
@@ -16,7 +16,8 @@ def _register_external_sync(
 ) -> None:
     """Register the explicit account/transaction/Watchlist sync capability."""
 
-    from .compact import SYNC, _register_dispatch_tool, _spec
+    from interfaces.capabilities.policy import SYNC
+    from interfaces.capabilities.registration import _register_dispatch_tool, _spec
 
     _register_dispatch_tool(
         registry,

@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import Field, ValidationError, model_validator
@@ -31,13 +32,6 @@ from application.dto.quick_review import QuickReviewInput
 from application.dto.review_item import ReviewItemTransitionInput
 from application.dto.trade_cycle_overrides import TradeCycleOverrideAppendInput
 from application.dto.valuation import ValuationCalculateInput, ValuationSaveInput
-from application.services.attention_projection import (
-    console_attention_payload,
-    project_agenda_overdue_fields,
-    project_trade_retro_fields,
-    project_unresolved_agent_fields,
-    project_unresolved_broker,
-)
 from application.services.external_note_sync_service import (
     ExternalObservationCaptureRequest,
 )
@@ -45,26 +39,28 @@ from application.services.trade_retro_schedule import trade_retro_weekly_windows
 from bootstrap import ApplicationContainer, build_default_application
 from domain.common.errors import TradingPartnerError
 from domain.external_note.attribution import attributed_blocks
-from domain.review_item.enums import ReviewItemSeverity, ReviewItemSourceType
-from domain.review_item.models import ReviewItemProjection
+from interfaces.capabilities import (
+    CapabilityConfirmationRequiredError,
+    CapabilityNotFoundError,
+    CompactCapabilityRegistry,
+)
 from interfaces.console._shared import ConsoleRequestModel, failure_payload
+from interfaces.console._shared import canonical_subject_transport as _canonical_subject_transport
 from interfaces.console.account_aliases import read_account_aliases
 from interfaces.console.agent_api import build_agent_runtime_state
 from interfaces.console.agent_api import router as agent_router
-from interfaces.console.catalog import capability_catalog
+from interfaces.console.capabilities import create_capability_registry
+from interfaces.console.capability_usage_api import router as capability_usage_router
+from interfaces.console.catalog import registry_catalog
 from interfaces.console.journal_history import journal_history
 from interfaces.console.observation_refresh_api import router as observation_refresh_router
 from interfaces.console.observation_research_draft import (
     project_observation_research_draft,
 )
+from interfaces.console.overview_api import router as overview_router
+from interfaces.console.research_links_api import router as research_links_router
 from interfaces.console.runtime_identity import build_runtime_identity
-from interfaces.mcp.server import create_capability_registry
-from interfaces.mcp.tool_inventory import MCP_VNEXT_TOOL_NAMES
-from interfaces.mcp.tools.compact import (
-    CapabilityConfirmationRequiredError,
-    CapabilityNotFoundError,
-    CompactCapabilityRegistry,
-)
+from interfaces.shared.result_compaction import compact_mcp_result
 
 
 @asynccontextmanager
@@ -74,7 +70,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     registry = create_capability_registry(container)
     app.state.container = container
     app.state.capability_registry = registry
-    app.state.capabilities = capability_catalog(registry.list_tools(), registry.policies)
+    app.state.capabilities = registry_catalog(registry)
     agent_state = build_agent_runtime_state(container, registry)
     app.state.agent_runtime_state = agent_state
     # Keep the three collaborators discoverable for channel adapters and
@@ -109,6 +105,18 @@ app = FastAPI(
 )
 
 app.include_router(observation_refresh_router)
+app.include_router(overview_router)
+app.include_router(research_links_router)
+app.include_router(capability_usage_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid_console_request(request: Request, error: RequestValidationError) -> JSONResponse:
+    """Never echo private request bodies or validator exception context."""
+    return JSONResponse(status_code=422, content={
+        "detail": "Invalid Console request",
+        "code": "CONSOLE_REQUEST_INVALID",
+    })
 
 _CONSOLE_HOSTS = frozenset({"127.0.0.1", "localhost"})
 _CONSOLE_ORIGINS = frozenset(
@@ -428,11 +436,10 @@ async def _invoke_capability(
                 arguments,
                 confirmation=confirmation,
             )
-        return await _registry(request).invoke(
-            tool_name,
-            arguments,
-            confirmation=confirmation,
+        result = await _registry(request).invoke_uncompacted(
+            tool_name, arguments, confirmation=confirmation,
         )
+        return compact_mcp_result(result, capability=tool_name, arguments=arguments)
     except CapabilityNotFoundError:
         raise HTTPException(
             status_code=404,
@@ -719,455 +726,6 @@ def _console_failure(request: Request, error: Exception, code: str) -> dict[str,
     return failure_payload(code, _sanitized_error(request, error))
 
 
-def _console_row(item: Any, *, href: str) -> dict[str, Any]:
-    payload = console_attention_payload(item)
-    payload["href"] = href
-    return payload
-
-
-def _workflow_attention_items(
-    *,
-    agenda: dict[str, Any],
-    retro: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Project every item from already-bounded durable workflow responses."""
-
-    items: list[dict[str, Any]] = []
-    agenda_data = agenda.get("data") if isinstance(agenda, dict) else None
-    agenda_items = agenda_data.get("items") if isinstance(agenda_data, dict) else None
-    for value in agenda_items if isinstance(agenda_items, list) else ():
-        if not isinstance(value, dict):
-            continue
-        item_id = value.get("agenda_item_id")
-        if not isinstance(item_id, str) or not item_id:
-            continue
-        limitation_codes = value.get("limitation_codes")
-        projected = project_agenda_overdue_fields(
-            agenda_item_id=item_id,
-            title=str(value.get("title") or item_id),
-            limitation_codes=(
-                tuple(str(code) for code in limitation_codes)
-                if isinstance(limitation_codes, list)
-                else ()
-            ),
-            subject_id=(
-                str(value["subject_id"])
-                if isinstance(value.get("subject_id"), str) and value["subject_id"]
-                else None
-            ),
-        )
-        if projected is not None:
-            items.append(_console_row(projected, href=f"/agenda#agenda-{item_id}"))
-
-    retro_data = retro.get("data") if isinstance(retro, dict) else None
-    retro_runs = retro_data.get("runs") if isinstance(retro_data, dict) else None
-    for value in retro_runs if isinstance(retro_runs, list) else ():
-        if not isinstance(value, dict):
-            continue
-        run_id = value.get("run_id")
-        if not isinstance(run_id, str) or not run_id:
-            continue
-        latest_review = value.get("latest_review")
-        review_status = (
-            str(latest_review.get("status", "")).upper()
-            if isinstance(latest_review, dict)
-            else "UNREVIEWED"
-        )
-        findings = value.get("findings")
-        subject_ids_value = value.get("subject_ids")
-        subject_ids = tuple(
-            dict.fromkeys(
-                subject_id
-                for subject_id in (
-                    subject_ids_value if isinstance(subject_ids_value, (list, tuple)) else ()
-                )
-                if isinstance(subject_id, str) and subject_id
-            )
-        )
-        action_items = (
-            latest_review.get("action_items") if isinstance(latest_review, dict) else None
-        )
-        for projected in project_trade_retro_fields(
-            run_id=run_id,
-            finding_count=len(findings) if isinstance(findings, list) else 0,
-            review_status=review_status,
-            action_items=tuple(action_items) if isinstance(action_items, list) else (),
-            subject_ids=subject_ids,
-        ):
-            items.append(_console_row(projected, href=f"/retro#retro-{run_id}"))
-
-    return items
-
-
-def _decision_review_attention_items(decisions: tuple[Any, ...]) -> list[dict[str, Any]]:
-    """Project due Decisions into stable ReviewItem source rows.
-
-    The decision id is both the durable source reference and the stable key
-    suffix.  A later exact superseder is intentionally handled by the
-    repository query, so this projector only receives still-live Decisions.
-    """
-
-    items: list[dict[str, Any]] = []
-    for decision in decisions:
-        decision_id = str(getattr(decision, "decision_id", ""))
-        subject_id = str(getattr(decision, "subject_id", ""))
-        due_at = getattr(decision, "review_due_at", None)
-        if not decision_id or not subject_id or not isinstance(due_at, datetime):
-            continue
-        title = str(getattr(decision, "title", "Decision review"))
-        items.append(
-            {
-                "key": f"decision-review-due-{decision_id}",
-                "source_type": ReviewItemSourceType.DECISION_REVIEW_DUE.value,
-                "source_ref": decision_id,
-                "subject_id": subject_id,
-                "title": f"Decision review due · {title}",
-                "detail": (
-                    "The Decision review deadline has passed and no later exact "
-                    "superseding Decision was recorded."
-                ),
-                "severity": "ATTENTION",
-                "recommended_action": "REVIEW_DECISION",
-                "href": (
-                    f"/decision-workbench?subject_id={subject_id}"
-                    f"&capture=decision&supersedes_decision_id={decision_id}"
-                ),
-                "due_at": due_at.isoformat(),
-            }
-        )
-    return items
-
-
-def _operational_attention_items(
-    *,
-    agent_actions: tuple[Any, ...] = (),
-    broker_intents: tuple[Any, ...] = (),
-) -> list[dict[str, Any]]:
-    """Render unresolved execution-adjacent state without attempting recovery."""
-
-    items: list[dict[str, Any]] = []
-    for action in agent_actions:
-        action_id = str(getattr(action, "action_id", ""))
-        if not action_id:
-            continue
-        status = str(getattr(getattr(action, "status", None), "value", "UNKNOWN"))
-        items.append(
-            _console_row(
-                project_unresolved_agent_fields(
-                    action_id=action_id,
-                    status=status,
-                    capability=str(getattr(action, "capability", "Agent action")),
-                    operation=str(getattr(action, "operation", "")),
-                ),
-                href="/chat",
-            )
-        )
-    for intent in broker_intents:
-        intent_id = str(getattr(intent, "order_intent_id", ""))
-        if not intent_id:
-            continue
-        items.append(
-            _console_row(
-                project_unresolved_broker(
-                    order_intent_id=intent_id,
-                    status=str(getattr(intent, "status", "UNKNOWN")),
-                    symbol=str(
-                        getattr(intent, "symbol", None) or getattr(intent, "instrument_id", "Order")
-                    ),
-                    provider_status=getattr(intent, "provider_status", None),
-                ),
-                href="/capabilities",
-            )
-        )
-    return items
-
-
-def _scorecard_attention_items(scorecards: dict[str, Any]) -> list[dict[str, Any]]:
-    """Project latest Scorecard gaps and label consecutive recurrence."""
-
-    data = scorecards.get("data") if scorecards.get("ok") is True else None
-    runs = data.get("runs") if isinstance(data, dict) else None
-    if not isinstance(runs, list):
-        return []
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for value in runs:
-        if not isinstance(value, dict):
-            continue
-        thesis_id = value.get("thesis_id")
-        if isinstance(thesis_id, str) and thesis_id:
-            grouped.setdefault(thesis_id, []).append(value)
-
-    items: list[dict[str, Any]] = []
-
-    def gap_codes(run: dict[str, Any] | None) -> set[str]:
-        dimensions = run.get("dimensions") if isinstance(run, dict) else None
-        return {
-            str(item.get("code"))
-            for item in (dimensions if isinstance(dimensions, list) else ())
-            if isinstance(item, dict)
-            and (
-                str(item.get("status", "")).upper() != "EVALUATED"
-                or str(item.get("result_code", "")).upper() in {"FAIL", "PARTIAL", "NOT_EVALUATED"}
-            )
-            and item.get("code")
-        }
-
-    for thesis_id, thesis_runs in grouped.items():
-        ordered = sorted(
-            thesis_runs,
-            key=lambda item: (str(item.get("generated_at", "")), str(item.get("scorecard_id", ""))),
-            reverse=True,
-        )
-        latest = ordered[0]
-        previous_gaps = gap_codes(ordered[1] if len(ordered) > 1 else None)
-        dimensions = latest.get("dimensions")
-        for dimension in dimensions if isinstance(dimensions, list) else ():
-            if not isinstance(dimension, dict):
-                continue
-            code = str(dimension.get("code", ""))
-            if code not in gap_codes(latest):
-                continue
-            persistent = code in previous_gaps
-            subject_id = latest.get("subject_id")
-            items.append(
-                {
-                    "key": f"scorecard-gap-{thesis_id}-{code}",
-                    "severity": "ATTENTION",
-                    "title": f"{'Persistent' if persistent else 'New'} Scorecard gap · "
-                    f"{dimension.get('title') or code}",
-                    "detail": (
-                        f"{dimension.get('summary') or dimension.get('result_code') or code} · "
-                        f"Thesis revision v{latest.get('thesis_revision_no') or '—'}"
-                    ),
-                    "href": (
-                        f"/scorecards?subject_id={subject_id}#scorecard-"
-                        f"{latest.get('scorecard_id')}"
-                        if isinstance(subject_id, str) and subject_id
-                        else f"/scorecards#scorecard-{latest.get('scorecard_id')}"
-                    ),
-                    "source_type": "SCORECARD_GAP",
-                    # A newer scorecard changes the display anchor, not the
-                    # durable issue scope.  Thesis is the authoritative source.
-                    "source_ref": thesis_id,
-                    "subject_id": subject_id if isinstance(subject_id, str) else None,
-                    "recommended_action": "REVIEW_SCORECARD_GAP",
-                }
-            )
-    return items
-
-
-def _authoritative_review_refs(
-    *,
-    agenda: dict[str, Any] | None = None,
-    retro: dict[str, Any] | None = None,
-    scorecards: dict[str, Any] | None = None,
-) -> frozenset[tuple[ReviewItemSourceType, str]]:
-    """Return exact source objects whose current gaps were fully inspected.
-
-    A paginated response is never authoritative for objects omitted from that
-    page.  Each object that is present, however, can safely close its own stale
-    projections when its current representation contains no matching gap.
-    """
-
-    values: set[tuple[ReviewItemSourceType, str]] = set()
-    agenda_data = agenda.get("data") if isinstance(agenda, dict) else None
-    agenda_items = agenda_data.get("items") if isinstance(agenda_data, dict) else None
-    for item in agenda_items if isinstance(agenda_items, list) else ():
-        source_ref = item.get("agenda_item_id") if isinstance(item, dict) else None
-        if isinstance(source_ref, str) and source_ref:
-            values.add((ReviewItemSourceType.CATALYST_AGENDA, source_ref))
-
-    retro_data = retro.get("data") if isinstance(retro, dict) else None
-    retro_runs = retro_data.get("runs") if isinstance(retro_data, dict) else None
-    for item in retro_runs if isinstance(retro_runs, list) else ():
-        source_ref = item.get("run_id") if isinstance(item, dict) else None
-        if isinstance(source_ref, str) and source_ref:
-            values.add((ReviewItemSourceType.TRADE_RETRO, source_ref))
-
-    scorecard_data = scorecards.get("data") if isinstance(scorecards, dict) else None
-    scorecard_runs = scorecard_data.get("runs") if isinstance(scorecard_data, dict) else None
-    for item in scorecard_runs if isinstance(scorecard_runs, list) else ():
-        if not isinstance(item, dict):
-            continue
-        for field in ("thesis_id", "scorecard_id"):
-            source_ref = item.get(field)
-            if isinstance(source_ref, str) and source_ref:
-                values.add((ReviewItemSourceType.SCORECARD_GAP, source_ref))
-    return frozenset(values)
-
-
-def _review_item_projection(item: dict[str, Any]) -> ReviewItemProjection | None:
-    try:
-        source_type = ReviewItemSourceType(str(item["source_type"]))
-        severity_wire = str(item.get("severity", "ATTENTION")).upper()
-        severity = (
-            ReviewItemSeverity.ERROR
-            if severity_wire == "ERROR"
-            else ReviewItemSeverity.INFO
-            if severity_wire in {"INFO", "OBSERVE"}
-            else ReviewItemSeverity.ATTENTION
-        )
-        return ReviewItemProjection(
-            source_key=str(item["key"]),
-            source_type=source_type,
-            source_ref=str(item["source_ref"]),
-            subject_id=(
-                str(item["subject_id"])
-                if isinstance(item.get("subject_id"), str) and item["subject_id"]
-                else None
-            ),
-            title=str(item["title"]),
-            detail=str(item["detail"]),
-            severity=severity,
-            recommended_action=str(item["recommended_action"]),
-            href=str(item["href"]),
-            due_at=(
-                datetime.fromisoformat(str(item["due_at"]))
-                if item.get("due_at") is not None
-                else None
-            ),
-        )
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-async def _reconcile_review_items(
-    request: Request,
-    *,
-    agenda: dict[str, Any] | None = None,
-    retro: dict[str, Any] | None = None,
-    scorecards: dict[str, Any] | None = None,
-) -> tuple[Any, ...]:
-    """Materialize only successfully observed durable sources.
-
-    A failed envelope is excluded from ``observed_source_types`` so an outage
-    can never auto-resolve an existing item.
-    """
-
-    if agenda is None or retro is None or scorecards is None:
-        fetched_agenda, fetched_retro, fetched_scorecards = await asyncio.gather(
-            _durable_console_call(
-                request,
-                "research_get",
-                {
-                    "request": {
-                        "operation": "agenda",
-                        "window_days": 90,
-                        "include_history": False,
-                        "limit": 200,
-                        "offset": 0,
-                    }
-                },
-            ),
-            _durable_console_call(
-                request,
-                "portfolio_get",
-                {"request": {"operation": "retro_history", "limit": 50}},
-            ),
-            _durable_console_call(
-                request,
-                "research_get",
-                {"request": {"operation": "scorecard_history", "limit": 50, "offset": 0}},
-            ),
-        )
-        agenda = agenda or fetched_agenda
-        retro = retro or fetched_retro
-        scorecards = scorecards or fetched_scorecards
-
-    observed: set[ReviewItemSourceType] = set()
-    authoritative_refs: set[tuple[ReviewItemSourceType, str]] = set()
-    fully_observed: set[ReviewItemSourceType] = set()
-    raw_items: list[dict[str, Any]] = []
-    if agenda.get("ok") is True:
-        observed.add(ReviewItemSourceType.CATALYST_AGENDA)
-        raw_items.extend(_workflow_attention_items(agenda=agenda, retro={}))
-        authoritative_refs.update(_authoritative_review_refs(agenda=agenda))
-    if retro.get("ok") is True:
-        observed.add(ReviewItemSourceType.TRADE_RETRO)
-        raw_items.extend(_workflow_attention_items(agenda={}, retro=retro))
-        authoritative_refs.update(_authoritative_review_refs(retro=retro))
-    if scorecards.get("ok") is True:
-        observed.add(ReviewItemSourceType.SCORECARD_GAP)
-        raw_items.extend(_scorecard_attention_items(scorecards))
-        authoritative_refs.update(_authoritative_review_refs(scorecards=scorecards))
-
-    container = _container(request)
-    decision_limit = 100
-    try:
-        due_decisions = container.services.decisions.list_review_due(
-            now=container.context.clock.now(),
-            limit=decision_limit,
-        )
-    except Exception:  # noqa: BLE001 - failed reads must not auto-resolve
-        due_decisions = ()
-    else:
-        observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
-        raw_items.extend(_decision_review_attention_items(due_decisions))
-        # A result at the bound may omit a still-live Decision.  Keep the
-        # source observed for upserts, but never mark it fully observed.
-        if len(due_decisions) < decision_limit:
-            fully_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
-    observation_limit = 100
-    try:
-        observation_reviews = container.services.external_note_reviews.pending_projections(
-            limit=observation_limit
-        )
-    except Exception:  # noqa: BLE001 - absence must not resolve prior items
-        observation_reviews = ()
-    else:
-        observed.add(ReviewItemSourceType.OBSERVATION_REVIEW_DUE)
-        raw_items.extend(
-            {
-                "key": item.source_key,
-                "source_type": item.source_type.value,
-                "source_ref": item.source_ref,
-                "subject_id": item.subject_id,
-                "title": item.title,
-                "detail": item.detail,
-                "severity": item.severity.value,
-                "recommended_action": item.recommended_action,
-                "href": item.href,
-                "due_at": item.due_at.isoformat() if item.due_at else None,
-            }
-            for item in observation_reviews
-        )
-        if len(observation_reviews) < observation_limit:
-            fully_observed.add(ReviewItemSourceType.OBSERVATION_REVIEW_DUE)
-    try:
-        agent_actions = container.operations.agent_pending_actions.list_unresolved(
-            now=container.context.clock.now(), limit=100
-        )
-    except Exception:  # noqa: BLE001 - absence must not resolve prior items
-        agent_actions = ()
-    else:
-        observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
-        if len(agent_actions) < 100:
-            fully_observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
-    try:
-        broker_intents = container.services.broker_orders.list_unresolved(limit=100)
-    except Exception:  # noqa: BLE001 - absence must not resolve prior items
-        broker_intents = ()
-    else:
-        observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
-        if len(broker_intents) < 100:
-            fully_observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
-    raw_items.extend(
-        _operational_attention_items(
-            agent_actions=agent_actions,
-            broker_intents=broker_intents,
-        )
-    )
-    projections = tuple(
-        value for item in raw_items if (value := _review_item_projection(item)) is not None
-    )
-    return container.services.review_items.reconcile(
-        projections,
-        observed_source_types=frozenset(observed),
-        authoritative_source_refs=frozenset(authoritative_refs),
-        fully_observed_source_types=frozenset(fully_observed),
-    )
-
-
 async def _durable_console_call(
     request: Request,
     tool_name: str,
@@ -1252,23 +810,6 @@ def _research_state_failure(request: Request, error: Exception) -> dict[str, Any
     """
 
     return failure_payload("CONSOLE_RESEARCH_STATE_READ_FAILED", _sanitized_error(request, error))
-
-
-def _canonical_subject_transport(value: Any) -> Any:
-    """Translate public compatibility ``case_*`` fields for the internal Console BFF."""
-
-    if isinstance(value, dict):
-        aliases = {
-            "case_id": "subject_id",
-            "case_type": "subject_type",
-            "linked_case_ids": "linked_subject_ids",
-        }
-        return {
-            aliases.get(key, key): _canonical_subject_transport(item) for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_canonical_subject_transport(item) for item in value]
-    return value
 
 
 @app.get("/api/weekly-review")
@@ -1953,51 +1494,15 @@ async def decision_workbench(
         partial_failures.insert(0, "research_subjects")
     durable_review_items: tuple[Any, ...] = ()
     if selected_subject_id is not None:
-        review_observed: set[ReviewItemSourceType] = set()
-        authoritative_refs: set[tuple[ReviewItemSourceType, str]] = set()
-        review_fully_observed: set[ReviewItemSourceType] = set()
-        review_raw: list[dict[str, Any]] = []
-        if agenda_result.get("ok") is True:
-            review_observed.add(ReviewItemSourceType.CATALYST_AGENDA)
-            review_raw.extend(_workflow_attention_items(agenda=agenda_result, retro={}))
-            authoritative_refs.update(_authoritative_review_refs(agenda=agenda_result))
-        if retro_result.get("ok") is True:
-            review_observed.add(ReviewItemSourceType.TRADE_RETRO)
-            review_raw.extend(_workflow_attention_items(agenda={}, retro=retro_result))
-            authoritative_refs.update(_authoritative_review_refs(retro=retro_result))
-        if scorecards_result.get("ok") is True:
-            review_observed.add(ReviewItemSourceType.SCORECARD_GAP)
-            review_raw.extend(_scorecard_attention_items(scorecards_result))
-            authoritative_refs.update(_authoritative_review_refs(scorecards=scorecards_result))
-        decision_limit = 100
-        try:
-            due_decisions = _container(request).services.decisions.list_review_due(
-                now=_container(request).context.clock.now(),
-                subject_id=selected_subject_id,
-                limit=decision_limit,
-            )
-        except Exception:  # noqa: BLE001 - failed reads must not auto-resolve
-            due_decisions = ()
-            partial_failures.append("decision_review_due")
-        else:
-            review_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
-            review_raw.extend(_decision_review_attention_items(due_decisions))
-            if len(due_decisions) < decision_limit:
-                review_fully_observed.add(ReviewItemSourceType.DECISION_REVIEW_DUE)
-        scoped_projections = tuple(
-            projection
-            for item in review_raw
-            if (projection := _review_item_projection(item)) is not None
-            and projection.subject_id == selected_subject_id
+        refresh_batch = _container(request).services.review_item_refresh.collect(
+            agenda_result,
+            retro_result,
+            scorecards_result,
+            subject_id=selected_subject_id,
         )
+        # Collect source coverage without changing materialized or human state.
+        partial_failures.extend(refresh_batch.partial_failures)
         try:
-            _container(request).services.review_items.reconcile(
-                scoped_projections,
-                observed_source_types=frozenset(review_observed),
-                authoritative_source_refs=frozenset(authoritative_refs),
-                fully_observed_source_types=frozenset(review_fully_observed),
-                subject_scope=selected_subject_id,
-            )
             durable_review_items = _container(request).services.review_items.list_open(
                 subject_id=selected_subject_id,
                 limit=500,
@@ -2539,15 +2044,13 @@ async def moomoo_notes_sync(
 
 
 @app.get("/api/review-items")
-async def review_items(
+def review_items(
     request: Request,
     subject_id: str | None = Query(default=None, min_length=1, max_length=128),
     limit: int = Query(default=100, ge=1, le=500),
     include_resolved: bool = False,
 ) -> dict[str, Any]:
-    """Refresh deterministic durable projections and return unresolved items."""
-
-    await _reconcile_review_items(request)
+    """Read materialized items without changing their source or human state."""
     service = _container(request).services.review_items
     items = (
         service.list_recent(subject_id=subject_id, limit=limit)
@@ -2564,6 +2067,10 @@ async def review_items(
         ),
         "page_count": len(items),
         "metrics": metrics.model_dump(mode="json"),
+        "generated_at": _container(request).context.clock.now(),
+        "materialized_at": service.latest_observed_at(),
+        "complete": (metrics.total_items if include_resolved else
+                     metrics.open_count + metrics.acknowledged_count) <= len(items),
     }
 
 
@@ -2853,173 +2360,3 @@ async def operations(request: Request) -> dict[str, Any]:
 @app.get("/api/schwab/oauth")
 def schwab_oauth(request: Request) -> dict[str, Any]:
     return _schwab_oauth_status(request)
-
-
-@app.get("/api/overview")
-async def overview(request: Request) -> dict[str, Any]:
-    container = _container(request)
-    research_attention: list[dict[str, Any]] = []
-    subject_page = await _invoke_capability(
-        request,
-        "research_get",
-        {
-            "request": {
-                "operation": "query",
-                "include_archived": False,
-                "limit": 200,
-                "offset": 0,
-            }
-        },
-        preserve_full_result=True,
-    )
-    subject_data = subject_page.get("data") if isinstance(subject_page, dict) else None
-    subject_items = subject_data.get("items") if isinstance(subject_data, dict) else None
-    valid_subjects = tuple(
-        subject
-        for subject in (subject_items if isinstance(subject_items, list) else ())
-        if isinstance(subject, dict) and isinstance(subject.get("case_id"), str)
-    )
-    subject_read_slots = asyncio.Semaphore(8)
-
-    async def read_subject_state(subject: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        async with subject_read_slots:
-            state = await _durable_console_call(
-                request,
-                "research_get",
-                {
-                    "request": {
-                        "operation": "state",
-                        "case_id": subject["case_id"],
-                        "include_archived_theses": False,
-                        "include_watchlist": False,
-                    }
-                },
-            )
-        return subject, state
-
-    subject_states_task = asyncio.gather(
-        *(read_subject_state(subject) for subject in valid_subjects)
-    )
-    agenda_task = _durable_console_call(
-        request,
-        "research_get",
-        {
-            "request": {
-                "operation": "agenda",
-                "window_days": 90,
-                "include_history": False,
-                "limit": 200,
-                "offset": 0,
-            }
-        },
-    )
-    retro_task = _durable_console_call(
-        request,
-        "portfolio_get",
-        {"request": {"operation": "retro_history", "limit": 50}},
-    )
-    scorecard_task = _durable_console_call(
-        request,
-        "research_get",
-        {"request": {"operation": "scorecard_history", "limit": 50, "offset": 0}},
-    )
-    subject_states, agenda_summary, retro_history, scorecard_history = await asyncio.gather(
-        subject_states_task,
-        agenda_task,
-        retro_task,
-        scorecard_task,
-    )
-    for subject, state in subject_states:
-        state_data = state.get("data")
-        pending = state_data.get("pending_candidates") if isinstance(state_data, dict) else None
-        if isinstance(pending, list) and pending:
-            research_attention.append(
-                {
-                    "subject_id": subject["case_id"],
-                    "title": subject.get("title"),
-                    "pending_count": len(pending),
-                }
-            )
-    broker_unresolved = container.services.broker_orders.list_unresolved(limit=50)
-    agent_unresolved_repository = container.operations.agent_pending_actions
-    agent_unresolved = (
-        agent_unresolved_repository.list_unresolved(now=container.context.clock.now(), limit=50)
-        if hasattr(agent_unresolved_repository, "list_unresolved")
-        else ()
-    )
-    workflow_attention = _workflow_attention_items(
-        agenda=agenda_summary,
-        retro=retro_history,
-    )
-    workflow_attention.extend(
-        _operational_attention_items(
-            agent_actions=agent_unresolved,
-            broker_intents=broker_unresolved,
-        )
-    )
-    workflow_attention.extend(_scorecard_attention_items(scorecard_history))
-    review_items_error: dict[str, Any] | None = None
-    try:
-        await _reconcile_review_items(
-            request,
-            agenda=agenda_summary,
-            retro=retro_history,
-            scorecards=scorecard_history,
-        )
-        durable_review_items = container.services.review_items.list_open(limit=100)
-    except Exception as error:  # noqa: BLE001 - inbox remains usable from live projection
-        durable_review_items = ()
-        review_items_error = _console_failure(
-            request,
-            error,
-            "CONSOLE_REVIEW_ITEM_RECONCILE_FAILED",
-        )
-    projected_workflow_attention = workflow_attention
-    if review_items_error is None:
-        # The durable Review Queue owns these same workflow gaps once
-        # reconciliation succeeds. Keep the Decision Inbox free of duplicate
-        # cards; the raw projection remains available for diagnostics/fallback.
-        workflow_attention = []
-    health, monitor_dashboard, recent_runs = await asyncio.gather(
-        _invoke_capability(request, "system_health", {}, preserve_full_result=True),
-        _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "dashboard", "status": None}},
-            preserve_full_result=True,
-        ),
-        _invoke_capability(
-            request,
-            "monitor_read",
-            {"request": {"operation": "runs", "limit": 20}},
-            preserve_full_result=True,
-        ),
-    )
-    return {
-        "health": health,
-        "monitor_dashboard": _canonical_subject_transport(monitor_dashboard),
-        "recent_runs": _canonical_subject_transport(recent_runs),
-        "post_market_sync": container.operations.post_market_sync.status().model_dump(mode="json"),
-        "notifications": container.operations.notifications.status().model_dump(mode="json"),
-        "maintenance": container.operations.maintenance.status().model_dump(mode="json"),
-        "capability_count": len(MCP_VNEXT_TOOL_NAMES),
-        "research_attention": _canonical_subject_transport(research_attention),
-        "workflow_attention": _canonical_subject_transport(workflow_attention),
-        "workflow_attention_projection": _canonical_subject_transport(projected_workflow_attention),
-        "review_items": [item.model_dump(mode="json") for item in durable_review_items],
-        "review_item_metrics": (
-            container.services.review_items.metrics().model_dump(mode="json")
-            if review_items_error is None
-            else None
-        ),
-        "review_item_history": [
-            item.model_dump(mode="json")
-            for item in (
-                container.services.review_items.list_recent(limit=50)
-                if review_items_error is None
-                else ()
-            )
-        ],
-        "review_items_error": review_items_error,
-        "agenda_summary": _canonical_subject_transport(agenda_summary),
-    }

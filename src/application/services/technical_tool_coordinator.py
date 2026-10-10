@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -49,6 +49,8 @@ from domain.us_market.models import USBarSeries
 _NEW_YORK = ZoneInfo("America/New_York")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _SEOUL = ZoneInfo("Asia/Seoul")
+_WEEKLY_BOUNDARY_LIMITATION = "SMC_CALENDAR_WEEK_BOUNDARIES_MAY_BE_PARTIAL"
+_DATE_LABEL_LIMITATION = "SMC_FUTURES_DATE_LABEL_CONFIRMATION_TIME_UNKNOWN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +103,26 @@ def _warnings(result: RouterExecutionResult[object]) -> tuple[WarningInfo, ...]:
             if code not in seen:
                 seen.add(code)
                 messages = {
+                    "FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND": (
+                        "Daily futures rows use a conservative 17:00 New York availability bound "
+                        "on the ending trade date. This is not a proven last-trade time or the "
+                        "actual holiday close."
+                    ),
+                    "FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN": (
+                        "Daily futures rows retain native New York date labels and are withheld "
+                        "until the next local date. Session coverage and actual completion time "
+                        "are unknown. Derived SMC occurrence and confirmation timestamps are "
+                        "date labels, not verified availability times."
+                    ),
+                    "US_NON_SESSION_DAILY_BAR": (
+                        "A provider daily row is dated outside XNYS sessions; its "
+                        "conservative 16:00 ET cutoff does not establish a regular "
+                        "exchange session."
+                    ),
+                    "LATEST_ADJUSTED_BAR_UNAVAILABLE": (
+                        "The latest raw daily row has no finalized adjusted close and "
+                        "was omitted; technical analysis uses preceding available bars."
+                    ),
                     "FUTURES_CONTRACT_NOT_SPOT": (
                         "Technical levels use an exchange-traded futures proxy, not "
                         "the exact OTC spot instrument."
@@ -131,6 +153,74 @@ def _warnings(result: RouterExecutionResult[object]) -> tuple[WarningInfo, ...]:
                 )
             )
     return tuple(merged)
+
+
+def _history_warnings(timeframes: tuple[TechnicalTimeframe, ...]) -> tuple[WarningInfo, ...]:
+    return tuple(
+        WarningInfo(
+            code="TECHNICAL_HISTORY_INCOMPLETE",
+            message=(
+                "The timeframe has fewer than 20 source bars; indicators without "
+                "enough history remain unavailable."
+            ),
+            details={"interval": frame.interval, "bar_count": frame.bar_count},
+        )
+        for frame in timeframes
+        if frame.bar_count < 20
+    )
+
+
+def _with_weekly_boundary_limitation(frame: TechnicalTimeframe) -> TechnicalTimeframe:
+    if frame.interval != "1w" or frame.smart_money is None:
+        return frame
+    smc = frame.smart_money
+    if _WEEKLY_BOUNDARY_LIMITATION in smc.limitations:
+        return frame
+    return replace(
+        frame,
+        smart_money=replace(
+            smc, limitations=(*smc.limitations, _WEEKLY_BOUNDARY_LIMITATION)
+        ),
+    )
+
+
+def _with_source_time_limitation(
+    frame: TechnicalTimeframe, result: RouterExecutionResult[object]
+) -> TechnicalTimeframe:
+    codes = {warning.code for warning in result.warnings}
+    if result.meta is not None:
+        codes.update(result.meta.warnings)
+    if (
+        "FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN" not in codes
+        or frame.smart_money is None
+        or _DATE_LABEL_LIMITATION in frame.smart_money.limitations
+    ):
+        return frame
+    return replace(
+        frame,
+        smart_money=replace(
+            frame.smart_money,
+            limitations=(*frame.smart_money.limitations, _DATE_LABEL_LIMITATION),
+        ),
+    )
+
+
+def _weekly_warnings(timeframes: tuple[TechnicalTimeframe, ...]) -> tuple[WarningInfo, ...]:
+    if not any(frame.interval == "1w" for frame in timeframes):
+        return ()
+    return (
+        WarningInfo(
+            code="TECHNICAL_WEEKLY_BOUNDARIES_MAY_BE_PARTIAL",
+            message=(
+                "Weekly bars aggregate available daily facts into ISO calendar weeks. "
+                "The first and last weeks may be partial because of history or cutoff "
+                "boundaries. SMC confirmed_at denotes confirmation within the available "
+                "bar prefix; facts using an unfinished boundary week remain provisional. "
+                "This does not establish completed exchange weeks or historical validation."
+            ),
+            details={"interval": "1w", "smc_limitation": _WEEKLY_BOUNDARY_LIMITATION},
+        ),
+    )
 
 
 class TechnicalToolCoordinator:
@@ -169,7 +259,10 @@ class TechnicalToolCoordinator:
             )
             if not result.ok or result.meta is None:
                 return self._provider_failure(request_id, as_of, instrument.market, result)
-            timeframes = self._analyze_intervals(bars, request.intervals)
+            timeframes = tuple(
+                _with_source_time_limitation(frame, result)
+                for frame in self._analyze_intervals(bars, request.intervals)
+            )
             analysis = TechnicalAnalysis(
                 instrument_id=instrument.instrument_id,
                 market=instrument.market,
@@ -181,7 +274,9 @@ class TechnicalToolCoordinator:
             chart_bars = (
                 bars if bars_interval == "1d" else _weekly_bars(bars)
             ) if bars_interval is not None else None
-            warnings = _warnings(result)
+            warnings = (
+                *_warnings(result), *_history_warnings(timeframes), *_weekly_warnings(timeframes)
+            )
             return ToolEnvelope.success(
                 request_id=request_id,
                 market=instrument.market,
@@ -212,7 +307,12 @@ class TechnicalToolCoordinator:
                 envelope = self._provider_failure(request_id, as_of, instrument.market, result)
                 return TechnicalChartArtifact(envelope=envelope, png=None)
             bars = daily if request.interval == "1d" else _weekly_bars(daily)
-            analysis = self._indicator_engine.analyze(bars, interval=request.interval)
+            analysis = _with_source_time_limitation(
+                _with_weekly_boundary_limitation(
+                    self._indicator_engine.analyze(bars, interval=request.interval)
+                ),
+                result,
+            )
             domain = TechnicalAnalysis(
                 instrument_id=instrument.instrument_id,
                 market=instrument.market,
@@ -220,7 +320,9 @@ class TechnicalToolCoordinator:
                 timeframes=(analysis,),
                 price_basis=basis,
             )
-            warnings = _warnings(result)
+            warnings = (
+                *_warnings(result), *_history_warnings((analysis,)), *_weekly_warnings((analysis,))
+            )
             envelope = ToolEnvelope.success(
                 request_id=request_id,
                 market=instrument.market,
@@ -249,7 +351,11 @@ class TechnicalToolCoordinator:
         out: list[TechnicalTimeframe] = []
         for interval in intervals:
             bars = daily if interval == "1d" else _weekly_bars(daily)
-            out.append(self._indicator_engine.analyze(bars, interval=interval))
+            out.append(
+                _with_weekly_boundary_limitation(
+                    self._indicator_engine.analyze(bars, interval=interval)
+                )
+            )
         return tuple(out)
 
     async def _load_daily_bars(

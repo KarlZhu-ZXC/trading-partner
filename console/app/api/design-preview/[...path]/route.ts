@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
 import { workbench, SYNTHETIC_NOTE_SUMMARIES } from "../../../../dev/journal-fixtures";
 import { syntheticTechnicalChartScene } from "../../../../dev/chart-fixtures";
+import { syntheticDailyReview } from "../../../../dev/daily-review-fixtures";
+import {
+  isSyntheticSubject,
+  syntheticDecisionReplay,
+  syntheticEmptyQuickReview,
+  syntheticEmptyResearchChanges,
+  syntheticQuickReview,
+  syntheticResearchChanges,
+  syntheticResearchLinks,
+  syntheticResearchWorkspace,
+} from "../../../../dev/research-workflow-fixtures";
 
 type Dict = Record<string, unknown>;
 type Context = { params: Promise<{ path: string[] }> };
@@ -29,6 +40,50 @@ export async function GET(request: Request, context: Context) {
   notes.push({ ...first, identity: { ...(first.identity as Dict), note_id: "sample_note_msft", title: "Microsoft · Cloud investment cycle", primary_instrument_id: "equity:US:MSFT" }, revision: { ...(first.revision as Dict), note_revision_id: "sample_revision_msft", summary: SYNTHETIC_NOTE_SUMMARIES[1] } });
   if (route === "account-aliases") return reply({ aliases: { account_1: "Schwab IRA", account_2: "Schwab Brokerage" } });
   if (route === "session") return reply({ token: "synthetic-preview-session-000000000000000000000000" });
+  if (route === "research") return reply(syntheticResearchWorkspace());
+  const researchPath = route.split("/");
+  if (researchPath[0] === "research" && researchPath.length > 1) {
+    const subjectId = researchPath[1];
+    if (!isSyntheticSubject(subjectId)) return reply({ detail: "Synthetic Research Subject not found" }, 404);
+    const previewState = query.get("preview_state");
+    if (researchPath[2] === "evidence-links" && researchPath.length === 3) {
+      if (previewState === "error") return reply({ detail: "Synthetic sources unavailable" }, 500);
+      if (previewState === "empty") {
+        return reply({ data: { ...syntheticResearchLinks(subjectId), sources: [], targets: [], impacts: [], impact_history: [], question_history: [], decisions: [], coverage: { sources: "COMPLETE", targets: "COMPLETE", impacts: "COMPLETE", impact_history: "COMPLETE", decisions: "COMPLETE", question_history: "COMPLETE" } } });
+      }
+      return reply({ data: syntheticResearchLinks(subjectId) });
+    }
+    if (researchPath[2] === "quick-review" && researchPath.length === 3) {
+      if (previewState === "error") return reply({ detail: "Synthetic Quick Review unavailable" }, 500);
+      return reply({ data: previewState === "empty" ? syntheticEmptyQuickReview(subjectId) : syntheticQuickReview(subjectId) });
+    }
+    if (researchPath[2] === "quick-review" && researchPath[3] === "submissions" && researchPath.length === 5) {
+      return reply({ data: { status: "NOT_FOUND" } });
+    }
+    if (researchPath[2] === "changes" && researchPath.length === 3) {
+      if (previewState === "error") return reply({ detail: "Synthetic changes unavailable" }, 500);
+      const baselineDecisionId = query.get("baseline_decision_id");
+      return reply({ data: previewState === "empty" ? syntheticEmptyResearchChanges(subjectId) : syntheticResearchChanges(subjectId, baselineDecisionId) });
+    }
+    if (researchPath[2] === "decisions" && researchPath[3] && researchPath[4] === "replay" && researchPath.length === 5) {
+      try {
+        if (previewState === "error") return reply({ detail: "Synthetic replay unavailable" }, 500);
+        const replay = syntheticDecisionReplay(subjectId, researchPath[3]);
+        if (previewState === "empty") return reply({ data: { ...replay, revisions: [], sources: [], impacts: [], questions: [], coverage: { revisions: "COMPLETE", sources: "COMPLETE", impacts: "COMPLETE", questions: "COMPLETE" }, warnings: [] } });
+        return reply({ data: replay });
+      } catch {
+        return reply({ detail: "Synthetic Decision not found for this Research Subject" }, 404);
+      }
+    }
+    return reply({ detail: "Synthetic Research route not found" }, 404);
+  }
+  if (["review-digest", "weekly-review", "overview"].includes(route) && query.get("preview_state") === "error") return reply({ detail: "Synthetic read failure — use the preview controls to recover." }, 500);
+  if (route === "review-digest") {
+    const digest = syntheticDailyReview();
+    if (query.get("preview_state") === "empty") { digest.groups = []; digest.unscoped = []; }
+    return reply({ data: digest });
+  }
+  if (route === "weekly-review") return reply({ data: { as_of: "2026-09-22T08:00:00Z", week_start: "2026-09-20T16:00:00Z", week_end: "2026-09-27T16:00:00Z", timezone: "Asia/Shanghai", confirmed_views: [], decisions: [], open_questions: [], due_groups: [], unresolved_groups: [], coverage: { research: "COMPLETE" }, warnings: [] } });
   if (route === "decision-workbench") {
     if (query.get("preview_state") === "error") return reply({ detail: "Synthetic read failure — use the preview controls to recover." }, 500);
     if (query.get("preview_state") === "empty") {

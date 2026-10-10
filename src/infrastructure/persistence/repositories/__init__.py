@@ -37,6 +37,10 @@ from infrastructure.persistence.repositories.open_question import (
 from infrastructure.persistence.repositories.research_event import (
     SqlAlchemyResearchEventRepository,
 )
+from infrastructure.persistence.repositories.research_links import (
+    SqlAlchemyEvidenceImpactRepository,
+    SqlAlchemyResearchSourceRepository,
+)
 from infrastructure.persistence.repositories.research_report import (
     SqlAlchemyResearchReportRepository,
 )
@@ -83,6 +87,8 @@ __all__ = [
     "SqlAlchemyJournalRepository",
     "SqlAlchemyMonitorLifecycleReader",
     "SqlAlchemyOpenQuestionRepository",
+    "SqlAlchemyEvidenceImpactRepository",
+    "SqlAlchemyResearchSourceRepository",
     "SqlAlchemyResearchEventRepository",
     "SqlAlchemyResearchReportRepository",
     "SqlAlchemyResearchSearchIndex",

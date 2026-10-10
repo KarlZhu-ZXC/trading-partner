@@ -1,5 +1,7 @@
 "use client";
 
+import { textTrimmed as text } from "../lib/coerce";
+
 import type { ObservationResearchSeed } from "../lib/observation-research-draft";
 import { Badge, Card, Disclosure, ErrorNote, formatDate, shortId } from "../components/ui";
 import { Button } from "../components/ui/controls";
@@ -13,10 +15,6 @@ type ObservationResearchSourceProps = {
   onUseThesis: () => void;
   onUsePlan: () => void;
 };
-
-function text(value: unknown, fallback = "—"): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
 
 export function ObservationResearchSource({
   seed,

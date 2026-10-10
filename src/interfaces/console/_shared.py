@@ -28,3 +28,20 @@ def failure_payload(code: str, message: str) -> dict[str, Any]:
         "errors": [{"code": code, "message": message}],
         "degraded": True,
     }
+
+
+def canonical_subject_transport(value: Any) -> Any:
+    """Translate public compatibility ``case_*`` fields for the internal Console BFF."""
+
+    if isinstance(value, dict):
+        aliases = {
+            "case_id": "subject_id",
+            "case_type": "subject_type",
+            "linked_case_ids": "linked_subject_ids",
+        }
+        return {
+            aliases.get(key, key): canonical_subject_transport(item) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [canonical_subject_transport(item) for item in value]
+    return value

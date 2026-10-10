@@ -10,9 +10,12 @@ import httpx
 import pytest
 from sqlalchemy import create_engine
 
+import application.services.review_item_projection as review_projection
 import interfaces.console.api as console_api
 from application.dto.activity_annotations import ActivityAnnotationDTO
 from application.ports.external_note_provider import ObservationSourceCapability
+from application.services.review_item_projection import authoritative_review_refs
+from application.services.review_item_refresh_service import ReviewItemRefreshService
 from application.services.review_item_service import ReviewItemService
 from domain.common.enums import VendorId
 from domain.common.errors import ActivityAnnotationVersionConflict
@@ -190,7 +193,7 @@ async def test_tool_workbench_compacts_by_default_and_owned_reads_opt_into_full_
 
 
 def test_workflow_attention_projects_overdue_agenda_and_open_retro_only() -> None:
-    items = console_api._workflow_attention_items(
+    items = review_projection.workflow_attention_items(
         agenda={
             "data": {
                 "items": [
@@ -234,7 +237,7 @@ def test_workflow_attention_projects_overdue_agenda_and_open_retro_only() -> Non
 
 
 def test_workflow_attention_projects_each_open_retro_action_as_stable_item() -> None:
-    items = console_api._workflow_attention_items(
+    items = review_projection.workflow_attention_items(
         agenda={},
         retro={
             "data": {
@@ -262,7 +265,7 @@ def test_workflow_attention_projects_each_open_retro_action_as_stable_item() -> 
 
 
 def test_workflow_attention_scopes_multi_subject_retro_without_key_collision() -> None:
-    items = console_api._workflow_attention_items(
+    items = review_projection.workflow_attention_items(
         agenda={},
         retro={
             "data": {
@@ -283,13 +286,13 @@ def test_workflow_attention_scopes_multi_subject_retro_without_key_collision() -
         "retro-review-retro_1-case_2",
     }
     assert {item["subject_id"] for item in items} == {"case_1", "case_2"}
-    assert console_api._authoritative_review_refs(
+    assert authoritative_review_refs(
         retro={"data": {"runs": [{"run_id": "retro_1"}]}}
     ) == frozenset({(ReviewItemSourceType.TRADE_RETRO, "retro_1")})
 
 
 def test_operational_attention_never_presents_unknown_actions_as_retryable() -> None:
-    items = console_api._operational_attention_items(
+    items = review_projection.operational_attention_items(
         agent_actions=(
             SimpleNamespace(
                 action_id="agent_action_1",
@@ -316,7 +319,7 @@ def test_operational_attention_never_presents_unknown_actions_as_retryable() -> 
     assert "will not retry automatically" in items[0]["detail"]
     assert items[1]["recommended_action"] == "RECONCILE_BROKER_ORDER"
 
-    submitting = console_api._operational_attention_items(
+    submitting = review_projection.operational_attention_items(
         broker_intents=(
             SimpleNamespace(
                 order_intent_id="order_intent_2",
@@ -333,7 +336,7 @@ def test_operational_attention_never_presents_unknown_actions_as_retryable() -> 
 
 
 def test_scorecard_attention_marks_consecutive_gap_as_persistent() -> None:
-    items = console_api._scorecard_attention_items(
+    items = review_projection.scorecard_attention_items(
         {
             "ok": True,
             "data": {
@@ -667,7 +670,10 @@ class _AgendaContainer:
         current = now or datetime.now(UTC)
         self.services = SimpleNamespace(
             decisions=SimpleNamespace(list_review_due=lambda **_kwargs: ()),
-            broker_orders=SimpleNamespace(list_recent=lambda **_kwargs: ()),
+            broker_orders=SimpleNamespace(
+                list_recent=lambda **_kwargs: (),
+                list_unresolved=lambda **_kwargs: (),
+            ),
             behavior_reviews=SimpleNamespace(history=lambda **_kwargs: ()),
             activity_annotations=SimpleNamespace(
                 list_annotations=lambda **_kwargs: (),
@@ -700,15 +706,43 @@ class _AgendaContainer:
         self.operations = SimpleNamespace(
             catalyst_agenda_sync=sync_service,
             catalyst_agenda_notifications=summary_service,
+            agent_pending_actions=SimpleNamespace(list_unresolved=lambda **_kwargs: ()),
         )
         self.context = SimpleNamespace(
             clock=_AgendaClock(current),
             secret_redactor=SimpleNamespace(redact_text=lambda value: value),
         )
         self.settings = SimpleNamespace(observation_review_workflow_enabled=True)
+        # Keep the production service's constructor contract while allowing
+        # tests to replace individual collaborators after container creation.
+        self.services.review_item_refresh = _ReviewItemRefreshProxy(self)
 
     async def aclose(self) -> None:
         return None
+
+
+class _ReviewItemRefreshProxy:
+    """Test-only adapter that rebuilds the service around current fakes."""
+
+    def __init__(self, container: _AgendaContainer) -> None:
+        self._container = container
+
+    def _service(self) -> ReviewItemRefreshService:
+        container = self._container
+        return ReviewItemRefreshService(
+            container.context.clock,
+            container.services.decisions,
+            container.services.external_note_reviews,
+            container.operations.agent_pending_actions,
+            container.services.broker_orders,
+            container.services.review_items,
+        )
+
+    def collect(self, *args: Any, **kwargs: Any) -> Any:
+        return self._service().collect(*args, **kwargs)
+
+    def apply(self, batch: Any) -> tuple[Any, ...]:
+        return self._service().apply(batch)
 
 
 async def _console_headers(client: httpx.AsyncClient) -> dict[str, str]:
@@ -2040,9 +2074,7 @@ async def test_decision_workbench_loads_one_subject_and_preserves_partial_failur
         },
     ) in calls
     assert all(name != "external_state_sync" for name, _request in calls)
-    assert reconciled
-    assert all(item.subject_id == "case_001" for item in reconciled)
-    assert all(item.href.startswith("/retro#retro-retro_001") for item in reconciled)
+    assert reconciled == []  # A scoped Journal GET must never materialize source state.
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 "use client";
 
+import { asRecord, displayDate } from "../lib/coerce";
+
 import {
   Check,
   Copy,
@@ -17,8 +19,6 @@ import { ResearchAnswerContent } from "./research-answer-content";
 import { Disclosure } from "./ui";
 import { IconButton, TextLink } from "./ui/controls";
 
-type Dict = Record<string, unknown>;
-
 type AgentMessageCardProps = {
   message: AgentMessage;
   receipts: AgentReceipt[];
@@ -29,25 +29,6 @@ type AgentMessageCardProps = {
   onEdit: (message: AgentMessage) => void;
   onRetry: (message: AgentMessage) => void;
 };
-
-function asRecord(value: unknown): Dict {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Dict)
-    : {};
-}
-
-function displayDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
 
 function safeWebLinks(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -219,6 +200,7 @@ export function AgentMessageCard({
   const isUser = message.role === "USER";
   const modelReceipt = asRecord(message.model_receipt);
   const research = parseCopilotResearch(modelReceipt.research);
+  const researchPresentation = !isUser && research ? modelReceipt.research_presentation : undefined;
   const evidenceRefs = useMemo(() => {
     let envelope = modelReceipt.answer_envelope;
     if (typeof envelope === "string") { try { envelope = JSON.parse(envelope); } catch { envelope = null; } }
@@ -280,11 +262,11 @@ export function AgentMessageCard({
       </header>
       <AgentImageGallery attachments={message.attachments} />
       {!isUser && research ? (
-        <ResearchAnswerContent content={message.content} />
+        <ResearchAnswerContent content={message.content} presentation={researchPresentation} />
       ) : (
         <AgentMessageContent content={message.content} />
       )}
-      {research && (!isUser || recoveredStatus) && <CopilotResearchProgress research={research} recoveredStatus={isUser ? recoveredStatus : undefined} receipts={receipts} usage={isUser ? undefined : asRecord(modelReceipt.usage)} />}
+      {research && (!isUser || recoveredStatus) && <CopilotResearchProgress conversationId={message.conversation_id} messageId={message.message_id} research={research} recoveredStatus={isUser ? recoveredStatus : undefined} receipts={receipts} usage={isUser ? undefined : asRecord(modelReceipt.usage)} />}
       {evidenceRefs.length > 0 && <div aria-label="Answer Evidence">{evidenceRefs.map(({ ref, receipt }) => receipt ? <TextLink key={ref} href={`#copilot-receipt-${receipt.receipt_id}`} onClick={(event) => { event.preventDefault(); const target = document.getElementById(`copilot-receipt-${receipt.receipt_id}`); const disclosure = target?.closest("details"); if (disclosure) disclosure.open = true; window.requestAnimationFrame(() => target?.scrollIntoView({ block: "nearest", behavior: "auto" })); }}>{ref}</TextLink> : <span key={ref}>{ref} · receipt unavailable</span>)}</div>}
       <AgentArtifactGallery urls={artifactUrls} />
       {!!sourceUrls.length && (

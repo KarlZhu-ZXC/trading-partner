@@ -42,7 +42,7 @@ JUDGMENT_SCORECARD_S1_DIMENSION_CODES: tuple[str, ...] = (
 # values use the suffixed constants and remain readable by the run invariant.
 JUDGMENT_SCORECARD_DIMENSION_CODES = JUDGMENT_SCORECARD_S1_DIMENSION_CODES
 JUDGMENT_SCORECARD_SCHEMA_VERSION = JUDGMENT_SCORECARD_S1_SCHEMA_VERSION
-JUDGMENT_SCORECARD_ALGORITHM_VERSION = JUDGMENT_SCORECARD_S1_ALGORITHM_VERSION
+JUDGMENT_SCORECARD_ALGORITHM_VERSION = "judgment-scorecard-s1-v3"
 
 _UUID7 = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 _ID_RE = re.compile(rf"^(?:case|thesis|rev|scorecard)_{_UUID7}$")
@@ -164,7 +164,11 @@ class JudgmentScorecardRun:
             expected_codes = JUDGMENT_SCORECARD_S0_DIMENSION_CODES
             expected_schema_version = JUDGMENT_SCORECARD_S0_SCHEMA_VERSION
             version_label = "S0"
-        elif self.algorithm_version == JUDGMENT_SCORECARD_S1_ALGORITHM_VERSION:
+        elif self.algorithm_version in (
+            JUDGMENT_SCORECARD_S1_ALGORITHM_VERSION,
+            "judgment-scorecard-s1-v2",
+            JUDGMENT_SCORECARD_ALGORITHM_VERSION,
+        ):
             expected_codes = JUDGMENT_SCORECARD_S1_DIMENSION_CODES
             expected_schema_version = JUDGMENT_SCORECARD_S1_SCHEMA_VERSION
             version_label = "S1"

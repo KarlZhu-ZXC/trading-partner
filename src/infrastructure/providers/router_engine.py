@@ -737,6 +737,15 @@ class ProviderRouterEngine:
                     False,
                 )
             if state is CircuitState.OPEN:
+                unavailable = ProviderUnavailableError(
+                    "Provider circuit is open",
+                    details={
+                        "vendor": vendor_id.value,
+                        "category": category.value,
+                        "circuit_state": state.value,
+                    },
+                )
+                collected_errors.append(unavailable)
                 self._add_warning(
                     warnings,
                     code="CIRCUIT_OPEN_SKIPPED",
@@ -748,7 +757,7 @@ class ProviderRouterEngine:
                 return (
                     _AttemptDraft(
                         outcome=ProviderAttemptOutcome.SKIPPED_CIRCUIT_OPEN,
-                        error_code=None,
+                        error_code=unavailable.code,
                         message=None,
                     ),
                     None,

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpRequest, HttpTransport
+from application.ports.market_session_calendar import MarketSessionCalendar
 from domain.common.enums import (
     AdjustmentMethod,
     AssetType,
@@ -40,9 +41,9 @@ from domain.common.time import require_aware_datetime
 from domain.instruments.models import Instrument
 from domain.market.freshness import classify_freshness
 from domain.market.models import MarketBar
-from domain.market.session import infer_session_basic
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USQuote
+from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.providers.common.adapter_guards import require_as_of
 from infrastructure.providers.us.alpha_vantage_key_pool import (
     AlphaVantageKeyPool,
@@ -56,6 +57,7 @@ _ALLOWED_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
 _JSON_CONTENT = ("application/json", "text/json", "text/plain", "*/*")
 _MAX_DAILY_STALE_NATURAL_DAYS = 4
 _SESSION_CLOSE = time(16, 0)
+_NON_SESSION_DAILY_BAR_WARNING = "US_NON_SESSION_DAILY_BAR"
 _COMPACT_LOOKBACK_DAYS = 100
 _SUPPORTED_CATEGORIES = frozenset({DataCategory.MARKET_QUOTE, DataCategory.MARKET_OHLCV})
 
@@ -165,6 +167,16 @@ def _optional_decimal(value: object, *, field: str) -> Decimal | None:
     return _as_decimal(value, field=field)
 
 
+def _require_response_symbol(value: object, *, symbol: str, operation: str) -> None:
+    """Verify upstream identity before assigning the requested Instrument ID."""
+    if not isinstance(value, str) or value.strip().casefold() != symbol.casefold():
+        raise _contract(
+            "Alpha Vantage response symbol must match request",
+            operation=operation,
+            rule="symbol_identity",
+        )
+
+
 def _ny_session_close(day: date) -> datetime:
     return datetime(
         day.year, day.month, day.day, _SESSION_CLOSE.hour, _SESSION_CLOSE.minute, tzinfo=_NY
@@ -217,6 +229,7 @@ class AlphaVantageAdapter:
         timeout_seconds: float = 15.0,
         max_fresh_seconds: int = 30,
         max_delayed_seconds: int = 900,
+        us_session_calendar: MarketSessionCalendar | None = None,
     ) -> None:
         self._timeout_seconds = _positive_number(timeout_seconds, field="timeout_seconds")
         self._max_fresh_seconds = _nonneg_int(max_fresh_seconds, field="max_fresh_seconds")
@@ -229,6 +242,7 @@ class AlphaVantageAdapter:
         self._transport = transport
         self._clock = clock if clock is not None else SystemClock()
         self._enabled = bool(enabled)
+        self._us_session_calendar = us_session_calendar
         # Keys are request params only — never copy into details/messages.
         self._key_pool = AlphaVantageKeyPool(api_keys)
 
@@ -441,6 +455,7 @@ class AlphaVantageAdapter:
         session: TradingSession,
         data_timestamp: datetime | None,
         adjustment: AdjustmentMethod | None,
+        warnings: tuple[str, ...] = (),
     ) -> ProviderResultMeta:
         if data_timestamp is not None:
             data_delay = max(0, int((fetched_at - data_timestamp).total_seconds()))
@@ -471,8 +486,28 @@ class AlphaVantageAdapter:
             cache_disposition=CacheDisposition.MISS,
             adjustment=adjustment,
             data_delay_seconds=data_delay,
-            warnings=(),
+            warnings=warnings,
         )
+
+    def _us_daily_timestamp(self, day: date, *, operation: str) -> tuple[datetime, bool]:
+        """Use the actual US close; flag unexpected non-session daily facts."""
+        try:
+            if self._us_session_calendar is None:
+                self._us_session_calendar = XnysMarketSessionCalendar()
+            session = self._us_session_calendar.session_at(datetime.combine(day, time.min, _NY))
+            if session is None:
+                return _ny_session_close(day), True
+            require_aware_datetime(session.close_at, field_name="session.close_at")
+            close_at = session.close_at.astimezone(_NY)
+            if session.session_date != day or close_at.date() != day:
+                raise ValueError("session date does not match daily fact")
+            return close_at, False
+        except Exception:
+            raise _contract(
+                "Alpha Vantage US daily session calendar is unavailable",
+                operation=operation,
+                rule="session_calendar_unavailable",
+            ) from None
 
     def _assert_daily_not_stale(
         self, bars: Sequence[MarketBar], *, expected_day: date, operation: str
@@ -500,7 +535,7 @@ class AlphaVantageAdapter:
         as_of: datetime,
         start: date,
         end: date,
-    ) -> list[MarketBar]:
+    ) -> tuple[list[MarketBar], bool]:
         series = payload.get(_TS_KEY)
         if series is None:
             raise NoMarketData(
@@ -515,17 +550,25 @@ class AlphaVantageAdapter:
             )
 
         out: list[MarketBar] = []
+        has_non_session_bar = False
+        cutoff_day = as_of.astimezone(_NY).date()
         for day_key, row in series.items():
-            if not isinstance(day_key, str) or not isinstance(row, dict):
+            if not isinstance(day_key, str):
                 raise _contract(
                     "Alpha Vantage payload failed contract validation",
                     operation=operation,
                     rule="contract_drift",
                 )
             day = _parse_ymd(day_key, field="time_series.date")
-            if day < start or day > end:
+            if day < start or day > end or day > cutoff_day:
                 continue
-            ts = _ny_session_close(day)
+            if not isinstance(row, dict):
+                raise _contract(
+                    "Alpha Vantage payload failed contract validation",
+                    operation=operation,
+                    rule="contract_drift",
+                )
+            ts, non_session_bar = self._us_daily_timestamp(day, operation=operation)
             if ts > as_of:
                 continue
 
@@ -565,11 +608,12 @@ class AlphaVantageAdapter:
                     rule="unsupported_adjustment",
                 )
 
+            has_non_session_bar |= non_session_bar
             out.append(
                 MarketBar(timestamp=ts, open=open_, high=high, low=low, close=close, volume=volume)
             )
         out.sort(key=lambda b: b.timestamp)
-        return out
+        return out, has_non_session_bar
 
     async def get_quote(self, instrument: Instrument, as_of: datetime) -> ProviderSuccess[USQuote]:
         self._require_configured()
@@ -593,10 +637,17 @@ class AlphaVantageAdapter:
                 details={"vendor": self.vendor_id.value, "operation": "quote"},
             )
 
+        _require_response_symbol(gq.get("01. symbol"), symbol=symbol, operation="quote")
+
         # No reliable intraday timestamp/session — use NY session close on the
         # latest trading day only; never claim realtime; enforce as_of cutoff.
         latest_day = _parse_ymd(gq.get(_GQ_LATEST_DAY), field="latest_trading_day")
-        quote_at = _ny_session_close(latest_day)
+        if latest_day > as_of.astimezone(_NY).date():
+            raise NoMarketData(
+                "Alpha Vantage global quote is after as_of cutoff",
+                details={"vendor": self.vendor_id.value, "operation": "quote"},
+            )
+        quote_at, non_session_quote = self._us_daily_timestamp(latest_day, operation="quote")
         if quote_at > as_of:
             raise NoMarketData(
                 "Alpha Vantage global quote is after as_of cutoff",
@@ -610,7 +661,9 @@ class AlphaVantageAdapter:
                 "quote volume must be nonnegative", operation="quote", rule="nonnegative"
             )
 
-        session = infer_session_basic(Market.US, quote_at, timezone="America/New_York")
+        # GLOBAL_QUOTE without entitlement is end-of-day data. Its synthetic
+        # close timestamp marks the regular session, not a post-market trade.
+        session = TradingSession.REGULAR
         quote = USQuote(
             instrument_id=instrument.instrument_id,
             quote_at=quote_at,
@@ -636,6 +689,7 @@ class AlphaVantageAdapter:
                 session=session,
                 data_timestamp=quote_at,
                 adjustment=None,
+                warnings=(_NON_SESSION_DAILY_BAR_WARNING,) if non_session_quote else (),
             ),
         )
 
@@ -706,7 +760,7 @@ class AlphaVantageAdapter:
             },
             operation="bars",
         )
-        bars = self._parse_daily_series(
+        bars, has_non_session_bar = self._parse_daily_series(
             payload,
             operation="bars",
             adjustment=adjustment,
@@ -719,6 +773,12 @@ class AlphaVantageAdapter:
                 "Alpha Vantage returned no bars",
                 details={"vendor": self.vendor_id.value, "operation": "bars"},
             )
+        metadata = payload.get("Meta Data")
+        _require_response_symbol(
+            metadata.get("2. Symbol") if isinstance(metadata, dict) else None,
+            symbol=symbol,
+            operation="bars",
+        )
         self._assert_daily_not_stale(
             bars,
             expected_day=min(end, as_of.astimezone(_NY).date()),
@@ -732,7 +792,7 @@ class AlphaVantageAdapter:
             end=end,
             bars=tuple(bars),
         )
-        session = infer_session_basic(Market.US, bars[-1].timestamp, timezone="America/New_York")
+        session = TradingSession.REGULAR
         return ProviderSuccess(
             value=series,
             meta=self._meta(
@@ -742,5 +802,6 @@ class AlphaVantageAdapter:
                 session=session,
                 data_timestamp=bars[-1].timestamp,
                 adjustment=adjustment,
+                warnings=(_NON_SESSION_DAILY_BAR_WARNING,) if has_non_session_bar else (),
             ),
         )

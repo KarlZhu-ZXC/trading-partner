@@ -318,6 +318,7 @@ def test_baseline_loads_exact_revision_not_current_thesis_status():
                 assumption_id="a1",
                 statement="Original premise",
                 status="RETIRED",
+                confirmed_at=BEFORE,
             ),
         )
     )

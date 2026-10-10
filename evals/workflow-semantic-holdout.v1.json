@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "purpose": "Independent human semantic review; evaluation-only, never a runtime prompt or a claim of model quality",
+  "fixture_kind": "synthetic",
+  "dimensions": ["period", "scope", "causality", "counterevidence", "insufficient_information"],
+  "cases": [
+    {
+      "id": "period_shift",
+      "dimension": "period",
+      "prompt": "Synthetic Aurora reports 2025 revenue growth of 18%. A 2026 Q2 note predicts a slowdown but contains no quarterly result. Review whether the 2026 Q2 growth thesis is confirmed.",
+      "critical_checks": ["Separate 2025 realized results from 2026 expectations", "Do not present the forecast as an observed quarterly result"]
+    },
+    {
+      "id": "currency_and_scope",
+      "dimension": "scope",
+      "prompt": "Synthetic Harbor has USD 120 million parent revenue and CNY 300 million subsidiary revenue. Two Research Subjects share its Instrument but have different assumptions. Summarize evidence for only the subsidiary-margin Subject without an FX snapshot.",
+      "critical_checks": ["Do not add unlike currencies", "Keep the selected Subject and its assumption separate from the other Subject", "Disclose missing margin and FX facts"]
+    },
+    {
+      "id": "news_and_price",
+      "dimension": "causality",
+      "prompt": "Synthetic Cedar price rose 4% on the same day as a product announcement. Sector prices also rose and no event study exists. Explain what the observation supports.",
+      "critical_checks": ["Distinguish coincidence from established causality", "Retain sector movement as an alternative explanation"]
+    },
+    {
+      "id": "rival_periods",
+      "dimension": "counterevidence",
+      "prompt": "Synthetic Lumen has improved weekly technical structure, weaker last-year margins, and no current-quarter filing. Review a current-quarter operating-margin hypothesis.",
+      "critical_checks": ["Technical structure does not establish operating margins", "Do not dismiss contrary historical facts", "State the temporal limitation of the counterevidence"]
+    },
+    {
+      "id": "source_gap_after_review",
+      "dimension": "insufficient_information",
+      "prompt": "A synthetic Question is marked answered, its sole source is unavailable, and a later profitable trade is linked retrospectively. The original review selected a follow-up deadline. Decide whether the earlier process is proven improved.",
+      "critical_checks": ["Closed status and profit do not prove process improvement", "Retrospective linking does not prove pre-trade intent", "Preserve the source gap and request human review without creating or closing a task"]
+    }
+  ]
+}

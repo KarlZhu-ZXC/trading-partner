@@ -5,6 +5,7 @@ import { Disclosure } from "./ui";
 import { AgentMessageContent } from "./agent-message-content";
 import {
   humanizeResearchEvidenceField,
+  parseResearchPresentation,
   segmentResearchEvidence,
   type ResearchEvidenceField,
 } from "../lib/research-evidence-presentation";
@@ -12,6 +13,7 @@ import styles from "./research-answer-content.module.css";
 
 type ResearchAnswerContentProps = {
   content: string;
+  presentation?: unknown;
 };
 
 function contextClassName(key: string): string | undefined {
@@ -105,8 +107,11 @@ function humanizeContextKey(key: string): string {
     ?? key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-export function ResearchAnswerContent({ content }: ResearchAnswerContentProps) {
-  const segments = useMemo(() => segmentResearchEvidence(content), [content]);
+export function ResearchAnswerContent({ content, presentation }: ResearchAnswerContentProps) {
+  const segments = useMemo(
+    () => parseResearchPresentation(presentation, content) ?? segmentResearchEvidence(content),
+    [content, presentation],
+  );
   if (!segments) return <AgentMessageContent content={content} />;
 
   return (

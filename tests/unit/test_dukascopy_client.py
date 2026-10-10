@@ -10,8 +10,10 @@ from urllib.parse import urlsplit
 import pytest
 
 from application.ports.http_transport import HttpRequest, HttpResponse
-from domain.common.enums import AdjustmentMethod, AssetType, DataCategory, Market
+from conftest import FixedClock
+from domain.common.enums import AdjustmentMethod, AssetType, CacheDisposition, DataCategory, Market
 from domain.common.errors import (
+    DataContractError,
     NoMarketData,
     ProviderNotConfigured,
     ProviderRateLimitError,
@@ -324,3 +326,353 @@ async def test_disabled_adapter_and_empty_history_are_typed() -> None:
             adjustment=AdjustmentMethod.NONE,
             as_of=AS_OF,
         )
+
+
+_COMPLETION_CASES = (
+    (USBarInterval.ONE_MINUTE, "minute", timedelta(minutes=1), "/2026/7/23"),
+    (USBarInterval.SIXTY_MINUTES, "hour", timedelta(hours=1), "/2026/7"),
+    (USBarInterval.ONE_DAY, "day", timedelta(days=1), "/2026"),
+)
+_COMPLETION_OPEN = datetime(2026, 7, 23, 1, tzinfo=UTC)
+_COMPLETION_FETCHED = datetime(2027, 2, 1, tzinfo=UTC)
+
+
+def _completion_payload(opening: datetime, duration: timedelta) -> dict[str, object]:
+    payload = _candle_payload(timestamp=opening - duration, base="32.10", second="32.25")
+    payload["shift"] = int(duration.total_seconds() * 1000)
+    return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval,source,duration,suffix", _COMPLETION_CASES)
+@pytest.mark.parametrize(
+    "offset", [-timedelta(microseconds=1), timedelta(0), timedelta(microseconds=1)]
+)
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_bars_respect_native_completion_boundary(
+    interval: USBarInterval,
+    source: str,
+    duration: timedelta,
+    suffix: str,
+    offset: timedelta,
+    legacy: bool,
+) -> None:
+    opening = (
+        _COMPLETION_OPEN.replace(hour=0) if interval is USBarInterval.ONE_DAY else _COMPLETION_OPEN
+    )
+    cutoff = opening + duration + offset
+    route = f"/v1/candles/{source}/XAG-USD/BID{suffix}"
+    rows = [
+        {
+            "timestamp": int(timestamp.timestamp() * 1000),
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": "1.25",
+        }
+        for timestamp, price in ((opening - duration, "32.10"), (opening, "32.25"))
+    ]
+    transport = _FixtureTransport(
+        {
+            route: (503, {}) if legacy else (200, _completion_payload(opening, duration)),
+            "legacy:api/instrumentList": (200, [{"id": 2, "name": "XAG/USD"}]),
+            "legacy:api/historicalPrices": (200, rows),
+        }
+    )
+    adapter = DukascopySpotAdapter(
+        transport, clock=FixedClock(_COMPLETION_FETCHED), api_key="fixture-only" if legacy else None
+    )
+    result = await adapter.get_bars(
+        _XAG,
+        start=date(2026, 7, 22),
+        end=date(2026, 7, 23),
+        interval=interval,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=cutoff,
+        offer_side=OfferSide.BID,
+    )
+    expected = [opening - duration] if offset < timedelta(0) else [opening - duration, opening]
+    assert [bar.timestamp for bar in result.value.bars] == expected
+    assert all(cutoff - bar.timestamp >= duration for bar in result.value.bars)
+    assert [bar.close for bar in result.value.bars] == [Decimal("32.10")] + (
+        [] if offset < timedelta(0) else [Decimal("32.25")]
+    )
+    assert all(bar.open == bar.high == bar.low == bar.close for bar in result.value.bars)
+    assert result.meta.as_of == cutoff and result.meta.fetched_at == _COMPLETION_FETCHED
+    assert result.meta.adjustment is AdjustmentMethod.NONE
+    assert result.value.offer_side is OfferSide.BID
+    assert result.value.volume_basis is SpotVolumeBasis.BEST_BID_ASK_VOLUME
+    assert ("DUKASCOPY_LEGACY_KEY_API_FALLBACK" in result.meta.warnings) is legacy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval,source,duration,suffix", _COMPLETION_CASES)
+async def test_cached_immutable_bucket_rechecks_completion_cutoff(
+    interval: USBarInterval,
+    source: str,
+    duration: timedelta,
+    suffix: str,
+) -> None:
+    opening = (
+        _COMPLETION_OPEN.replace(hour=0) if interval is USBarInterval.ONE_DAY else _COMPLETION_OPEN
+    )
+    route = f"/v1/candles/{source}/XAG-USD/BID{suffix}"
+    transport = _FixtureTransport({route: (200, _completion_payload(opening, duration))})
+    adapter = DukascopySpotAdapter(transport, clock=FixedClock(_COMPLETION_FETCHED))
+    for cached, cutoff in (
+        (False, opening + duration / 2),
+        (True, opening + duration / 2),
+        (True, opening + duration),
+    ):
+        result = await adapter.get_bars(
+            _XAG,
+            start=date(2026, 7, 22) if interval is USBarInterval.ONE_DAY else date(2026, 7, 23),
+            end=date(2026, 7, 23),
+            interval=interval,
+            adjustment=AdjustmentMethod.NONE,
+            as_of=cutoff,
+        )
+        assert result.meta.cache_disposition is (
+            CacheDisposition.HIT if cached else CacheDisposition.MISS
+        )
+        expected = (
+            [opening - duration] if cutoff < opening + duration else [opening - duration, opening]
+        )
+        assert [bar.timestamp for bar in result.value.bars] == expected
+        assert result.meta.as_of == cutoff
+    successful_requests = [
+        request for request in transport.requests if urlsplit(request.url).path == route
+    ]
+    assert len(successful_requests) == len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval,source,duration,suffix", _COMPLETION_CASES)
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_only_partial_native_bar_is_unavailable(
+    interval: USBarInterval,
+    source: str,
+    duration: timedelta,
+    suffix: str,
+    legacy: bool,
+) -> None:
+    opening = (
+        _COMPLETION_OPEN.replace(hour=0) if interval is USBarInterval.ONE_DAY else _COMPLETION_OPEN
+    )
+    payload = _candle_payload(timestamp=opening, base="32.25")
+    payload["shift"] = int(duration.total_seconds() * 1000)
+    route = f"/v1/candles/{source}/XAG-USD/BID{suffix}"
+    transport = _FixtureTransport(
+        {
+            route: (200, payload),
+            "legacy:api/instrumentList": (200, [{"id": 2, "name": "XAG/USD"}]),
+            "legacy:api/historicalPrices": (
+                200,
+                [
+                    {
+                        "timestamp": int(opening.timestamp() * 1000),
+                        "open": "32.25",
+                        "high": "32.25",
+                        "low": "32.25",
+                        "close": "32.25",
+                        "volume": "1.25",
+                    }
+                ],
+            ),
+        }
+    )
+    adapter = DukascopySpotAdapter(
+        transport, clock=FixedClock(_COMPLETION_FETCHED), api_key="fixture-only" if legacy else None
+    )
+    with pytest.raises(NoMarketData, match="no completed bars"):
+        await adapter.get_bars(
+            _XAG,
+            start=date(2026, 7, 23),
+            end=date(2026, 7, 23),
+            interval=interval,
+            adjustment=AdjustmentMethod.NONE,
+            as_of=opening + duration / 2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_quote_minute_close_proxy_does_not_gain_bar_completion_filter() -> None:
+    cutoff = _COMPLETION_OPEN + timedelta(seconds=30)
+    routes = {
+        "/v1/candles/minute/XAG-USD/BID": (
+            200,
+            _candle_payload(timestamp=_COMPLETION_OPEN, base="32.10"),
+        ),
+        "/v1/candles/minute/XAG-USD/ASK": (
+            200,
+            _candle_payload(timestamp=_COMPLETION_OPEN, base="32.20"),
+        ),
+    }
+    result = await DukascopySpotAdapter(
+        _FixtureTransport(routes), clock=FixedClock(cutoff)
+    ).get_quote(_XAG, cutoff)
+    assert result.value.quote_at == _COMPLETION_OPEN
+    assert result.value.bid == Decimal("32.10") and result.value.ask == Decimal("32.20")
+    assert result.value.mid == Decimal("32.15") and result.value.last is None
+    assert "DUKASCOPY_MINUTE_CLOSE_QUOTE_PROXY" in result.meta.warnings
+    assert result.meta.as_of == cutoff
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval,source,duration,suffix", _COMPLETION_CASES)
+async def test_completed_filter_preserves_requested_day_boundaries(
+    interval: USBarInterval,
+    source: str,
+    duration: timedelta,
+    suffix: str,
+) -> None:
+    payload = _candle_payload(
+        timestamp=datetime(2026, 7, 22, tzinfo=UTC), base="32.10", second="32.25"
+    )
+    payload["shift"] = int(duration.total_seconds() * 1000)
+    payload["times"] = [0, int(timedelta(days=1) / duration), int(timedelta(days=1) / duration)]
+    for field in ("opens", "highs", "lows", "closes"):
+        payload[field] = [0, 15, 15]
+    payload["volumes"] = [1.25, 2.5, 3.75]
+    route = f"/v1/candles/{source}/XAG-USD/BID{suffix}"
+    result = await DukascopySpotAdapter(
+        _FixtureTransport({route: (200, payload)}), clock=FixedClock(_COMPLETION_FETCHED)
+    ).get_bars(
+        _XAG,
+        start=date(2026, 7, 23),
+        end=date(2026, 7, 23),
+        interval=interval,
+        adjustment=AdjustmentMethod.NONE,
+        as_of=datetime(2026, 7, 26, tzinfo=UTC),
+    )
+    assert [bar.timestamp for bar in result.value.bars] == [datetime(2026, 7, 23, tzinfo=UTC)]
+    bar = result.value.bars[0]
+    assert bar.open == bar.high == bar.low == bar.close == Decimal("32.25")
+    assert bar.volume == Decimal("2.5")
+
+def _legacy_identity_transport(payload: object) -> _FixtureTransport:
+    return _FixtureTransport(
+        {
+            "/v1/candles/minute/XAU-USD/BID": (503, {}),
+            "/v1/candles/minute/XAU-USD/ASK": (503, {}),
+            "legacy:api/currentPrices": (200, payload),
+        }
+    )
+
+
+def _legacy_identity_row(code: str | None, *, field: str = "instrument") -> dict[str, object]:
+    row: dict[str, object] = {
+        "bid": "2348.10",
+        "ask": "2348.40",
+        "timestamp": int((AS_OF - timedelta(seconds=10)).timestamp() * 1000),
+    }
+    if code is not None:
+        row[field] = code
+    return row
+
+
+@pytest.mark.asyncio
+async def test_legacy_quote_rejects_sole_wrong_instrument() -> None:
+    transport = _legacy_identity_transport([_legacy_identity_row("XAG/USD")])
+    adapter = DukascopySpotAdapter(transport, clock=_FixedClock(), api_key="fixture-only")
+    with pytest.raises(NoMarketData, match="matching quote"):
+        await adapter.get_quote(_XAU, AS_OF)
+    assert len(transport.requests) == 3  # One explicit chain read, no added retries.
+
+
+@pytest.mark.asyncio
+async def test_legacy_quote_missing_identity_fails_codec_contract() -> None:
+    transport = _legacy_identity_transport([_legacy_identity_row(None)])
+    with pytest.raises(DataContractError, match="missing instrument code"):
+        await DukascopySpotAdapter(
+            transport, clock=_FixedClock(), api_key="fixture-only"
+        ).get_quote(_XAU, AS_OF)
+
+
+@pytest.mark.asyncio
+async def test_legacy_quote_rejects_ambiguous_matching_rows() -> None:
+    transport = _legacy_identity_transport(
+        [
+            _legacy_identity_row("XAU/USD"),
+            {**_legacy_identity_row("XAU/USD"), "bid": "2448.10", "ask": "2448.40"},
+        ]
+    )
+    with pytest.raises(DataContractError, match="ambiguous matching quotes"):
+        await DukascopySpotAdapter(
+            transport, clock=_FixedClock(), api_key="fixture-only"
+        ).get_quote(_XAU, AS_OF)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["instrument", "name", "symbol", "code"])
+async def test_legacy_quote_exact_identity_field_aliases_remain_valid(field: str) -> None:
+    transport = _legacy_identity_transport([_legacy_identity_row(" XAU/USD ", field=field)])
+    result = await DukascopySpotAdapter(
+        transport, clock=_FixedClock(), api_key="fixture-only"
+    ).get_quote(_XAU, AS_OF)
+    assert result.value.instrument_id == _XAU.instrument_id
+    assert result.value.bid == Decimal("2348.10") and result.value.ask == Decimal("2348.40")
+    assert result.value.mid == Decimal("2348.25") and result.value.last is None
+    assert result.value.quote_at == AS_OF - timedelta(seconds=10)
+    assert result.meta.as_of == AS_OF
+    assert "DUKASCOPY_LEGACY_KEY_API_FALLBACK" in result.meta.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["keyed_map", "mixed_rows"])
+async def test_legacy_quote_selects_only_exact_requested_identity(shape: str) -> None:
+    payload: object = (
+        {"XAU/USD": _legacy_identity_row(None)}
+        if shape == "keyed_map"
+        else [_legacy_identity_row("XAG/USD"), _legacy_identity_row("XAU/USD")]
+    )
+    result = await DukascopySpotAdapter(
+        _legacy_identity_transport(payload), clock=_FixedClock(), api_key="fixture-only"
+    ).get_quote(_XAU, AS_OF)
+    assert result.value.instrument_id == _XAU.instrument_id
+    assert result.value.bid == Decimal("2348.10") and result.value.ask == Decimal("2348.40")
+    assert result.value.mid == Decimal("2348.25")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformation", ["ohlc", "column_length", "duplicate_time", "negative_volume"]
+)
+async def test_invalid_immutable_bucket_recovers_on_next_read_then_valid_cache_hit(
+    malformation: str,
+) -> None:
+    opening = datetime(2026, 7, 23, 1, tzinfo=UTC)
+    route = "/v1/candles/hour/XAG-USD/BID/2026/7"
+    malformed = _candle_payload(timestamp=opening, base="32.10")
+    if malformation == "ohlc":
+        malformed["highs"] = [-1]
+    elif malformation == "column_length":
+        malformed["opens"] = []
+    elif malformation == "negative_volume":
+        malformed["volumes"] = [-1.25]
+    else:
+        malformed["times"] = [0, 0]
+        for column in ("opens", "highs", "lows", "closes"):
+            malformed[column] = [0, 0]
+        malformed["volumes"] = [1.25, 1.25]
+    transport = _FixtureTransport({route: (200, malformed)})
+    adapter = DukascopySpotAdapter(transport, clock=FixedClock(_COMPLETION_FETCHED))
+    kwargs = {
+        "start": date(2026, 7, 23),
+        "end": date(2026, 7, 23),
+        "interval": USBarInterval.SIXTY_MINUTES,
+        "adjustment": AdjustmentMethod.NONE,
+        "as_of": opening + timedelta(hours=2),
+    }
+    with pytest.raises(DataContractError):
+        await adapter.get_bars(_XAG, **kwargs)
+    assert len(transport.requests) == 1  # Failure never auto-retries.
+    transport.routes[route] = (200, _candle_payload(timestamp=opening, base="32.25"))
+    for disposition in (CacheDisposition.MISS, CacheDisposition.HIT):
+        result = await adapter.get_bars(_XAG, **kwargs)
+        assert result.meta.cache_disposition is disposition
+        assert result.meta.as_of == kwargs["as_of"]
+        assert result.value.bars[0].timestamp == opening
+        assert result.value.bars[0].close == Decimal("32.25")
+        assert len(transport.requests) == 2

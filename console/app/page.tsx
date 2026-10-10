@@ -2,19 +2,21 @@
 
 import { TodayReview } from "./components/today-review";
 import { WeeklyReview } from "./components/weekly-review";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useAccountLabel } from "./components/account-aliases";
 
 import Link from "next/link";
 import { ConsoleShell } from "./components/console-shell";
 import {
   Badge,
+  Button,
   HorizontalTabs,
   Card,
   DataBoundary,
   Disclosure,
   QuickLink,
   Empty,
+  ErrorNote,
   MetricTile,
   RefreshButton,
   formatBytes,
@@ -23,12 +25,31 @@ import {
   shortId,
   Table,
 } from "./components/ui";
-import { envelopeData, listOf, useApi } from "./lib/api";
+import { envelopeData, listOf, postApi, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
 import { agendaSummaryFromPayload } from "./lib/agenda-presentation";
 import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
+
+function reviewWindow() {
+  return new URLSearchParams(window.location.search).get("review_window") === "week" ? "week" : "today";
+}
+function subscribeReviewWindow(onChange: () => void) {
+  window.addEventListener("popstate", onChange);
+  window.addEventListener("review-window-change", onChange);
+  return () => {
+    window.removeEventListener("popstate", onChange);
+    window.removeEventListener("review-window-change", onChange);
+  };
+}
+function setReviewMode(value: string) {
+  const url = new URL(window.location.href);
+  if (value === "week") url.searchParams.set("review_window", "week");
+  else url.searchParams.delete("review_window");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  window.dispatchEvent(new Event("review-window-change"));
+}
 
 function durationLabel(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -40,9 +61,33 @@ function durationLabel(value: unknown): string {
 }
 
 export default function OverviewPage() {
-  const [reviewMode, setReviewMode] = useState("today");
+  const reviewMode = useSyncExternalStore(subscribeReviewWindow, reviewWindow, () => "today");
+  const [updatingQueue, setUpdatingQueue] = useState(false);
+  const [queueMessage, setQueueMessage] = useState<string | null>(null);
+  const [submittedReceipt, setSubmittedReceipt] = useState<Dict | null>(null);
   const accountLabel = useAccountLabel();
   const result = useApi<Dict>("/api/overview");
+  const reviewCoverage = result.data?.review_coverage as Dict | undefined;
+  const scanReceipt = submittedReceipt ?? result.data?.recent_refresh_receipt as Dict | undefined;
+  const scanWindow = scanReceipt?.receipt_window as Dict | undefined;
+  const scanSources = Object.entries((scanReceipt?.sources ?? {}) as Record<string, Dict>);
+  async function updateReviewQueue() {
+    setUpdatingQueue(true);
+    setQueueMessage(null);
+    try {
+      const receipt = await postApi<{ complete: boolean; scan_receipt?: Dict }>("/api/review-items/refresh", {
+        confirmation: "refresh_review_items",
+      });
+      setSubmittedReceipt(receipt.scan_receipt ?? null);
+      const persistence = receipt.scan_receipt?.persistence as Dict | undefined;
+      setQueueMessage(receipt.complete ? "Review queue updated. The declared source scan is complete; individual reviews retain their own status." : persistence?.status === "UNAVAILABLE" ? "Review queue updated, but the scan receipt could not be saved. Do not repeat completed reviews to recover this receipt." : "Review queue updated from available sources. Some sources remain incomplete.");
+      result.refresh();
+    } catch (error) {
+      setQueueMessage(error instanceof Error ? error.message : "Unable to update review queue.");
+    } finally {
+      setUpdatingQueue(false);
+    }
+  }
   const health = envelopeData<Dict>(result.data?.health);
   const monitorData = envelopeData<Dict>(result.data?.monitor_dashboard);
   const monitorItems = listOf<Dict>(monitorData, "items");
@@ -106,7 +151,12 @@ export default function OverviewPage() {
     <ConsoleShell active="overview">
       <HorizontalTabs items={[{id:"today",label:"Today Review"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={setReviewMode} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
       <section id={`review-window-panel-${reviewMode}`} role="tabpanel" aria-labelledby={`review-window-${reviewMode}`}>{reviewMode === "today" ? <TodayReview /> : <WeeklyReview />}</section>
-      <DataBoundary loading={result.loading} error={result.error}>
+      {result.error && <div role="status">
+        {result.data && <><ErrorNote>{result.error}</ErrorNote><p>Showing the last loaded overview. Refresh to check for newer items.</p></>}
+        <Button disabled={result.loading} onClick={result.refresh}>Retry Overview</Button>
+      </div>}
+      {result.loading && result.data && <p role="status">Refreshing overview. Current items remain visible.</p>}
+      <DataBoundary loading={result.loading && result.data === null} error={result.data ? null : result.error}>
         <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
           <div className="agenda-summary-grid">
             <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
@@ -137,7 +187,18 @@ export default function OverviewPage() {
         </div>
 
         <div className="dashboard-grid">
-          <Card id="review-queue" className="span-12" kicker="SYSTEM FOLLOW-UP" title="Operations & Workflow">
+          <Card id="review-queue" className="span-12" kicker="SYSTEM FOLLOW-UP" title="Operations & Workflow" action={<Button size="sm" disabled={updatingQueue} onClick={() => { void updateReviewQueue(); }}>{updatingQueue ? "Updating…" : "Update Review Queue"}</Button>}>
+            {queueMessage ? <p role="status">{queueMessage}</p> : null}
+            {reviewCoverage?.complete === false ? <p className="card-note">Some review sources are incomplete or unavailable. Available items remain visible.</p> : null}
+            {reviewCoverage?.materialization_required === true ? <p className="card-note">New follow-up items are available. Update the review queue to track them.</p> : null}
+            <p className="card-note">Last observed review item: {formatDate(reviewCoverage?.materialized_at)}</p>
+            {scanReceipt && <Disclosure title="Last Queue Refresh">
+              <p>Source scan {String(scanReceipt.status ?? "UNAVAILABLE")} · Completed {formatDate(scanWindow?.completed_at)}</p>
+              <p>Scanned through {formatDate(scanReceipt.cutoff_at)}. Sources were checked independently; this is not a single database snapshot or confirmation of user review.</p>
+              {(scanReceipt.persistence as Dict | undefined)?.status === "UNAVAILABLE" && <p>This receipt is shown only for the current session because persistence was unavailable.</p>}
+              <Table><thead><tr><th>Source</th><th>Scan Status</th><th>Rows</th><th>Pages</th></tr></thead><tbody>{scanSources.map(([name, source]) => <tr key={name}><td>{name.replaceAll("_", " ")}</td><td><Badge value={String(source.status ?? "UNAVAILABLE")} /></td><td>{source.status === "UNAVAILABLE" ? "Unavailable" : String(source.row_count ?? "—")}</td><td>{String(source.pages ?? "—")}</td></tr>)}</tbody></Table>
+            </Disclosure>}
+            {result.data?.recent_refresh_receipt_status === "UNAVAILABLE" && !scanReceipt && <p>The last queue-refresh receipt is unavailable. Available review items remain visible.</p>}
             {operationalActions.length > 0 && <div className="attention-queue" aria-label="Operational Actions">{operationalActions.map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></Link>)}</div>}
             <Disclosure title="Workflow Details">
             {groupedInboxCount > 0 && <div className="attention-queue">{otherReviewCount > 0 ? <Link href="/decision-workbench#reviews"><Badge value="REVIEW" /><div><strong>Other Review Items</strong><span>{otherReviewCount} open or acknowledged items.</span></div></Link> : null}{notices.actionItems.filter((item) => !operationalActions.includes(item)).map((item) => <Link href={item.href} key={item.key}><Badge value={item.severity} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></Link>)}</div>}

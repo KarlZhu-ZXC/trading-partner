@@ -91,6 +91,12 @@ are explicitly distinguished.
 
 ## Page layout and interaction
 
+Research answer fields use the host's typed presentation when it reconstructs the
+stored text exactly. Render field values and material context using the existing
+field view; use the legacy text adapter only when typed data is absent, compacted
+or invalid. Copy Message always uses the original stored content. Missing values
+remain distinct from numeric zero and from a literal string value named `null`.
+
 Specialist pages share the Research workspace composition; Overview retains its dashboard composition. Agent conversations use the shared Rail, and `/chat` redirects to `/?agent=open`.
 
 ## Page hierarchy
@@ -150,6 +156,15 @@ action button.
 
 ## Interaction boundaries
 
+Today Review exposes in-memory search and priority filters for active groups, with
+unfiltered group counts and the digest timestamp. Matching a group retains all of
+its reasons and exact Research Subject links; operational Other Actions and
+deferred/reviewed sections stay outside those filters. A no-match result never
+means the queue is clear. The first reason is visible before expanding details.
+Overview retains loaded content and a retry action after refresh failures. Its
+Today/Weekly selection uses the `review_window` URL parameter; search text is not
+written to URLs or browser storage.
+
 - A page load remains durable-only unless the product contract explicitly says
   otherwise.
 - Console BFF page reads use the same validated capability schemas and handlers as
@@ -175,3 +190,11 @@ user drawings use the editable `user:drawing` group. Chart-library indicators ar
 visual aids and must not replace the sourced snapshot or create Monitor/Decision/order
 facts. Drawings are session-only until a versioned local persistence contract exists.
 Keep the Matplotlib PNG path for Agent/MCP artifacts and portable export.
+
+
+Review workflow interaction regressions exercise populated forms at 390px in both
+themes, keyboard entry and focus order, control bounds and pointer hit visibility
+above sticky actions. They also cover the narrow Research Question handoff and
+Plan readiness action, not just empty route layouts. Tab-local review drafts retain
+conflicted input for an explicit saved-versus-draft comparison; changing a local
+basis never submits automatically.

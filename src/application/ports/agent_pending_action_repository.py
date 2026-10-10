@@ -1,8 +1,8 @@
 """Exact-confirmation persistence port for Agent pending actions.
 
-The repository intentionally has no execution method.  Agent-A can persist a
-pending action, while later milestones decide whether a confirmed action may
-be dispatched through an existing application service.
+The repository has no execution method. The runtime may persist a pending action;
+the action service separately validates exact confirmation before dispatching an
+allowed operation through an existing application service.
 """
 
 from __future__ import annotations
@@ -67,6 +67,7 @@ class AgentPendingActionRepository(Protocol):
         *,
         now: datetime,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[AgentPendingAction, ...]: ...
 
     def expire_due(self, *, now: datetime | None = None, limit: int = 100) -> int: ...

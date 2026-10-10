@@ -1,6 +1,7 @@
 """Synthetic current-turn research evidence regression gate."""
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -14,6 +15,69 @@ from interfaces.cli.copilot_research_evaluation import (
 )
 
 CASES = json.loads(CATALOG_PATH.read_text())["cases"]
+
+
+def test_question_cutoff_filters_prompt_catalog_and_final_fact_guard():
+    from application.services.copilot_research_evidence import research_evidence_catalog
+
+    receipt = AgentToolReceipt(
+        capability="market_us_get",
+        operation="quote",
+        request_id="req_cutoff",
+        effect="READ_PROVIDER",
+    )
+    payload = {
+        "receipt": receipt.as_dict(),
+        "result": {
+            "as_of": "2026-10-02T13:00:00Z",
+            "instrument_id": "equity:US:SYNTH",
+            "price": "123",
+            "currency": "USD",
+        },
+    }
+    cutoff = datetime(2026, 10, 2, 12, tzinfo=UTC)
+    assert research_evidence_catalog([receipt], [payload])["entries"]
+    assert not research_evidence_catalog([receipt], [payload], evidence_cutoff=cutoff)["entries"]
+    answer = AgentAnswerEnvelope(
+        blocks=(
+            AgentAnswerBlock(
+                kind="FACT", text="@evidence", evidence_refs=("req_cutoff/result/price",)
+            ),
+        )
+    )
+    result = guard_research_answer(
+        answer, receipts=[receipt], tool_payloads=[payload], evidence_cutoff=cutoff
+    )
+    assert result.summary["verified_count"] == 0
+    assert result.envelope.blocks[0].kind == "GAP"
+
+
+@pytest.mark.parametrize(
+    "text,missing",
+    [
+        ("null不是0；缺失值不等于零。", 0),
+        ("null 表示字段缺失而非数值 0，因此无法推算净收益。", 0),
+        ("不能把缺失费用当作 0 处理。", 0),
+        ("A missing value is unknown; null is not 0.", 0),
+        ("null不是0.5。", 1),
+        ("缺失不是0%，费用未知。", 1),
+        ("缺失不等于0，但费用为0。", 1),
+        ("null不是0；当前价格为999。", 1),
+        ("费用不是0。", 1),
+        ("不能把缺失费用当作 0 处理；已买入。", 1),
+    ],
+)
+def test_missing_value_definition_does_not_assert_a_financial_zero(text, missing):
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind="SUMMARY", text=text),)),
+        receipts=[],
+        tool_payloads=[],
+    )
+    assert guarded.summary["missing_count"] == missing
+    assert guarded.summary["verified_count"] == 0
+    if not missing:
+        assert guarded.envelope.blocks[0].kind == "INFERENCE"
+        assert guarded.envelope.blocks[0].text == text
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
@@ -36,6 +100,33 @@ def test_no_facts_does_not_claim_verified() -> None:
     )
     assert guarded.summary["status"] == "NOT_CHECKED"
     assert guarded.summary["verified_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "text,missing",
+    [
+        ("费用字段为已确认的已知值，净交易盈亏缺失，不能按零处理。", 0),
+        ("仍需用户进行观点确认。", 0),
+        ("订单已经确认。", 1),
+        ("已确认订单。", 1),
+        ("已确认该候选。", 1),
+        ("观点已确认。", 1),
+        ("已确认的突破可执行。", 1),
+        ("已确认。", 1),
+        ("费用字段为已确认的已知值；已买入。", 1),
+    ],
+)
+def test_field_certainty_is_not_an_execution_confirmation(text, missing):
+    guarded = guard_research_answer(
+        AgentAnswerEnvelope(blocks=(AgentAnswerBlock(kind="INFERENCE", text=text),)),
+        receipts=[],
+        tool_payloads=[],
+    )
+    assert guarded.summary["missing_count"] == missing
+    assert guarded.summary["verified_count"] == 0
+    if not missing:
+        assert guarded.envelope.blocks[0].kind == "INFERENCE"
+        assert guarded.envelope.blocks[0].text == text
 
 
 @pytest.mark.parametrize(

@@ -191,8 +191,25 @@ class TradeRetroFindingReview:
     finding_key: str
     status: TradeRetroFindingReviewStatus
     note: str | None = None
+    followup: str | None = None
+    question_id: str | None = None
+    question_version: int | None = None
 
     def __post_init__(self) -> None:
+        if self.followup not in {None, "QUESTION", "NO_FOLLOWUP", "DEFER"}:
+            raise DataContractError("invalid finding follow-up choice")
+        if self.followup == "QUESTION":
+            if (
+                self.question_id is None
+                or self.question_version is None
+                or self.question_version < 1
+            ):
+                raise DataContractError("question follow-up requires exact question version")
+            _id(self.question_id, "question_id", "question")
+        elif self.question_id is not None or self.question_version is not None:
+            raise DataContractError("question reference requires QUESTION follow-up")
+        if self.followup == "NO_FOLLOWUP" and not (self.note and self.note.strip()):
+            raise DataContractError("no follow-up requires a rationale")
         _id(self.finding_key, "finding_key", "finding")
         if not isinstance(self.status, TradeRetroFindingReviewStatus):
             raise DataContractError("finding review status is invalid")

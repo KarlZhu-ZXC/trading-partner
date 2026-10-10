@@ -136,8 +136,8 @@ class TALibIndicatorEngine:
     def analyze(self, bars: Sequence[MarketBar], *, interval: str) -> TechnicalTimeframe:
         if interval not in {"1d", "1w"}:
             raise DataContractError("technical interval must be 1d or 1w")
-        if len(bars) < 20:
-            raise DataContractError("at least 20 bars are required for technical analysis")
+        if not bars or (interval == "1d" and len(bars) < 20):
+            raise DataContractError("at least 20 daily bars or one weekly bar are required")
         open_ = np.asarray([float(bar.open) for bar in bars], dtype=np.float64)
         high = np.asarray([float(bar.high) for bar in bars], dtype=np.float64)
         low = np.asarray([float(bar.low) for bar in bars], dtype=np.float64)
@@ -194,8 +194,9 @@ class TALibIndicatorEngine:
         )
 
         last_close = close[-1]
-        trend_state = "mixed"
+        trend_state = "insufficient_data"
         if not math.isnan(ema20[-1]) and not math.isnan(sma50[-1]):
+            trend_state = "mixed"
             if last_close > ema20[-1] > sma50[-1]:
                 trend_state = "uptrend"
             elif last_close < ema20[-1] < sma50[-1]:

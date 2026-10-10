@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, TypeVar
 
@@ -23,6 +23,8 @@ from application.ports.research_unit_of_work import ResearchUnitOfWork
 from application.ports.secret_redactor import SecretRedactor
 from application.ports.trade_retro_repository import TradeRetroRepository
 from application.services._research_support import UowFactory
+from application.services.evidence_cohorts import reviewed_impact_cohort
+from application.services.plan_monitor_coverage import plan_monitor_coverage
 from domain.catalyst_agenda.enums import AgendaItemStatus
 from domain.catalyst_agenda.models import CatalystAgendaVersion
 from domain.common.enums import DecisionType, EvidenceStance, Freshness, InvalidationStatus
@@ -107,9 +109,7 @@ class JudgmentScorecardService:
             existing = self._repository.get_by_idempotency_key(idempotency_key)
             if existing is not None:
                 if existing.subject_id != subject_id or existing.thesis_id != thesis_id:
-                    raise IdempotencyConflict(
-                        "Judgment Scorecard idempotency key was reused"
-                    )
+                    raise IdempotencyConflict("Judgment Scorecard idempotency key was reused")
                 return self._success(
                     request_id,
                     existing.generated_at,
@@ -256,13 +256,63 @@ class JudgmentScorecardService:
         plan = uow.trade_plans.get_current_by_subject(subject_id)
         if plan is not None and plan.thesis_id != thesis_id:
             plan = None
-        plan_versions = (
-            uow.trade_plans.list_versions(plan.plan_id) if plan is not None else ()
-        )
+        plan_versions = uow.trade_plans.list_versions(plan.plan_id) if plan is not None else ()
 
+        impact = reviewed_impact_cohort(
+            uow,
+            subject_id,
+            revision_id,
+            as_of,
+            {item.evidence_id for item in latest_assessments},
+        )
+        balance = self._evidence_balance(latest_assessments, evidence, revision_ref)
+        balance = replace(
+            balance,
+            status=(
+                ScorecardDimensionStatus.PARTIAL
+                if impact["coverage"] != "COMPLETE" or impact["missing_sources"]
+                else balance.status
+            ),
+            summary=balance.summary + " Assessment stance and reviewed Impact links are separate "
+            "cohorts at the run cutoff; counts must not be added or treated as a quality score.",
+            facts=balance.facts
+            + (
+                ("ASSESSMENT_DISTINCT_EVIDENCE_COUNT", str(len(latest_assessments))),
+                ("COHORT_CUTOFF", as_of.isoformat()),
+                ("IMPACT_COVERAGE", impact["coverage"]),
+                *tuple(
+                    (
+                        "IMPACT_" + stance.upper() + "_LINK_COUNT",
+                        str(impact.get("stances", {}).get(stance, "UNKNOWN")),
+                    )
+                    for stance in ("supports", "contradicts", "uncertain")
+                ),
+                *tuple(
+                    (
+                        "IMPACT_" + key.upper(),
+                        str(impact[key]) if impact[key] is not None else "UNKNOWN",
+                    )
+                    for key in (
+                        "link_count",
+                        "source_count",
+                        "overlap_with_assessments",
+                        "missing_sources",
+                    )
+                ),
+            ),
+            limitation_codes=balance.limitation_codes
+            + (("IMPACT_COHORT_INCOMPLETE",) if impact["coverage"] != "COMPLETE" else ())
+            + (("IMPACT_SOURCE_UNAVAILABLE",) if impact["missing_sources"] else ())
+            + (("IMPACT_REFS_TRUNCATED",) if len(impact["refs"]) > 40 else ()),
+            source_refs=balance.source_refs
+            + tuple(
+                ScorecardSourceRef("EVIDENCE_IMPACT", ref["impact_id"], ref["version"])
+                for ref in impact["refs"][:40]
+            ),
+        )
         return (
             self._revision_definition(revision, revision_ref, assumptions, invalidations),
-            self._evidence_balance(latest_assessments, evidence, revision_ref),
+            balance,
             self._evidence_recency(latest_assessments, evidence, revision_ref, as_of),
             self._assumption_outcome(assumptions, revision_ref),
             self._invalidation_outcome(invalidations, revision_ref),
@@ -362,9 +412,7 @@ class JudgmentScorecardService:
         )
         evidence_cap = 40
         capped_evidence = evidence[:evidence_cap]
-        balance_limitations = (
-            ("EVIDENCE_REFS_TRUNCATED",) if len(evidence) > evidence_cap else ()
-        )
+        balance_limitations = ("EVIDENCE_REFS_TRUNCATED",) if len(evidence) > evidence_cap else ()
         return ScorecardDimension(
             code="REVISION_EVIDENCE_BALANCE",
             status=status,
@@ -375,8 +423,7 @@ class JudgmentScorecardService:
             source_refs=(
                 revision_ref,
                 *tuple(
-                    ScorecardSourceRef("EVIDENCE", item.evidence_id)
-                    for item in capped_evidence
+                    ScorecardSourceRef("EVIDENCE", item.evidence_id) for item in capped_evidence
                 ),
             ),
             limitation_codes=balance_limitations
@@ -396,7 +443,8 @@ class JudgmentScorecardService:
                 status=ScorecardDimensionStatus.NOT_EVALUATED,
                 result_code="NO_EXACT_REVISION_EVIDENCE",
                 title="Evidence recency",
-                summary="No exact-revision evidence is available for an age calculation.",
+                summary="No assessed Evidence is available for this revision age calculation; "
+                "reviewed Impact sources are a separate cohort.",
                 source_refs=(revision_ref,),
                 limitation_codes=("NO_EXACT_REVISION_EVIDENCE",),
             )
@@ -430,9 +478,7 @@ class JudgmentScorecardService:
             facts=tuple(facts),
             source_refs=tuple(refs),
             limitation_codes=(
-                ("EVIDENCE_RECENCY_TRUNCATED",)
-                if len(assessments) > evidence_cap
-                else ()
+                ("EVIDENCE_RECENCY_TRUNCATED",) if len(assessments) > evidence_cap else ()
             ),
         )
 
@@ -456,9 +502,7 @@ class JudgmentScorecardService:
         invalidations: tuple[InvalidationCondition, ...], revision_ref: ScorecardSourceRef
     ) -> ScorecardDimension:
         triggered = tuple(
-            item
-            for item in invalidations
-            if item.status is InvalidationStatus.TRIGGERED
+            item for item in invalidations if item.status is InvalidationStatus.TRIGGERED
         )
         checked = tuple(item for item in invalidations if item.last_checked_at is not None)
         if triggered:
@@ -474,8 +518,7 @@ class JudgmentScorecardService:
             result = "NEVER_CHECKED"
             limitation_codes = ("INVALIDATION_NEVER_CHECKED",)
         refs = (revision_ref,) + tuple(
-            ScorecardSourceRef("INVALIDATION", item.invalidation_id)
-            for item in invalidations
+            ScorecardSourceRef("INVALIDATION", item.invalidation_id) for item in invalidations
         )
         return ScorecardDimension(
             code="THESIS_INVALIDATION_OUTCOME",
@@ -510,38 +553,12 @@ class JudgmentScorecardService:
                 source_refs=(revision_ref,),
                 limitation_codes=("NO_TRADE_PLAN",),
             )
-        monitor_defs = tuple(
-            value
-            for value in self._monitors.list_current()
-            if value.trade_plan_id == plan.plan_id and value.trade_plan_version == plan.version
-        )
-        monitorable = tuple(value for value in plan.conditions if value.mode.value == "MONITORABLE")
-        manual = tuple(value for value in plan.conditions if value.mode.value == "MANUAL")
-        matched_codes: set[str] = set()
-        observed_codes: set[str] = set()
-        refs: list[ScorecardSourceRef] = [
-            revision_ref,
-            ScorecardSourceRef("TRADE_PLAN", plan.plan_id, plan.version),
-        ]
-        for monitor in monitor_defs:
-            exact = self._monitors.get_version(monitor.monitor_id, monitor.version)
-            if exact is None:
-                continue
-            refs.append(ScorecardSourceRef("MONITOR", exact.monitor_id, exact.version))
-            rule_codes = {item.rule_code for item in exact.rules}
-            matched_codes.update(
-                value.condition_code
-                for value in monitorable
-                if value.condition_code in rule_codes
-            )
-            run = self._monitors.latest_run_for_monitor_version(exact.monitor_id, exact.version)
-            if run is not None:
-                observed_codes.update(
-                    item.rule_code
-                    for item in run.observations
-                    if item.rule_code in {value.condition_code for value in monitorable}
-                )
-                refs.append(ScorecardSourceRef("MONITOR_RUN", run.run_id))
+        coverage = plan_monitor_coverage(plan, self._monitors, as_of=self._clock.now())
+        monitorable = tuple(c for c in coverage.conditions if c.state != "MANUAL")
+        manual = tuple(c for c in coverage.conditions if c.state == "MANUAL")
+        matched_codes = {c.condition_code for c in monitorable if c.configured}
+        observed_codes = {c.condition_code for c in monitorable if c.observed}
+        refs = [revision_ref, *coverage.source_refs]
         total = len(monitorable)
         limitations: tuple[str, ...]
         facts = (
@@ -549,12 +566,18 @@ class JudgmentScorecardService:
             ("MATCHED_CONDITION_COUNT", str(len(matched_codes))),
             ("OBSERVED_CONDITION_COUNT", str(len(observed_codes))),
             ("MANUAL_CONDITION_COUNT", str(len(manual))),
+            ("UNAVAILABLE_CONDITION_COUNT", str(sum(c.unavailable for c in monitorable))),
         )
         if total == 0:
             status = ScorecardDimensionStatus.NOT_EVALUATED
             result = "NO_MONITORABLE_CONDITIONS"
             limitations = ("NO_MONITORABLE_CONDITIONS",)
-        elif len(matched_codes) == total and len(observed_codes) == total and not manual:
+        elif (
+            len(matched_codes) == total
+            and len(observed_codes) == total
+            and not manual
+            and not coverage.unavailable
+        ):
             status = ScorecardDimensionStatus.EVALUATED
             result = "COVERED"
             limitations = ()
@@ -596,8 +619,7 @@ class JudgmentScorecardService:
             item for item in decisions if item.decision_type in _ACTION_INTENTS
         )
         refs = (revision_ref,) + tuple(
-            ScorecardSourceRef("TRADE_PLAN", plan.plan_id, plan.version)
-            for plan in plan_versions
+            ScorecardSourceRef("TRADE_PLAN", plan.plan_id, plan.version) for plan in plan_versions
         )
         if not action_decisions:
             return ScorecardDimension(
@@ -609,6 +631,7 @@ class JudgmentScorecardService:
                 source_refs=refs,
                 limitation_codes=("NO_ACTION_INTENT",),
             )
+
         def eligible(item: DecisionRecord) -> TradePlan | None:
             candidates = tuple(
                 plan
@@ -739,10 +762,7 @@ class JudgmentScorecardService:
         identity_count = len(grouped)
         agenda_groups = tuple(
             sorted(
-                (
-                    tuple(sorted(values, key=self._s1_version_key))
-                    for values in grouped.values()
-                ),
+                (tuple(sorted(values, key=self._s1_version_key)) for values in grouped.values()),
                 key=lambda values: str(getattr(values[-1], "agenda_item_id", "")),
             )[:_AGENDA_IDENTITY_CAP]
         )
@@ -894,11 +914,7 @@ class JudgmentScorecardService:
                 no_calibratable_count=no_calibratable_count,
                 closure_only_count=closure_only_count,
             )
-        unresolved = (
-            closure_only_count
-            + no_calibratable_count
-            + overdue_count
-        )
+        unresolved = closure_only_count + no_calibratable_count + overdue_count
         if not agenda_groups or occurred_count == 0:
             dimension_status = ScorecardDimensionStatus.NOT_EVALUATED
         elif unresolved:
@@ -1203,9 +1219,7 @@ class JudgmentScorecardService:
             warnings=normalized,
         )
 
-    def _failure(
-        self, request_id: str, as_of: datetime, exc: BaseException
-    ) -> ToolEnvelope[_T]:
+    def _failure(self, request_id: str, as_of: datetime, exc: BaseException) -> ToolEnvelope[_T]:
         error = to_error_info_from_exception(exc, self._redactor)
         return ToolEnvelope.failure(
             request_id=request_id,

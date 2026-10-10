@@ -20,7 +20,7 @@ from typing import Any, Literal, NoReturn, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import AliasChoices, Field, ValidationError, model_validator
 
 from application.dto.agent import (
@@ -61,8 +61,8 @@ from domain.common.errors import TradingPartnerError
 from interfaces.agent.action_gateway import AgentActionGateway
 from interfaces.agent.capability_gateway import AgentCapabilityGateway
 from interfaces.agent.prompts import build_agent_system_prompt
+from interfaces.capabilities import CompactCapabilityRegistry
 from interfaces.console._shared import ConsoleRequestModel
-from interfaces.mcp.tools.compact import CompactCapabilityRegistry
 
 AGENT_OWNER_PRINCIPAL = "local-console"
 AGENT_CHANNEL = AgentChannel.CONSOLE
@@ -208,6 +208,7 @@ class SendMessageRequest(_RequestModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
     )
     reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
+    question_context_token: str | None = Field(default=None, min_length=1, max_length=128)
     research_mode: Literal["standard", "research", "challenge"] = "standard"
     research_max_seconds: int = Field(default=180, ge=30, le=600)
     research_max_model_calls: int = Field(default=8, ge=1, le=16)
@@ -217,6 +218,8 @@ class SendMessageRequest(_RequestModel):
 
     @model_validator(mode="after")
     def validate_content_or_attachments(self) -> SendMessageRequest:
+        if self.question_context_token and self.research_mode == "standard":
+            raise ValueError("Question Research requires Research or Counter-review mode")
         if len(self.attachments) > AGENT_IMAGE_MAX_COUNT:
             raise ValueError("Too many image attachments")
         total_bytes = 0
@@ -570,6 +573,9 @@ def build_agent_runtime_state(
                 None,
             ),
             preferences_service=preferences_service,
+            question_research=getattr(
+                getattr(container, "services", None), "question_research", None
+            ),
             telemetry=getattr(container.context, "telemetry", NOOP_TELEMETRY),
             turn_lock_factory=cast(
                 Any,
@@ -1549,6 +1555,35 @@ def _find_durable_messages(
     return found
 
 
+@router.get("/conversations/{conversation_id}/messages/{message_id}/research-sources")
+async def question_research_sources(
+    request: Request,
+    conversation_id: str,
+    message_id: str,
+    subject_id: str,
+) -> JSONResponse:
+    _owned_conversation(request, conversation_id)
+    repository = _require_repository(_state(request))
+    message = _find_durable_messages(repository, conversation_id, {message_id}).get(message_id)
+    try:
+        if message is None or message.role.value != "ASSISTANT" or not message.model_receipt_json:
+            raise ValueError("Missing research message")
+        receipt = CopilotResearchReceipt.model_validate(
+            json.loads(message.model_receipt_json)["research"]
+        )
+        if receipt.question_context is None or receipt.question_context.subject_id != subject_id:
+            raise ValueError("Mismatched research scope")
+        container = cast(ApplicationContainer, request.app.state.container)
+        data = await asyncio.to_thread(
+            container.services.question_research.sources_for_result, receipt.question_context
+        )
+    except (ValueError, KeyError, TypeError, TradingPartnerError):
+        raise HTTPException(
+            status_code=409, detail="Saved question sources are unavailable for this scope"
+        ) from None
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
 def _replay_turn_events(
     repository: AgentConversationRepository,
     turn: AgentTurn,
@@ -1723,9 +1758,11 @@ async def _event_stream(
     turn: AgentTurnRequest,
 ) -> AsyncIterator[bytes]:
     queue: asyncio.Queue[AgentTurnEvent | object] = asyncio.Queue()
+    stream_open = True
 
     async def emit(event: AgentTurnEvent) -> None:
-        await queue.put(event)
+        if stream_open:
+            await queue.put(event)
 
     async def produce() -> None:
         try:
@@ -1735,7 +1772,8 @@ async def _event_stream(
             # stream remains a valid SSE sequence even when the model fails.
             pass
         finally:
-            await queue.put(_STREAM_END)
+            if stream_open:
+                await queue.put(_STREAM_END)
 
     task = asyncio.create_task(produce())
     ordinal = 0
@@ -1747,6 +1785,14 @@ async def _event_stream(
             ordinal += 1
             yield _sse(cast(AgentTurnEvent, item), ordinal)
     finally:
+        stream_open = False
+        # Delivery events have no consumer after disconnect. Release queued
+        # payloads and let the runtime finish without retaining further deltas.
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         # Do not cancel a turn when a browser tab disconnects.  The runtime
         # owns durable append/receipt completion; a reconnect can read the
         # resulting messages and receipts from the history endpoints.
@@ -1769,6 +1815,7 @@ async def stream_agent_message(
         owner_principal=AGENT_OWNER_PRINCIPAL,
         channel=AGENT_CHANNEL,
         content=payload.content,
+        question_context_token=payload.question_context_token,
         research_mode=payload.research_mode,
         research_max_seconds=payload.research_max_seconds,
         research_max_model_calls=payload.research_max_model_calls,
@@ -1875,6 +1922,18 @@ async def retry_agent_turn(
             raise HTTPException(
                 status_code=409, detail="Copilot research retry policy is unavailable"
             ) from None
+    if research_policy and policy.question_context is not None:
+        container = cast(ApplicationContainer, request.app.state.container)
+        try:
+            restored = container.services.question_research.restore(
+                policy.question_context, original.content
+            )
+        except TradingPartnerError:
+            raise HTTPException(
+                status_code=409,
+                detail="The saved question changed. Prepare Research from the question again.",
+            ) from None
+        research_policy["question_context_token"] = restored["question_context_token"]
     retry_request = AgentTurnRequest(
         conversation_id=conversation_id,
         owner_principal=AGENT_OWNER_PRINCIPAL,

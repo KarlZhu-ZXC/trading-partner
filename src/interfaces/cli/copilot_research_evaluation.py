@@ -102,6 +102,14 @@ def evaluate_research_evidence_case(case: dict[str, Any]) -> dict[str, object]:
         "category": case["category"],
         "passed": not failures,
         "failures": failures,
+        # Keep the evaluator's observed guard outcome available to aggregate
+        # reports.  The old ``passed`` field is intentionally unchanged for
+        # callers that only need the regression-gate result.
+        "expected_gap": expected_gap,
+        "actual_gap": actual_gap,
+        "missing_count": guarded.summary["missing_count"],
+        "verified_count": guarded.summary["verified_count"],
+        "guard_codes": guarded.summary["codes"],
     }
 
 

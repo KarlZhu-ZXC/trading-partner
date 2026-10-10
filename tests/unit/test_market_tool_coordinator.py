@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application.dto.cross_asset import FuturesCurveSnapshotDTO, SpotObservationDTO
+from application.dto.cross_asset import (
+    BasisSnapshotDTO,
+    FuturesCurveSnapshotDTO,
+    SpotObservationDTO,
+)
 from application.dto.provider_routing import ProviderResultMeta
 from application.dto.tool_envelope import ToolEnvelope, WarningInfo
 from application.dto.us_market import (
@@ -38,6 +42,7 @@ from domain.common.enums import (
     VendorId,
 )
 from domain.cross_asset.enums import (
+    BasisComparability,
     CurveCompleteness,
     CurveShape,
     OfferSide,
@@ -609,3 +614,148 @@ async def test_otc_quote_unavailable_when_service_missing() -> None:
     )
     assert env.ok is False
     assert env.errors
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["quote", "bars", "context"])
+@pytest.mark.parametrize("explicit_as_of", [False, True])
+async def test_us_delegation_pins_one_cutoff_across_coordinators(
+    operation: str, explicit_as_of: bool
+) -> None:
+    from datetime import timedelta
+
+    from test_us_tool_coordinator import NOW
+    from test_us_tool_coordinator import _coordinator as make_us_coordinator
+
+    clock = FixedClock(NOW, step_seconds=60)
+    ids = SequentialIdGenerator()
+    us, master, data, context, _technical = make_us_coordinator(clock=clock, ids=ids)
+    access = InstrumentAccessService(master, MagicMock())
+    access.get = AsyncMock(wraps=access.get)  # type: ignore[method-assign]
+    coordinator = MarketToolCoordinator(
+        instrument_access=access, clock=clock, id_generator=ids,
+        secret_redactor=DefaultSecretRedactor(), us_tool_coordinator=us,
+        data_service=data,
+    )
+    requested_as_of = NOW - timedelta(minutes=5) if explicit_as_of else None
+    expected_as_of = requested_as_of or NOW
+    if operation == "quote":
+        request = MarketGetSnapshotInput(
+            instrument_id=_US_EQ.instrument_id, as_of=requested_as_of,
+        )
+        envelope = await coordinator.get_market_snapshot(request)
+        data.get_quote.assert_awaited_once()
+        assert data.get_quote.await_args.args[1] == expected_as_of
+    elif operation == "bars":
+        request = MarketGetBarsInput(
+            instrument_id=_US_EQ.instrument_id,
+            start=NOW.date() - timedelta(days=7), end=NOW.date(),
+            as_of=requested_as_of,
+        )
+        envelope = await coordinator.get_market_bars(request)
+        data.get_bars.assert_awaited_once()
+        assert data.get_bars.await_args.kwargs["as_of"] == expected_as_of
+    else:
+        request = MarketGetContextInput(as_of=requested_as_of)
+        envelope = await coordinator.get_market_context(request)
+        context.get_context_result.assert_awaited_once_with(expected_as_of)
+    assert envelope.ok is True
+    assert envelope.as_of == expected_as_of
+    assert request.as_of == requested_as_of
+    if operation != "context":
+        assert access.get.await_args.kwargs["as_of"] == expected_as_of
+    assert clock.call_count == (0 if explicit_as_of else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prices", "expected_price", "expected_basis"),
+    [
+        ({"bid": "2400", "ask": "2402"}, "2401", PriceBasis.MID),
+        ({"mid": "2401", "last": "2399"}, "2401", PriceBasis.MID),
+        ({"mid": "0", "last": "2399"}, "0", PriceBasis.MID),
+        ({"last": "2399"}, "2399", PriceBasis.LAST),
+        ({"bid": "2400", "ask": "2402", "last": "2399"}, "2399", PriceBasis.LAST),
+        ({"bid": "2400", "last": "2399"}, "2399", PriceBasis.LAST),
+    ],
+    ids=["derived_mid", "explicit_mid", "zero_mid", "last", "last_over_bid_ask", "last_with_bid"],
+)
+async def test_spot_future_basis_preserves_selected_price_basis_and_comparability(
+    prices: dict[str, str], expected_price: str, expected_basis: PriceBasis
+) -> None:
+    from dataclasses import replace
+
+    from test_us_tool_coordinator import _meta, _ok, _quote
+
+    spot = SpotObservationDTO(
+        instrument_id=_OTC_XAU.instrument_id, currency="USD", unit="USD/troy_oz",
+        quote_at=AS_OF, venue_basis=SpotVenueBasis.DUKASCOPY_SWFX, source="fixture",
+        **{field: Decimal(value) for field, value in prices.items()},
+    )
+    commodity = MagicMock()
+    commodity.get_quote = AsyncMock(
+        return_value=CommoditySpotQuoteResult(ok=True, data=spot, warnings=(), error=None),
+    )
+    coordinator, _us = _coordinator(commodity=commodity)
+    future_quote = replace(
+        _quote(), instrument_id=_CME_FUT.instrument_id, quote_at=AS_OF,
+        last=Decimal("2405"), open=None, high=None, low=None,
+    )
+    coordinator._data_service.get_quote = AsyncMock(  # noqa: SLF001
+        return_value=_ok(future_quote, _meta()),
+    )
+    envelope = await coordinator.get_market_context(
+        MarketGetContextInput(
+            operation="spot_future_basis", left_instrument_id=_OTC_XAU.instrument_id,
+            right_instrument_id=_CME_FUT.instrument_id, as_of=AS_OF,
+        ),
+    )
+    assert envelope.ok is True
+    assert isinstance(envelope.data, BasisSnapshotDTO)
+    result = envelope.data
+    assert result.left_leg.price == Decimal(expected_price)
+    assert result.left_leg.price_basis is expected_basis
+    assert result.right_leg.price == Decimal("2405")
+    assert result.right_leg.price_basis is PriceBasis.LAST
+    if expected_basis is PriceBasis.MID:
+        assert result.comparability is BasisComparability.NOT_COMPARABLE
+        assert result.reason_codes == ("PRICE_BASIS_MISMATCH",)
+        assert result.absolute_spread is None
+        assert result.percentage_spread is None
+        assert envelope.degraded is True
+        assert [warning.code for warning in envelope.warnings] == ["BASIS_NOT_COMPARABLE"]
+    else:
+        assert result.comparability is BasisComparability.INDICATIVE_ONLY
+        assert result.absolute_spread == Decimal(expected_price) - Decimal("2405")
+        assert result.reason_codes == ("INDICATIVE_DELIVERY_OR_GRADE",)
+        assert envelope.warnings == ()
+    for field, value in prices.items():
+        assert getattr(spot, field) == Decimal(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prices", [{"bid": "2400"}, {"ask": "2402"}, {}])
+async def test_spot_future_basis_rejects_one_sided_or_absent_prices(
+    prices: dict[str, str],
+) -> None:
+    spot = SpotObservationDTO(
+        instrument_id=_OTC_XAU.instrument_id, currency="USD", unit="USD/troy_oz",
+        quote_at=AS_OF, venue_basis=SpotVenueBasis.DUKASCOPY_SWFX, source="fixture",
+        **{field: Decimal(value) for field, value in prices.items()},
+    )
+    commodity = MagicMock()
+    commodity.get_quote = AsyncMock(
+        return_value=CommoditySpotQuoteResult(ok=True, data=spot, warnings=(), error=None),
+    )
+    coordinator, _us = _coordinator(commodity=commodity)
+    envelope = await coordinator.get_market_context(
+        MarketGetContextInput(
+            operation="spot_future_basis", left_instrument_id=_OTC_XAU.instrument_id,
+            right_instrument_id=_CME_FUT.instrument_id, as_of=AS_OF,
+        ),
+    )
+    assert envelope.ok is False
+    assert envelope.data is None
+    assert envelope.errors[0].code == "NO_MARKET_DATA"
+    assert envelope.errors[0].details["code"] == "BASIS_NOT_COMPARABLE"
+    assert [warning.code for warning in envelope.warnings] == ["SPOT_FUTURE_BASIS_UNAVAILABLE"]

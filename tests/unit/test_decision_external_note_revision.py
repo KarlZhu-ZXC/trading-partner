@@ -77,7 +77,9 @@ def _subject(factory: object, ids: SequentialIdGenerator, clock: FixedClock) -> 
     return value.subject_id
 
 
-def _insert_note(engine: Engine, *, observed_at: datetime, instrument_id: str | None) -> None:
+def _insert_note(
+    engine: Engine, *, observed_at: datetime, instrument_id: str | None, coverage: str = "FULL"
+) -> None:
     with Session(engine) as session, session.begin():
         session.add(
             ExternalNoteIdentityRow(
@@ -99,8 +101,8 @@ def _insert_note(engine: Engine, *, observed_at: datetime, instrument_id: str | 
                 source_revision_key="bridge:nvda:1",
                 title="NVDA note",
                 summary="Observation",
-                full_body="Observation",
-                coverage="FULL",
+                full_body="Observation" if coverage == "FULL" else None,
+                coverage=coverage,
                 source_timestamp=observed_at.isoformat(),
                 observed_at=observed_at.isoformat(),
                 visibility="SELF",
@@ -176,7 +178,8 @@ def test_omitted_observation_reference_preserves_legacy_idempotency_digest() -> 
     }
     legacy = compute_decision_idempotency_payload_sha256(**common)  # type: ignore[arg-type]
     omitted = compute_decision_idempotency_payload_sha256(
-        **common, external_note_revision_id=None  # type: ignore[arg-type]
+        **common,
+        external_note_revision_id=None,  # type: ignore[arg-type]
     )
     linked = compute_decision_idempotency_payload_sha256(
         **common,
@@ -221,6 +224,56 @@ def test_decision_note_revision_round_trips_and_appears_in_timeline(
     )
     assert timeline.ok and timeline.data is not None
     assert timeline.data.items[0].external_note_revision_id == NOTE_REVISION_ID
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "coverage,observed_at,accepted",
+    [
+        ("FULL", EARLIER, True),
+        ("SUMMARY_ONLY", EARLIER, False),
+        ("FULL", NOW, False),
+    ],
+)
+def test_independent_human_decision_requires_full_known_source_without_model(
+    migrated_sqlite_url,
+    coverage,
+    observed_at,
+    accepted,
+):
+    engine = create_engine(migrated_sqlite_url)
+    clock, ids, redactor = (
+        FixedClock(NOW),
+        SequentialIdGenerator(start=30_000),
+        DefaultSecretRedactor(),
+    )
+
+    def factory():
+        return SqlAlchemyResearchUnitOfWork(engine, clock, ids, redactor)
+
+    subject_id = _subject(factory, ids, clock)
+    _insert_note(
+        engine, observed_at=observed_at, instrument_id=SUBJECT_INSTRUMENT, coverage=coverage
+    )
+    result = DecisionRecordService(factory, clock, ids, redactor).append(
+        **_append_base(
+            subject_id,
+            external_note_revision_id=NOTE_REVISION_ID,
+            decision_type=DecisionType.NO_ACTION,
+        )
+    )
+    assert result.ok is accepted
+    # No interpretation/review is created or required by a human Decision.
+    from sqlalchemy import func, select
+
+    from infrastructure.persistence.orm.operations import (
+        ExternalNoteInterpretationRow,
+        ExternalNoteReviewRevisionRow,
+    )
+
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(ExternalNoteInterpretationRow)) == 0
+        assert session.scalar(select(func.count()).select_from(ExternalNoteReviewRevisionRow)) == 0
     engine.dispose()
 
 

@@ -253,7 +253,8 @@ def test_composition_root_and_orm_modules_stay_bounded() -> None:
     # Trade Retro, Judgment Scorecard, Catalyst Agenda, Shared Agent Runtime,
     # Agent Preferences, and the durable Review Queue each own one small module;
     # keep the graph bounded without folding unrelated records together.
-    assert len(declaration_modules) <= 18
+    # Reviewed source/assumption impact versions own a separate bounded module.
+    assert len(declaration_modules) <= 19
     largest_module = max(
         len(path.read_text(encoding="utf-8").splitlines()) for path in declaration_modules
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -14,6 +15,8 @@ from application.dto.provider_routing import (
     ProviderSuccess,
     RouterExecutionResult,
 )
+from application.dto.us_market import MarketGetSnapshotInput
+from application.ports.http_transport import HttpRequest, HttpResponse
 from application.services.us_market_context_service import USMarketContextService
 from application.services.us_market_data_service import (
     OP_BARS,
@@ -34,7 +37,7 @@ from domain.common.enums import (
     TradingSession,
     VendorId,
 )
-from domain.common.errors import DataContractError
+from domain.common.errors import DataContractError, NoMarketData
 from domain.instruments.models import Instrument
 from domain.market.models import MarketBar
 from domain.us_market.enums import USBarInterval
@@ -745,3 +748,217 @@ async def test_no_future_as_of() -> None:
     )
     with pytest.raises(DataContractError, match="future"):
         await ctx_svc.get_context(future)
+
+
+# These fixtures exercise the real adapter/router/cache/coordinator path without
+# endpoints or an OpenD process. Older AV EOD prices must remain visibly older.
+class _OvernightFallbackTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def send(self, request: HttpRequest) -> HttpResponse:
+        self.calls += 1
+        assert request.params["function"] == "GLOBAL_QUOTE"
+        return HttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=json.dumps(
+                {
+                    "Global Quote": {
+                        "01. symbol": "NVDA",
+                        "02. open": "122",
+                        "03. high": "123",
+                        "04. low": "121",
+                        "05. price": "122.5",
+                        "06. volume": "1400000",
+                        "07. latest trading day": "2026-10-02",
+                        "08. previous close": "119",
+                    }
+                }
+            ).encode(),
+        )
+
+
+class _OvernightFallbackContext:
+    def __init__(self, *, available: bool) -> None:
+        self.available = available
+        self.snapshots = 0
+        self.closed = 0
+
+    def get_market_state(self, codes: list[str]) -> tuple[bool, object]:
+        return True, [{"code": codes[0], "market_state": "OVERNIGHT"}]
+
+    def get_market_snapshot(self, codes: list[str]) -> tuple[bool, object]:
+        self.snapshots += 1
+        return True, [
+            {
+                "code": codes[0],
+                "update_time": "2026-10-04 20:59:50.000",
+                "overnight_price": "125" if self.available else None,
+                "overnight_high_price": "126",
+                "overnight_low_price": "124",
+                "overnight_volume": "10",
+                "prev_close_price": "119",
+            }
+        ]
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def _real_overnight_chain(*, moomoo: str, historical: bool = False) -> tuple[Any, ...]:
+    from test_provider_router import _make_router
+    from test_provider_router_engine import _engine, _settings, _StubAdapter
+    from test_us_tool_coordinator import _coordinator
+
+    from infrastructure.providers.us.alpha_vantage import AlphaVantageAdapter
+    from infrastructure.providers.us.codecs import us_bars_codec, us_quote_codec
+    from infrastructure.providers.us.moomoo_overnight import MoomooOvernightQuoteAdapter
+
+    class EmptyYahoo(_StubAdapter):
+        async def get_quote(
+            self, instrument: Instrument, as_of: datetime
+        ) -> ProviderSuccess[USQuote]:
+            self.call_count += 1
+            raise NoMarketData("fixture has no Yahoo quote")
+
+    cutoff = datetime(2026, 10, 4, 21, 0, tzinfo=NY)
+    clock = FixedClock(cutoff + timedelta(minutes=6) if historical else cutoff)
+    engine, _cache, _health, _clock, registry = _engine(
+        clock=clock, settings=_settings(_env_file=None, provider_retry_max_attempts=1)
+    )
+    transport = _OvernightFallbackTransport()
+    context = _OvernightFallbackContext(available=moomoo == "available")
+    yahoo = EmptyYahoo(VendorId.YFINANCE)
+    registry.register(VendorId.YFINANCE, yahoo)
+    registry.register(
+        VendorId.ALPHA_VANTAGE,
+        AlphaVantageAdapter(transport, api_keys=("fixture-only",), clock=clock),
+    )
+    registry.register(
+        VendorId.MOOMOO,
+        MoomooOvernightQuoteAdapter(
+            enabled=moomoo != "disabled",
+            host="127.0.0.1",
+            port=11111,
+            clock=clock,
+            context_factory=lambda host, port: context,
+        ),
+    )
+    router, _ = _make_router(
+        engine=engine,
+        chains={
+            (Market.US, DataCategory.MARKET_QUOTE): (VendorId.YFINANCE, VendorId.ALPHA_VANTAGE),
+        },
+    )
+    service = USMarketDataService(
+        router, clock, quote_codec=us_quote_codec(), bars_codec=us_bars_codec()
+    )
+    coordinator, *_ = _coordinator(data=service, clock=clock)
+    return service, coordinator, cutoff, transport, context, yahoo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moomoo", ["disabled", "missing_price"])
+async def test_overnight_av_fallback_disclosed_fresh_and_cached(moomoo: str) -> None:
+    service, coordinator, cutoff, transport, context, yahoo = _real_overnight_chain(moomoo=moomoo)
+    for disposition in (CacheDisposition.MISS, CacheDisposition.HIT):
+        result = await service.get_quote(_us_equity(), cutoff)
+        assert result.ok and result.value is not None and result.meta is not None
+        assert [w.code for w in result.warnings].count("OVERNIGHT_QUOTE_UNAVAILABLE") == 1
+        assert result.meta.cache_disposition is disposition
+        assert result.meta.vendor is VendorId.ALPHA_VANTAGE
+        assert result.meta.role is SourceRole.FALLBACK
+        assert result.meta.freshness is Freshness.STALE
+        assert result.meta.session is TradingSession.REGULAR
+        assert result.meta.as_of == cutoff
+        assert result.value.quote_at == datetime(2026, 10, 2, 16, 0, tzinfo=NY)
+        assert result.value.session is TradingSession.REGULAR
+        assert result.value.last == D("122.5")
+        assert result.value.previous_close == D("119")
+
+    envelope = await coordinator.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id="equity:US:NVDA", as_of=cutoff)
+    )
+    assert envelope.ok and envelope.data is not None
+    codes = [w.code for w in envelope.warnings]
+    assert codes.count("OVERNIGHT_QUOTE_UNAVAILABLE") == 1
+    assert {"CACHE_SERVED", "FALLBACK_US_SOURCE", "STALE_US_DATA"} <= set(codes)
+    assert envelope.data.quote_at == datetime(2026, 10, 2, 16, 0, tzinfo=NY)
+    assert envelope.data.session is TradingSession.REGULAR
+    assert envelope.data.display_price == D("122.5") and envelope.data.price_basis == "last"
+    assert envelope.sources[0].name == VendorId.ALPHA_VANTAGE.value
+    assert transport.calls == 1 and yahoo.call_count == 1
+    assert context.snapshots == (0 if moomoo == "disabled" else 1)
+    assert context.closed == context.snapshots
+
+
+@pytest.mark.asyncio
+async def test_verified_moomoo_overnight_fresh_and_cached_has_no_unavailable_warning() -> None:
+    service, coordinator, cutoff, transport, context, yahoo = _real_overnight_chain(
+        moomoo="available"
+    )
+    for disposition in (CacheDisposition.MISS, CacheDisposition.HIT):
+        result = await service.get_quote(_us_equity(), cutoff)
+        assert result.ok and result.value is not None and result.meta is not None
+        assert "OVERNIGHT_QUOTE_UNAVAILABLE" not in [w.code for w in result.warnings]
+        assert "OVERNIGHT_QUOTE_UNAVAILABLE" not in result.meta.warnings
+        assert result.meta.cache_disposition is disposition
+        assert result.meta.vendor is VendorId.MOOMOO
+        assert result.meta.freshness is Freshness.FRESH
+        assert result.value.session is TradingSession.OVERNIGHT
+        assert result.value.quote_at == datetime(2026, 10, 4, 20, 59, 50, tzinfo=NY)
+        assert result.value.last == D("125")
+    envelope = await coordinator.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id="equity:US:NVDA", as_of=cutoff)
+    )
+    assert envelope.ok and envelope.data is not None
+    assert "OVERNIGHT_QUOTE_UNAVAILABLE" not in [w.code for w in envelope.warnings]
+    assert envelope.data.session is TradingSession.OVERNIGHT
+    assert envelope.data.display_price == D("125") and envelope.data.price_basis == "last"
+    assert context.snapshots == context.closed == 1
+    assert transport.calls == yahoo.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_historical_overnight_cutoff_av_fallback_has_no_current_only_warning() -> None:
+    service, coordinator, cutoff, transport, context, yahoo = _real_overnight_chain(
+        moomoo="available", historical=True
+    )
+    for disposition in (CacheDisposition.MISS, CacheDisposition.HIT):
+        result = await service.get_quote(_us_equity(), cutoff)
+        assert result.ok and result.value is not None and result.meta is not None
+        assert "OVERNIGHT_QUOTE_UNAVAILABLE" not in [w.code for w in result.warnings]
+        assert result.meta.cache_disposition is disposition
+        assert result.meta.freshness is Freshness.STALE
+        assert result.meta.vendor is VendorId.ALPHA_VANTAGE
+        assert result.value.session is TradingSession.REGULAR
+        assert result.value.quote_at == datetime(2026, 10, 2, 16, 0, tzinfo=NY)
+    envelope = await coordinator.get_market_snapshot(
+        MarketGetSnapshotInput(instrument_id="equity:US:NVDA", as_of=cutoff)
+    )
+    assert envelope.ok and "OVERNIGHT_QUOTE_UNAVAILABLE" not in [w.code for w in envelope.warnings]
+    assert "STALE_US_DATA" in [w.code for w in envelope.warnings]
+    assert context.snapshots == 0
+    assert transport.calls == yahoo.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_overnight_av_fallback_tool_envelope_fresh_and_cached() -> None:
+    _service, coordinator, cutoff, transport, context, yahoo = _real_overnight_chain(
+        moomoo="missing_price"
+    )
+    for cached in (False, True):
+        envelope = await coordinator.get_market_snapshot(
+            MarketGetSnapshotInput(instrument_id="equity:US:NVDA", as_of=cutoff)
+        )
+        assert envelope.ok and envelope.data is not None
+        codes = [w.code for w in envelope.warnings]
+        assert codes.count("OVERNIGHT_QUOTE_UNAVAILABLE") == 1
+        assert ("CACHE_SERVED" in codes) is cached
+        assert {"FALLBACK_US_SOURCE", "STALE_US_DATA"} <= set(codes)
+        assert envelope.data.quote_at == datetime(2026, 10, 2, 16, 0, tzinfo=NY)
+        assert envelope.data.session is TradingSession.REGULAR
+        assert envelope.data.display_price == D("122.5") and envelope.data.price_basis == "last"
+        assert envelope.sources[0].name == VendorId.ALPHA_VANTAGE.value
+    assert transport.calls == yahoo.call_count == context.snapshots == context.closed == 1

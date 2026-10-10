@@ -1,6 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 const SUBJECT = "case_019ff000-0000-7000-8000-000000000081";
 const INSTRUMENT = "equity:US:TEST";
+const completion = { decision_recorded: true, observation_reviews_changed: false,
+  remaining_observation_reviews_at_review: 2, materials_status: "AVAILABLE",
+  materials_journal_id: "journal_synthetic_materials", materials: {
+    prepared_at: "2026-09-15T10:00:00Z", reference_count: 2, references_complete: true,
+    references: [{ kind: "ACCOUNT_SNAPSHOT", source_id: "snapshot_synthetic", version: null, as_of: "2026-09-11T10:00:00Z" }],
+    coverage: { MONITOR: "UNAVAILABLE" }, pending_observation_reviews: 2,
+  } };
 async function mock(page: Page, failFirst = false, receipt: "NOT_FOUND" | "RECORDED" = "NOT_FOUND") {
   const posts: Record<string, unknown>[] = [];
   const reads: string[] = [];
@@ -11,10 +18,10 @@ async function mock(page: Page, failFirst = false, receipt: "NOT_FOUND" | "RECOR
       posts.push(request.postDataJSON());
       if (!path.endsWith("/quick-review")) return route.fulfill({ status: 403, json: { detail: "Unexpected write" } });
       if (failFirst && posts.length === 1) return route.fulfill({ status: 500, json: { detail: "Synthetic unknown outcome; retry same intent" } });
-      return json({ data: { decision_id: "decision_synthetic_recorded", action: posts.at(-1)!.action, status: "RECORDED", review_due_at: posts.at(-1)!.review_due_at } });
+      return json({ data: { decision_id: "decision_synthetic_recorded", action: posts.at(-1)!.action, status: "RECORDED", review_due_at: posts.at(-1)!.review_due_at, completion } });
     }
     reads.push(path);
-    if (path.includes("/quick-review/submissions/")) return json({ data: receipt === "RECORDED" ? { status: "RECORDED", decision_id: "decision_recovered", action: "maintain", review_due_at: null } : { status: "NOT_FOUND" } });
+    if (path.includes("/quick-review/submissions/")) return json({ data: receipt === "RECORDED" ? { status: "RECORDED", decision_id: "decision_recovered", action: "maintain", review_due_at: null, completion } : { status: "NOT_FOUND" } });
     if (path === "/api/session") return json({ token: "synthetic-quick-review-session-token-0000000000000" });
     if (path === "/api/agent/status") return json({ enabled: false, configured: false, providers: [], models: [], components: {} });
     if (path === "/api/research") return json({ subjects: [{ subject: { subject_id: SUBJECT, title: "Synthetic Quick Subject", subject_type: "company", primary_instrument_id: INSTRUMENT, summary: "Synthetic research", status: "active", topic_tags: [], linked_subject_ids: [] }, state: { ok: true, data: { theses: [], latest_revisions: [], assumptions: [], invalidations: [], pending_candidates: [], trade_plan_versions: [], open_questions: [], watchlist_items: [] } } }].flatMap((item) => [{ ...item, subject: { ...item.subject, subject_id: "case_019ff000-0000-7000-8000-000000000082", title: "Other Subject Listed First" } }, item]) });
@@ -46,7 +53,8 @@ test("Quick Review pins evidence, recovers same intent and never resubmits on re
   expect(api.posts[0].baseline_decision_id).toBe("decision_synthetic_baseline");
   expect(api.posts[0].confirmed).toBe(true);
   await page.evaluate(() => window.dispatchEvent(new Event("tp-observation-data-changed")));
-  await expect(page.getByText(/your current review remains pinned/)).toBeVisible();
+  await expect(page.getByText("Your Decision was saved. Individual Observation reviews keep their own status.")).toBeVisible();
+  await expect(page.getByText(/your current review remains pinned/)).toHaveCount(0);
   expect(api.reads.filter((path) => path.endsWith("/quick-review"))).toHaveLength(1);
   await page.reload(); await expect(page.getByRole("button", { name: "Confirm No Action", exact: true })).toBeVisible();
   expect(api.posts).toHaveLength(2);
@@ -118,7 +126,12 @@ test("Recovered receipt shows outcome without resubmitting", async ({ page }) =>
   const api = await mock(page, true, "RECORDED"); await open(page);
   await page.getByRole("button", { name: "Confirm No Action", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry Same Review" })).toBeVisible();
+  const prepareReads = api.reads.filter((path) => path.endsWith("/quick-review")).length;
   await page.reload(); await expect(page.getByText(/Recorded NO_ACTION/)).toBeVisible();
+  await expect(page.getByText(/2 notes remained pending at the time/)).toBeVisible();
+  await expect(page.getByText(/retains disclosed evidence gaps/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Remaining Notes" })).toHaveAttribute("href", `/decision-workbench?subject_id=${SUBJECT}#notes`);
+  expect(api.reads.filter((path) => path.endsWith("/quick-review"))).toHaveLength(prepareReads);
   expect(api.posts).toHaveLength(1);
 });
 test("Thinking date and edited before-after draft open formal editor only on acceptance", async ({ page }) => {

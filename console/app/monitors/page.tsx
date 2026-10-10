@@ -343,6 +343,7 @@ export default function MonitorsPage() {
   const [instrumentFilter, setInstrumentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof MONITOR_STATUSES)[number]>("ACTIVE");
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
+  const [requestedBinding, setRequestedBinding] = useState<{ id: string; version: number } | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<MonitorModule>("overview");
   useAgentPageContext({
@@ -379,6 +380,11 @@ export default function MonitorsPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const requestedMonitor = params.get("monitor_id");
+    if (requestedMonitor) {
+      setSelectedMonitorId(requestedMonitor);
+      if (params.get("version")) setRequestedBinding({ id: requestedMonitor, version: Number(params.get("version")) });
+    }
     const tradePlanId = params.get("trade_plan_id");
     const tradePlanVersion = params.get("trade_plan_version");
     if (!tradePlanId || !tradePlanVersion) return;
@@ -642,6 +648,7 @@ export default function MonitorsPage() {
               <MonitorFlipSurface
                 flipped={editingSelected}
                 front={<div className="monitor-workspace-front">
+                  {requestedBinding?.id === String(selectedDefinition.monitor_id) && requestedBinding.version !== Number(selectedDefinition.version) && <ErrorNote>The linked Monitor version has changed. Review the current version before editing or pausing it.</ErrorNote>}
                   <div className="monitor-title-row">
                     <div className="symbol-tile large">{shortId(selectedDefinition.primary_instrument_id)}</div>
                     <div className="monitor-copy"><h2>{String(selectedDefinition.name ?? "Untitled Monitor")}</h2><span className="mono">{String(selectedDefinition.monitor_id)} · v{String(selectedDefinition.version ?? "—")}</span></div>

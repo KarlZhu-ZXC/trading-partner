@@ -2,12 +2,48 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, Protocol
 
-from mcp.types import Tool as MCPTool
+from interfaces.capabilities import CapabilityPolicy, CompactCapabilityRegistry
 
-from interfaces.mcp.tools.compact import CapabilityPolicy
+
+class CatalogTool(Protocol):
+    @property
+    def name(self) -> str: ...
+    @property
+    def description(self) -> str | None: ...
+    @property
+    def inputSchema(self) -> dict[str, Any]: ...
+    @property
+    def annotations(self) -> Any: ...
+
+
+@dataclass(frozen=True)
+class _CatalogTool:
+    name: str
+    description: str
+    inputSchema: dict[str, Any]
+    annotations: Any
+
+
+def registry_catalog(registry: CompactCapabilityRegistry) -> list[dict[str, Any]]:
+    """Expose complete canonical schemas, without an MCP listing projection."""
+    return capability_catalog(
+        [
+            _CatalogTool(
+                item.tool.name,
+                item.tool.description,
+                deepcopy(item.tool.parameters),
+                item.policy.annotations,
+            )
+            for item in registry.registered_capabilities
+        ],
+        registry.policies,
+    )
+
 
 _GROUPS = {
     "system_health": "System",
@@ -66,7 +102,7 @@ def _operations(schema: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def capability_catalog(
-    tools: list[MCPTool],
+    tools: Sequence[CatalogTool],
     policies: Mapping[str, CapabilityPolicy] | None = None,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []

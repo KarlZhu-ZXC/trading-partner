@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from application.ports.capability_usage import CapabilityUsageStore
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
 from application.ports.secret_redactor import SecretRedactor
@@ -22,6 +23,7 @@ from application.services.daily_equity_materialization_service import (
 )
 from application.services.data_quality_service import DataQualityService
 from application.services.decision_record_service import DecisionRecordService
+from application.services.decision_replay_service import DecisionReplayService
 from application.services.external_note_review_draft_service import (
     ExternalNoteReviewDraftService,
 )
@@ -34,17 +36,22 @@ from application.services.judgment_calibration_service import JudgmentCalibratio
 from application.services.judgment_scorecard_service import JudgmentScorecardService
 from application.services.market_tool_coordinator import MarketToolCoordinator
 from application.services.monitor_tool_coordinator import MonitorToolCoordinator
+from application.services.plan_workflow_query_service import PlanWorkflowQueryService
 from application.services.portfolio_tool_coordinator import PortfolioToolCoordinator
+from application.services.question_research_service import QuestionResearchService
 from application.services.quick_review_service import QuickReviewService
 from application.services.research_archive_service import ResearchArchiveService
 from application.services.research_changes_service import ResearchChangesService
 from application.services.research_context_builder import ResearchContextBuilder
+from application.services.research_links_query_service import ResearchLinksQueryService
 from application.services.research_search_service import ResearchSearchService
 from application.services.research_state_query_service import ResearchStateQueryService
 from application.services.research_subject_service import ResearchSubjectService
 from application.services.research_timeline_service import ResearchTimelineService
 from application.services.research_workflow_orchestrator import ResearchWorkflowOrchestrator
+from application.services.review_item_refresh_service import ReviewItemRefreshService
 from application.services.review_item_service import ReviewItemService
+from application.services.review_workspace_query_service import ReviewWorkspaceQueryService
 from application.services.risk_tool_coordinator import RiskToolCoordinator
 from application.services.technical_tool_coordinator import TechnicalToolCoordinator
 from application.services.thesis_revision_service import ThesisRevisionService
@@ -99,12 +106,18 @@ class ApplicationServices:
     broker_order_preview: CashSweepShadowService
     broker_orders: BrokerOrderService
     review_items: ReviewItemService
+    review_item_refresh: ReviewItemRefreshService
+    review_workspace_query: ReviewWorkspaceQueryService
     attention: AttentionQueryService
     external_notes: ExternalNoteSyncService
     external_note_reviews: ExternalNoteReviewService
     external_note_review_drafts: ExternalNoteReviewDraftService
     view_reviews: ViewReviewService
     research_changes: ResearchChangesService
+    research_links: ResearchLinksQueryService
+    question_research: QuestionResearchService
+    plan_workflow: PlanWorkflowQueryService
+    decision_replay: DecisionReplayService
     quick_review: QuickReviewService
     today_review: TodayReviewService
     weekly_review: WeeklyReviewService
@@ -120,3 +133,4 @@ class RuntimeContext:
     id_generator: IdGenerator
     secret_redactor: SecretRedactor
     telemetry: Telemetry = NOOP_TELEMETRY
+    capability_usage: CapabilityUsageStore | None = None

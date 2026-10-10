@@ -53,20 +53,40 @@ def render_agent_answer(value: AgentAnswerEnvelope) -> str:
         return "".join(block.text for block in value.blocks)
     sections: list[str] = []
     for block in value.blocks:
-        lines = [f"## {_HEADINGS[block.kind]}", "", block.text]
-        metadata: list[str] = []
-        if block.as_of:
-            metadata.append(f"as_of={block.as_of}")
-        if block.basis:
-            metadata.append(f"basis={block.basis}")
-        if block.evidence_refs:
-            metadata.append(f"evidence={', '.join(block.evidence_refs)}")
+        lines = [answer_block_heading(block), "", block.text]
+        metadata = answer_block_metadata_line(block)
         if metadata:
-            lines.extend(("", f"`{' · '.join(metadata)}`"))
-        if block.source_urls:
-            lines.extend(("", *[f"- {url}" for url in block.source_urls]))
+            lines.extend(("", metadata))
+        source_lines = answer_block_source_lines(block)
+        if source_lines:
+            lines.extend(("", *source_lines))
         sections.append("\n".join(lines))
     return "\n\n".join(sections)
+
+
+def answer_block_heading(block: AgentAnswerBlock) -> str:
+    """Return the exact heading used by the canonical answer renderer."""
+
+    return f"## {_HEADINGS[block.kind]}"
+
+
+def answer_block_metadata_line(block: AgentAnswerBlock) -> str | None:
+    """Return the exact metadata line used by the canonical answer renderer."""
+
+    metadata: list[str] = []
+    if block.as_of:
+        metadata.append(f"as_of={block.as_of}")
+    if block.basis:
+        metadata.append(f"basis={block.basis}")
+    if block.evidence_refs:
+        metadata.append(f"evidence={', '.join(block.evidence_refs)}")
+    return f"`{' · '.join(metadata)}`" if metadata else None
+
+
+def answer_block_source_lines(block: AgentAnswerBlock) -> tuple[str, ...]:
+    """Return the exact source URL lines used by the canonical renderer."""
+
+    return tuple(f"- {url}" for url in block.source_urls)
 
 
 def parse_research_answer(value: str) -> AgentAnswerEnvelope:
@@ -112,6 +132,9 @@ def agent_answer_envelope_json(value: AgentAnswerEnvelope) -> str:
 
 __all__ = [
     "agent_answer_envelope_json",
+    "answer_block_heading",
+    "answer_block_metadata_line",
+    "answer_block_source_lines",
     "parse_agent_answer",
     "parse_research_answer",
     "render_agent_answer",

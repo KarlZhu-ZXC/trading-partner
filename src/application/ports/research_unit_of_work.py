@@ -22,6 +22,10 @@ from application.ports.journal_repository import JournalRepository
 from application.ports.monitor_lifecycle_reader import MonitorLifecycleReader
 from application.ports.open_question_repository import OpenQuestionRepository
 from application.ports.research_event_repository import ResearchEventRepository
+from application.ports.research_links import (
+    EvidenceImpactRepository,
+    ResearchSourceRepository,
+)
 from application.ports.research_report_repository import ResearchReportRepository
 from application.ports.research_search_index import ResearchSearchIndex
 from application.ports.research_subject_repository import ResearchSubjectRepository
@@ -59,6 +63,12 @@ class ResearchUnitOfWork(Protocol):
 
     @property
     def questions(self) -> OpenQuestionRepository: ...
+
+    @property
+    def evidence_impacts(self) -> EvidenceImpactRepository: ...
+
+    @property
+    def research_sources(self) -> ResearchSourceRepository: ...
 
     @property
     def watchlist(self) -> WatchlistRepository: ...

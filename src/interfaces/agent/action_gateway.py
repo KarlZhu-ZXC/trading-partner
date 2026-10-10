@@ -26,10 +26,11 @@ from domain.agent.enums import AgentChannel
 from domain.agent.models import AgentPendingAction
 from domain.common.errors import TradingPartnerError
 from interfaces.agent.capability_gateway import compact_tool_result
-from interfaces.mcp.tools.compact import (
+from interfaces.capabilities import (
     CapabilityEffect,
     CompactCapabilityRegistry,
 )
+from interfaces.capabilities.usage import capability_usage_source
 
 
 class AgentActionGateway:
@@ -222,12 +223,13 @@ class CompactAgentActionOperationGateway:
                 "Agent action operation policy is not writable",
                 code="AGENT_ACTION_NOT_ALLOWED",
             )
-        raw = await self._registry.invoke_validated(
-            capability,
-            operation,
-            dict(arguments),
-            enforce_confirmation=False,
-        )
+        with capability_usage_source("AGENT"):
+            raw = await self._registry.invoke_validated(
+                capability,
+                operation,
+                dict(arguments),
+                enforce_confirmation=False,
+            )
         if isinstance(raw, Mapping):
             error_code: object = raw.get("error_code")
             if error_code is None and isinstance(raw.get("error"), Mapping):

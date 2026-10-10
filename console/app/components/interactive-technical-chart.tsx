@@ -9,8 +9,10 @@ import type {
   KLineData,
   Styles,
 } from "klinecharts";
-import { chartStructures, type ChartStructure } from "../lib/chart-research-context";
+import { chartStructures, hasDateLabelTimes, type ChartStructure } from "../lib/chart-research-context";
+import { smcDisclosures } from "../lib/technical-disclosures";
 import { Button, Input, Select } from "./ui/controls";
+import { Disclosure } from "./ui";
 import styles from "../styles/technical-chart.module.css";
 
 export type TechnicalWireBar = {
@@ -363,10 +365,12 @@ export function InteractiveTechnicalChart({ scene, onSelectStructure, onContextR
   const [drawingCount, setDrawingCount] = useState(0);
   const [showSmc, setShowSmc] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [cutoff, setCutoff] = useState("");
+  const [requestedCutoff, setCutoff] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const data = useMemo(() => chartData(scene.bars).filter((bar) => !cutoff || bar.timestamp <= Date.parse(cutoff)), [scene.bars, cutoff]);
   const timeframe = scene.timeframes.find((item) => item.interval === scene.bars_interval);
+  const dateLabelTimes = timeframe ? hasDateLabelTimes(timeframe) : false;
+  const cutoff = dateLabelTimes ? "" : requestedCutoff;
+  const data = useMemo(() => chartData(scene.bars).filter((bar) => !cutoff || bar.timestamp <= Date.parse(cutoff)), [scene.bars, cutoff]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -477,12 +481,13 @@ export function InteractiveTechnicalChart({ scene, onSelectStructure, onContextR
   }
 
   const smartMoney = timeframe?.smart_money;
+  const limitations = smcDisclosures(smartMoney?.limitations ?? []);
   const structures = timeframe ? chartStructures(timeframe, cutoff || undefined) : [];
   const selected = structures.find((row) => row.id === selectedId);
   return (
     <section className={styles.workspace} aria-label="Interactive Technical Chart">
       <div className={styles.toolbar}>
-        <label><span>Historical Cutoff (UTC)</span><Input type="datetime-local" value={cutoff.replace(/Z$/, "")} onChange={(event) => { setCutoff(event.target.value ? `${event.target.value}Z` : ""); setSelectedId(null); onContextReset?.(); }} /></label>
+        <label><span>Historical Cutoff (UTC)</span><Input type="datetime-local" disabled={dateLabelTimes} value={cutoff.replace(/Z$/, "")} onChange={(event) => { setCutoff(event.target.value ? `${event.target.value}Z` : ""); setSelectedId(null); onContextReset?.(); }} /></label>
         <label><span>Chart Style</span><Select value={chartType} onChange={(event) => setChartType(event.target.value as CandleType)}>{CHART_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
         <div className={styles.indicators} aria-label="Chart Indicators">
           <span>Indicators</span>
@@ -507,14 +512,20 @@ export function InteractiveTechnicalChart({ scene, onSelectStructure, onContextR
         <span>Snapshot Trend {timeframe?.trend_state ?? "unknown"}</span>
         <span>Snapshot SMC {smartMoney?.trend ?? "unavailable"}</span>
         <span>{drawingCount} {drawingCount === 1 ? "drawing" : "drawings"}</span>
-        {smartMoney && !smartMoney.atr_200_ready && <span>{smartMoney.limitations.join(", ")}</span>}
       </div>
+      {limitations.length > 0 && <div className={styles.help} role="note" aria-label="SMC Limitations">
+        <p>SMC Limitations</p>
+        <ul>{limitations.map((limitation) => <li key={limitation.code}>
+          <span>{limitation.message}</span>
+          <Disclosure title="Source Detail" variant="compact"><code>{limitation.code}</code></Disclosure>
+        </li>)}</ul>
+      </div>}
       <p className={styles.help}>Algorithm {scene.algorithm_version ?? "unavailable"} · SMC {smartMoney?.algorithm_version ?? "unavailable"} · Source interval {scene.bars_interval} · Snapshot {scene.as_of ?? "unavailable"}. Derived SMC is locked; user drawings are editable and session-only.</p>
       {cutoff && <p className={styles.help}>Cutoff filters confirmation times and bars only. Zone/liquidity status belongs to the current snapshot; historical invalidation, mitigation and sweep status cannot be reconstructed. This is not a historical backtest.</p>}
       <div className={styles.inspector}>
         <label><span>Inspect Structure</span><Select value={selectedId ?? ""} onChange={(event) => setSelectedId(event.target.value || null)}><option value="">Select an overlay or structure</option>{structures.map((row) => <option key={row.id} value={row.id}>{row.kind} · {row.occurred_at}</option>)}</Select></label>
-        {selected && <div><p>{selected.kind} · {selected.values}</p><p>Occurred {selected.occurred_at} · Confirmed {selected.confirmed_at}</p><p>Status at snapshot: {selected.status}</p>{onSelectStructure && <Button onClick={() => onSelectStructure(selected, cutoff || null)}>Use as Research Context</Button>}</div>}
-        {structures.length === 0 && <p>No confirmed structures at this cutoff.</p>}
+        {selected && <div><p>{selected.kind} · {selected.values}</p><p>{dateLabelTimes ? "Occurrence label" : "Occurred"} {selected.occurred_at} · {dateLabelTimes ? "Confirmation label" : "Confirmed"} {selected.confirmed_at}</p><p>Status at snapshot: {selected.status}</p>{onSelectStructure && <Button onClick={() => onSelectStructure(selected, cutoff || null)}>Use as Research Context</Button>}</div>}
+        {structures.length === 0 && <p>{dateLabelTimes ? "No structures in this snapshot." : "No confirmed structures at this cutoff."}</p>}
       </div>
       {error && <p className={styles.error}>{error}</p>}
       <p className={styles.help}>Right-click a user drawing to remove it. Drawings remain in the current chart session; changing Instrument, period, basis, algorithm version or cutoff starts a fresh canvas. Chart indicators are visual aids; the receipt below remains the sourced technical record.</p>

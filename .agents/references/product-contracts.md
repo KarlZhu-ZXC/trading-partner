@@ -5,7 +5,7 @@ relevant to the affected behavior; paths in this document are repository-relativ
 
 ## Implemented boundary
 
-The public `mcp_vnext_shadow` v12 surface has nine entry tools over the unchanged
+The public `mcp_vnext_shadow` v14 surface has nine entry tools over the unchanged
 24-capability/106-operation Registry. `capability_discover` reveals a compact catalog,
 operation names, or one exact original input schema plus `call_tool`. `capability_read`
 routes only READ_DURABLE/READ_PROVIDER capabilities; `capability_write` routes only
@@ -14,7 +14,8 @@ name as confirmation. Neither gateway accepts the six dedicated tools:
 `instrument_resolve`, `research_judgment_propose`, `research_judgment_confirm`,
 `external_state_sync`, `broker_order_manage`, and `technical_render_chart`.
 Those preserve their own annotations and handlers. Discovery never invokes business
-services or grants authorization. Removed public names remain capability identities
+services or grants authorization. Optional v13 `category` filters only the catalogue;
+no-argument discovery remains complete, and category cannot combine with tool/operation. Removed public names remain capability identities
 for durable records, Console calls and next-read hints, never callable MCP aliases.
 Full inputs retain original nesting under gateway `arguments`, closed validation,
 defaults, actor/version gates and result compaction. Console/Agent retain the full
@@ -85,6 +86,19 @@ with their short window; this is not a strict FIFO job queue.
   `INTERRUPTED`; it never implies that an unknown order is safe to retry. A launched
   Python orchestrator dispatches project child modules through its current
   `sys.executable`; it must not rediscover `uv` through launchd's minimal `PATH`.
+  Heartbeat failure cancels and drains the active operation and attempts an
+  INTERRUPTED receipt with a safe code. A finish failure triggers one read-back,
+  never another operation or terminal write. Only a matching attempt, owner,
+  status and result code can retain the operation's returned value; unresolved
+  leases remain for explicit expired-run recovery.
+- Shared-registry usage is a best-effort local diagnostic sidecar under
+  `RUNTIME_ROOT/data/diagnostics/`, not business state or a database migration.
+  Persist only canonical capability/operation identities, closed channel/outcome,
+  UTC day, counts and bounded millisecond durations. Unknown names collapse to
+  fixed sentinels; arguments, results, identifiers and exception text never enter
+  it. Missing-file export never initializes storage. A recorder failure must never
+  retry an invocation or replace its result. No observed call is not proof of non-use;
+  direct application/CLI calls and pre-dispatch rejection are outside this scope.
 - Optional OpenTelemetry is disabled by default and accepts only allowlisted `tp.*`
   attributes. Prompts, payloads, URLs, credentials, headers, exception text, and stack
   traces must never enter spans.
@@ -173,6 +187,13 @@ The confirmed Decision stores that exact revision through optional
 `external_note_revision_id`; the revision must exist, belong to a Note whose primary
 Instrument matches the Research Subject, and have been observed no later than the
 Decision time. Historical Decisions without the field remain readable.
+Journal's **Record Independent Decision** accepts a FULL revision without a model
+interpretation. The owner chooses an exact matching active Research Subject and
+writes an initially empty rationale in the existing confirmation dialog. Opening
+this path never calls ensure/deep-review/analysis or changes source review status.
+It pins the exact revision and cannot overwrite an open Decision draft. The
+repository rejects SUMMARY_ONLY references and compares aware observation time
+against `decided_at`; an independent Decision never fabricates source adoption.
 `SUMMARY_ONLY` list text is change-detection evidence only: it must not be sent to
 the model or adopted, and eviction of a prior FULL editor cache must not create a
 false downgrade revision when the visible summary is unchanged.
@@ -244,6 +265,11 @@ window, so later same-day data changes never enqueue a second summary.
 Judgment Scorecard S1 locks one exact Thesis revision, adds deterministic Catalyst
 outcome calibration to the existing eight discipline cards, preserves S0 runs, has
 no aggregate score, and cannot mutate research state, a position, or an order.
+S1-v3 discloses exact-revision assessment and reviewed Impact cohorts separately,
+including distinct sources, stance/link denominators, overlap, cutoff and missing
+source metadata. Incomplete/bounded Impact history remains unknown. Historical
+S0/S1-v1/v2 records retain their original facts and interpretation.
+
 
 Candidate Propose → Confirm / Reject / Withdraw remains mandatory. Codex must not
 autonomously choose confirm or reject. When the user explicitly states the exact
@@ -306,6 +332,44 @@ require an ACTIVE Research Subject, and linked ACTIVE/PAUSED Monitors block Subj
 or live-Plan retirement with `RESEARCH_STATE_CONFLICT`; callers must archive those
 Monitor definitions explicitly.
 
+**Reviewed evidence impacts and question research**
+
+The existing research-state Candidate union adds `evidence_impact` create/revise/
+retract. A confirmed impact pins a scoped durable source, Thesis revision and active
+assumption; revalidate source time/scope and current target at confirm. Effects are
+append-only link versions, never Thesis/Decision/position/order mutations. Preserve
+one active source/assumption pair, expected-version CAS, candidate provenance and
+idempotent recovery. Retraction can retain unavailable source IDs and records its
+reason; no source absence deletes history. Research Links samples one read cutoff;
+a current impact confirmed afterward is omitted with PARTIAL coverage, without
+substituting an older current version. Observations require FULL content mode,
+but mixed-speaker notes are not reattributed to USER. Monitor references use exact
+run/monitor/rule plus historical definition scope, never the current definition.
+
+OpenQuestion metadata (requirements/deadline/progress/source/Decision refs) shares
+that Candidate lifecycle. Tracked answers require criteria acknowledgment and valid
+sources; Decision links must be same-Subject and temporally follow the answer.
+Question version CAS protects all mutations, while legacy rows default to version 1.
+Due reminders use OPEN_QUESTION_DUE only through explicit queue materialization;
+failed/bounded scans cannot auto-resolve unseen reminders. All new reads are durable
+and no model/private-content call is implied. Implementation/usage contract:
+`docs/guide/evidence-links-and-research-questions.md`.
+
+Decision Replay is a separate passive Console projection at exact `decided_at`,
+not Changes Since Review's recorded-time baseline. Validate the Decision's Subject,
+retain exact pinned revisions, and reject post-cutoff fact/recorded/confirmation
+times. Later assumption retirement and impact retraction must not rewrite earlier
+state. Today's Instrument-to-Observation mapping is insufficient historical scope;
+require an exact Decision or then-confirmed impact reference. Legacy question text
+and creation time may establish existence, but current mutable status, requirements,
+progress and answers must not leak into the past. Missing historical state is
+UNAVAILABLE, bounded scans are PARTIAL, and no read materializes records.
+
+Evidence comparison is a presentation of reviewed associations, not a vote or an
+automatic judgment. Research templates only fill editable question/requirements
+drafts; preserve explicit replacement and Candidate confirmation. Original source
+URLs come from stored metadata, never generated from provider names or opaque IDs.
+
 **Console Changes Since Review**
 
 `GET /api/research/{subject_id}/changes` is a durable-only application projection.
@@ -350,11 +414,26 @@ review_due_at through DecisionRecordService's NORMAL-mode, user-actor and unique
 gates. Retry retrieves the matching completed intent; no reload-triggered write.
 Recheck source fingerprint before append; never silently adopt a new baseline.
 General review does not adopt or close Observation reviews or authorize orders.
+The server prepares a versioned reference-only `review_materials` manifest: exact
+baseline, formal versions, source revisions, all consulted account snapshot IDs,
+coverage and preparation time. Preparation does not prove reading or adoption.
+At most 500 deduplicated references are stored; larger sets disclose their full
+count and partial status and cannot use maintain. An explicit follow-up can retain
+that partial context. DecisionRecordService appends the manifest as a linked
+`review_materials_v1` Journal NOTE in the same research UoW as the Decision. A
+material-write failure rolls back the Decision; no production migration is needed.
+Completion and status reads recover the same saved manifest, disclose unavailable
+legacy material receipts, and report pending-note count as of preparation rather
+than claiming current source closure. Several consulted snapshots remain several
+references, never an arbitrarily chosen consolidated portfolio.
 Read-only `/quick-review/submissions/{idempotency_key}` supports recovery of the exact
 recorded Subject/key. Browser session storage retains only bounded user input plus
 an unresolved original request for 24 hours, never arbitrary provider/note payloads.
 The saved context token is a read-context identity, not a Pending Action token.
 Reload may read status only; retry/abandon remains explicit and preserves the key.
+An unresolved saved attempt is checked before preparing a new context. A recovered
+Decision shows its own material receipt rather than a newly prepared card. Source
+or queue failures never turn a successful Decision into a retry of that write.
 Thesis previews use the current PRIMARY revision, remain editable, and require
 matching target/version before prefilling the existing editor.
 
@@ -400,12 +479,43 @@ or model call is part of these operations.
   `insider_activity`, `company_updates`, `events`, or `live_news`)
 - `us_get_facts` (`macro`, `sentiment`, `prediction_market`)
 
+US quote/bar adapters verify the response symbol against the exact requested
+Provider alias before assigning an Instrument ID. US equity/ETF/index daily facts
+use XNYS closes, including early closes, with an application historical schedule
+starting in 1990 and the library default future bound. Date-only Alpha Vantage
+GLOBAL_QUOTE facts are REGULAR closing observations, not post-market trades. An unavailable or invalid
+calendar fails closed. Unexpected non-session daily rows retain a conservative
+16:00 New York cutoff and carry `US_NON_SESSION_DAILY_BAR`.
+The unified market entry pins its first sampled `as_of` across US delegation,
+Instrument reads and Provider requests. Yahoo weekly/monthly bars aggregate validated,
+cutoff-visible daily facts in local calendar periods; timestamps retain the last
+included daily fact's time/date convention, and first/last periods may be partial. `CALENDAR_PERIOD_AGGREGATED_FROM_DAILY_BARS` discloses this policy.
+An overnight-policy success from a non-OVERNIGHT fallback carries
+`OVERNIGHT_QUOTE_UNAVAILABLE`, including cache hits. Preserve its actual session.
+An OPEN configured Provider circuit is retryable unavailability, retaining
+`SKIPPED_CIRCUIT_OPEN`; it must not be misreported as missing configuration.
+
 **Phase 3A commodity futures facts**
 
 - The existing `instrument_resolve`, `market_data_get`, `technical_get_snapshot`,
   and `technical_render_chart` tools support Yahoo
   continuous futures `GC=F`, `MGC=F`, `SI=F`, `HG=F`, `PL=F`, and `PA=F` through
   `future:US:*` IDs. Futures are unadjusted and always disclose non-spot and roll risk.
+- Yahoo GC=F and supported specific CME metal daily rows use a disclosed conservative
+  17:00 New York availability bound on the ending trade date. This is not an exact
+  holiday close or a proven last-trade/settlement timestamp. Other seeded continuous
+  metals retain their native New York date labels and are withheld until the next
+  local date, with completion/coverage explicitly unknown. Unsupported roots have
+  typed daily-bar unavailability. Date-only uncertain history cannot synthesize a
+  quote time; timestamped metadata/minute recovery remains available. Known daily-
+  derived quotes disclose their availability-bound timestamp. Futures-only quote
+  and bar cache fingerprints version this completion policy; US/KR stock keys stay
+  unchanged. Technical and Console warnings explain the selected policy in words.
+  Daily uniqueness uses exchange-local dates, so differing native timestamps cannot
+  double-count one daily fact. Date-label sources propagate an SMC limitation to
+  every derived timeframe and PNG. Their occurrence/confirmation fields remain
+  labels, not availability instants; historical chart cutoff and cutoff-based
+  Research handoffs are unavailable, while current-snapshot review remains usable.
 - Futures routing is asset-aware: Yahoo is primary; timestamped Sina quotes are a
   best-effort fallback for GC/SI/HG; Eastmoney daily bars are a best-effort fallback
   for all six metals and may be aggregated to weekly/monthly. There is no intraday
@@ -423,10 +533,18 @@ or model call is part of these operations.
 - Dukascopy follows the current keyless `dukascopy-node` Jetta strategy: minute/
   hour/day data use UTC day/month/year buckets, up to 10 requests run per batch,
   and batches pause for one second. Completed buckets are cached; active `from`
-  buckets are not. `DUKASCOPY_API_KEY` is legacy-fallback-only.
+  buckets are not. `DUKASCOPY_API_KEY` is legacy-fallback-only. Public bars retain
+  native UTC opening timestamps and expose final OHLC only after their 1m/60m/1d
+  interval completes at or before `as_of`, including legacy fallback. The
+  separately disclosed minute-close quote proxy retains its existing semantics.
+  Immutable buckets enter cache only after candle validation, so a malformed
+  response cannot poison later explicit reads. Legacy quotes require exactly one
+  matching explicit Instrument identity; a sole wrong row is rejected.
 - Dukascopy OTC quote DTOs expose `display_price` plus `price_basis`; bid/ask
   observations normally use their midpoint while `last` stays null. Never
-  relabel a quote midpoint as a traded price.
+  relabel a quote midpoint as a traded price. The spot/future basis path also
+  labels a midpoint derived from bid/ask as `MID`, so the price-basis mismatch
+  gate remains effective against a futures `LAST` observation.
 - During the Dukascopy weekend closure, current XAUUSD price rules may use
   Binance PAXG/USDC spot and current LIGHT.CMD-USD/USOIL rules may use
   Hyperliquid XYZ CL/USDC. The former is tokenized gold; the latter is a HIP-3
@@ -551,14 +669,21 @@ historical summaries and Review records are not rewritten.
 Cycle action and reserve `operation` for MCP dispatch. The adapter maps the field
 back to the existing domain input. Writes still require explicit confirmation,
 idempotency, and the existing expected-version checks; Agent action permissions
-are unchanged.
+are unchanged. Console Preview, Apply and durable receipt recovery verify the
+reviewed note and authorization note exactly, including explicit null notes,
+before clearing the draft or resolving an uncertain result. Broker order previews prefer BUY ask and SELL bid for quote
+references. If unavailable, last then the opposite quote side remain context-only
+fallbacks with `BROKER_QUOTE_REFERENCE_FALLBACK`, never an execution guarantee.
+Quote freshness depends on quote age, not fallback disclosure. Limit/stop estimate
+precedence and all order/account gates are unchanged. Idempotent preview receipts
+preserve their original stored values and existing duplicate-warning contract.
 
 - `research_workflow_run` (`deep_dive`, `catalyst_review`,
   `a_share_market_review`, `us_market_review`, `portfolio_review`, `peer_comparison`,
   `trade_retro`)
 
 QuantConnect/LEAN code generation, backtesting, and result import are removed.
-The public schema is `mcp-vnext-shadow-v12`; `research_workflow_run` rejects the
+The public schema is `mcp-vnext-shadow-v14`; `research_workflow_run` rejects the
 retired `historical_validation_prepare` and `historical_validation_import` operations.
 Existing private artifacts are historical files only, not a runtime capability.
 
@@ -588,6 +713,17 @@ items, plus `ACCEPTED`/`DISPUTED`/`RESOLVED` dispositions for exact deterministi
 Finding keys. A disputed Finding requires a note. Stale writers remain
 `TRADE_RETRO_REVIEW_VERSION_CONFLICT`; there is no hidden merge. `export` includes
 the latest review and records that review version while retaining the original Run.
+Finding reviews may additionally choose `QUESTION`, `NO_FOLLOWUP`, or `DEFER`.
+QUESTION pins one same-scope confirmed Question ID/version; stale version or an
+unrelated Subject is rejected. NO_FOLLOWUP requires a note. Legacy reviews omit
+these optional fields. They persist within the existing versioned finding-review
+JSON, including export and idempotency comparison; no migration or automatic
+Question creation/closure is introduced. Console prepares new Question drafts in
+Research and returns to a separately authorized Retro link after confirmation.
+The explicit coverage projection reads the original trade references and eligible
+pre-period snapshot. Current annotation counts and in-period Plan versions remain
+separate, never retrospective evidence of prior adherence.
+
 
 Phase 4B `portfolio_get/trade_cycles` is a rebuildable, durable-only,
 long-only projection over normalized Account Transactions. It groups by exact
@@ -611,7 +747,19 @@ the Broker fact or authorizes an order.
 `research_memory_append/trade_cycle_override` appends a user-confirmed split/merge/
 relink revision only after `portfolio_get/trade_cycle_override_preview`; the
 algorithm projection remains retained and affected metrics fail closed until they
-can be recomputed. `research_memory_append/behavior_review` records one exact
+can be recomputed. Console Preview is bound to the exact draft and durable scope;
+late responses after edits cannot authorize Apply, which reuses the reviewed
+payload and key. Duplicate clicks are blocked, and failed requests retain the
+reviewed draft for explicit retry. Apply validates the exact saved revision
+identity, version, key and member references before clearing the draft or refreshing.
+An unconfirmed response retains the original reviewed request and explains that
+it may already have been recorded; no automatic resubmission occurs. Editing while
+Apply is unresolved retains the old body/key and the new draft separately, and
+blocks another Preview. Retry is explicit and requires the original durable scope;
+changed scope offers inspection guidance and only an exact durable receipt can
+resolve the uncertainty. This state is in mounted-editor memory, with no promise
+of recovery across navigation or reload.
+`research_memory_append/behavior_review` records one exact
 weekly/monthly/quarterly cohort and derives NEW/PERSISTENT/RESOLVED/RECURRED only
 from complete durable action-source reads. `portfolio_get/journal_timeline`
 merges durable Decisions, linked order intents/results, and Broker activities.
@@ -627,6 +775,21 @@ auto-resolve an item. A failed or unavailable source read must never auto-resolv
 If a closed source condition disappears and later recurs, the same item reopens with a
 higher occurrence count. The Journal Reviews workflow consumes this queue while the existing
 Research, Monitor, Agenda, Retro, and Scorecard pages remain intact.
+Overview, ReviewItem list and scoped Journal GETs must never apply/reconcile a
+ReviewItem batch. The explicit Console `POST /api/review-items/refresh` command
+requires the session token and exact `refresh_review_items` confirmation. It collects
+only durable sources and preserves existing completeness/closure rules. Live
+projections and source coverage remain available before materialization. A read
+must not expire a Candidate; pending summaries count persisted PROPOSED state.
+Explicit refresh scans each source with stable private pagination, twice, within a
+5,000-row bound. The final overflow probe retains gap/degradation semantics. Ordered
+identities and frozen payload fingerprints must agree before that source can close
+absent items; failed, changing or truncated sources have no closure authority.
+This is a bounded, per-source observation window, not a cross-source DB snapshot.
+Reconciliation runs once, then a safe `REVIEW_ITEMS_REFRESHED` audit receipt stores
+source counts, statuses, warnings and times. Receipt persistence failure is PARTIAL
+and never retries reconciliation. Overview reads the last persisted receipt without
+materializing or refreshing; displayed rows remain separately bounded.
 Each occurrence also retains its own opened/last-seen, first-acknowledged, and closure
 timestamps plus MANUAL/AUTO resolution mode. Queue metrics must use occurrence history,
 not lifetime first_seen timestamps or a paginated item list; zero-sample medians/rates
@@ -998,6 +1161,21 @@ candlestick/volume/RSI chart. Hosts that do not promote MCP image blocks must em
 the returned `chart_artifact.display_markdown` verbatim. Technical outputs
 remain `historically_validated=false`: they are derived facts, not forecasts,
 strategies, trade signals, or execution authority.
+Nonempty weekly histories shorter than 20 bars retain available technical facts
+with `TECHNICAL_HISTORY_INCOMPLETE`; unavailable metrics remain null and trend state
+is `insufficient_data` until EMA20 and SMA50 are available. Daily minimum history
+remains 20 bars. SMC retains structure analysis but skips FVG percentage deltas when
+an evaluated middle bar has a nonpositive open, disclosing
+`SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE` without inventing a gap.
+Weekly snapshot/chart boundaries carry `TECHNICAL_WEEKLY_BOUNDARIES_MAY_BE_PARTIAL`
+and `SMC_CALENDAR_WEEK_BOUNDARIES_MAY_BE_PARTIAL`: confirmation uses the available
+bar prefix, so structures involving an unfinished boundary week are provisional.
+Do not label these calendar periods completed exchange weeks. Console exposes
+all SMC limitations even when ATR200 is ready, along with envelope source notes;
+standalone PNG charts include readable SMC limitation guidance.
+The explicit Chart-to-Research handoff retains SMC and source caveats in reviewed
+draft provenance through bounded optional version-1 session metadata; legacy
+contexts remain readable and no research write is automatic.
 `tp_technical_v3` additionally embeds independent deterministic `tp_smc_v1` output:
 confirmed internal/swing HH/HL/LH/LL, close-through BOS/CHoCH, Order Blocks, FVGs,
 EQH/EQL liquidity, and premium/equilibrium/discount zones. Preserve occurrence and

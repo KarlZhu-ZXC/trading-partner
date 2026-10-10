@@ -17,6 +17,7 @@ def test_entity_id_prefix_frozen_values() -> None:
         "thesis",
         "rev",
         "evidence",
+        "impact",
         "report",
         "event",
         "decision",

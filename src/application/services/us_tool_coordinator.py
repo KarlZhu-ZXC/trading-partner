@@ -236,6 +236,30 @@ _OVERNIGHT_QUOTE_UNAVAILABLE = WarningInfo(
     ),
     details={},
 )
+_NON_SESSION_DAILY_BAR = WarningInfo(
+    code="US_NON_SESSION_DAILY_BAR",
+    message=(
+        "A provider daily row is dated outside XNYS sessions; its conservative "
+        "16:00 ET cutoff does not establish a regular exchange session."
+    ),
+    details={},
+)
+_CALENDAR_PERIOD_AGGREGATION = WarningInfo(
+    code="CALENDAR_PERIOD_AGGREGATED_FROM_DAILY_BARS",
+    message=(
+        "Weekly/monthly OHLCV aggregates completed daily bars within the requested "
+        "range and cutoff; the first or last period may be partial."
+    ),
+    details={},
+)
+_LATEST_ADJUSTED_BAR_UNAVAILABLE = WarningInfo(
+    code="LATEST_ADJUSTED_BAR_UNAVAILABLE",
+    message=(
+        "The latest raw daily row has no finalized adjusted close and was omitted; "
+        "adjusted facts use the preceding available bars."
+    ),
+    details={},
+)
 _GENERIC_CODE_MESSAGE = "US market data warning."
 
 _KNOWN_WARNINGS = {
@@ -266,8 +290,50 @@ _KNOWN_WARNINGS = {
         _MOOMOO_OVERNIGHT_VENUE_UNDISCLOSED,
         _OVERNIGHT_QUOTE_UNAVAILABLE,
         _YAHOO_KR_DELAYED_QUOTE,
+        _NON_SESSION_DAILY_BAR,
+        _CALENDAR_PERIOD_AGGREGATION,
+        _LATEST_ADJUSTED_BAR_UNAVAILABLE,
     )
 }
+
+_KNOWN_WARNINGS.update(
+    {
+        "FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND": WarningInfo(
+            code="FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND",
+            message=(
+                "Daily futures rows use a conservative 17:00 New York availability bound on the "
+                "ending trade date. This is not a proven last-trade time or the actual holiday "
+                "close."
+            ),
+            details={},
+        ),
+        "FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN": WarningInfo(
+            code="FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN",
+            message=(
+                "Daily futures rows retain native New York date labels and are withheld until the "
+                "next local date. Session coverage and actual completion time are unknown."
+            ),
+            details={},
+        ),
+        "FUTURES_DAILY_QUOTE_TIME_UNAVAILABLE": WarningInfo(
+            code="FUTURES_DAILY_QUOTE_TIME_UNAVAILABLE",
+            message=(
+                "Date-only futures history cannot establish a quote observation time or previous "
+                "close. Only available timestamped metadata or intraday observations may supply "
+                "the quote."
+            ),
+            details={},
+        ),
+        "FUTURES_DAILY_DERIVED_QUOTE_TIME": WarningInfo(
+            code="FUTURES_DAILY_DERIVED_QUOTE_TIME",
+            message=(
+                "This daily-derived futures quote uses a conservative availability bound. Its "
+                "timestamp does not prove a last trade, actual holiday close, or executable price."
+            ),
+            details={},
+        ),
+    }
+)
 
 
 def _warning_from_code(code: str) -> WarningInfo:

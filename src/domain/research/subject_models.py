@@ -24,6 +24,7 @@ from domain.common.enums import (
 )
 from domain.common.errors import DataContractError
 from domain.common.time import require_aware_datetime
+from domain.research.evidence_impact import ResearchSourceRef
 from domain.research.validation import _require_run_candidate_id
 
 
@@ -235,8 +236,16 @@ class OpenQuestion:
     answer_summary: str | None
     closed_without_answer_reason: str | None
     proposed_by: str
+    version: int = 1
+    evidence_requirements: tuple[str, ...] = ()
+    due_at: datetime | None = None
+    progress_note: str | None = None
+    source_refs: tuple[ResearchSourceRef, ...] = ()
+    decision_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if type(self.version) is not int or self.version < 1:
+            raise DataContractError("version must be an integer >= 1")
         require_aware_datetime(self.asked_at, field_name="asked_at")
         if self.answered_at is not None:
             require_aware_datetime(self.answered_at, field_name="answered_at")
@@ -258,6 +267,43 @@ class OpenQuestion:
             raise DataContractError(
                 "non-CLOSED_WITHOUT_ANSWER open question must not set closed_without_answer_reason"
             )
+        if (
+            not isinstance(self.evidence_requirements, tuple)
+            or len(self.evidence_requirements) > 50
+        ):
+            raise DataContractError("evidence_requirements must be a bounded tuple")
+        seen_requirements: set[str] = set()
+        for item in self.evidence_requirements:
+            if not isinstance(item, str) or not item.strip() or len(item) > 2_000:
+                raise DataContractError("evidence_requirements must contain bounded non-blank text")
+            if item in seen_requirements:
+                raise DataContractError("evidence_requirements must not contain duplicates")
+            seen_requirements.add(item)
+        if self.due_at is not None:
+            require_aware_datetime(self.due_at, field_name="due_at")
+        if self.progress_note is not None and (
+            not isinstance(self.progress_note, str) or len(self.progress_note) > 4_000
+        ):
+            raise DataContractError("progress_note must be <= 4000 characters")
+        if not isinstance(self.source_refs, tuple) or len(self.source_refs) > 50:
+            raise DataContractError("source_refs must be a bounded tuple")
+        if any(not isinstance(ref, ResearchSourceRef) for ref in self.source_refs):
+            raise DataContractError("source_refs must contain ResearchSourceRef values")
+        if len(set(self.source_refs)) != len(self.source_refs):
+            raise DataContractError("source_refs must not contain duplicates")
+        if not isinstance(self.decision_ids, tuple) or len(self.decision_ids) > 50:
+            raise DataContractError("decision_ids must be a bounded tuple")
+        seen_decisions: set[str] = set()
+        for decision_id in self.decision_ids:
+            if (
+                not isinstance(decision_id, str)
+                or not decision_id.strip()
+                or len(decision_id) > 128
+            ):
+                raise DataContractError("decision_ids must contain bounded non-blank IDs")
+            if decision_id in seen_decisions:
+                raise DataContractError("decision_ids must not contain duplicates")
+            seen_decisions.add(decision_id)
 
 
 @dataclass(frozen=True, slots=True)

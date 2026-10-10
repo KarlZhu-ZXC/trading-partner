@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ConsoleShell } from "../components/console-shell";
 import {
@@ -13,6 +13,7 @@ import { Disclosure, ErrorNote, ActionButton, Badge, Card, DataBoundary, FieldLa
   LinkButton,
   Select,
   Textarea,
+  Table,
 } from "../components/ui";
 import { postApi, useApi } from "../lib/api";
 
@@ -31,6 +32,13 @@ type Capability = {
 
 type JsonSchema = Record<string, unknown>;
 type Dict = Record<string, unknown>;
+type UsageRow = { source: string; capability: string; operation: string; calls: number };
+type UsageSnapshot = {
+  rows: UsageRow[];
+  initialized: boolean;
+  completeness: string;
+  inventory: { public_tools: number; capabilities: number; operations: number };
+};
 
 const MARKET_OPTIONS = [
   { value: "US", label: "US" },
@@ -222,6 +230,16 @@ function MarketLens() {
 
 export default function CapabilitiesPage() {
   const result = useApi<{ count: number; items: Capability[] }>("/api/capabilities");
+  const usage = useApi<UsageSnapshot>("/api/capability-usage");
+  const usageRows = useMemo(() => {
+    const grouped = new Map<string, UsageRow>();
+    for (const row of usage.data?.rows ?? []) {
+      const key = `${row.source}:${row.capability}:${row.operation}`;
+      const prior = grouped.get(key);
+      grouped.set(key, { ...row, calls: (prior?.calls ?? 0) + row.calls });
+    }
+    return [...grouped.values()].sort((a, b) => b.calls - a.calls).slice(0, 10);
+  }, [usage.data]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Capability | null>(null);
   const [argumentsText, setArgumentsText] = useState("{}");
@@ -233,6 +251,20 @@ export default function CapabilitiesPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [groupDisclosureRevision, setGroupDisclosureRevision] = useState(0);
   const items = useMemo(() => result.data?.items ?? [], [result.data?.items]);
+  const [handoffLoaded, setHandoffLoaded] = useState(false);
+  useEffect(() => {
+    if (handoffLoaded || !items.length) return;
+    setHandoffLoaded(true);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("workflow") !== "order-preview") return;
+    const capability = items.find(item => item.name === "broker_order_manage");
+    if (!capability) return;
+    const draft = argumentsTemplate(capability.input_schema, "preview");
+    const request = draft.request && typeof draft.request === "object" ? draft.request as Dict : {};
+    draft.request = { ...request, operation: "preview", case_id: params.get("subject_id"), trade_plan_id: params.get("plan_id"), trade_plan_version: Number(params.get("plan_version")) };
+    setSelected(capability); setArgumentsText(JSON.stringify(draft, null, 2));
+    setConfirmed(false);
+  }, [items, handoffLoaded]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return needle ? items.filter((item) => [item.name, item.group, item.description, ...item.operations].join(" ").toLowerCase().includes(needle)) : items;
@@ -302,9 +334,21 @@ export default function CapabilitiesPage() {
 
   return (
     <ConsoleShell active="capabilities" pageActions={<PageActionMenu ariaLabel="Capabilities Page Actions" items={[
-      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload the public MCP capability inventory", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: result.refresh },
+      { id: "refresh", label: result.loading ? "Refreshing…" : "Refresh", description: "Reload capability inventory and recorded usage", icon: <RefreshCw aria-hidden="true" className={result.loading ? "spin" : undefined} />, disabled: result.loading, onSelect: () => { result.refresh(); usage.refresh(); } },
     ]} />}>
       <DataBoundary loading={result.loading} error={result.error}>
+        <Card kicker="OBSERVED ACTIVITY" title="Capability Usage">
+          <p className="card-note">{usage.data?.inventory?.public_tools ?? "—"} public tools · {usage.data?.inventory?.capabilities ?? "—"} business capabilities · {usage.data?.inventory?.operations ?? "—"} operations</p>
+          <p className="card-note">Recorded invocations from the last 30 days. Direct service calls and requests rejected before dispatch are not included. No observations does not mean unused.</p>
+          <ErrorNote>{usage.error}</ErrorNote>
+          {usage.data?.completeness === "unavailable" ? <p role="status">Usage evidence is temporarily unavailable.</p> : null}
+          {usageRows.length ? <Disclosure title="Most Observed Operations">
+            <Table>
+              <thead><tr><th>Capability</th><th>Operation</th><th>Channel</th><th>Calls</th></tr></thead>
+              <tbody>{usageRows.map((row) => <tr key={`${row.source}:${row.capability}:${row.operation}`}><td>{row.capability}</td><td>{row.operation === "__direct__" ? "Direct" : row.operation}</td><td>{row.source}</td><td>{row.calls}</td></tr>)}</tbody>
+            </Table>
+          </Disclosure> : <p className="card-note">{usage.loading ? "Loading usage evidence…" : "No recorded invocations are available yet."}</p>}
+        </Card>
         <MarketLens />
         {selected && (
           <Card className="workbench" kicker="MCP TOOL WORKBENCH" title={selected.name} action={<Button className="close-button" type="button" onClick={() => setSelected(null)}>Close</Button>}>
@@ -332,7 +376,7 @@ export default function CapabilitiesPage() {
         )}
         <div className="workspace-controls capability-toolbar">
           <div className="search-box"><span>⌕</span><Input aria-label="Search Capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools, operations, or descriptions…" /></div>
-          <div className="toolbar-count"><strong>{filtered.length}</strong> / {result.data?.count ?? 0} tools</div>
+          <div className="toolbar-count"><strong>{filtered.length}</strong> / {result.data?.count ?? 0} capabilities</div>
         </div>
         <div className="capability-groups">
           {[...groups.entries()].map(([group, capabilities]) => (
@@ -340,7 +384,7 @@ export default function CapabilitiesPage() {
               className="capability-group"
               key={`${group}-${query.trim()}-${groupDisclosureRevision}`}
               title={group}
-              meta={`${capabilities.length} Tool${capabilities.length === 1 ? "" : "s"}`}
+              meta={`${capabilities.length} Capabilit${capabilities.length === 1 ? "y" : "ies"}`}
               defaultOpen={query.trim() !== "" || expandedGroups.has(group)}
               onToggle={(open) => {
                 if (query.trim()) {

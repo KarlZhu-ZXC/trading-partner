@@ -26,7 +26,7 @@ import { ConsoleShell } from "../components/console-shell";
 import { authenticatedFetch, envelopeData, listOf, postApi, useApi } from "../lib/api";
 import { unwrapAgendaSync } from "../lib/agenda-receipt.mjs";
 import { agendaSummaryFromPayload } from "../lib/agenda-presentation";
-import { textDash as text } from "../lib/coerce";
+import { asObject as asDict, textDash as text } from "../lib/coerce";
 
 type Dict = Record<string, unknown>;
 type AgendaAction = "CREATE" | "REVISE" | "CANCEL" | "LINK_OUTCOME";
@@ -140,10 +140,6 @@ const EMPTY_FORM: AgendaItemForm = {
   revision_note: "",
   cancellation_reason: "",
 };
-
-function asDict(value: unknown): Dict {
-  return value !== null && typeof value === "object" ? (value as Dict) : {};
-}
 
 function splitIdentifierList(value: string): string[] {
   return value

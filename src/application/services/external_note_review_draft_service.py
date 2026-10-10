@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from pydantic import ValidationError
 
 from application.dto.external_note_review import ExternalNoteReviewDraftDTO
+from application.dto.view_review import ViewReviewPackageDTO
 from application.ports.agent_model_provider import (
     AgentModelProvider,
     ModelMessage,
@@ -316,10 +317,23 @@ class ExternalNoteReviewDraftService:
     ) -> bool:
         """Return the deterministic package decision without contacting a provider."""
 
-        return self._view_reviews.get(
+        return self.prepare_review(
             note_revision_id,
             explicit_review=explicit_review,
         ).requires_deep_review
+
+    def prepare_review(
+        self,
+        note_revision_id: str,
+        *,
+        explicit_review: bool = False,
+    ) -> ViewReviewPackageDTO:
+        """Build the deterministic review package once for a review attempt."""
+
+        return self._view_reviews.get(
+            note_revision_id,
+            explicit_review=explicit_review,
+        )
 
     async def review(
         self,
@@ -328,10 +342,20 @@ class ExternalNoteReviewDraftService:
         explicit_review: bool = False,
         force: bool = False,
     ) -> ExternalNoteReviewDraftDTO | None:
-        package = self._view_reviews.get(
+        package = self.prepare_review(
             note_revision_id,
             explicit_review=explicit_review,
         )
+        return await self.review_prepared(package, force=force)
+
+    async def review_prepared(
+        self,
+        package: ViewReviewPackageDTO,
+        *,
+        force: bool = False,
+    ) -> ExternalNoteReviewDraftDTO | None:
+        """Run the deep review against an already materialized view package."""
+
         if not package.requires_deep_review:
             return None
         review = self._reviews.latest_for_revision(package.note_revision_id)

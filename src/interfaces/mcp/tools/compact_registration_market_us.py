@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compact import CapabilityRegistrar
+    from interfaces.capabilities.registry import CapabilityRegistrar
 
 
 def _register_market_and_us(
@@ -17,9 +17,8 @@ def _register_market_and_us(
 ) -> None:
     """Register market and US grouped capabilities in stable tool order."""
 
-    from .compact import (
-        LOCAL_ARTIFACT,
-        READ_PROVIDER,
+    from interfaces.capabilities.policy import LOCAL_ARTIFACT, READ_PROVIDER
+    from interfaces.capabilities.registration import (
         _all_fields,
         _copy_handler,
         _register_flat_dispatch_tool,

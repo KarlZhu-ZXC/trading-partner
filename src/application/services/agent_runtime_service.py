@@ -1,4 +1,4 @@
-"""Shared read-only Agent loop used by future Console and Telegram adapters."""
+"""Shared Agent loop behind Console reads, proposals and gated pending actions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol, cast
 
 from application.dto.agent import (
@@ -20,6 +20,7 @@ from application.dto.agent import (
     EphemeralContext,
 )
 from application.dto.copilot_research import ResearchPhase, ResearchStopReason
+from application.dto.research_presentation import ResearchAnswerPresentation
 from application.ports.agent_action_gateway import AgentPendingActionGateway
 from application.ports.agent_attachment_store import AgentAttachmentStore
 from application.ports.agent_conversation_repository import AgentConversationRepository
@@ -28,10 +29,8 @@ from application.ports.agent_model_provider import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    ModelStreamChunk,
     ModelTool,
     ModelToolCall,
-    ModelUsage,
 )
 from application.ports.agent_tool_gateway import (
     AgentToolDescriptor,
@@ -55,6 +54,7 @@ from application.services.agent_evidence_guard import (
     guard_agent_response,
 )
 from application.services.agent_failure_notice import agent_failure_notice
+from application.services.agent_model_execution import AgentModelExecution
 from application.services.agent_pending_action_service import (
     PendingActionProposal,
     pending_action_wire,
@@ -72,6 +72,8 @@ from application.services.copilot_research_evidence import (
     guard_research_answer,
     research_evidence_catalog,
 )
+from application.services.copilot_research_finalization import finalize_research_answer
+from application.services.question_research_service import QuestionResearchService
 from domain.agent.attachments import AgentImageAttachment
 from domain.agent.enums import AgentMessageRole, AgentTurnStatus
 from domain.agent.models import AgentMessage, AgentTurn
@@ -108,7 +110,7 @@ _CAPABILITY_SEARCH_TOOL = ModelTool(
 )
 _READ_TOOL = ModelTool(
     name="tp_read",
-    description="调用一个已经发现且被 Agent-A policy 允许的 Trading Partner 只读 operation。",
+    description="调用一个已经发现且被当前 Agent policy 允许的 Trading Partner 只读 operation。",
     parameters={
         "type": "object",
         "properties": {
@@ -162,7 +164,7 @@ _PREPARE_TOOL = ModelTool(
     name="tp_prepare_action",
     description=(
         "描述一个需要用户确认的动作；只创建 PROPOSED/PRESENTED pending action，"
-        "永远不直接执行，等待 Console 或 Telegram 明确确认。"
+        "永远不直接执行，等待 Console 明确确认。"
     ),
     parameters={
         "type": "object",
@@ -279,6 +281,7 @@ class AgentRuntimeService:
         preferences_service: Any | None = None,
         telemetry: Telemetry | None = None,
         turn_lock_factory: Callable[[str], AgentTurnLock] | None = None,
+        question_research: QuestionResearchService | None = None,
         max_tool_rounds: int = 6,
         max_tool_result_bytes: int = 64_000,
     ) -> None:
@@ -303,8 +306,10 @@ class AgentRuntimeService:
         self._turn_lock_factory = turn_lock_factory
         self._max_tool_rounds = max_tool_rounds
         self._max_tool_result_bytes = max_tool_result_bytes
-        # Conversation turns are serialized at the core boundary so Console,
-        # Telegram, and any future adapter cannot append interleaved messages.
+        self._model_execution = AgentModelExecution()
+        self._question_research = question_research
+        # Conversation turns are serialized at the core boundary so Console and
+        # other callers cannot append interleaved messages.
         self._conversation_locks: dict[str, asyncio.Lock] = {}
         # Runtime-only cancellation handles. Durable turn state remains the
         # source of truth so a process restart never reruns a cancelled turn.
@@ -787,185 +792,16 @@ class AgentRuntimeService:
         turn_id: str | None,
         research_budget: ResearchBudget | None = None,
     ) -> ModelResponse:
-        """Use provider streaming when available, falling back to complete()."""
+        """Delegate provider response assembly to the application collaborator."""
 
-        if research_budget is not None:
-            research_budget.model()
-            return await research_budget.wait(lambda: model_provider.complete(request))
-        stream_method = getattr(model_provider, "stream", None)
-        if not callable(stream_method):
-            response = await model_provider.complete(request)
-            if response.text:
-                await self._emit_event(
-                    event_sink,
-                    AgentTurnEvent(
-                        type="text_delta",
-                        data={
-                            "conversation_id": conversation_id,
-                            "turn_id": turn_id,
-                            "text": response.text,
-                            "delta": response.text,
-                        },
-                    ),
-                )
-            return response
-
-        text_parts: list[str] = []
-        tool_calls: dict[str, ModelToolCall] = {}
-        latest_usage: ModelUsage | None = None
-        model: str | None = None
-        finish_reason: str | None = None
-        web_search_used = False
-        web_extractor_used = False
-        source_urls: list[str] = []
-        request_id: str | None = None
-        latest_latency_ms: int | None = None
-        final_response: ModelResponse | None = None
-        saw_event = False
-        streamed_content = False
-        try:
-            stream_result = stream_method(request)
-            if inspect.isawaitable(stream_result):
-                stream_result = await stream_result
-            async for chunk in stream_result:
-                self._check_cancelled(turn_id)
-                if isinstance(chunk, ModelResponse):
-                    final_response = chunk
-                    saw_event = True
-                    continue
-                if not isinstance(chunk, ModelStreamChunk):
-                    raise DataContractError("Agent model stream returned an invalid chunk")
-                saw_event = saw_event or bool(
-                    chunk.text_delta
-                    or chunk.tool_calls
-                    or chunk.final_response is not None
-                    or chunk.web_search_used
-                    or chunk.web_extractor_used
-                    or chunk.web_source_urls
-                    or chunk.done
-                )
-                if chunk.text_delta:
-                    streamed_content = True
-                    text_parts.append(chunk.text_delta)
-                    await self._emit_event(
-                        event_sink,
-                        AgentTurnEvent(
-                            type="text_delta",
-                            data={
-                                "conversation_id": conversation_id,
-                                "turn_id": turn_id,
-                                "text": chunk.text_delta,
-                                "delta": chunk.text_delta,
-                            },
-                        ),
-                    )
-                for call in chunk.tool_calls:
-                    streamed_content = True
-                    existing = tool_calls.get(call.id)
-                    if existing is None and len(tool_calls) == 1 and call.id.startswith("call_"):
-                        # Chat/Responses continuations often omit the stable
-                        # provider call id and expose only an array index.
-                        existing = next(iter(tool_calls.values()))
-                        call = replace(call, id=existing.id)
-                    if existing is None:
-                        tool_calls[call.id] = call
-                    else:
-                        tool_calls[call.id] = ModelToolCall(
-                            id=call.id,
-                            name=call.name or existing.name,
-                            arguments=existing.arguments + call.arguments,
-                        )
-                latest_usage = chunk.usage or latest_usage
-                model = chunk.model or model
-                finish_reason = chunk.finish_reason or finish_reason
-                if chunk.latency_ms is not None:
-                    latest_latency_ms = chunk.latency_ms
-                web_search_used = web_search_used or chunk.web_search_used
-                web_extractor_used = web_extractor_used or chunk.web_extractor_used
-                if chunk.web_search_used or chunk.web_extractor_used or chunk.web_source_urls:
-                    streamed_content = True
-                for url in chunk.web_source_urls:
-                    if url not in source_urls and len(source_urls) < 20:
-                        source_urls.append(url)
-                request_id = chunk.request_id or request_id
-                if chunk.final_response is not None:
-                    streamed_content = True
-                    final_response = chunk.final_response
-        except (
-            ProviderTimeoutError,
-            ProviderRateLimitError,
-            ProviderUnavailableError,
-        ) as error:
-            # The auto router may retry only before the first visible delta.
-            error.__dict__["agent_stream_emitted"] = streamed_content
-            raise
-        except NotImplementedError:
-            if saw_event:
-                raise
-            response = await model_provider.complete(request)
-            if response.text:
-                await self._emit_event(
-                    event_sink,
-                    AgentTurnEvent(
-                        type="text_delta",
-                        data={
-                            "conversation_id": conversation_id,
-                            "turn_id": turn_id,
-                            "text": response.text,
-                            "delta": response.text,
-                        },
-                    ),
-                )
-            return response
-
-        if final_response is not None:
-            # Responses ``completed`` events can carry the complete text even
-            # after deltas. Never append that text a second time.
-            text = "".join(text_parts) if text_parts else final_response.text
-            if not text_parts and final_response.text:
-                await self._emit_event(
-                    event_sink,
-                    AgentTurnEvent(
-                        type="text_delta",
-                        data={
-                            "conversation_id": conversation_id,
-                            "turn_id": turn_id,
-                            "text": final_response.text,
-                            "delta": final_response.text,
-                        },
-                    ),
-                )
-            merged_calls = tuple(tool_calls.values()) or final_response.tool_calls
-            return replace(
-                final_response,
-                text=text,
-                tool_calls=merged_calls,
-                usage=final_response.usage or latest_usage,
-                model=final_response.model or model,
-                finish_reason=final_response.finish_reason or finish_reason,
-                latency_ms=(
-                    final_response.latency_ms
-                    if final_response.latency_ms is not None
-                    else latest_latency_ms
-                ),
-                web_search_used=final_response.web_search_used or web_search_used,
-                web_extractor_used=final_response.web_extractor_used or web_extractor_used,
-                web_source_urls=tuple(
-                    dict.fromkeys((*final_response.web_source_urls, *source_urls))
-                )[:20],
-                request_id=final_response.request_id or request_id,
-            )
-        return ModelResponse(
-            text="".join(text_parts),
-            tool_calls=tuple(tool_calls.values()),
-            usage=latest_usage,
-            model=model,
-            finish_reason=finish_reason,
-            web_search_used=web_search_used,
-            web_extractor_used=web_extractor_used,
-            web_source_urls=tuple(source_urls),
-            request_id=request_id,
-            latency_ms=latest_latency_ms,
+        return await self._model_execution.execute(
+            model_provider=model_provider,
+            request=request,
+            event_emitter=event_sink,
+            cancellation_check=lambda: self._check_cancelled(turn_id),
+            research_budget=research_budget,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
         )
 
     async def run_turn(
@@ -1079,6 +915,13 @@ class AgentRuntimeService:
             request.content
         ) > 64_000:
             raise DataContractError("Agent user message must contain text or an image")
+        question_context = None
+        if request.question_context_token is not None:
+            if self._question_research is None or request.research_mode == "standard":
+                raise DataContractError("Question Research is unavailable")
+            question_context = self._question_research.resolve(
+                request.question_context_token, request.content
+            )
         model_id, model_provider, route_reason, is_auto_route = self._select_provider(request)
         fallback_from: str | None = None
         fallback_code: str | None = None
@@ -1091,6 +934,7 @@ class AgentRuntimeService:
                 max_seconds=request.research_max_seconds,
                 max_model_calls=request.research_max_model_calls,
                 max_tool_calls=request.research_max_tool_calls,
+                question_context=question_context,
             )
             if request.research_mode != "standard"
             else None
@@ -1099,6 +943,7 @@ class AgentRuntimeService:
         challenge_performed = False
         research_extra_gaps: list[str] = []
         research_summary: dict[str, object] | None = None
+        research_presentation: ResearchAnswerPresentation | None = None
         if research_budget is not None:
             model_tools = (
                 _RESEARCH_TOOLS if self._web_search_provider is not None else _RESEARCH_CORE_TOOLS
@@ -1115,6 +960,11 @@ class AgentRuntimeService:
             request.model,
             request.reasoning_effort,
         )
+        if request.question_context_token is not None:
+            assert self._question_research is not None
+            question_context = self._question_research.resolve(
+                request.question_context_token, request.content
+            )
         stored_attachments = self._store_attachments(request.attachments)
         candidate_message = AgentMessage(
             message_id=self._id_generator.new(EntityIdPrefix.AGENT_MESSAGE),
@@ -1607,6 +1457,11 @@ class AgentRuntimeService:
                 if _valid_structured_answer(critique, research=True):
                     critique_evidence = guard_research_answer(
                         parse_research_answer(critique.text),
+                        evidence_cutoff=(
+                            datetime.fromisoformat(research_budget.question_context.evidence_cutoff)
+                            if research_budget.question_context
+                            else None
+                        ),
                         receipts=receipts,
                         tool_payloads=tool_payloads,
                     )
@@ -1694,54 +1549,21 @@ class AgentRuntimeService:
                 pass
         final_response = replace(final_response, text=evidence_guard.text)
         if research_budget is not None:
-            checked = guard_research_answer(
-                answer_envelope, receipts=receipts, tool_payloads=tool_payloads
-            )
-            research_budget.complete_step("EVIDENCE_CHECK")
-            answer_envelope = checked.envelope
-            final_response = replace(final_response, text=render_agent_answer(answer_envelope))
-            if final_response.finish_reason == "tool_round_limit":
-                research_stop = "ROUND_LIMIT"
-            raw_codes = checked.summary.get("codes", [])
-            evidence_codes = (
-                [code for code in raw_codes if isinstance(code, str)]
-                if isinstance(raw_codes, list)
-                else []
-            )
-            evidence_codes.extend(research_extra_gaps)
-            evidence_status = (
-                "GAPS" if research_extra_gaps else str(checked.summary.get("status", "NOT_CHECKED"))
-            )
-            stop = research_stop or ("EVIDENCE_GAP" if evidence_status == "GAPS" else "COMPLETED")
-            if research_stop is not None:
-                final_response = replace(final_response, finish_reason=research_stop.lower())
-            verified_count = checked.summary.get("verified_count", 0)
-            missing_count = checked.summary.get("missing_count", 0)
-            research_summary = research_budget.snapshot(
-                phase="FINISHED",
-                stop_reason=stop,
+            finalized = finalize_research_answer(
+                final_response=final_response,
+                answer_envelope=answer_envelope,
+                research_budget=research_budget,
+                receipts=receipts,
+                tool_payloads=tool_payloads,
+                model_responses=model_responses,
+                research_stop=research_stop,
+                research_extra_gaps=research_extra_gaps,
                 challenge_performed=challenge_performed,
-                evidence_status="STOPPED" if research_stop else evidence_status,
-                gaps=evidence_codes,
-                verified_claims=verified_count if type(verified_count) is int else 0,
-                blocked_claims=missing_count if type(missing_count) is int else 0,
-                verified_refs=list(
-                    dict.fromkeys(
-                        ref for block in answer_envelope.blocks for ref in block.evidence_refs
-                    )
-                )[:32],
-            ).model_dump()
-            research_summary["usage_complete"] = (
-                len(model_responses) == research_summary["model_calls_attempted"]
-                and bool(model_responses)
-                and all(
-                    item.usage is not None
-                    and item.usage.input_tokens is not None
-                    and item.usage.output_tokens is not None
-                    and item.usage.total_tokens is not None
-                    for item in model_responses
-                )
             )
+            final_response = finalized.response
+            answer_envelope = finalized.envelope
+            research_presentation = finalized.presentation
+            research_summary = finalized.summary
             await self._emit_event(
                 event_sink,
                 AgentTurnEvent(
@@ -1816,6 +1638,7 @@ class AgentRuntimeService:
                     additional_web_search_used=sidecar_web_search_used,
                     additional_web_source_urls=tuple(sidecar_web_source_urls),
                     research=research_summary,
+                    research_presentation=research_presentation,
                 ),
                 created_at=self._clock.now(),
             )
@@ -2003,7 +1826,15 @@ def _research_catalog_messages(
 ) -> tuple[ModelMessage, ...]:
     if budget is None:
         return ()
-    catalog = research_evidence_catalog(receipts, payloads)
+    catalog = research_evidence_catalog(
+        receipts,
+        payloads,
+        evidence_cutoff=(
+            datetime.fromisoformat(budget.question_context.evidence_cutoff)
+            if budget.question_context
+            else None
+        ),
+    )
     return (
         ModelMessage(
             role="system",
@@ -2030,7 +1861,6 @@ def _research_catalog_messages(
                 "字段引用只核对来源，不核验解释语义；不得据此宣称解释已验证，也不得声称已执行。"
                 "null表示字段缺失，不是零。"
                 "SUMMARY也不能复述任何阿拉伯数字或日期；直接写定性结论。"
-                "解释缺失不等于零时请写汉字“零”，不要写数字0，也不要重复列示数值示例。"
                 "不能从期末日期推断单季，从费前推断税前，从level推断阻力。"
                 "freshness=stale只表示过时，不能推断Provider声明了行情延迟。"
                 "市值在币种和估值时点统一后可以比较名义敞口大小；计算相对权重才需要组合总值，"

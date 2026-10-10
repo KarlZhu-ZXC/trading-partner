@@ -20,6 +20,7 @@ from application.dto.research import (
     parse_candidate_payload,
     payloads_equal_json,
 )
+from application.dto.research_links import EvidenceImpactDTO
 from application.dto.tool_envelope import (
     DUPLICATE_IDEMPOTENCY_KEY,
     ToolEnvelope,
@@ -213,8 +214,13 @@ def build_research_state(
         uow.trade_plans.list_versions(current_plan.plan_id) if current_plan is not None else ()
     )
 
+    evidence_impacts = uow.evidence_impacts.list_by_subject(subject_id, limit=201)
     return ResearchStateDTO(
         subject=ResearchSubjectDTO.from_domain(subject),
+        evidence_impacts=tuple(
+            EvidenceImpactDTO.model_validate(row) for row in evidence_impacts[:200]
+        ),
+        evidence_impacts_has_more=len(evidence_impacts) > 200,
         theses=ThesisDTO.from_domain_list(theses),
         latest_revisions=ThesisRevisionDTO.from_domain_list(tuple(latest_revisions)),
         assumptions=AssumptionDTO.from_domain_list(tuple(assumptions)),
@@ -274,6 +280,13 @@ def propose_candidate(
 
     existing = uow.candidates.get_by_idempotency_key(key)
     if existing is not None:
+        if kind in {CandidateKind.EVIDENCE_IMPACT, CandidateKind.OPEN_QUESTION} and (
+            existing.subject_id != subject_id
+            or existing.kind != kind
+            or existing.proposed_by != actor
+            or existing.confirmation_mode != confirmation_mode
+        ):
+            raise DuplicateIdempotencyKey("Proposal key belongs to a different request or scope")
         if payloads_equal_json(existing.payload_json, payload_json):
             return existing, True, DUPLICATE_IDEMPOTENCY_KEY
         raise DuplicateIdempotencyKey(

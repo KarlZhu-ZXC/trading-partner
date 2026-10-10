@@ -317,13 +317,6 @@ test("journal reuses durable workflow stages without replacing specialist pages"
   assert.match(source, /activityDateParameter\("behavior_end", selectedPeriodEnd, periodWindowValid, usesActivityFilters\)/);
   assert.match(source, /<DateRange start=\{customPeriodStart\} end=\{customPeriodEnd\}/);
   assert.match(source, /Other Metrics & Audit Details/);
-  assert.match(source, /payload value does not match/);
-  assert.match(source, /metricInteger\(metric\.numerator\)/);
-  assert.match(source, /Payoff ratio/i);
-  assert.match(source, /Payoff Ratio · Amount/);
-  assert.match(source, /Payoff Ratio · Return %/);
-  assert.match(source, /avg_win_return/);
-  assert.match(source, /avg_loss_return/);
   assert.doesNotMatch(source, /sample_sufficient|minimum_sample_size|minimum sample/);
   assert.doesNotMatch(source, /behaviorPercent/);
   assert.match(source, /CycleAdjustmentEditor/);
@@ -692,6 +685,11 @@ test("research console is a responsive Research Subject/Thesis master-detail wor
 });
 
 test("card headings separate domain, object, and supporting context", async () => {
+  const questionSource = await readFile(new URL("../app/research/question-research-panel.tsx", import.meta.url), "utf8");
+  const impactSource = await readFile(new URL("../app/research/evidence-impact-panel.tsx", import.meta.url), "utf8");
+  assert.match(questionSource, /kicker="INVESTIGATION" title="Research Questions"/);
+  assert.match(impactSource, /kicker="EVIDENCE WORKFLOW" title="Assumption Links"/);
+
   const overviewSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const agendaSource = await readFile(new URL("../app/agenda/page.tsx", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../app/components/ui.tsx", import.meta.url), "utf8");
@@ -720,6 +718,10 @@ test("card headings separate domain, object, and supporting context", async () =
   assert.match(overviewSource, /<TodayReview \/>/);
   const todayReviewSource = await readFile(new URL("../app/components/today-review.tsx", import.meta.url), "utf8");
   assert.match(todayReviewSource, /kicker="DECISION WORKFLOW" title="Today Review"/);
+  const replaySource = await readFile(new URL("../app/research/decision-replay-panel.tsx", import.meta.url), "utf8");
+  assert.match(replaySource, /kicker="HISTORICAL CONTEXT" title="Decision Replay"/);
+  assert.match(replaySource, /FormField label="Reviewed Decision" required/);
+  assert.match(replaySource, /<Select required/);
   assert.doesNotMatch(overviewSource, /title="View Inbox"/);
   assert.match(overviewSource, /OBSERVATION_REVIEW_DUE/);
   assert.match(overviewSource, /kicker="SYSTEM FOLLOW-UP" title="Operations & Workflow"/);
@@ -860,6 +862,8 @@ test("operations provides a guarded foreground Schwab OAuth flow", async () => {
   assert.match(operationsSource, /schwab_oauth_renew/);
   assert.match(operationsSource, /schwab_oauth_renew_confirmed/);
   assert.match(operationsSource, /waiting for the Schwab callback/i);
+  assert.match(operationsSource, /Check the default browser on the Mac/);
+  assert.doesNotMatch(operationsSource, /A new tab is open/);
   assert.match(operationsSource, /Use only the newly opened tab/);
   assert.match(operationsSource, /Observation Review Health/);
   assert.match(operationsSource, /terminal_with_exact_decision/);

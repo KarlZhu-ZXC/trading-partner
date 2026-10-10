@@ -27,11 +27,11 @@ from application.services.agent_runtime_service import AgentRuntimeService
 from domain.agent.enums import AgentChannel
 from domain.common.errors import DataContractError
 from interfaces.agent.prompts import AGENT_SYSTEM_PROMPT
-from interfaces.cli.agent_behavior_evaluation import (
-    _Clock,
-    _fingerprint_manifest,
-    _Ids,
-    _Repository,
+from interfaces.cli.agent_evaluation_support import (
+    EvaluationClock,
+    EvaluationIds,
+    MemoryConversationRepository,
+    evaluation_fingerprint_manifest,
 )
 
 
@@ -220,16 +220,17 @@ async def run_live_research_acceptance(
     *,
     cases: tuple[ResearchAcceptanceCase, ...] = CASES,
     reasoning_effort: Literal["low", "medium", "high", "max"] | None = None,
+    research_system_prompt: str | None = None,
     on_case: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    fingerprint = _fingerprint_manifest()
+    fingerprint = evaluation_fingerprint_manifest()
     fingerprint["src/interfaces/cli/copilot_research_live_evaluation.py"] = hashlib.sha256(
         Path(__file__).read_bytes()
     ).hexdigest()
     results: list[dict[str, Any]] = []
-    ids = _Ids()
+    ids = EvaluationIds()
     for case in cases:
-        repository, clock = _Repository(), _Clock()
+        repository, clock = MemoryConversationRepository(), EvaluationClock()
         port = cast(AgentConversationRepository, repository)
         context = AgentContextService(repository=port, clock=clock, id_generator=ids)
         conversation = context.create_conversation(
@@ -244,7 +245,8 @@ async def run_live_research_acceptance(
             tool_gateway=gateway,
             clock=clock,
             id_generator=ids,
-            system_prompt=AGENT_SYSTEM_PROMPT + "\n本次全部数据与标的均为合成验收样本。",
+            system_prompt=(research_system_prompt or AGENT_SYSTEM_PROMPT)
+            + "\n本次全部数据与标的均为合成验收样本。",
         )
         try:
             response = await runtime.run_turn(

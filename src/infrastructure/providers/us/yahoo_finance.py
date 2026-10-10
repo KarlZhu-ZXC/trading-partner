@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from application.dto.provider_routing import ProviderResultMeta, ProviderSuccess
 from application.ports.clock import Clock
 from application.ports.http_transport import HttpRequest, HttpTransport
+from application.ports.market_session_calendar import MarketSessionCalendar
 from domain.common.enums import (
     AdjustmentMethod,
     AssetType,
@@ -51,6 +52,7 @@ from domain.market.models import MarketBar
 from domain.market.session import infer_session_basic
 from domain.us_market.enums import USBarInterval
 from domain.us_market.models import USBarSeries, USQuote
+from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
 from infrastructure.providers.common.adapter_guards import require_as_of
 from infrastructure.system.clock import SystemClock
 
@@ -59,6 +61,7 @@ _SEOUL = ZoneInfo("Asia/Seoul")
 _CHART_HOST = "https://query1.finance.yahoo.com"
 _CHART_PATH_PREFIX = "/v8/finance/chart/"
 _ALLOWED_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX, AssetType.FUTURE})
+_REGULAR_SESSION_ASSETS = frozenset({AssetType.EQUITY, AssetType.ETF, AssetType.INDEX})
 _CONTINUOUS_FUTURES_WARNING_CODES = (
     "FUTURES_CONTRACT_NOT_SPOT",
     "CONTINUOUS_FUTURES_ROLL_RISK",
@@ -80,6 +83,40 @@ _MARKET_CLOSED_LATEST_KNOWN_WARNING = "MARKET_CLOSED_LATEST_KNOWN"
 _OVERNIGHT_QUOTE_UNAVAILABLE_WARNING = "OVERNIGHT_QUOTE_UNAVAILABLE"
 _PREVIOUS_CLOSE_RECOVERY_WARNING = "PREVIOUS_CLOSE_REGULAR_SESSION_RECOVERY"
 _LATEST_ADJUSTED_BAR_UNAVAILABLE_WARNING = "LATEST_ADJUSTED_BAR_UNAVAILABLE"
+_NON_SESSION_DAILY_BAR_WARNING = "US_NON_SESSION_DAILY_BAR"
+_CALENDAR_PERIOD_AGGREGATION_WARNING = "CALENDAR_PERIOD_AGGREGATED_FROM_DAILY_BARS"
+_METAL_DAILY_COMPLETION_BOUND_WARNING = "FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND"
+_METAL_DAILY_DATE_ONLY_WARNING = "FUTURES_DAILY_DATE_ONLY_COMPLETION_UNKNOWN"
+_FUTURES_DAILY_QUOTE_TIME_WARNING = "FUTURES_DAILY_QUOTE_TIME_UNAVAILABLE"
+_FUTURES_DAILY_DERIVED_QUOTE_TIME_WARNING = "FUTURES_DAILY_DERIVED_QUOTE_TIME"
+_METAL_DAILY_COMPLETION_BOUND = time(17, 0)
+
+
+def _future_daily_mode(instrument: Instrument) -> str:
+    """Proven ending trade dates, unresolved proxy coverage, or unsupported root.
+
+    Specific seeded metals and GC=F have verified midnight trade-date labels
+    covering the prior 18:00 through 17:00 New York Globex session. The standard
+    17:00 bound is conservative on early closes, not an actual holiday calendar.
+    Other seeded continuous proxies only establish a native date label; keep
+    completed prior dates without inventing an observation or closing time.
+    """
+    if instrument.asset_type is not AssetType.FUTURE:
+        return "not_future"
+    if instrument.market is Market.CME:
+        parse_cme_contract_code(instrument.symbol)
+        return "standard_metal"
+    symbol = instrument.symbol.strip()
+    match = re.fullmatch(r"(GC|MGC|SI|HG|PL|PA)=F", symbol)
+    if instrument.market is not Market.US or match is None:
+        return "unsupported"
+    root = match.group(1)
+    expected_exchange = "NYMEX" if root in {"PL", "PA"} else "COMEX"
+    if instrument.exchange.upper() != expected_exchange:
+        return "unsupported"
+    return "standard_metal" if root == "GC" else "date_only_metal"
+
+
 
 _INTERVAL_WIRE: Mapping[USBarInterval, str] = {
     USBarInterval.ONE_MINUTE: "1m",
@@ -246,6 +283,7 @@ class YahooFinanceAdapter:
         current_window_seconds: int = 300,
         max_fresh_seconds: int = 30,
         max_delayed_seconds: int = 900,
+        us_session_calendar: MarketSessionCalendar | None = None,
     ) -> None:
         if (
             not isinstance(timeout_seconds, (int, float))
@@ -296,6 +334,7 @@ class YahooFinanceAdapter:
         self._current_window_seconds = current_window_seconds
         self._max_fresh_seconds = max_fresh_seconds
         self._max_delayed_seconds = max_delayed_seconds
+        self._us_session_calendar = us_session_calendar
 
     @property
     def vendor_id(self) -> VendorId:
@@ -487,6 +526,14 @@ class YahooFinanceAdapter:
                 operation=operation,
                 rule=str(exc.details.get("rule", "json")),
             ) from None
+        result = self._chart_result(payload, operation=operation)
+        meta = result.get("meta")
+        if not isinstance(meta, dict) or meta.get("symbol") != symbol:
+            raise _contract(
+                "Yahoo Finance response instrument does not match the request",
+                operation=operation,
+                rule="instrument_identity",
+            )
         return payload, fetched_at
 
     def _chart_result(self, payload: object, *, operation: str) -> dict[str, object]:
@@ -520,6 +567,12 @@ class YahooFinanceAdapter:
             raise NoMarketData(
                 "Yahoo Finance returned empty chart result",
                 details={"vendor": self.vendor_id.value, "operation": operation},
+            )
+        if len(results) != 1:
+            raise _contract(
+                "Yahoo Finance returned no unique chart result",
+                operation=operation,
+                rule="unique_chart_result",
             )
         first = results[0]
         if not isinstance(first, dict):
@@ -633,6 +686,31 @@ class YahooFinanceAdapter:
             warnings=warnings,
         )
 
+    def _us_daily_timestamp(self, day: date, *, operation: str) -> tuple[datetime, bool]:
+        """Timestamp equity-like daily facts at their actual completed session close.
+
+        Retain the conservative 16:00 cutoff for unexpected non-session rows
+        (including synthetic fixtures), with an explicit warning. Calendar lookup
+        failures must reject the result rather than silently invent a close time.
+        """
+        try:
+            if self._us_session_calendar is None:
+                self._us_session_calendar = XnysMarketSessionCalendar()
+            session = self._us_session_calendar.session_at(_local_midnight(day, _NY))
+            if session is None:
+                return _local_session_close(day, _NY, _SESSION_CLOSE), True
+            require_aware_datetime(session.close_at, field_name="session.close_at")
+            close_at = session.close_at.astimezone(_NY)
+            if session.session_date != day or close_at.date() != day:
+                raise ValueError("session date does not match daily bar")
+            return close_at, False
+        except Exception:
+            raise _contract(
+                "Yahoo Finance US daily session calendar is unavailable",
+                operation=operation,
+                rule="session_calendar_unavailable",
+            ) from None
+
     def _parse_ohlcv_arrays(
         self,
         result: Mapping[str, object],
@@ -646,6 +724,8 @@ class YahooFinanceAdapter:
         timezone: ZoneInfo = _NY,
         session_close: time = _SESSION_CLOSE,
         warning_codes: list[str] | None = None,
+        use_us_session_calendar: bool = False,
+        previous_daily_date_only: bool = False,
     ) -> list[MarketBar]:
         timestamps = result.get("timestamp")
         if timestamps is None:
@@ -743,9 +823,29 @@ class YahooFinanceAdapter:
             # Yahoo pads gaps with null rows — skip rather than invent prices.
             if any(v is None for v in (open_raw, high_raw, low_raw, close_raw)):
                 continue
-            ts = _unix_to_aware(timestamps[idx], field=f"timestamp[{idx}]", timezone=timezone)
+            ts = _unix_to_aware(
+                timestamps[idx], field=f"timestamp[{idx}]", timezone=timezone
+            )
+            non_session_daily_bar = False
             if interval is USBarInterval.ONE_DAY:
-                ts = _local_session_close(ts.astimezone(timezone).date(), timezone, session_close)
+                day = ts.astimezone(timezone).date()
+                if (
+                    (start is not None and day < start)
+                    or (end is not None and day > end)
+                    or day > as_of.astimezone(timezone).date()
+                ):
+                    continue
+                if previous_daily_date_only:
+                    if day >= as_of.astimezone(timezone).date():
+                        continue
+                    # Preserve the provider's date label. Availability is gated
+                    # by the next local date; this is not a claimed close time.
+                elif use_us_session_calendar:
+                    ts, non_session_daily_bar = self._us_daily_timestamp(
+                        day, operation=operation
+                    )
+                else:
+                    ts = _local_session_close(day, timezone, session_close)
             if ts > as_of:
                 continue
             local_day = ts.astimezone(timezone).date()
@@ -759,7 +859,9 @@ class YahooFinanceAdapter:
             low = _as_decimal(low_raw, field=f"bars[{idx}].low")
             close = _as_decimal(close_raw, field=f"bars[{idx}].close")
             volume = (
-                Decimal(0) if vol_raw is None else _as_decimal(vol_raw, field=f"bars[{idx}].volume")
+                Decimal(0)
+                if vol_raw is None
+                else _as_decimal(vol_raw, field=f"bars[{idx}].volume")
             )
             if volume < 0:
                 raise _contract(
@@ -779,7 +881,9 @@ class YahooFinanceAdapter:
                     # the loss of the latest bar explicit in Provider metadata.
                     if idx == last_complete_price_index:
                         if warning_codes is not None:
-                            warning_codes.append(_LATEST_ADJUSTED_BAR_UNAVAILABLE_WARNING)
+                            warning_codes.append(
+                                _LATEST_ADJUSTED_BAR_UNAVAILABLE_WARNING
+                            )
                         continue
                     raise _contract(
                         "Yahoo Finance adjclose missing for bar",
@@ -808,6 +912,8 @@ class YahooFinanceAdapter:
                     rule="unsupported_adjustment",
                 )
 
+            if non_session_daily_bar and warning_codes is not None:
+                warning_codes.append(_NON_SESSION_DAILY_BAR_WARNING)
             out.append(
                 MarketBar(
                     timestamp=ts,
@@ -820,6 +926,55 @@ class YahooFinanceAdapter:
             )
         out.sort(key=lambda b: b.timestamp)
         return out
+
+    @staticmethod
+    def _require_unique_daily_timestamps(
+        bars: Sequence[MarketBar], *, timezone: ZoneInfo
+    ) -> None:
+        # Native futures timestamps can differ within one date label. A daily
+        # fact is unique by exchange-local date, before any volume aggregation.
+        seen: set[date] = set()
+        for bar in bars:
+            day = bar.timestamp.astimezone(timezone).date()
+            if day in seen:
+                raise _contract(
+                    "Yahoo Finance daily dates must be unique before aggregation",
+                    operation="bars",
+                    rule="unique_daily_timestamps",
+                )
+            seen.add(day)
+
+    @staticmethod
+    def _aggregate_daily_calendar_periods(
+        bars: Sequence[MarketBar], *, interval: USBarInterval, timezone: ZoneInfo
+    ) -> list[MarketBar]:
+        """Aggregate only the requested range's cutoff-safe completed daily facts.
+
+        Use the last included daily close as the period timestamp. The first or
+        last period can be incomplete because of range boundaries or ``as_of``;
+        this is disclosed separately in provider metadata.
+        """
+        YahooFinanceAdapter._require_unique_daily_timestamps(bars, timezone=timezone)
+        groups: dict[tuple[int, int], list[MarketBar]] = {}
+        for bar in bars:
+            day = bar.timestamp.astimezone(timezone).date()
+            if interval is USBarInterval.ONE_WEEK:
+                iso_year, iso_week, _weekday = day.isocalendar()
+                key = (iso_year, iso_week)
+            else:
+                key = (day.year, day.month)
+            groups.setdefault(key, []).append(bar)
+        return [
+            MarketBar(
+                timestamp=group[-1].timestamp,
+                open=group[0].open,
+                high=max(bar.high for bar in group),
+                low=min(bar.low for bar in group),
+                close=group[-1].close,
+                volume=sum((bar.volume for bar in group), Decimal(0)),
+            )
+            for group in groups.values()
+        ]
 
     def _assert_daily_not_stale(
         self,
@@ -961,17 +1116,29 @@ class YahooFinanceAdapter:
             )
         return bars[-1], fetched_at, meta
 
-    async def get_quote(self, instrument: Instrument, as_of: datetime) -> ProviderSuccess[USQuote]:
+    async def get_quote(
+        self, instrument: Instrument, as_of: datetime
+    ) -> ProviderSuccess[USQuote]:
         self._require_configured()
         now = self._require_as_of(as_of)
         symbol = self._require_chart_instrument(instrument)
         timezone = _SEOUL if instrument.market is Market.KR else _NY
-        session_close = _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
+        session_close = (
+            _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
+        )
+
+        future_daily_mode = _future_daily_mode(instrument)
+        if future_daily_mode == "standard_metal":
+            session_close = _METAL_DAILY_COMPLETION_BOUND
 
         # Window ends exclusive of the calendar day after as_of (NY), inclusive wire.
         as_of_day = as_of.astimezone(timezone).date()
-        period1 = int(_local_midnight(as_of_day - timedelta(days=30), timezone).timestamp())
-        period2 = int(_local_midnight(as_of_day + timedelta(days=1), timezone).timestamp())
+        period1 = int(
+            _local_midnight(as_of_day - timedelta(days=30), timezone).timestamp()
+        )
+        period2 = int(
+            _local_midnight(as_of_day + timedelta(days=1), timezone).timestamp()
+        )
         payload, fetched_at = await self._fetch_chart(
             symbol,
             params={
@@ -992,20 +1159,40 @@ class YahooFinanceAdapter:
                 rule="contract_drift",
             )
 
-        bars = self._parse_ohlcv_arrays(
-            result,
-            operation="quote",
-            interval=USBarInterval.ONE_DAY,
-            adjustment=AdjustmentMethod.NONE,
-            as_of=as_of,
-            timezone=timezone,
-            session_close=session_close,
+        parse_warnings: list[str] = []
+        bars = (
+            self._parse_ohlcv_arrays(
+                result,
+                operation="quote",
+                interval=USBarInterval.ONE_DAY,
+                adjustment=AdjustmentMethod.NONE,
+                as_of=as_of,
+                start=as_of_day - timedelta(days=30),
+                end=as_of_day,
+                timezone=timezone,
+                session_close=session_close,
+                warning_codes=parse_warnings,
+                use_us_session_calendar=(
+                    instrument.market is Market.US
+                    and instrument.asset_type in _REGULAR_SESSION_ASSETS
+                ),
+            )
+            if future_daily_mode in {"not_future", "standard_metal"}
+            else []
         )
+        if future_daily_mode == "standard_metal":
+            parse_warnings.append(_METAL_DAILY_COMPLETION_BOUND_WARNING)
+        elif future_daily_mode in {"date_only_metal", "unsupported"}:
+            # A date-labelled candle cannot provide a truthful quote timestamp.
+            # Actual metadata/intraday observations retain their own timestamps.
+            parse_warnings.append(_FUTURES_DAILY_QUOTE_TIME_WARNING)
 
         regular_market_at: datetime | None = None
         rmt = meta_raw.get("regularMarketTime")
         if type(rmt) is int or type(rmt) is Decimal:
-            candidate = _unix_to_aware(int(rmt), field="regularMarketTime", timezone=timezone)
+            candidate = _unix_to_aware(
+                int(rmt), field="regularMarketTime", timezone=timezone
+            )
             if candidate <= as_of:
                 regular_market_at = candidate
 
@@ -1025,9 +1212,15 @@ class YahooFinanceAdapter:
 
         regular_market_price: Decimal | None = None
         if regular_market_at is not None:
-            volume = _optional_decimal(meta_raw.get("regularMarketVolume"), field="volume")
-            week_low = _optional_decimal(meta_raw.get("fiftyTwoWeekLow"), field="week_52_low")
-            week_high = _optional_decimal(meta_raw.get("fiftyTwoWeekHigh"), field="week_52_high")
+            volume = _optional_decimal(
+                meta_raw.get("regularMarketVolume"), field="volume"
+            )
+            week_low = _optional_decimal(
+                meta_raw.get("fiftyTwoWeekLow"), field="week_52_low"
+            )
+            week_high = _optional_decimal(
+                meta_raw.get("fiftyTwoWeekHigh"), field="week_52_high"
+            )
             regular_market_price = _optional_decimal(
                 meta_raw.get("regularMarketPrice"), field="last"
             )
@@ -1053,6 +1246,7 @@ class YahooFinanceAdapter:
 
         quote_session = TradingSession.REGULAR
 
+        daily_derived_quote = False
         if last is None and bars:
             bar = bars[-1]
             quote_at = bar.timestamp
@@ -1061,6 +1255,26 @@ class YahooFinanceAdapter:
             high = bar.high
             low = bar.low
             volume = bar.volume if volume is None else volume
+            daily_derived_quote = future_daily_mode == "standard_metal"
+
+        initial_intraday_quote = False
+        if (
+            (last is None or quote_at is None)
+            and future_daily_mode in {"date_only_metal", "unsupported"}
+            and 0 <= (now - as_of).total_seconds() <= self._current_window_seconds
+        ):
+            # Unproved daily dates cannot bootstrap a quote timestamp. A current
+            # request may still recover an independently timestamped minute.
+            intraday_bar, fetched_at, intraday_meta = await self._latest_intraday_quote_bar(
+                symbol, as_of=as_of, market=instrument.market
+            )
+            quote_at = intraday_bar.timestamp
+            last = intraday_bar.close
+            quote_session = self._session_for_observation(
+                intraday_meta, quote_at, market=instrument.market
+            )
+            open_ = high = low = volume = None
+            initial_intraday_quote = True
 
         if last is None or quote_at is None:
             raise NoMarketData(
@@ -1074,12 +1288,24 @@ class YahooFinanceAdapter:
                 rule="as_of_cutoff",
             )
 
-        meta_session = self._session_for_observation(meta_raw, as_of, market=instrument.market)
+        meta_session = self._session_for_observation(
+            meta_raw, as_of, market=instrument.market
+        )
         request_session = meta_session
-        additional_warnings: list[str] = []
+        additional_warnings: list[str] = list(parse_warnings)
+        if initial_intraday_quote:
+            meta_session = quote_session
+            additional_warnings.extend(
+                (
+                    _INTRADAY_QUOTE_RECOVERY_WARNING,
+                    "INTRADAY_QUOTE_SESSION_RANGE_UNAVAILABLE",
+                )
+            )
         if instrument.market is Market.KR:
             additional_warnings.append("YAHOO_KR_DELAYED_QUOTE")
-        current_cutoff = 0 <= (now - as_of).total_seconds() <= self._current_window_seconds
+        current_cutoff = (
+            0 <= (now - as_of).total_seconds() <= self._current_window_seconds
+        )
         regular_age = (as_of - quote_at).total_seconds()
         equity_like = instrument.asset_type in {
             AssetType.EQUITY,
@@ -1107,7 +1333,7 @@ class YahooFinanceAdapter:
             meta_session is not TradingSession.CLOSED
             and regular_age > self._max_delayed_seconds
         )
-        if current_cutoff and should_check_intraday:
+        if current_cutoff and should_check_intraday and not initial_intraday_quote:
             try:
                 (
                     intraday_bar,
@@ -1132,6 +1358,7 @@ class YahooFinanceAdapter:
                 if not current_session_observation:
                     additional_warnings.append(_INTRADAY_QUOTE_UNAVAILABLE_WARNING)
                 if intraday_bar.timestamp > quote_at:
+                    daily_derived_quote = False
                     quote_at = intraday_bar.timestamp
                     last = intraday_bar.close
                     fetched_at = intraday_fetched_at
@@ -1184,6 +1411,10 @@ class YahooFinanceAdapter:
         ):
             additional_warnings.append(_OVERNIGHT_QUOTE_UNAVAILABLE_WARNING)
 
+        if daily_derived_quote:
+            # quote_at is the disclosed conservative availability bound of the
+            # daily fact, not a proven last-trade or actual holiday-close time.
+            additional_warnings.append(_FUTURES_DAILY_DERIVED_QUOTE_TIME_WARNING)
         previous_close, previous_close_recovered = self._previous_session_close(
             bars,
             quote_at=quote_at,
@@ -1240,7 +1471,9 @@ class YahooFinanceAdapter:
         self._require_as_of(as_of)
         symbol = self._require_chart_instrument(instrument)
         timezone = _SEOUL if instrument.market is Market.KR else _NY
-        session_close = _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
+        session_close = (
+            _KR_SESSION_CLOSE if instrument.market is Market.KR else _SESSION_CLOSE
+        )
 
         if type(start) is not date or type(end) is not date:
             raise DataContractError(
@@ -1279,7 +1512,23 @@ class YahooFinanceAdapter:
                 rule="unsupported_adjustment",
             )
 
-        wire_interval = _INTERVAL_WIRE[interval]
+        aggregate_calendar_period = interval in {
+            USBarInterval.ONE_WEEK,
+            USBarInterval.ONE_MONTH,
+        }
+        parse_interval = (
+            USBarInterval.ONE_DAY if aggregate_calendar_period else interval
+        )
+        future_daily_mode = _future_daily_mode(instrument)
+        if parse_interval is USBarInterval.ONE_DAY:
+            if future_daily_mode == "unsupported":
+                raise NoMarketData(
+                    "Yahoo futures daily completion is not established for this instrument",
+                    details={"vendor": self.vendor_id.value, "operation": "bars"},
+                )
+            if future_daily_mode == "standard_metal":
+                session_close = _METAL_DAILY_COMPLETION_BOUND
+        wire_interval = _INTERVAL_WIRE[parse_interval]
         # Upstream period2 is exclusive; wire end remains inclusive.
         period1 = int(_local_midnight(start, timezone).timestamp())
         period2 = int(_local_midnight(end + timedelta(days=1), timezone).timestamp())
@@ -1313,7 +1562,7 @@ class YahooFinanceAdapter:
         bars = self._parse_ohlcv_arrays(
             result,
             operation="bars",
-            interval=interval,
+            interval=parse_interval,
             adjustment=adjustment,
             as_of=as_of,
             start=start,
@@ -1321,18 +1570,47 @@ class YahooFinanceAdapter:
             timezone=timezone,
             session_close=session_close,
             warning_codes=parse_warnings,
+            use_us_session_calendar=(
+                instrument.market is Market.US
+                and instrument.asset_type in _REGULAR_SESSION_ASSETS
+            ),
+            previous_daily_date_only=(future_daily_mode == "date_only_metal"),
         )
+        if parse_interval is USBarInterval.ONE_DAY:
+            if future_daily_mode == "standard_metal":
+                parse_warnings.append(_METAL_DAILY_COMPLETION_BOUND_WARNING)
+            elif future_daily_mode == "date_only_metal":
+                parse_warnings.append(_METAL_DAILY_DATE_ONLY_WARNING)
         if not bars:
             raise NoMarketData(
                 "Yahoo Finance returned no bars",
                 details={"vendor": self.vendor_id.value, "operation": "bars"},
             )
 
-        if interval is USBarInterval.ONE_DAY:
+        if parse_interval is USBarInterval.ONE_DAY:
+            self._require_unique_daily_timestamps(bars, timezone=timezone)
             expected_day = min(end, as_of.astimezone(timezone).date())
             self._assert_daily_not_stale(
                 bars, expected_day=expected_day, operation="bars", timezone=timezone
             )
+
+        if aggregate_calendar_period:
+            # Validate every daily fact before its opening/closing prices can
+            # disappear inside a valid-looking period candle. Keep the existing
+            # duplicate rule authoritative before domain series validation.
+            self._require_unique_daily_timestamps(bars, timezone=timezone)
+            USBarSeries(
+                instrument_id=instrument.instrument_id,
+                interval=USBarInterval.ONE_DAY,
+                adjustment=adjustment,
+                start=start,
+                end=end,
+                bars=tuple(bars),
+            )
+            bars = self._aggregate_daily_calendar_periods(
+                bars, interval=interval, timezone=timezone
+            )
+            parse_warnings.append(_CALENDAR_PERIOD_AGGREGATION_WARNING)
 
         series = USBarSeries(
             instrument_id=instrument.instrument_id,

@@ -190,3 +190,54 @@ def test_submission_status_is_read_only_and_recovers_exact_scope():
     assert svc.submission_status("s1", "once") == saved
     assert svc.submission_status("s2", "once") == {"status": "NOT_FOUND"}
     assert writer.append.call_count == 1
+
+
+def test_materials_pin_all_account_snapshots_without_copying_values():
+    svc, _projection, writer, _reader, _clock, _uow = setup()
+    svc._snapshots = NS(
+        latest_accounts=lambda: (
+            NS(snapshot_id="snapshot_a", account_as_of=NOW, positions=()),
+            NS(snapshot_id="snapshot_b", account_as_of=NOW - timedelta(days=2), positions=()),
+        )
+    )
+    card = svc.get("s1")
+    refs = card["review_materials"]["references"]
+    assert {r["source_id"] for r in refs if r["kind"] == "ACCOUNT_SNAPSHOT"} == {
+        "snapshot_a",
+        "snapshot_b",
+    }
+    assert "quantity" not in str(refs)
+    svc.submit("s1", request(card))
+    sent = writer.append.call_args.kwargs
+    assert sent["position_context_snapshot_id"] is None
+    assert len(sent["review_materials"].references) == 2
+
+
+def test_partial_material_listing_cannot_maintain_but_can_record_explicit_followup():
+    svc, _projection, writer, *_ = setup()
+    svc._snapshots = NS(
+        latest_accounts=lambda: tuple(
+            NS(snapshot_id=f"snapshot_{i}", account_as_of=NOW, positions=()) for i in range(501)
+        )
+    )
+    card = svc.get("s1")
+    assert card["review_materials"]["reference_count"] == 501
+    assert card["review_materials"]["references_complete"] is False
+    assert len(card["review_materials"]["references"]) == 500
+    with pytest.raises(DataContractError):
+        svc.submit("s1", request(card))
+    writer.append.assert_not_called()
+    svc.submit("s1", request(card, action="defer", review_due_at=NOW + timedelta(days=3)))
+    assert writer.append.call_args.kwargs["review_materials"].references_complete is False
+
+
+def test_failed_pending_source_count_is_unknown_not_zero_in_material_receipt():
+    svc, _projection, _writer, *_ = setup()
+
+    def unavailable(**kwargs):
+        raise RuntimeError("Synthetic unavailable source")
+
+    svc._reviews = NS(list_latest=unavailable, latest_for_revision=lambda _: None)
+    card = svc.get("s1")
+    assert card["coverage"]["OBSERVATION_REVIEWS"] == "UNAVAILABLE"
+    assert card["review_materials"]["pending_observation_reviews"] is None

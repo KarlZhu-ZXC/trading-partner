@@ -168,6 +168,7 @@ class CandidateKind(StrEnum):
     ASSUMPTION = "assumption"
     INVALIDATION_CONDITION = "invalidation_condition"
     OPEN_QUESTION = "open_question"
+    EVIDENCE_IMPACT = "evidence_impact"
     WATCHLIST_ITEM = "watchlist_item"
     # Persisted wire token retained for storage and historical payload compatibility.
     SUBJECT_STATUS_CHANGE = "case_status_change"

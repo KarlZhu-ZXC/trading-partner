@@ -488,6 +488,79 @@ def test_fidelity_preserves_attribution_guard_for_cited_block() -> None:
     assert str(error.value) == "NOTE_INTERPRETATION_ATTRIBUTION_KIND_CHANGED"
 
 
+class _CountingViewReviews:
+    def __init__(self, package) -> None:
+        self.package = package
+        self.calls = 0
+        self.explicit_review = False
+
+    def get(self, _note_revision_id: str, *, explicit_review: bool = False):
+        self.calls += 1
+        self.explicit_review = explicit_review
+        return self.package
+
+
+def _review_package(*, requires_deep_review: bool = True):
+    return SimpleNamespace(
+        requires_deep_review=requires_deep_review,
+        note_revision_id=REVISION_ID,
+        escalation_reasons=("EXPLICIT_USER_REVIEW",),
+        model_dump=lambda **_kwargs: {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_review_and_review_prepared_share_one_view_package(
+    fixed_clock, id_generator
+) -> None:
+    fixed_clock.set(NOW)
+    provider = _Provider()
+    view_reviews = _CountingViewReviews(_review_package())
+    service = ExternalNoteReviewDraftService(
+        provider,  # type: ignore[arg-type]
+        provider_name="opencode_go",
+        model="qwen3.8-max",
+        reviews=_Reviews(),  # type: ignore[arg-type]
+        notes=_Notes(),  # type: ignore[arg-type]
+        view_reviews=view_reviews,  # type: ignore[arg-type]
+        clock=fixed_clock,
+        id_generator=id_generator,
+    )
+
+    package = service.prepare_review(REVISION_ID, explicit_review=True)
+    result = await service.review_prepared(package)
+
+    assert result is not None and result.status == "SUCCEEDED"
+    assert view_reviews.calls == 1
+    assert view_reviews.explicit_review is True
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_review_prepared_skips_provider_when_deep_review_is_not_required(
+    fixed_clock, id_generator
+) -> None:
+    fixed_clock.set(NOW)
+    provider = _Provider()
+    reviews = _Reviews()
+    service = ExternalNoteReviewDraftService(
+        provider,  # type: ignore[arg-type]
+        provider_name="opencode_go",
+        model="qwen3.8-max",
+        reviews=reviews,  # type: ignore[arg-type]
+        notes=_Notes(),  # type: ignore[arg-type]
+        view_reviews=_CountingViewReviews(_review_package(requires_deep_review=False)),  # type: ignore[arg-type]
+        clock=fixed_clock,
+        id_generator=id_generator,
+    )
+
+    result = await service.review(REVISION_ID)
+
+    assert result is None
+    assert provider.requests == []
+    assert reviews.drafts == []
+
+
 @pytest.mark.asyncio
 async def test_max_review_draft_is_separate_strict_and_idempotent(
     fixed_clock, id_generator

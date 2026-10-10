@@ -157,7 +157,9 @@ class MarketToolCoordinator:
             if _is_otc_spot_or_cfd(instrument):
                 return await self._otc_quote(request_id, effective_as_of, instrument)
             # US equity/ETF/index/legacy future + CME specific contracts.
-            return await self._us.get_market_snapshot(request)
+            return await self._us.get_market_snapshot(
+                request.model_copy(update={"as_of": effective_as_of})
+            )
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
 
@@ -249,7 +251,9 @@ class MarketToolCoordinator:
                     adjustment=adjustment,
                     offer_side=_parse_offer_side(request.offer_side),
                 )
-            return await self._us.get_market_bars(request)
+            return await self._us.get_market_bars(
+                request.model_copy(update={"as_of": effective_as_of})
+            )
         except Exception as exc:  # noqa: BLE001 — envelope boundary
             return self._exception_failure(request_id, effective_as_of, exc)
 
@@ -257,7 +261,9 @@ class MarketToolCoordinator:
         request_id, effective_as_of = self._begin(request.as_of)
         try:
             if request.operation == "us_market":
-                return await self._us.get_market_context(request)
+                return await self._us.get_market_context(
+                    request.model_copy(update={"as_of": effective_as_of})
+                )
             if request.operation == "futures_curve":
                 return await self._futures_curve_envelope(request_id, effective_as_of, request)
             if request.operation == "spot_future_basis":
@@ -508,8 +514,10 @@ class MarketToolCoordinator:
                 )
             obs = spot_result.data
             price: Decimal | None = obs.mid if obs.mid is not None else obs.last
+            price_basis = PriceBasis.MID if obs.mid is not None else PriceBasis.LAST
             if price is None and obs.bid is not None and obs.ask is not None:
                 price = (obs.bid + obs.ask) / Decimal("2")
+                price_basis = PriceBasis.MID
             if price is None or obs.quote_at is None:
                 raise NoMarketData(
                     "spot observation lacks mid/last and quote_at for basis",
@@ -524,7 +532,7 @@ class MarketToolCoordinator:
                 currency=obs.currency,
                 unit=obs.unit,
                 observed_at=obs.quote_at,
-                price_basis=PriceBasis.MID if obs.mid is not None else PriceBasis.LAST,
+                price_basis=price_basis,
                 delivery_location=obs.delivery_location,
             )
         if instrument.asset_type is AssetType.FUTURE and instrument.market is Market.CME:

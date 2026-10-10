@@ -79,6 +79,12 @@ class ObsidianTradeRetroExporter:
                         f"- **{item.status.value}** · "
                         f"{finding_titles.get(item.finding_key, item.finding_key)}"
                         f"{f' — {item.note}' if item.note else ''}"
+                        f"{f' · Follow-up: {item.followup}' if item.followup else ''}"
+                        + (
+                            f" · {item.question_id} v{item.question_version}"
+                            if item.question_id
+                            else ""
+                        )
                     )
                     for item in review.finding_reviews
                 )

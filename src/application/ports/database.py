@@ -7,7 +7,7 @@ from typing import Final, Protocol
 # The application and its Alembic migration graph are released together. This
 # is a compatibility marker for read-only runtime preflight and diagnostics;
 # initialization commands remain the only code allowed to upgrade a database.
-CURRENT_MIGRATION_HEAD: Final[str] = "0072_external_note_review_drafts"
+CURRENT_MIGRATION_HEAD: Final[str] = "0073_research_evidence_links"
 
 
 class Database(Protocol):

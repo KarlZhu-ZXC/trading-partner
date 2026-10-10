@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from application.dto.question_research import QuestionResearchContext
+
 ResearchPhase = Literal["QUEUED", "READING", "SYNTHESIZING", "CHALLENGING", "CHECKING", "FINISHED"]
 ResearchStopReason = Literal[
     "COMPLETED",
@@ -26,6 +28,7 @@ class ResearchStep(BaseModel):
 class CopilotResearchReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     mode: Literal["research", "challenge"]
+    question_context: QuestionResearchContext | None = None
     phase: ResearchPhase
     stop_reason: ResearchStopReason | None = None
     max_seconds: int = Field(ge=30, le=600)

@@ -248,9 +248,19 @@ class CatalystAgendaService:
                 exc=exc,
             )
 
-    def query(self, request: AgendaQueryInput) -> ToolEnvelope[AgendaQueryDTO]:
+    def query(
+        self, request: AgendaQueryInput, *, offset: int = 0
+    ) -> ToolEnvelope[AgendaQueryDTO]:
         request_id = self._ids.new(EntityIdPrefix.REQ)
         try:
+            if type(offset) is not int or offset < 0:
+                raise InputValidationError("Agenda query offset must be non-negative")
+            # ``offset`` is an internal paging hook for the Console refresh.  A
+            # normal public query keeps the offset already validated on its
+            # Pydantic request model.
+            effective_offset = request.offset if offset == 0 else offset
+            if effective_offset != request.offset:
+                request = request.model_copy(update={"offset": effective_offset})
             as_of = request.as_of or self._clock.now()
             require_aware_datetime(as_of, field_name="as_of")
             window_end = as_of + timedelta(days=request.window_days)

@@ -4,10 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Card, Disclosure, ErrorNote, FieldLabel, Input, LinkButton, Select, Textarea, formatDate } from "../components/ui";
 import { ObservationRefreshStatus, startObservationRefresh } from "../components/observation-refresh-status";
 import { readQuickReviewDraft, saveQuickReviewDraft, clearQuickReviewDraft, type QuickPending } from "../lib/quick-review-draft";
+import { navigateQuestionResearch } from "../lib/question-research";
 import { getJson, postApi } from "../lib/api";
 
 type Dict = Record<string, unknown>;
+type ReviewMaterials = {
+  prepared_at: string; reference_count: number; references_complete: boolean;
+  references: Array<{ kind: string; source_id: string; version: string | null; as_of: string | null }>;
+  coverage: Record<string, string>; pending_observation_reviews: number | null;
+};
+type ReviewReceipt = {
+  decision_id: string; action: string; status: string; review_due_at: string | null;
+  completion?: {
+    decision_recorded: boolean; observation_reviews_changed: boolean;
+    remaining_observation_reviews_at_review: number | null;
+    materials_status: string; materials_journal_id: string | null;
+    materials: ReviewMaterials | null;
+  };
+};
 type Snapshot = {
+  review_materials?: ReviewMaterials;
   subject_id: string; title: string; instrument_id: string | null; review_token: string; expires_at: string;
   baseline: { decision_id: string; title: string; rationale?: string; decided_at: string; recorded_at: string; theses: Array<{ thesis_id: string; revision_id: string; statement: string; assumptions?: Dict[]; invalidations?: Dict[] }>; plan: { plan_id: string; version: number } | null } | null;
   changes: Array<{ change_id: string; title: string; kind: string; old_value: unknown; new_value: unknown; occurred_at: string; relation_detail?: string; source_names?: string[] }>;
@@ -37,13 +53,14 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
   const [notesChanged, setNotesChanged] = useState(false);
   const [notesUpdated, setNotesUpdated] = useState(false);
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ decision_id: string; action: string; status: string; review_due_at: string | null } | null>(null);
+  const [result, setResult] = useState<ReviewReceipt | null>(null);
   const [now, setNow] = useState(Date.now());
   const loaded = useRef(false);
   const [readFailed, setReadFailed] = useState(false);
   const generation = useRef(0);
   const intent = useRef<{ signature: string; key: string } | null>(null);
   async function load(afterNoteRefresh = false) {
+    loaded.current = true;
     const sequence = ++generation.current;
     setLoading(true); setError(null); setReadFailed(false);
     try {
@@ -63,7 +80,7 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
   async function recover(attempt: QuickPending) {
     setRecovery("checking");
     try {
-      const response = await getJson(`/api/research/${encodeURIComponent(subjectId)}/quick-review/submissions/${encodeURIComponent(attempt.request.idempotency_key)}`) as { data: { status: string; decision_id: string; action: string; review_due_at: string | null } };
+      const response = await getJson(`/api/research/${encodeURIComponent(subjectId)}/quick-review/submissions/${encodeURIComponent(attempt.request.idempotency_key)}`) as { data: ReviewReceipt };
       if (response.data.status === "RECORDED" && response.data.decision_id) { setResult(response.data); setPending(null); setRecovery(null); clearSaved(); }
       else if (response.data.status === "NOT_FOUND") setRecovery("not_found");
       else throw new Error("Saved submission status is unavailable.");
@@ -85,8 +102,8 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
     else clearSaved();
   }, [action, rationale, due, pending, storageReady, result]);
   useEffect(() => {
-    if (enabled && !loaded.current) { loaded.current = true; void load(); }
-  }, [enabled]);
+    if (enabled && storageReady && !pending && !result && !loaded.current) { loaded.current = true; void load(); }
+  }, [enabled, storageReady, pending, result]);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => { window.clearInterval(timer); generation.current += 1; }; }, []);
   useEffect(() => {
     const changed = () => {
@@ -98,11 +115,11 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
   }, [enabled, sending, result, pending, thinkingDraft, subjectId]);
   const expired = !snapshot || !Number.isFinite(Date.parse(snapshot.expires_at)) || now >= Date.parse(snapshot.expires_at);
   const dueIso = due && Number.isFinite(Date.parse(due)) ? new Date(due).toISOString() : null;
-  const invalid = !rationale.trim() || (action === "maintain" ? !snapshot?.baseline || !snapshot.can_maintain : !dueIso || Date.parse(dueIso) <= now);
+  const invalid = !rationale.trim() || (action === "maintain" ? !snapshot?.baseline || !snapshot.can_maintain || snapshot.review_materials?.references_complete === false : !dueIso || Date.parse(dueIso) <= now);
   async function sendAttempt(attempt: QuickPending) {
     setSending(true); setError(null); setPending(attempt); persist(attempt);
     try {
-      const response = await postApi<{ data: { decision_id: string; action: string; status: string; review_due_at: string | null } }>(`/api/research/${encodeURIComponent(subjectId)}/quick-review`, attempt.request);
+      const response = await postApi<{ data: ReviewReceipt }>(`/api/research/${encodeURIComponent(subjectId)}/quick-review`, attempt.request);
       if (!response.data?.decision_id || response.data.status !== "RECORDED") throw new Error("The recorded outcome could not be verified. Check or retry this saved submission.");
       setResult(response.data); setPending(null); setRecovery(null); clearSaved();
     } catch (cause) { setRecovery("unknown"); setError(cause instanceof Error ? cause.message : "Submission outcome unavailable. Check or retry this saved submission."); }
@@ -115,8 +132,10 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
     if (intent.current?.signature !== signature) intent.current = { signature, key: crypto.randomUUID() };
     await sendAttempt({ request: { ...body, idempotency_key: intent.current.key }, expires_at: snapshot.expires_at });
   }
-  return <Card kicker="REVIEWED JUDGMENT" title={snapshot?.title ?? "Quick Review"}>
+  return <Card kicker="REVIEWED JUDGMENT" title={result ? "Review Receipt" : snapshot?.title ?? "Quick Review"}>
     <p>Review your latest thinking and what changed. Maintain the prior judgment, adjust it, or schedule a follow-up.</p>
+    {!result && snapshot?.review_materials && <p>Materials prepared {formatDate(snapshot.review_materials.prepared_at)} · {snapshot.review_materials.reference_count} exact references. This list records the prepared context; it does not mark individual notes as read or adopted.</p>}
+    {!result && snapshot?.review_materials?.references_complete === false && <p>Material references are partial. Inspect individual sources or save a follow-up before continuing.</p>}
     <ErrorNote>{error}</ErrorNote>
     {storageWarning && <p role="status">{storageWarning}</p>}
     {restored && !result && <p>Your saved Quick Review draft was restored. Nothing has been submitted automatically.</p>}
@@ -130,7 +149,7 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
     </div>}
     {loading && <p>Loading review context…</p>}
     {!result && <Button disabled={loading || sending || Boolean(pending)} onClick={() => { void load(); }}>Refresh Review Context</Button>}
-    {snapshot && <>
+    {snapshot && !result && <>
       <Disclosure title="Prior Reviewed Judgment" defaultOpen><p>{snapshot.baseline ? snapshot.baseline.title : "No prior reviewed judgment; record a follow-up or adjust the research first."}</p>{snapshot.baseline && <><p>{snapshot.baseline.rationale}</p><p>Reviewed {formatDate(snapshot.baseline.recorded_at)}</p>{snapshot.baseline.theses.map((thesis) => <div key={thesis.revision_id}><p>{thesis.statement}</p>{thesis.assumptions?.length ? <pre>{readable(thesis.assumptions)}</pre> : null}{thesis.invalidations?.length ? <pre>{readable(thesis.invalidations)}</pre> : null}</div>)}<p>{snapshot.baseline.plan ? `Reviewed Trade Plan · version ${snapshot.baseline.plan.version}` : "No Plan pinned to this review."}</p></>}</Disclosure>
       <Disclosure title="Latest Thinking" defaultOpen><p>From your latest synced Moomoo notes. Refresh notes when you want to fetch newer thinking.</p>
       {(snapshot.latest_thinking ?? []).length === 0 && <p>No matching synced thinking is available.</p>}
@@ -143,12 +162,25 @@ export function QuickReview({ subjectId, enabled, onAdjustThesis, onAdjustPlan }
       </Disclosure>
       {(snapshot.warnings.length > 0 || Object.values(snapshot.coverage).some((value) => ["UNAVAILABLE", "PARTIAL", "FAILED", "INCOMPLETE"].includes(value))) && <p>Some evidence is missing or unavailable. Review the changes with that gap in mind, or schedule a follow-up.</p>}
       {snapshot.pending_observation_reviews > 0 && <p>{snapshot.pending_observation_reviews} notes still need their own review. This decision will not adopt them. <LinkButton href="/decision-workbench#notes">Review Notes</LinkButton></p>}
-      <Disclosure title="Source Details"><pre>{readable({ coverage: snapshot.coverage, warnings: snapshot.warnings, baseline: snapshot.baseline, notes: (snapshot.latest_thinking ?? []).map(({ user_excerpt: _userExcerpt, user_summary: _userSummary, other_viewpoints: _otherViewpoints, ...source }) => source), positions: snapshot.positions })}</pre></Disclosure>
+      <Disclosure title="Source Details"><pre>{readable({ coverage: snapshot.coverage, warnings: snapshot.warnings, materials: snapshot.review_materials, baseline: snapshot.baseline, notes: (snapshot.latest_thinking ?? []).map(({ user_excerpt: _userExcerpt, user_summary: _userSummary, other_viewpoints: _otherViewpoints, ...source }) => source), positions: snapshot.positions })}</pre></Disclosure>
       <Disclosure title={`Changes to Review · ${snapshot.changes.length}`} defaultOpen>{snapshot.changes.length === 0 ? <p>No changes returned within the disclosed coverage.</p> : snapshot.changes.map((change) => <Disclosure key={change.change_id} title={change.title}><p>{formatDate(change.occurred_at)} · {change.source_names?.join(", ")}</p><p>{change.relation_detail}</p><p>Previous Value</p><pre>{readable(change.old_value)}</pre><p>New Value</p><pre>{readable(change.new_value)}</pre></Disclosure>)}</Disclosure>
       <Disclosure title="Durable Positions">{snapshot.positions.length === 0 ? <p>No positions returned; this does not assert complete broker coverage.</p> : snapshot.positions.map((position) => <p key={`${position.snapshot_id}:${position.account_ref}`}>{position.account_ref}: {position.quantity} · {position.currency} · {formatDate(position.as_of)}</p>)}</Disclosure>
       <div className="page-actions"><Button disabled={sending || Boolean(pending)} onClick={() => onAdjustThesis()}>Adjust Thesis</Button><Button disabled={sending || Boolean(pending)} onClick={onAdjustPlan}>Adjust Plan</Button>{snapshot.instrument_id && <LinkButton href={`/charts?instrument_id=${encodeURIComponent(snapshot.instrument_id)}&subject_id=${encodeURIComponent(subjectId)}`}>Inspect Chart</LinkButton>}<LinkButton href={`/research?subject_id=${encodeURIComponent(subjectId)}&section=valuation`}>Inspect Valuation</LinkButton><LinkButton href={`/research?subject_id=${encodeURIComponent(subjectId)}&section=calibration`}>Inspect Calibration</LinkButton></div>
     </>}
-    {result ? <div aria-live="polite"><p>Recorded {result.action === "maintain" ? "NO_ACTION" : "Follow-up"}{result.review_due_at ? ` · Due ${formatDate(result.review_due_at)}` : ""}</p><Disclosure title="Decision Receipt"><p>{result.decision_id}</p></Disclosure><Button onClick={() => { setResult(null); intent.current = null; setAction("maintain"); setRationale(DEFAULT_REASON); setDue(""); void load(); }}>Review Next</Button></div> : <>
+    {result ? <div aria-live="polite">
+      <p>Recorded {result.action === "maintain" ? "NO_ACTION" : "Follow-up"}{result.review_due_at ? ` · Due ${formatDate(result.review_due_at)}` : ""}</p>
+      <p>Your Decision was saved. Individual Observation reviews keep their own status.</p>
+      {result.completion?.remaining_observation_reviews_at_review != null && <p>{result.completion.materials?.coverage.OBSERVATION_REVIEWS === "PARTIAL" ? "At least " : ""}{result.completion.remaining_observation_reviews_at_review} notes remained pending at the time of this review. Open Notes to inspect their current status.</p>}
+      {result.completion?.materials_status === "AVAILABLE" && result.completion.remaining_observation_reviews_at_review == null && <p>The pending-note count was unavailable when the context was prepared. Open Notes to check current source coverage.</p>}
+      {result.completion?.materials_status !== "AVAILABLE" && <p>The Decision is recorded; its material-reference receipt is unavailable. Checking the receipt does not submit another Decision.</p>}
+      {result.completion?.materials && <>
+        <p>Prepared {formatDate(result.completion.materials.prepared_at)} · {result.completion.materials.reference_count} material references · {result.completion.materials.references_complete ? "Reference listing complete" : "Reference listing partial"}</p>
+        {Object.values(result.completion.materials.coverage).some((value) => ["PARTIAL", "UNAVAILABLE", "FAILED", "INCOMPLETE"].includes(value)) && <p>This Decision retains disclosed evidence gaps; it does not certify complete source coverage.</p>}
+      </>}
+      {result.action === "defer" && <LinkButton href={`/research?subject_id=${encodeURIComponent(subjectId)}&section=thesis#research-section-questions`} onClick={(event) => navigateQuestionResearch(event, `/research?subject_id=${encodeURIComponent(subjectId)}&section=thesis#research-section-questions`)}>Continue with Research Questions</LinkButton>}
+      <Disclosure title="Decision Receipt"><p>{result.decision_id}</p>{result.completion?.materials && <pre>{readable(result.completion.materials)}</pre>}</Disclosure>
+      <div className="page-actions"><LinkButton href={`/decision-workbench?subject_id=${encodeURIComponent(subjectId)}#notes`}>Open Remaining Notes</LinkButton><LinkButton href="/">Return to Today Review</LinkButton><Button onClick={() => { setResult(null); intent.current = null; setAction("maintain"); setRationale(DEFAULT_REASON); setDue(""); void load(); }}>Review Next</Button></div>
+    </div> : <>
       {snapshot && !snapshot.can_maintain && <p>{!snapshot.baseline ? "No prior reviewed judgment is available to maintain. Adjust the research or schedule a follow-up." : "This review has more changes than can be confirmed together. Inspect the changes and adjust the research or schedule a follow-up."}</p>}
       {snapshot && expired && <p>Review context expired. Refresh to review the current evidence before submitting.</p>}
       <label><FieldLabel required>Review Action</FieldLabel><Select required disabled={sending || Boolean(pending)} value={action} onChange={(event) => { const next = event.target.value as "maintain" | "defer"; setAction(next); if (next === "defer" && rationale === DEFAULT_REASON) setRationale(""); }}><option value="maintain">Maintain Prior Judgment</option><option value="defer">Defer for Missing Evidence</option></Select></label>

@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Annotated, Any, Final, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from interfaces.capabilities.catalog import CATEGORY_CAPABILITIES, CapabilityCategory
 from interfaces.mcp.tool_inventory import DIRECT_PUBLIC_TOOL_NAMES
 from interfaces.mcp.tools.compact import (
     CapabilityEffect,
@@ -29,7 +31,8 @@ DISCOVERY_TOOL_NAME: Final = "capability_discover"
 READ_TOOL_NAME: Final = "capability_read"
 WRITE_TOOL_NAME: Final = "capability_write"
 DISCOVERY_DESCRIPTION: Final = (
-    "List public capabilities when tool is omitted, or return one exact call schema."
+    "List public capabilities when tool is omitted; optionally filter by category, "
+    "or return one exact call schema."
 )
 READ_DESCRIPTION: Final = "Read one public capability with its original arguments."
 WRITE_DESCRIPTION: Final = "Invoke one confirmed public capability with its original arguments."
@@ -39,13 +42,20 @@ _WRONG_ROUTE = "Capability is not available on this route."
 _INVALID_CONFIRMATION = "Confirmation does not match the capability."
 _UNKNOWN_OPERATION = "Unknown public operation."
 
+type _DiscoveryCategoryInput = Annotated[
+    str,
+    Field(json_schema_extra={"enum": list(CATEGORY_CAPABILITIES)}),
+] | None
+
 # Short descriptions are the only prose emitted by the no-argument catalog.
 SHORT_DESCRIPTIONS: Final[dict[str, str]] = {
     "system_health": "Read durable system health, data quality, and attention summary.",
     "instrument_resolve": "Resolve a market symbol to one canonical instrument.",
     "research_get": "Read durable Research Subjects, context, history, search, and attention.",
     "investment_case_manage": "Create, update, or archive a Research Subject with confirmation.",
-    "research_judgment_propose": "Propose Research state, Thesis, Plan, or Instrument changes.",
+    "research_judgment_propose": (
+        "Propose research, evidence-impact, question, Thesis, Plan, or Instrument changes."
+    ),
     "research_judgment_confirm": "Confirm or resolve an explicit Research candidate decision.",
     "research_memory_append": "Append confirmed Journal, Decision, Agenda, or review records.",
     "a_share_get_facts": "Read sourced A-share facts and research datasets.",
@@ -164,6 +174,14 @@ def _validate_name(value: Any, *, optional: bool = False) -> str | None:
     return value
 
 
+def _validate_category(value: Any, *, optional: bool = False) -> CapabilityCategory | None:
+    if value is None and optional:
+        return None
+    if not isinstance(value, str) or value not in CATEGORY_CAPABILITIES:
+        raise ToolError(_INVALID_REQUEST)
+    return cast(CapabilityCategory, value)
+
+
 def _route(index: _DiscoveryIndex, tool: str) -> str:
     if tool in DIRECT_PUBLIC_TOOL_NAMES:
         return tool
@@ -202,17 +220,26 @@ def _metadata(index: _DiscoveryIndex, tool: str, operation: str | None) -> dict[
     }
 
 
-def _discover(index: _DiscoveryIndex, tool: Any, operation: Any) -> Any:
+def _discover(index: _DiscoveryIndex, tool: Any, operation: Any, category: Any) -> Any:
     tool_name = _validate_name(tool, optional=True)
     operation_name = _validate_name(operation, optional=True)
+    category_name = _validate_category(category, optional=True)
     if tool_name is None:
         if operation_name is not None:
             raise ToolError(_INVALID_REQUEST)
+        if category_name is not None:
+            return [
+                {"tool": name, "description": description}
+                for name, description in SHORT_DESCRIPTIONS.items()
+                if name in index.policies and name in CATEGORY_CAPABILITIES[category_name]
+            ]
         return [
             {"tool": name, "description": description}
             for name, description in SHORT_DESCRIPTIONS.items()
             if name in index.policies
         ]
+    if category_name is not None:
+        raise ToolError(_INVALID_REQUEST)
     if tool_name not in index.policies:
         raise ToolError(_UNKNOWN_TOOL)
 
@@ -261,9 +288,11 @@ def public_input_schema(tool: MCPTool) -> dict[str, Any]:
 
 def _register_discovery_tool(server: FastMCP, index: _DiscoveryIndex) -> None:
     async def capability_discover(
-        tool: str | None = None, operation: str | None = None
+        tool: str | None = None,
+        operation: str | None = None,
+        category: _DiscoveryCategoryInput = None,
     ) -> Any:
-        return _discover(index, tool, operation)
+        return _discover(index, tool, operation, category)
 
     server.add_tool(
         capability_discover,

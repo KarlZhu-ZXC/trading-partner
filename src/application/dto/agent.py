@@ -192,12 +192,17 @@ class AgentTurnRequest:
     external_message_ref: str | None = None
     ephemeral_context: EphemeralContext | None = None
     attachments: tuple[AgentImageInput, ...] = ()
+    question_context_token: str | None = None
     research_mode: Literal["standard", "research", "challenge"] = "standard"
     research_max_seconds: int = 180
     research_max_model_calls: int = 8
     research_max_tool_calls: int = 24
 
     def __post_init__(self) -> None:
+        if self.question_context_token is not None and (
+            self.research_mode == "standard" or not 1 <= len(self.question_context_token) <= 128
+        ):
+            raise ValueError("Question Research requires a bounded read-only context")
         if self.research_mode not in {"standard", "research", "challenge"}:
             raise ValueError("Unknown research mode")
         for name, value, minimum, maximum in (

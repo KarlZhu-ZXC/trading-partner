@@ -17,6 +17,11 @@ from pydantic import (
     model_validator,
 )
 
+from application.dto.research_links import (
+    EvidenceImpactCandidatePayload,
+    EvidenceImpactDTO,
+    ResearchSourcePayload,
+)
 from application.dto.trade_plan import TradePlanDTO
 from domain.common.enums import (
     AssumptionStatus,
@@ -110,9 +115,7 @@ class ThesisRevisionCandidatePayload(BaseModel):
 
     @field_validator("rival_thesis_ids")
     @classmethod
-    def _unique_rival_thesis_ids(
-        cls, value: tuple[str, ...] | None
-    ) -> tuple[str, ...] | None:
+    def _unique_rival_thesis_ids(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
         if value is None:
             return None
         if len(value) != len(set(value)):
@@ -163,11 +166,36 @@ class OpenQuestionCandidatePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
 
     kind: Literal["open_question"] = "open_question"
-    action: Literal["create", "answer", "mark_stale", "close"]
+    action: Literal["create", "update_research", "answer", "mark_stale", "close", "link_decision"]
     question_id: str | None = None
     text: str | None = Field(default=None, max_length=2000)
     answer_summary: str | None = Field(default=None, max_length=4000)
     closed_reason: str | None = Field(default=None, max_length=1000)
+
+    expected_version: int | None = Field(default=None, ge=1)
+    evidence_requirements: tuple[str, ...] = Field(default=(), max_length=20)
+    due_at: datetime | None = None
+    progress_note: str | None = Field(default=None, max_length=4000)
+    source_refs: tuple[ResearchSourcePayload, ...] = Field(default=(), max_length=20)
+    decision_ids: tuple[str, ...] = Field(default=(), max_length=20)
+    criteria_met: bool = False
+
+    @field_validator("due_at")
+    @classmethod
+    def _due_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            require_aware_datetime(value)
+        return value
+
+    @field_validator("evidence_requirements")
+    @classmethod
+    def _requirements(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        result = tuple(value.strip() for value in values)
+        if any(not value or len(value) > 2000 for value in result):
+            raise ValueError("Evidence requirements must be bounded nonblank text")
+        if len(set(result)) != len(result):
+            raise ValueError("Duplicate evidence requirements")
+        return result
 
     @model_validator(mode="after")
     def _action_fields(self) -> Self:
@@ -181,6 +209,11 @@ class OpenQuestionCandidatePayload(BaseModel):
                 raise ValueError("answer open_question requires question_id")
             if self.answer_summary is None or not self.answer_summary.strip():
                 raise ValueError("answer open_question requires answer_summary")
+        elif self.action in {"update_research", "link_decision"}:
+            if self.question_id is None or self.expected_version is None:
+                raise ValueError("research updates require an exact question/version")
+            if self.action == "link_decision" and not self.decision_ids:
+                raise ValueError("link_decision requires explicit Decision references")
         elif self.action == "mark_stale":
             if self.question_id is None:
                 raise ValueError("mark_stale open_question requires question_id")
@@ -189,6 +222,28 @@ class OpenQuestionCandidatePayload(BaseModel):
                 raise ValueError("close open_question requires question_id")
             if self.closed_reason is None or not self.closed_reason.strip():
                 raise ValueError("close open_question requires closed_reason")
+        if self.action == "create" and self.expected_version is not None:
+            raise ValueError("create cannot set expected_version")
+        # Preserve historical payloads for the original four actions. New
+        # metadata operations cannot masquerade as text/answer/status edits.
+        if self.action in {"update_research", "link_decision"} and any(
+            value is not None for value in (self.text, self.answer_summary, self.closed_reason)
+        ):
+            raise ValueError("research metadata actions cannot change question text or answers")
+        if self.action != "answer" and self.criteria_met:
+            raise ValueError("criteria_met belongs to answer only")
+        if self.action not in {"create", "update_research"} and (
+            self.evidence_requirements or self.due_at is not None or self.progress_note is not None
+        ):
+            raise ValueError("research metadata belongs to create/update_research")
+        if self.action not in {"create", "update_research", "answer"} and self.source_refs:
+            raise ValueError("source_refs not allowed for this action")
+        if self.action != "link_decision" and self.decision_ids:
+            raise ValueError("decision_ids belongs to link_decision only")
+        if len(set(self.decision_ids)) != len(self.decision_ids):
+            raise ValueError("Duplicate Decision references")
+        if len({ref.to_domain() for ref in self.source_refs}) != len(self.source_refs):
+            raise ValueError("Duplicate source references")
         return self
 
 
@@ -268,9 +323,7 @@ class WatchlistCandidatePayload(BaseModel):
                 if self.symbol is None or not self.symbol.strip():
                     raise ValueError("create watchlist_item requires symbol or instrument_id")
             else:
-                _, instrument_market, instrument_symbol = parse_instrument_id(
-                    self.instrument_id
-                )
+                _, instrument_market, instrument_symbol = parse_instrument_id(self.instrument_id)
                 if self.market is not None and self.market != instrument_market:
                     raise ValueError("market must match instrument_id")
                 if self.symbol is not None and self.symbol.strip() != instrument_symbol:
@@ -297,9 +350,7 @@ class WatchlistCandidatePayload(BaseModel):
                 if self.selection_reason is None or not self.selection_reason.strip():
                     raise ValueError("selected/rejected candidate requires selection_reason")
             elif self.selection_reason is not None:
-                raise ValueError(
-                    "selection_reason is only valid for selected/rejected candidate"
-                )
+                raise ValueError("selection_reason is only valid for selected/rejected candidate")
             if (
                 self.new_status == WatchlistItemStatus.PROMOTED_TO_SUBJECT
                 and self.promoted_to_subject_id is None
@@ -492,6 +543,7 @@ CandidateRevisionPayload = Annotated[
     | AssumptionCandidatePayload
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
+    | EvidenceImpactCandidatePayload
     | WatchlistCandidatePayload
     | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload,
@@ -503,6 +555,7 @@ _CANDIDATE_PAYLOAD_ADAPTER: TypeAdapter[
     | AssumptionCandidatePayload
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
+    | EvidenceImpactCandidatePayload
     | WatchlistCandidatePayload
     | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload
@@ -516,6 +569,7 @@ def parse_candidate_payload(
     | AssumptionCandidatePayload
     | InvalidationCandidatePayload
     | OpenQuestionCandidatePayload
+    | EvidenceImpactCandidatePayload
     | WatchlistCandidatePayload
     | SubjectUpdateCandidatePayload
     | TradePlanCandidatePayload
@@ -530,6 +584,7 @@ def candidate_payload_to_json(
         | AssumptionCandidatePayload
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
+        | EvidenceImpactCandidatePayload
         | WatchlistCandidatePayload
         | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
@@ -829,8 +884,14 @@ class OpenQuestionDTO(_BaseResearchDTO):
     answer_summary: str | None
     closed_without_answer_reason: str | None
     proposed_by: str
+    version: int = 1
+    evidence_requirements: tuple[str, ...] = ()
+    due_at: datetime | None = None
+    progress_note: str | None = None
+    source_refs: tuple[ResearchSourcePayload, ...] = ()
+    decision_ids: tuple[str, ...] = ()
 
-    @field_validator("asked_at", "answered_at")
+    @field_validator("asked_at", "answered_at", "due_at")
     @classmethod
     def _aware(cls, value: datetime | None) -> datetime | None:
         if value is not None:
@@ -849,6 +910,14 @@ class OpenQuestionDTO(_BaseResearchDTO):
             answer_summary=question.answer_summary,
             closed_without_answer_reason=question.closed_without_answer_reason,
             proposed_by=question.proposed_by,
+            version=question.version,
+            evidence_requirements=question.evidence_requirements,
+            due_at=question.due_at,
+            progress_note=question.progress_note,
+            source_refs=tuple(
+                ResearchSourcePayload.model_validate(ref) for ref in question.source_refs
+            ),
+            decision_ids=question.decision_ids,
         )
 
     @classmethod
@@ -937,6 +1006,7 @@ class CandidateRevisionDTO(_BaseResearchDTO):
         | AssumptionCandidatePayload
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
+        | EvidenceImpactCandidatePayload
         | WatchlistCandidatePayload
         | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload
@@ -1010,6 +1080,8 @@ class ResearchStateDTO(_BaseResearchDTO):
     pending_candidates: tuple[CandidateRevisionDTO, ...]
     current_trade_plan: TradePlanDTO | None = None
     trade_plan_versions: tuple[TradePlanDTO, ...] = ()
+    evidence_impacts: tuple[EvidenceImpactDTO, ...] = ()
+    evidence_impacts_has_more: bool = False
 
 
 class ConfirmedRevisionDTO(_BaseResearchDTO):
@@ -1033,6 +1105,7 @@ def kind_from_payload(
         | AssumptionCandidatePayload
         | InvalidationCandidatePayload
         | OpenQuestionCandidatePayload
+        | EvidenceImpactCandidatePayload
         | WatchlistCandidatePayload
         | SubjectUpdateCandidatePayload
         | TradePlanCandidatePayload

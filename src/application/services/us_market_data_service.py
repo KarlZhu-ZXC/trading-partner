@@ -9,6 +9,7 @@ Context composition lives in ``USMarketContextService``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 
 from application.dto.provider_routing import (
@@ -16,6 +17,7 @@ from application.dto.provider_routing import (
     RouterExecutionResult,
     ToolDataPolicy,
 )
+from application.dto.tool_envelope import WarningInfo
 from application.ports.category_provider import CategoryProvider
 from application.ports.clock import Clock
 from application.ports.provider_cache_codec import ProviderCacheCodec
@@ -26,6 +28,7 @@ from domain.common.enums import (
     AssetType,
     DataCategory,
     Market,
+    TradingSession,
     VendorId,
 )
 from domain.common.errors import DataContractError
@@ -374,8 +377,13 @@ class USMarketDataService:
     ) -> RouterExecutionResult[USQuote]:
         self._require_exchange_tradable(instrument)
         self._require_as_of_not_future(as_of, operation=OP_QUOTE)
+        params = (
+            {"daily_completion_policy": "metal_trade_date_or_prior_date.v1"}
+            if instrument.asset_type is AssetType.FUTURE
+            else {}
+        )
         fingerprint = build_us_fingerprint(
-            OP_QUOTE, instrument.instrument_id, {}, as_of
+            OP_QUOTE, instrument.instrument_id, params, as_of
         )
 
         async def _call(adapter: CategoryProvider) -> ProviderSuccess[USQuote]:
@@ -392,7 +400,8 @@ class USMarketDataService:
         def _validator(success: ProviderSuccess[USQuote]) -> None:
             self._validate_quote(success, instrument=instrument, as_of=as_of)
 
-        return await self._router.execute(
+        policy = self._quote_bars_policy(instrument, bars=False, as_of=as_of)
+        result = await self._router.execute(
             market=instrument.market,
             category=DataCategory.MARKET_QUOTE,
             call=_call,
@@ -400,11 +409,35 @@ class USMarketDataService:
             request_fingerprint=fingerprint,
             instrument=instrument,
             as_of=as_of,
-            tool_policy=self._quote_bars_policy(instrument, bars=False, as_of=as_of),
+            tool_policy=policy,
             bypass_cache=False,
             cache_codec=self._quote_codec,
             result_validator=_validator,
         )
+        if (
+            policy is _US_OVERNIGHT_QUOTE_POLICY
+            and result.ok
+            and result.value is not None
+            and result.value.session is not TradingSession.OVERNIGHT
+            and not any(w.code == "OVERNIGHT_QUOTE_UNAVAILABLE" for w in result.warnings)
+            and (result.meta is None or "OVERNIGHT_QUOTE_UNAVAILABLE" not in result.meta.warnings)
+        ):
+            # The final source may be a daily fallback or its cache entry. The
+            # requested overnight observation remains unavailable in both cases.
+            result = replace(
+                result,
+                warnings=(
+                    *result.warnings,
+                    WarningInfo(
+                        code="OVERNIGHT_QUOTE_UNAVAILABLE",
+                        message=(
+                            "No verified overnight observation was available; the returned price "
+                            "is the latest timestamped regular/pre/post-market value."
+                        ),
+                    ),
+                ),
+            )
+        return result
 
     async def get_bars(
         self,
@@ -450,6 +483,8 @@ class USMarketDataService:
             "interval": interval.value,
             "start": start.isoformat(),
         }
+        if instrument.asset_type is AssetType.FUTURE:
+            params["daily_completion_policy"] = "metal_trade_date_or_prior_date.v1"
         fingerprint = build_us_fingerprint(
             OP_BARS, instrument.instrument_id, params, as_of
         )

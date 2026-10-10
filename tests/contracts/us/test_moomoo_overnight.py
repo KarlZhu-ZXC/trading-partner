@@ -10,7 +10,7 @@ import pytest
 
 from conftest import FixedClock
 from domain.common.enums import AssetType, DataCategory, Market, TradingSession, VendorId
-from domain.common.errors import NoMarketData
+from domain.common.errors import DataContractError, NoMarketData
 from domain.instruments.models import Instrument
 from infrastructure.providers.moomoo_rate_limiter import MoomooOpenDOperation
 from infrastructure.providers.us.moomoo_overnight import MoomooOvernightQuoteAdapter
@@ -39,20 +39,30 @@ class _Context:
         *,
         ok: bool = True,
         market_state: str = "OVERNIGHT",
+        state_rows: list[dict[str, object]] | None = None,
+        snapshot_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self.row = row
         self.ok = ok
         self.market_state = market_state
+        self.state_rows = state_rows
+        self.snapshot_rows = snapshot_rows
+        self.snapshot_called = False
         self.closed = False
         self.codes: list[str] = []
 
     def get_market_snapshot(self, codes: list[str]) -> tuple[bool, object]:
         self.codes = codes
-        return self.ok, [self.row]
+        self.snapshot_called = True
+        return self.ok, self.snapshot_rows if self.snapshot_rows is not None else [self.row]
 
     def get_market_state(self, codes: list[str]) -> tuple[bool, object]:
         self.codes = codes
-        return self.ok, [{"code": codes[0], "market_state": self.market_state}]
+        return self.ok, (
+            self.state_rows
+            if self.state_rows is not None
+            else [{"code": codes[0], "market_state": self.market_state}]
+        )
 
     def close(self) -> None:
         self.closed = True
@@ -170,3 +180,58 @@ async def test_time_window_alone_cannot_relabel_non_overnight_market_state() -> 
         await adapter.get_quote(_instrument(), NOW)
     assert limiter.operations == [MoomooOpenDOperation.MARKET_STATE]
     assert context.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", ["state", "snapshot"])
+@pytest.mark.parametrize("code", [None, "", "US.SPY"])
+async def test_overnight_quote_rejects_unverified_response_identity(
+    response: str, code: str | None
+) -> None:
+    state: dict[str, object] = {"code": "US.GDX", "market_state": "OVERNIGHT"}
+    snapshot = _row()
+    row = state if response == "state" else snapshot
+    if code is None:
+        row.pop("code")
+    else:
+        row["code"] = code
+    context = _Context(snapshot, state_rows=[state])
+    adapter = MoomooOvernightQuoteAdapter(
+        enabled=True,
+        host="127.0.0.1",
+        port=11111,
+        clock=FixedClock(NOW),
+        context_factory=lambda _host, _port: context,
+    )
+
+    with pytest.raises(DataContractError) as captured:
+        await adapter.get_quote(_instrument(), NOW)
+
+    assert captured.value.details["rule"] == "instrument_identity"
+    assert context.closed is True
+    assert context.snapshot_called is (response == "snapshot")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", ["state", "snapshot"])
+@pytest.mark.parametrize("row_count", [0, 2])
+async def test_overnight_quote_requires_one_response_row(response: str, row_count: int) -> None:
+    state: dict[str, object] = {"code": "US.GDX", "market_state": "OVERNIGHT"}
+    context = _Context(
+        _row(),
+        state_rows=[state] * row_count if response == "state" else [state],
+        snapshot_rows=[_row()] * row_count if response == "snapshot" else [_row()],
+    )
+    adapter = MoomooOvernightQuoteAdapter(
+        enabled=True,
+        host="127.0.0.1",
+        port=11111,
+        clock=FixedClock(NOW),
+        context_factory=lambda _host, _port: context,
+    )
+
+    with pytest.raises(NoMarketData):
+        await adapter.get_quote(_instrument(), NOW)
+
+    assert context.closed is True
+    assert context.snapshot_called is (response == "snapshot")

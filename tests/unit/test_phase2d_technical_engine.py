@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -143,3 +144,67 @@ def test_technical_inputs_reject_unknown_or_duplicate_normalized_intervals() -> 
             instrument_id="equity:US:TEST",
             interval="2d",
         )
+
+
+@pytest.mark.parametrize(
+    "limitations, expected",
+    [
+        (
+            ("SMC_CALENDAR_WEEK_BOUNDARIES_MAY_BE_PARTIAL",),
+            ("calendar weeks may be partial", "remain provisional"),
+        ),
+        (
+            ("SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",),
+            ("nonpositive opening prices are unavailable",),
+        ),
+        (("SMC_ATR_200_UNAVAILABLE_ORDER_BLOCK_FILTER_AND_EQH_EQL",), ("ATR200 is unavailable",)),
+        (
+            (
+                "SMC_CALENDAR_WEEK_BOUNDARIES_MAY_BE_PARTIAL",
+                "SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",
+                "SMC_ATR_200_UNAVAILABLE_ORDER_BLOCK_FILTER_AND_EQH_EQL",
+            ),
+            (
+                "calendar weeks may be partial",
+                "remain provisional",
+                "nonpositive opening prices",
+                "ATR200 is unavailable",
+            ),
+        ),
+        (("SMC_FUTURE_LIMITATION",), ("SMC FUTURE LIMITATION",)),
+    ],
+)
+def test_png_carries_visible_smc_limitations_when_atr_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    limitations: tuple[str, ...],
+    expected: tuple[str, ...],
+) -> None:
+    from matplotlib.figure import Figure
+
+    bars = _bars()
+    analysis = TALibIndicatorEngine().analyze(bars, interval="1w")
+    assert analysis.smart_money is not None and analysis.smart_money.atr_200_ready
+    analysis = replace(analysis, smart_money=replace(analysis.smart_money, limitations=limitations))
+    savefig = Figure.savefig
+    footers: list[str] = []
+
+    def inspect_figure(figure: Figure, *args: object, **kwargs: object) -> None:
+        figure.canvas.draw()
+        for text in figure.texts:
+            footers.append(text.get_text())
+            bounds = text.get_window_extent(figure.canvas.get_renderer())
+            # Meaningful standalone guidance must fit on the exported canvas,
+            # below the axes, rather than existing only in the JSON receipt.
+            assert figure.bbox.contains(bounds.x0, bounds.y0)
+            assert figure.bbox.contains(bounds.x1, bounds.y1)
+            assert all(axis.get_window_extent().y0 > bounds.y1 for axis in figure.axes)
+        savefig(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect_figure)
+    png = MatplotlibChartRenderer().render(
+        instrument_id="equity:US:TEST", bars=bars, analysis=analysis
+    )
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    visible = " ".join(" ".join(footers).split())
+    assert all(message in visible for message in expected)
+    assert "has not been historically validated" in visible

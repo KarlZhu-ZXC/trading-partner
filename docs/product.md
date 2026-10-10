@@ -50,11 +50,18 @@ workspace. The chart supports six candle/bar styles, common overlay and pane
 indicators, zoom/crosshair interaction, SMC overlays, drawing tools, and PNG export.
 Console reads complete local results and does not implicitly refresh a broker.
 
-The public `mcp_vnext_shadow` v12 surface has nine entry tools over 24 business
+The public `mcp_vnext_shadow` v14 surface has nine entry tools over 24 business
 capabilities. `capability_discover` reveals operations and exact schemas on demand;
 read and write gateways preserve the original capability validation. Identity,
 judgment confirmation, sync, broker-order, and chart operations keep dedicated
 entry tools. The tool count may change through an explicit compatibility migration.
+
+Optional discovery categories narrow the returned catalogue without hiding exact
+operations or changing authorization. No-argument discovery still returns the full
+catalogue. Console distinguishes public tools from business capabilities and shows
+best-effort, owner-only usage aggregates from the shared registry. These aggregates
+contain no business content and do not establish non-use when observations are absent.
+See [capability usage and audit](guide/capability-usage-and-audit.md).
 
 The optional built-in Copilot uses a smaller private tool set for capability search,
 reads, proposals, action preparation, and web search. Writes become exact Pending
@@ -72,6 +79,10 @@ Deferred and previously reviewed reasons are folded by default; new evidence
 reopens attention. This is a presentation grouping, not resolution of source records.
 Processing failures stay visible, including a failed latest note interpretation.
 Operational failures retain visible action links outside the research groups.
+Today Review supports local search and priority filters with visible counts,
+source time and trigger summaries. Filters retain exact scope links and never hide
+separate operational actions. Overview preserves loaded content on refresh failure;
+the Today/Weekly selection survives browser reload.
 
 Sources fail independently and bounded histories remain partial. Repeated Monitor
 polls do not manufacture new transitions; recovered current state suppresses stale
@@ -85,7 +96,21 @@ groups. Missing predecessors or definition comparisons remain unavailable. It do
 not reconstruct historical question status, infer investment outcomes or compute a
 win rate. The tab is a read-only review surface, not an automatic weekly message.
 
+Overview and ReviewItem list reads, including scoped Journal reads, do not
+materialize the Review Queue. Overview's explicit **Update Review Queue** action
+collects existing durable sources and applies their deterministic projections.
+It does not refresh providers, invoke models or confirm judgment. Live projections,
+partial-source coverage and the latest materialized item observation time remain
+visible. Pending research counts use one complete aggregate read rather than
+per-Subject full-state queries. See [architecture and measurement](guide/architecture-and-performance.md).
+
 ## Quick Review
+
+Journal Notes also offers **Record Independent Decision** for FULL sources with an
+exact matching active Research Subject. It opens the existing confirmation dialog
+with an empty user rationale even when interpretation is unavailable. No model is
+called, and the Observation review retains its own status. New Decision source
+references must be FULL and already observable at the Decision time.
 
 Today Review links directly to a Quick Review card inside the selected Research Subject.
 The card combines the pinned user Decision/Thesis/Plan, durable position snapshots,
@@ -110,6 +135,20 @@ current evidence/formal versions; stale context requires refresh without discard
 the user's draft. Existing Decision idempotency supports recovery without duplicate
 writes; reload does not resubmit. Source-specific Observation adoption remains a
 separate explicit action, never an implied consequence of a general review.
+
+Each prepared card includes a reference-only material manifest with its baseline,
+formal versions, source revisions, consulted account snapshots, preparation time
+and coverage. Preparation does not mean the user read or adopted every source.
+The explicit Decision and its linked material Journal NOTE commit in one research
+transaction; a failed material write rolls both back. The reference list is bounded
+at 500, with total count and partial coverage disclosed; a partial list cannot use
+maintain but can accompany an explicit follow-up.
+
+The completion receipt identifies the saved Decision, retained evidence gaps and
+pending-note count at review time. It preserves separate source statuses and links
+to their current review entry. Recovery reads the saved material record after a
+restart; legacy/missing material receipts remain unavailable. A recovered receipt
+does not display a freshly prepared card as if it were the original context.
 
 Adjustments reuse the existing Thesis and Plan editors in the same Research page,
 with a return shortcut and preserved Quick Review draft. Latest thinking first produces an editable before/after preview bound to the
@@ -169,9 +208,13 @@ counter-reviews preserve the primary answer and disclose the rejected critique.
 
 Research answers present supported canonical fields with readable names and values,
 keeping identity and material context visible while full source/path text can be
-expanded. This changes presentation only: stored/copied answers keep the exact
-original text, malformed or unfamiliar field formats fall back to the full text,
-and an interpretation never becomes a verified fact through formatting.
+expanded. New messages use host-generated structured fields and ordered context;
+Console checks that they reconstruct the exact stored answer before rendering them.
+The optional projection is dropped first when the receipt size bound is reached.
+Historical or compacted messages retain their text formatting fallback. Stored/copied
+answers keep the exact original text, and an interpretation never becomes a verified
+fact through formatting. Missing-value definitions can use either zero notation;
+this does not permit unsupported financial amounts or execution assertions.
 
 Counter-review permits one additional tool-free critique, only within the remaining
 budget. Failure preserves the primary answer and reports a gap. Completed read steps
@@ -226,12 +269,75 @@ not generate evaluations or write research state.
 See [the workflow guide](guide/research-chart-valuation.md) for supported inputs and
 continuous navigation/recovery rules.
 
+## Review evidence and follow-through
+
+New Scorecards disclose two exact-revision cohorts at the run cutoff: latest
+EvidenceAssessments per Evidence, and active reviewed Evidence Impact links. Link
+counts, distinct sources, stance counts, overlap with assessed Evidence and missing
+source metadata remain separate. They are never summed into an evidence count or
+quality score. Bounded/inaccessible Impact history is unknown, not zero. Calibration
+shows the same immutable facts; old runs without these fields remain unknown.
+
+Journal period reviews expose an explicit durable-only coverage read. It resolves
+the original Run's trade references, compares only an eligible pre-period snapshot,
+and reports unique active Plan matches, compatible pre-period Decisions and absent
+or ambiguous matches. Current activity links and Plan versions created during the
+period are separate cohorts; later records never backfill prior discipline. Missing
+or colliding references and bounded reads stay unavailable. This projection is
+read-time context, not a rewrite of the immutable Run or complete broker history.
+
+A finding review may explicitly defer, record a reason for no follow-up, or link one
+confirmed Question at an exact version. Scope/version checks, review version,
+authorization note and idempotency remain mandatory. A new Question is prepared as
+an editable Research draft, then proposed and separately confirmed before linking.
+The review cannot create/answer/close a Question. Later review exposes the linked
+version alongside current Question status and its evidence entry; completion is not
+inferred from status or a later annotation. Retro drafts retain editable fields and pending request
+metadata in bounded tab-local session storage across return/reload. Version
+conflicts show saved-versus-draft differences and require explicit local rebasing
+before a separate save. Reload recovery reads receipts only; it never replays a
+write. Storage failure is disclosed and stale cached terms are removed. Weekly action items reuse the existing
+human-selected list, with 1–3 concrete process improvements suggested.
+The same explicit Retro read now prioritizes follow-up next steps, keeping coverage
+and denominator details collapsed. Its cohort is the findings explicitly linked to
+Questions in the bounded review history. Due counts use the latest reviewed exact
+Question version. Missing histories, changed versions or unrecoverable old deadlines
+keep totals unknown. An answered Question counts as a traceable reviewed resolution
+only when its sources remain visible at answer time and a subsequent human Finding
+review explicitly marks that exact version RESOLVED. This is traceability, not a
+semantic-quality or investment-outcome claim. Later similar Findings are shown as
+review leads; their absence is never proof of improvement. NO_ACTION and actual
+trades retain separate cohorts and are not added to this denominator.
+
+
 ## Research and observations
 
 Research Subjects support company, theme, macro, catalyst, and portfolio-concern
 work. A Subject may exist without a primary Instrument or confirmed Thesis. Live
 Theses, active Plans, and Monitors enforce explicit lifecycle dependencies; the
 system does not auto-activate or cascade related records to hide a conflict.
+
+The Research Plan dependency panel compares the current confirmed version with its
+predecessor, including condition content, and shows the bound Thesis revision at
+Plan creation versus the latest revision. Confirmation-time ordering is disclosed;
+it does not assert that a historical review occurred. Old Monitor bindings remain
+unchanged. Keeping/defer choices are view-local; durable review and reminders use
+existing explicit workflows. Monitor read failures leave the confirmed Plan intact.
+
+Plan coverage and new Scorecards share one exact-version calculation: active,
+unexpired rules must match the condition semantics; usable observations must belong
+to that exact Monitor version, have no error and remain within the condition's fact
+age at read time. MANUAL, UNCONFIGURED, CONFIGURED, OBSERVED and UNAVAILABLE remain
+separate. OBSERVED includes triggered conditions and is not a pass or authorization.
+Scorecard algorithm `judgment-scorecard-s1-v3` retains historical S0/S1-v1/v2 readability.
+
+Execution readiness runs only on explicit selection, using existing durable-only
+Sizing/Risk. A different returned Plan version is rejected. Missing facts remain
+blockers. Portfolio refresh, order-preview drafting and Journal reconciliation have
+separate navigation; none submits an order. UNKNOWN outcomes must be reconciled
+without retry; partial fills and external/unattributed activities retain their
+existing execution and attribution boundaries.
+
 
 External observations share one provider-neutral revision contract. The Local
 Observation Bridge accepts closed full-text JSON. Moomoo note capture is read-only
@@ -242,6 +348,53 @@ Optional model interpretation produces drafts only. Attribution and date orderin
 are computed deterministically first. A model cannot confirm a Thesis, Decision,
 Plan, Monitor, position, or order. Contributor models require the owner's explicit
 training opt-in.
+
+## Evidence impact links and research questions
+
+OPEN Research Questions can prepare a version-bound Copilot prompt with an optional
+exact assumption, evidence cutoff and bounded durable source choices. Preparation
+is read-only; explicit Send starts the existing budgeted Research runtime. An
+existing composer draft is preserved. The question version and cutoff remain in
+durable receipts, including budget stops and reload. Changed context requires a
+new preparation, and unknown/later field times cannot be verified against the cutoff.
+
+Completion explains whether the output needs review, further evidence, a narrower
+run or failure recovery. It can return to the question or open prepared durable
+sources in an editable evidence-link draft. Existing active pairs use revision
+drafts; every proposal and confirmation retains its own gates. No temporary Web or
+Provider field becomes Evidence, and Research never answers/closes the question.
+
+Research → Evidence proposes a user interpretation linking one exact durable
+Evidence/FULL Observation/evaluated Monitor observation to one current Thesis
+revision and active assumption. Source scope/time and target/version are checked
+again at Candidate confirmation. Supports/Contradicts/Uncertain describes the
+reviewed association, not a factual verification or a change to Thesis conviction.
+Confirmed links append immutable versions; revise/retract retain history, and a
+missing source never removes an existing link. Duplicate active source/assumption
+pairs and stale versions are rejected.
+
+The Evidence Comparison workspace places Supports, Contradicts and Uncertain links
+beside their exact targets and original source metadata. Local, versioned question
+templates prefill editable drafts only and require explicit replacement of existing
+text. Desktop lanes stack for mobile review; confirmation gates remain unchanged.
+
+Decision Replay uses an exact Decision's `decided_at` cutoff, separately discloses
+its recorded time and excludes later facts and assumptions. Only pinned revisions
+and historically scoped sources participate. Old question text/creation can be
+shown, but unavailable historical mutable state is never reconstructed from today's
+answers. This is a passive Console read, not a historical trading simulator.
+
+Research → Thesis extends existing OpenQuestions with evidence requirements, due
+at, progress notes, cited sources and explicit links to later same-Subject Decisions.
+Tracked answers require evidence and a user criteria acknowledgment. Effective
+changes retain the Candidate lifecycle and optimistic versions. Nothing creates a
+Decision automatically. Explicit Review Queue refresh materializes overdue OPEN
+questions and preserves incomplete-source closure rules. Reads remain passive.
+
+Changes Since Review attaches exact reviewed source links separately from automatic
+scope relations. A link matches the reviewed baseline only when both its revision
+and assumption were present by the Decision's recorded time. The detail guide is
+[evidence links and research questions](guide/evidence-links-and-research-questions.md).
 
 ## Changes since a reviewed Decision
 

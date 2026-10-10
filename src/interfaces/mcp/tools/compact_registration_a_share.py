@@ -6,13 +6,18 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compact import CapabilityRegistrar
+    from interfaces.capabilities.registry import CapabilityRegistrar
 
 
 def _register_a_share(registry: CapabilityRegistrar, adapters: SimpleNamespace) -> None:
     """Register the grouped A-share fact capability in stable operation order."""
 
-    from .compact import READ_PROVIDER, _all_fields, _register_flat_dispatch_tool, _spec
+    from interfaces.capabilities.policy import READ_PROVIDER
+    from interfaces.capabilities.registration import (
+        _all_fields,
+        _register_flat_dispatch_tool,
+        _spec,
+    )
 
     facts = "a_share_get_facts"
     variants = (

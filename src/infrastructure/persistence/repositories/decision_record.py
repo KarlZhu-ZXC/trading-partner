@@ -139,7 +139,7 @@ class SqlAlchemyDecisionRecordRepository:
             self._session,
             subject_id=decision.subject_id,
             external_note_revision_id=decision.external_note_revision_id,
-            visible_at=decision.recorded_at,
+            visible_at=decision.decided_at,
         )
         if decision.supersedes_decision_id is not None:
             old = self._session.get(DecisionRecordRow, decision.supersedes_decision_id)
@@ -206,6 +206,7 @@ class SqlAlchemyDecisionRecordRepository:
         now: datetime,
         subject_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[DecisionRecord, ...]:
         """Return due Decisions not replaced by a later exact superseder.
 
@@ -219,6 +220,8 @@ class SqlAlchemyDecisionRecordRepository:
 
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("limit must be an int in [1, 500]")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a non-negative int")
         successor = DecisionRecordRow.__table__.alias("decision_successor")
         statement = select(DecisionRecordRow).where(
             DecisionRecordRow.review_due_at.is_not(None),
@@ -236,5 +239,5 @@ class SqlAlchemyDecisionRecordRepository:
             DecisionRecordRow.review_due_at.asc(),
             DecisionRecordRow.recorded_at.asc(),
             DecisionRecordRow.decision_id.asc(),
-        ).limit(limit)
+        ).offset(offset).limit(limit)
         return tuple(_to_domain(row) for row in self._session.scalars(statement).all())

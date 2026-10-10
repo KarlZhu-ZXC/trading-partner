@@ -348,6 +348,85 @@ def _runtime(
     return runtime, conversation
 
 
+@pytest.mark.asyncio
+async def test_question_research_preserves_binding_in_user_and_assistant_receipts():
+    from types import SimpleNamespace
+
+    from application.dto.question_research import QuestionResearchContext
+
+    binding = QuestionResearchContext(
+        subject_id="case_fixture",
+        question_id="question_fixture",
+        question_version=3,
+        question_fingerprint="a" * 64,
+        evidence_cutoff="2026-10-02T12:00:00Z",
+        source_coverage="UNAVAILABLE",
+    )
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider(
+        [
+            ModelResponse(
+                text=json.dumps(
+                    {
+                        "schema_version": 1,
+                        "generated_by": "MODEL",
+                        "blocks": [{"kind": "GAP", "text": "Need primary evidence."}],
+                    }
+                ),
+                model="fake",
+            )
+        ]
+    )
+    runtime, conversation = _runtime(
+        repository, model, question_research=SimpleNamespace(resolve=lambda token, content: binding)
+    )
+    result = await runtime.run_turn(
+        AgentTurnRequest(
+            conversation_id=conversation.conversation_id,
+            owner_principal="user:1",
+            channel=AgentChannel.CONSOLE,
+            content="Prepared question",
+            research_mode="research",
+            question_context_token="prepared",
+        )
+    )
+    messages = repository.messages[conversation.conversation_id]
+    assert len(model.requests) == 1
+    assert len(messages) == 2
+    for message in messages:
+        policy = json.loads(message.model_receipt_json)["research"]
+        assert policy["question_context"]["question_version"] == 3
+        assert policy["question_context"]["evidence_cutoff"] == binding.evidence_cutoff
+    assert result.assistant_message_id == messages[-1].message_id
+
+
+@pytest.mark.asyncio
+async def test_stale_question_is_rejected_before_model_or_message_append():
+    from types import SimpleNamespace
+
+    def stale(token, content):
+        raise DataContractError("Question changed")
+
+    repository = MemoryConversationRepository()
+    model = QueueModelProvider([])
+    runtime, conversation = _runtime(
+        repository, model, question_research=SimpleNamespace(resolve=stale)
+    )
+    with pytest.raises(DataContractError):
+        await runtime.run_turn(
+            AgentTurnRequest(
+                conversation_id=conversation.conversation_id,
+                owner_principal="user:1",
+                channel=AgentChannel.CONSOLE,
+                content="Prepared question",
+                research_mode="research",
+                question_context_token="stale",
+            )
+        )
+    assert model.requests == []
+    assert repository.messages[conversation.conversation_id] == []
+
+
 def test_context_uses_latest_tail_and_merges_existing_summary() -> None:
     repository = MemoryConversationRepository()
     clock = SystemClock()
@@ -1792,6 +1871,17 @@ async def test_research_inline_evidence_persists_context_without_verifying_inter
     assert "quantity: 7" in result.text and "currency=USD" in result.text
     assert "仍需结合风险判断" in result.text and "@evidence" not in result.text
     assert receipt["answer_envelope"]["blocks"][0]["kind"] == "INFERENCE"
+    from application.dto.research_presentation import (
+        ResearchAnswerPresentation,
+        ResearchFieldSegment,
+    )
+
+    presentation = ResearchAnswerPresentation.model_validate(receipt["research_presentation"])
+    assert presentation.rendered_text() == message.content == result.text
+    fields = [s for s in presentation.segments if isinstance(s, ResearchFieldSegment)]
+    assert len(fields) == 1
+    assert fields[0].ref == ref and fields[0].scalar == "7"
+    assert dict(fields[0].context)["currency"] == "USD"
     assert receipt["research"]["verified_claims"] == 0
     assert receipt["research"]["blocked_claims"] == 0
     assert receipt["research"]["verified_refs"] == [ref]

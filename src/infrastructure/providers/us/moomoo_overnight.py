@@ -123,6 +123,18 @@ def _records(value: object) -> list[Mapping[str, object]]:
     )
 
 
+def _require_instrument_identity(row: Mapping[str, object], *, expected_code: str) -> None:
+    if row.get("code") != expected_code:
+        raise DataContractError(
+            "Moomoo overnight response instrument does not match the request",
+            details={
+                "vendor": VendorId.MOOMOO.value,
+                "operation": "overnight_quote",
+                "rule": "instrument_identity",
+            },
+        )
+
+
 def _decimal(value: object, *, field: str, positive: bool = False) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
@@ -258,6 +270,7 @@ class MoomooOvernightQuoteAdapter:
         return await asyncio.to_thread(self._read, instrument, as_of)
 
     def _read(self, instrument: Instrument, as_of: datetime) -> ProviderSuccess[USQuote]:
+        expected_code = f"US.{instrument.symbol}"
         try:
             context = self._context_factory(self._host, self._port)
         except ProviderNotConfigured:
@@ -270,13 +283,15 @@ class MoomooOvernightQuoteAdapter:
         try:
             if self._opend_rate_limiter is not None:
                 self._opend_rate_limiter.wait(MoomooOpenDOperation.MARKET_STATE)
-            state_ok, state_payload = context.get_market_state([f"US.{instrument.symbol}"])
+            state_ok, state_payload = context.get_market_state([expected_code])
             if not state_ok:
                 raise ProviderUnavailableError(
                     "Moomoo overnight market-state request failed",
                     details={"vendor": self.vendor_id.value, "operation": "overnight_quote"},
                 )
             state_rows = _records(state_payload)
+            if len(state_rows) == 1:
+                _require_instrument_identity(state_rows[0], expected_code=expected_code)
             state = state_rows[0].get("market_state") if len(state_rows) == 1 else None
             if str(state).upper() != "OVERNIGHT":
                 raise NoMarketData(
@@ -285,7 +300,7 @@ class MoomooOvernightQuoteAdapter:
                 )
             if self._opend_rate_limiter is not None:
                 self._opend_rate_limiter.wait(MoomooOpenDOperation.MARKET_SNAPSHOT)
-            ok, payload = context.get_market_snapshot([f"US.{instrument.symbol}"])
+            ok, payload = context.get_market_snapshot([expected_code])
         finally:
             context.close()
         if not ok:
@@ -300,6 +315,7 @@ class MoomooOvernightQuoteAdapter:
                 details={"vendor": self.vendor_id.value, "operation": "overnight_quote"},
             )
         row = rows[0]
+        _require_instrument_identity(row, expected_code=expected_code)
         quote_at = _snapshot_time(row.get("update_time"), as_of=as_of)
         if _overnight_session_date(quote_at) != _overnight_session_date(as_of):
             raise NoMarketData(

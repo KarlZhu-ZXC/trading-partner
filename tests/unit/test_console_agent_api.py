@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from application.dto.agent import AgentTurnRequest
+from application.dto.agent import AgentTurnEvent, AgentTurnRequest
 from application.ports.agent_model_provider import (
     ModelCatalog,
     ModelCatalogItem,
@@ -381,6 +381,76 @@ def _client_state(*, enabled: bool, model: _Model | None = None) -> tuple[_Repos
         },
     )
     return repository, conversation.conversation_id
+
+
+@pytest.mark.asyncio
+async def test_question_sources_require_owned_assistant_receipt_and_exact_subject(monkeypatch):
+    from unittest.mock import Mock
+
+    from application.dto.question_research import QuestionResearchContext
+    from application.services.copilot_research_budget import ResearchBudget
+
+    repository, conversation_id = _client_state(enabled=False)
+    context = QuestionResearchContext(
+        subject_id="case_fixture",
+        question_id="question_fixture",
+        question_version=1,
+        question_fingerprint="a" * 64,
+        evidence_cutoff="2026-10-02T12:00:00Z",
+        source_coverage="COMPLETE",
+    )
+    budget = ResearchBudget(
+        mode="research",
+        max_seconds=180,
+        max_model_calls=8,
+        max_tool_calls=24,
+        question_context=context,
+    )
+    message = repository.append_message(
+        AgentMessage(
+            message_id="agent_message_question_fixture",
+            conversation_id=conversation_id,
+            role=AgentMessageRole.ASSISTANT,
+            content="Synthetic answer",
+            created_at=datetime.now(UTC),
+            model_receipt_json=json.dumps(
+                {
+                    "research": budget.snapshot(
+                        phase="FINISHED", stop_reason="COMPLETED"
+                    ).model_dump()
+                }
+            ),
+        )
+    )
+    reader = Mock(
+        return_value={"context": context.model_dump(), "context_status": "CURRENT", "sources": []}
+    )
+    monkeypatch.setattr(
+        api.app.state,
+        "container",
+        SimpleNamespace(
+            services=SimpleNamespace(question_research=SimpleNamespace(sources_for_result=reader))
+        ),
+        raising=False,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api.app), base_url="http://127.0.0.1:8765"
+    ) as client:
+        url = (
+            f"/api/agent/conversations/{conversation_id}"
+            f"/messages/{message.message_id}/research-sources"
+        )
+        assert (await client.get(url, params={"subject_id": "case_other"})).status_code == 409
+        reader.assert_not_called()
+        response = await client.get(url, params={"subject_id": "case_fixture"})
+        assert response.status_code == 200
+        assert response.json()["data"]["context"]["question_version"] == 1
+        reader.assert_called_once()
+        repository.conversations[conversation_id] = replace(
+            repository.conversations[conversation_id], owner_principal="other-owner"
+        )
+        assert (await client.get(url, params={"subject_id": "case_fixture"})).status_code == 404
+        reader.assert_called_once()
 
 
 def _pending_client_state() -> tuple[_Repository, str, str, _PendingGateway]:
@@ -1217,3 +1287,113 @@ def test_failed_research_replay_keeps_saved_reads_and_unknown_usage() -> None:
     assert research["usage_complete"] is False
     assert "MODEL_PROGRESS_UNAVAILABLE" in research["gaps"]
     assert "Synthetic private question" not in json.dumps(research)
+
+
+class _SSEDeliveryRuntime:
+    """Pause a real async event producer while the delivery stream disconnects."""
+
+    def __init__(self, *, queued_deltas: int = 0, later_deltas: int = 0) -> None:
+        self.resume = asyncio.Event()
+        self.completed = asyncio.Event()
+        self.queued_deltas = queued_deltas
+        self.later_deltas = later_deltas
+        self.cancelled = False
+        self.persisted: list[str] = []
+
+    async def run_turn(self, turn: AgentTurnRequest, *, event_sink: Any) -> None:
+        try:
+            await event_sink(AgentTurnEvent(type="message_started", data={"fixture": True}))
+            for idx in range(self.queued_deltas):
+                await event_sink(AgentTurnEvent(type="text_delta", data={"text": f"queued {idx}"}))
+            await self.resume.wait()
+            for idx in range(self.later_deltas):
+                await event_sink(AgentTurnEvent(type="text_delta", data={"text": f"later {idx}"}))
+            self.persisted.append("durable turn completed")
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        finally:
+            self.completed.set()
+
+
+def _capture_sse_queues(monkeypatch: pytest.MonkeyPatch) -> list[asyncio.Queue[Any]]:
+    queues: list[asyncio.Queue[Any]] = []
+
+    class _ObservedQueue(asyncio.Queue[Any]):
+        def __init__(self) -> None:
+            super().__init__()
+            queues.append(self)
+
+    monkeypatch.setattr("interfaces.console.agent_api.asyncio.Queue", _ObservedQueue)
+    return queues
+
+
+def _sse_fixture_turn() -> AgentTurnRequest:
+    return AgentTurnRequest(
+        conversation_id="conv_fixture",
+        owner_principal=AGENT_OWNER_PRINCIPAL,
+        channel=AgentChannel.CONSOLE,
+        content="fixture",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_releases_pending_delivery_without_cancelling_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queues = _capture_sse_queues(monkeypatch)
+    runtime = _SSEDeliveryRuntime(queued_deltas=3)
+    stream = _event_stream(runtime, _sse_fixture_turn())  # type: ignore[arg-type]
+    first = await anext(stream)
+    try:
+        assert b"message_started" in first
+        assert len(queues) == 1 and queues[0].qsize() == 3
+        await stream.aclose()
+        assert queues[0].qsize() == 0
+        assert runtime.completed.is_set() is False
+        assert runtime.cancelled is False
+    finally:
+        await stream.aclose()
+        runtime.resume.set()
+        await asyncio.wait_for(runtime.completed.wait(), timeout=1.0)
+
+    assert runtime.persisted == ["durable turn completed"]
+    assert runtime.cancelled is False
+    assert queues[0].qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_drops_later_delivery_but_completes_durable_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queues = _capture_sse_queues(monkeypatch)
+    runtime = _SSEDeliveryRuntime(later_deltas=10000)
+    stream = _event_stream(runtime, _sse_fixture_turn())  # type: ignore[arg-type]
+    await anext(stream)
+    await stream.aclose()
+    runtime.resume.set()
+    await asyncio.wait_for(runtime.completed.wait(), timeout=1.0)
+
+    assert runtime.persisted == ["durable turn completed"]
+    assert runtime.cancelled is False
+    assert queues[0].qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_connected_stream_still_delivers_events_and_finishes() -> None:
+    runtime = _SSEDeliveryRuntime(queued_deltas=1, later_deltas=2)
+    runtime.resume.set()
+    stream = _event_stream(runtime, _sse_fixture_turn())  # type: ignore[arg-type]
+
+    async def read() -> list[bytes]:
+        return [chunk async for chunk in stream]
+
+    chunks = await asyncio.wait_for(read(), timeout=1.0)
+
+    assert len(chunks) == 4
+    assert b"event: message_started" in chunks[0]
+    assert all(b"event: text_delta" in chunk for chunk in chunks[1:])
+    assert b"queued 0" in chunks[1]
+    assert b"later 1" in chunks[-1]
+    assert runtime.persisted == ["durable turn completed"]
+    assert runtime.cancelled is False

@@ -152,7 +152,7 @@ _PHASE3_TABLES = {
 }
 
 _HEAD_TARGET = "head"
-_HEAD_REVISIONS = frozenset({"0072_external_note_review_drafts"})
+_HEAD_REVISIONS = frozenset({"0073_research_evidence_links"})
 _PHASE1B_REVISION = "0002_phase1b_research_state"
 
 _EXPECTED_SCHEMA_VERSIONS = {

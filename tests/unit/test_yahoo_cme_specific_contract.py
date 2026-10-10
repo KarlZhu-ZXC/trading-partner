@@ -134,10 +134,12 @@ async def test_yahoo_specific_bars_use_cmx_symbol() -> None:
         end=date(2026, 7, 24),
         interval=USBarInterval.ONE_DAY,
         adjustment=AdjustmentMethod.NONE,
-        as_of=AS_OF.astimezone(UTC),
+        as_of=(AS_OF + timedelta(hours=1)).astimezone(UTC),
     )
     assert result.value.instrument_id == "future:CME:GCZ26"
     assert transport.requests[0].url.endswith("GCZ26.CMX")
+    assert result.value.bars[-1].timestamp == AS_OF + timedelta(hours=1)
+    assert "FUTURES_DAILY_CONSERVATIVE_COMPLETION_BOUND" in result.meta.warnings
 
 
 def test_yahoo_rejects_invalid_cme_root() -> None:

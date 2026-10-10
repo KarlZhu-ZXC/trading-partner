@@ -59,6 +59,7 @@ export function JudgmentCalibration({ subjectId, decisionId }: { subjectId: stri
         {dimension.limitation_codes.length > 0 && <p>{dimension.limitation_codes.join(" · ")}</p>}
         {dimension.cards.map((card) => <article key={`${card.scorecard_id}-${card.dimension.code}`}>
           <h4>{card.dimension.title}</h4><Badge value={card.dimension.status} />
+          {card.dimension.code === "REVISION_EVIDENCE_BALANCE" && <p>Assessment and reviewed Impact cohorts remain separate at the Scorecard cutoff. Missing Impact counts in older runs mean unknown.</p>}
           <p>{card.dimension.summary}</p><p>{card.dimension.result_code}</p>
           <DescriptionList columns={2} items={card.dimension.facts.map(([label, value]) => ({ label, value }))} />
           <p>{formatDate(card.generated_at)} · {card.thesis_revision_id}</p>

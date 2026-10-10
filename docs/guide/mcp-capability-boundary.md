@@ -65,9 +65,9 @@ Provider。健康检查正常并不代表所有外部网络 Provider 都正常�
 为降低 Host 上下文，较大的 group 发布扁平 operation schema；服务端在 dispatch 前仍使用
 精确 closed variant 再验证 required/owned fields，因此跨 operation 字段不会进入应用服务。
 
-每个进程只构建一份 compact Capability Registry。`interfaces/mcp/tools/` 中的 capability
+共享操作图、校验和策略由 `interfaces/capabilities/` 定义，MCP 适配器采用同一份图。`interfaces/mcp/tools/` 中的 capability
 模块提供普通 operation adapters，Registry 同时持有 callable、由同一 callable 生成的
-Pydantic/FastMCP 参数模型、tool annotations，以及独立的 effect/confirmation policy。
+Pydantic 参数模型、tool annotations，以及独立的 effect/confirmation policy。
 FastMCP transport 和本地 Console HTTP transport 都从这份 Registry 生成或调用，因此不存在
 两套 handler、两套请求模型或通过工具名查找的旧兼容注册表。MCP `tools/list` 仅发布短说明和轻量参数入口；完整 schema 由
 `capability_discover` 按操作返回。轻量 schema 不承诺接受任意字段：实际调用仍由
@@ -89,16 +89,29 @@ capability_read(tool="portfolio_get", arguments={"request":{"operation":"positio
   → 原有结果
 ```
 
+v13 增加可选的 `category`：`research`、`portfolio`、`market`、`monitoring`、`operations`。
+例如 `capability_discover(category="portfolio")` 只返回组合相关的 5 个业务能力，
+不增加发现轮次。无参数调用仍返回完整 24 项；已知能力与操作时继续直接获取精确 schema。
+`category` 不能与 `tool` / `operation` 混用；分类仅筛选目录，不改变可调用范围或授权。
+9 个首层入口和 106 个操作保持不变。本次没有根据缺少调用记录删除任何操作。
+
 不知道操作名时，仅传 `tool` 获取操作列表。同一会话复用已有 schema，不重复发现。
 `capability_write` 另外要求 `confirmation` 等于原业务 capability 名称和用户明确授权；
 底层继续检查 actor、版本、幂等键与业务授权。两个路由均拒绝上述六个独立工具，
 查询入口拒绝任何写入，发现不触发任何业务操作。标的解析参数较短，直接完整发布。
 
-当前 schema 为 `mcp-vnext-shadow-v12`：9 个入口、24 个业务能力、106 个业务操作。
+当前 schema 为 `mcp-vnext-shadow-v14`：9 个入口、24 个业务能力、106 个业务操作。
 原业务名称不再全部是公开 MCP 工具；历史记录及 next-read 提示保留原能力名，调用前
 根据发现返回的 `call_tool` 路由。Console 和内置 Agent 仍使用完整 Registry。
 完整 schema 的 `$ref` 在同一结果内可解析，绝不为了压缩而截断 schema。
-重新连接 MCP 客户端获取 v12；不需要迁移数据库或改写历史记录。
+重新连接 MCP 客户端获取 v14；不需要迁移数据库或改写历史记录。
+
+v14 在现有 `research_judgment_propose/research_state` 中加入 `evidence_impact` 的
+create/revise/retract，以及 `open_question` 的 update_research/link_decision。
+答案来源、标准确认和 expected_version 继续由闭合 DTO 与确认时检查约束。
+`research_get/state` 返回已确认关联和扩展的问题元数据；数量仍为 9/24/106。
+这没有新增自动判断、订单或通用证据导入权限。参见
+[证据关联与研究问题闭环](evidence-links-and-research-questions.md)。
 
 业务能力保留此前合并结果：
 
@@ -118,10 +131,11 @@ v9 删除 Behavior 的 `minimum_sample_size` 输入参数；新结果不再输�
 
 Shared Agent Runtime 的 `tp_capability_search`、`tp_read`、`tp_propose`、`tp_prepare_action` 和
 `tp_web_search` 是模型请求内的私有函数，不注册为 MCP 工具；当前公开数量为 9。
-Agent-A 只允许 durable/provider reads、
+Copilot 的自动读取只允许 durable/provider reads、
 instrument discovery/cache 与明确无执行效果的技术图；它通过 Registry 保存的 exact operation
 schema 再校验后进程内 dispatch，不启动 stdio 子进程，也不能同步、确认、写入或下单。
-Agent-D 仅对单独维护的 research-write operation allowlist 创建 Pending Action；用户在原
+用户明确请求的非生效 Proposal 可经 `tp_propose` 创建，Candidate 仍需用户最终批准。
+生效写入仅对单独维护的 research-write operation allowlist 创建 Pending Action；用户在原
 Console channel 以 exact hash、principal、version、expiry 和 single-use token
 确认后，才通过同一 Registry 再校验并 dispatch。该路径不改变 MCP inventory 或授权语义，
 也不开放 sync/evaluate、账户、风险策略或订单写入。

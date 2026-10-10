@@ -257,6 +257,11 @@ def _fair_value_gaps(
         first = bars[index - 2]
         middle = bars[index - 1]
         current = bars[index]
+        # Percentage displacement has no meaningful direction at a zero or
+        # negative opening price. Such prices can occur in valid futures bars.
+        # Existing gaps still advance through the current bar above.
+        if middle.open <= 0:
+            continue
         delta = float((middle.close - middle.open) / (middle.open * Decimal("100")))
         cumulative_delta += abs(delta)
         threshold = cumulative_delta / index * 2
@@ -391,11 +396,13 @@ def analyze_smart_money(
     """Return bounded internal/swing SMC structure for one bar series."""
 
     atr_200_ready = bool(len(atr) and math.isfinite(float(atr[-1])))
-    limitations = (
+    limitations: tuple[str, ...] = (
         ()
         if atr_200_ready
         else ("SMC_ATR_200_UNAVAILABLE_ORDER_BLOCK_FILTER_AND_EQH_EQL",)
     )
+    if any(bar.open <= 0 for bar in bars[1:-1]):
+        limitations += ("SMC_FVG_NONPOSITIVE_OPEN_UNAVAILABLE",)
     internal = _pivots(bars, scope="internal", span=5)
     swing = _pivots(bars, scope="swing", span=50)
     parsed_highs: list[Decimal] = []

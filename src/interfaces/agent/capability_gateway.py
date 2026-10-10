@@ -24,12 +24,13 @@ from application.ports.agent_tool_gateway import (
     AgentToolResult,
 )
 from application.services.review_item_service import ReviewItemService
-from interfaces.mcp.tools.compact import (
+from interfaces.capabilities import (
     READ_DURABLE,
     CapabilityNotFoundError,
     CompactCapabilityRegistry,
     CompactOperationDescriptor,
 )
+from interfaces.capabilities.usage import capability_usage_source
 from interfaces.shared.result_compaction import (
     DEFAULT_RESULT_MAX_BYTES,
     MIN_RESULT_MAX_BYTES,
@@ -803,12 +804,13 @@ class AgentCapabilityGateway(AgentToolGateway):
         # ``invoke_validated`` does not inject or check a confirmation.  This
         # is important for technical_render_chart: its public MCP policy is
         # unchanged, while Agent-A reaches the explicit internal read path.
-        raw_result = await self._registry.invoke_validated(
-            capability,
-            descriptor.operation,
-            dict(arguments),
-            enforce_confirmation=False,
-        )
+        with capability_usage_source("AGENT"):
+            raw_result = await self._registry.invoke_validated(
+                capability,
+                descriptor.operation,
+                dict(arguments),
+                enforce_confirmation=False,
+            )
         compacted = compact_tool_result(
             raw_result,
             max_bytes=self._result_max_bytes,
@@ -845,12 +847,13 @@ class AgentCapabilityGateway(AgentToolGateway):
             raise AgentCapabilityAccessDeniedError("Agent Thesis proposal kind is invalid")
         if operation == "research_state" and kind not in {"watchlist_item", "trade_plan"}:
             raise AgentCapabilityAccessDeniedError("Agent Research proposal kind is invalid")
-        raw_result = await self._registry.invoke_validated(
-            capability,
-            descriptor.operation,
-            dict(arguments),
-            enforce_confirmation=False,
-        )
+        with capability_usage_source("AGENT"):
+            raw_result = await self._registry.invoke_validated(
+                capability,
+                descriptor.operation,
+                dict(arguments),
+                enforce_confirmation=False,
+            )
         compacted = compact_tool_result(
             raw_result,
             max_bytes=self._result_max_bytes,

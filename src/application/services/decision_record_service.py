@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from application.dto.research_memory import DecisionRecordDTO
+from application.dto.review_materials import ReviewMaterials, review_materials_key
 from application.dto.tool_envelope import DUPLICATE_IDEMPOTENCY_KEY, ToolEnvelope
 from application.ports.clock import Clock
 from application.ports.id_generator import IdGenerator
@@ -16,6 +17,7 @@ from application.ports.secret_redactor import SecretRedactor
 from application.services._research_memory_write_support import (
     audit_summary,
     compute_decision_idempotency_payload_sha256,
+    compute_journal_idempotency_payload_sha256,
     redact_required_text,
     schema_version,
     stable_dedupe_strs,
@@ -33,12 +35,13 @@ from domain.common.enums import (
     ConfirmationMode,
     DecisionScenario,
     DecisionType,
+    JournalEntryType,
     ResearchSearchEntityType,
 )
 from domain.common.errors import DuplicateIdempotencyKey, InputValidationError, InvalidResearchLink
 from domain.common.ids import EntityIdPrefix
 from domain.common.time import require_aware_datetime
-from domain.research.models import DecisionRecord
+from domain.research.models import DecisionRecord, JournalEntry
 
 
 class DecisionRecordService:
@@ -60,6 +63,7 @@ class DecisionRecordService:
         now: datetime | None = None,
         subject_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[DecisionRecordDTO, ...]:
         """Read the bounded set of currently due, still-live Decisions.
 
@@ -84,15 +88,28 @@ class DecisionRecordService:
                     "subject_id must be non-blank when provided",
                     details={"field": "subject_id"},
                 )
+        if type(offset) is not int or offset < 0:
+            raise InputValidationError(
+                "offset must be a non-negative int",
+                details={"field": "offset", "offset": offset},
+            )
         cutoff = require_aware_datetime(
             now if now is not None else self._clock.now(), field_name="now"
         )
         with self._uow_factory() as uow:
-            values = uow.decisions.list_review_due(
-                now=cutoff,
-                subject_id=subject_id_n,
-                limit=limit,
-            )
+            if offset == 0:
+                values = uow.decisions.list_review_due(
+                    now=cutoff,
+                    subject_id=subject_id_n,
+                    limit=limit,
+                )
+            else:
+                values = uow.decisions.list_review_due(
+                    now=cutoff,
+                    subject_id=subject_id_n,
+                    limit=limit,
+                    offset=offset,
+                )
         return tuple(DecisionRecordDTO.from_domain(value) for value in values)
 
     def append(
@@ -119,6 +136,7 @@ class DecisionRecordService:
         trade_plan_version: int | None = None,
         review_due_at: datetime | None = None,
         external_note_revision_id: str | None = None,
+        review_materials: ReviewMaterials | None = None,
     ) -> ToolEnvelope[DecisionRecordDTO]:
         request_id = self._id_generator.new(EntityIdPrefix.REQ)
         try:
@@ -245,6 +263,16 @@ class DecisionRecordService:
                         details={"field": "position_context_snapshot_id"},
                     )
 
+            if review_materials is not None:
+                if (
+                    review_materials.subject_id != subject_id_n
+                    or review_materials.baseline_decision_id != supersedes
+                    or review_materials.prepared_at > decided
+                ):
+                    raise InputValidationError("Review materials do not match this Decision")
+                if len(review_materials.model_dump_json()) > 180_000:
+                    raise InputValidationError("Review materials exceed the record bound")
+
             key = normalize_idempotency_key(idempotency_key)
             payload_sha = compute_decision_idempotency_payload_sha256(
                 subject_id=subject_id_n,
@@ -294,7 +322,17 @@ class DecisionRecordService:
                         review_due_at=existing.review_due_at,
                         external_note_revision_id=existing.external_note_revision_id,
                     )
-                    if existing_sha != payload_sha:
+                    materials_match = True
+                    if review_materials is not None:
+                        prior_materials = uow.journal.get_by_idempotency_key(
+                            review_materials_key(key)
+                        )
+                        materials_match = (
+                            prior_materials is not None
+                            and prior_materials.related_entity_id == existing.decision_id
+                            and prior_materials.body_markdown == review_materials.model_dump_json()
+                        )
+                    if existing_sha != payload_sha or not materials_match:
                         raise DuplicateIdempotencyKey(
                             "idempotency_key already used with a different payload",
                             details={
@@ -312,6 +350,26 @@ class DecisionRecordService:
                     )
 
                 recorded_at = self._clock.now()
+                if review_materials is not None:
+                    # Recheck formal targets inside the Decision UoW as well as
+                    # Quick Review's source-fingerprint check before entering it.
+                    for reference in review_materials.references:
+                        if reference.kind == "THESIS":
+                            reviewed_revision = uow.revisions.get(reference.source_id)
+                            current_thesis = uow.theses.get(reviewed_revision.thesis_id)
+                            if (
+                                current_thesis.subject_id != subject_id_n
+                                or current_thesis.latest_revision_id != reference.source_id
+                            ):
+                                raise InvalidResearchLink("Prepared Thesis version changed")
+                        elif reference.kind == "PLAN":
+                            current_plan = uow.trade_plans.get_current_by_subject(subject_id_n)
+                            if (
+                                current_plan is None
+                                or current_plan.plan_id != reference.source_id
+                                or str(current_plan.version) != reference.version
+                            ):
+                                raise InvalidResearchLink("Prepared Trade Plan version changed")
                 if decided > recorded_at:
                     raise InputValidationError(
                         "decided_at must be <= recorded_at",
@@ -388,6 +446,41 @@ class DecisionRecordService:
                     idempotency_key=key,
                     idempotency_payload_sha256=payload_sha,
                 )
+                if review_materials is not None:
+                    entry = JournalEntry(
+                        journal_id=self._id_generator.new(EntityIdPrefix.JOURNAL),
+                        subject_id=subject_id_n,
+                        entry_type=JournalEntryType.NOTE,
+                        title="Quick Review material references",
+                        body_markdown=review_materials.model_dump_json(),
+                        created_at=recorded_at,
+                        authored_by="user",
+                        confirmed_by=decider,
+                        instrument_ids=(primary,) if primary else (),
+                        topic_tags=("review_materials_v1",),
+                        related_entity_type="decision",
+                        related_entity_id=decision_id,
+                        supersedes_journal_id=None,
+                        schema_version=schema_version(),
+                    )
+                    uow.journal.add(
+                        entry,
+                        idempotency_key=review_materials_key(key),
+                        idempotency_payload_sha256=compute_journal_idempotency_payload_sha256(
+                            subject_id=entry.subject_id,
+                            entry_type=entry.entry_type,
+                            title=entry.title,
+                            body_markdown=entry.body_markdown,
+                            authored_by=entry.authored_by,
+                            confirmed_by=entry.confirmed_by,
+                            instrument_ids=entry.instrument_ids,
+                            topic_tags=entry.topic_tags,
+                            related_entity_type=entry.related_entity_type,
+                            related_entity_id=entry.related_entity_id,
+                            supersedes_journal_id=None,
+                        ),
+                    )
+                    uow.search_index.index(ResearchSearchEntityType.JOURNAL, entry.journal_id)
                 update_subject_decision_cache(
                     uow,
                     subject_id=subject_id_n,
@@ -396,6 +489,8 @@ class DecisionRecordService:
                 )
                 uow.search_index.index(ResearchSearchEntityType.DECISION, decision_id)
                 linked = list(revisions) + list(evidence) + list(reports)
+                if review_materials is not None:
+                    linked.append(entry.journal_id)
                 if supersedes is not None:
                     linked.append(supersedes)
                 if plan_id_n is not None:

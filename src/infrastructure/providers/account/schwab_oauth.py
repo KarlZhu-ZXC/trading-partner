@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import webbrowser
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
@@ -21,6 +24,28 @@ from infrastructure.system.process_file_lock import ProcessFileLock
 
 _REAUTHORIZATION_LIFETIME = timedelta(days=7)
 _EARLY_WARNING_AGE = timedelta(days=5)
+_FOREGROUND_BROWSER = "trading-partner-schwab-foreground"
+
+
+class _ForegroundBrowser(webbrowser.BaseBrowser):
+    """Ask LaunchServices to foreground the default browser on macOS."""
+
+    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool:
+        try:
+            result = subprocess.run(
+                ["/usr/bin/open", "-u", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode:
+                raise OSError
+        except (OSError, subprocess.TimeoutExpired):
+            # The SDK ignores a False browser result and would wait five minutes.
+            # Do not expose the command/authorization URL in the error.
+            raise RuntimeError("Schwab authorization browser could not be opened") from None
+        return True
 
 
 class SchwabOAuthFlowState(StrEnum):
@@ -200,6 +225,10 @@ class SchwabOAuthFlowManager:
                 from schwab.auth import client_from_login_flow
 
                 login_flow = client_from_login_flow
+            browser_options: dict[str, str] = {}
+            if sys.platform == "darwin":
+                webbrowser.register(_FOREGROUND_BROWSER, None, _ForegroundBrowser())
+                browser_options["requested_browser"] = _FOREGROUND_BROWSER
             # schwab-py prints the authorization URL (including OAuth state) to
             # stdout. The browser still opens, but raw OAuth parameters must not
             # enter Codex/automation logs.
@@ -211,6 +240,7 @@ class SchwabOAuthFlowManager:
                     str(self._token_path),
                     callback_timeout=300,
                     interactive=False,
+                    **browser_options,
                 )
             self._token_path.chmod(0o600)
         except (Exception, KeyboardInterrupt):

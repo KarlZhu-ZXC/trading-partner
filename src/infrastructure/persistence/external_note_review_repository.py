@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from application.ports.external_note_review_repository import ExternalNoteReviewRepository
 from domain.common.errors import (
+    DataContractError,
     ExternalNoteReviewVersionConflict,
     IdempotencyConflict,
     PersistenceError,
@@ -184,7 +185,12 @@ class SqlAlchemyExternalNoteReviewRepository(ExternalNoteReviewRepository):
         statuses: frozenset[ExternalNoteReviewStatus] | None = None,
         subject_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> tuple[ExternalNoteReview, ...]:
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise DataContractError("Observation review limit must be between 1 and 500")
+        if type(offset) is not int or offset < 0:
+            raise DataContractError("Observation review offset must be non-negative")
         latest_versions = (
             select(
                 ExternalNoteReviewRevisionRow.review_id.label("review_id"),
@@ -212,7 +218,7 @@ class SqlAlchemyExternalNoteReviewRepository(ExternalNoteReviewRepository):
             statement = statement.order_by(
                 ExternalNoteReviewRevisionRow.created_at.desc(),
                 ExternalNoteReviewRevisionRow.review_id.desc(),
-            ).limit(limit)
+            ).offset(offset).limit(limit)
             return tuple(_domain(row) for row in session.scalars(statement))
 
     def append_draft(self, value: ExternalNoteReviewDraft) -> ExternalNoteReviewDraft:

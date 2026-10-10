@@ -27,20 +27,16 @@ not user-facing terminology. Equity means an actual stock Instrument only.
 
 ## Current source of truth
 
-- Implemented scope is Phase 1–4D. The current runtime snapshot exposes the single
-  9-tool `mcp_vnext_shadow` entry surface over 24 business capabilities, but the count is not a future product invariant:
-  tools may be split, grouped, added, deprecated, or removed through an explicit
-  compatibility migration when that improves intent discovery and workflow cohesion.
+- Current capability scope and MCP counts live in `docs/product.md` and the linked
+  product contracts. The single `mcp_vnext_shadow` surface may evolve through an
+  explicit compatibility migration; tool count is not a product invariant.
 - Application version is read from `src/application/__init__.py`; the current database
-  migration head is `0072_external_note_review_drafts`.
+  migration head is `0073_research_evidence_links`.
 - This file and its linked `.agents/references/` files own agent-facing invariants.
   `docs/product.md` owns the concise current product specification;
   `docs/guide/` and `docs/operations/` own current instructions,
   `docs/roadmap/` owns genuinely deferred work, and `docs/releases/` owns historical
   version truth.
-- Do not retain completed plans, dated smoke receipts, local-path screenshots, or
-  superseded design audits as parallel specifications. Fold lasting rules into the
-  appropriate current document, update `docs/README.md`, then delete the obsolete file.
 - Historical release notes are intentionally immutable except for secret/privacy
   redaction or broken-link repair; do not rewrite old terminology as current behavior.
 
@@ -152,15 +148,14 @@ record. It stays limited to the product tour, capability summary, safety
 boundary, quick start, operational command cheat sheet, and documentation
 links. Do not grow it with design or implementation narrative.
 
-Design and implementation content — architecture internals such as composition
-bundles and ORM grouping, provider pacing/fallback rules, runtime semantics,
-confirmation/idempotency contract detail, and capability contracts — belongs
-in this guide or its task-specific references when it defines an agent-facing boundary, or in a dedicated page
-under `docs/` (typically `docs/operations/` or `docs/guide/`) for
-operator/user-facing detail. When the detail already exists here or under
-`docs/`, link to it from the README instead of restating it. Every new `docs/`
+Development boundaries belong in this guide or `.agents/references/`; investment
+MCP-host guidance belongs in `.agents/skills/trading-partner/`; operator instructions
+belong in `docs/guide/` or `docs/operations/`. Built-in model instructions live in
+their runtime prompt code, not in a second copy of this development guide.
+Link to existing detail rather than restating it in the README. Every new `docs/`
 page must be added to the `docs/README.md` index.
-Completed implementation plans and dated audit/smoke artifacts are deleted after
+Completed plans, dated audit/smoke artifacts, local-path screenshots and superseded
+design audits are deleted after
 their durable rules and evidence summary have moved to `docs/product.md`, a focused
 guide, a release note, or this file. Do not create a new `docs/plans/`, `docs/phases/`,
 or `docs/audits/` archive merely to preserve superseded prose; Git history already
@@ -186,14 +181,6 @@ owns that record.
 - Python 3.13, `uv`, hatchling, `src/` layout.
 - Codex owns architecture, naming, boundaries, and acceptance; delegate code
   implementation to grok Build when external implementation help is useful.
-- The project-scoped `deterministic_coder` custom subagent (`gpt-5.6-luna`,
-  `max`) is the preferred local executor for bounded deterministic code changes
-  after Codex has fixed architecture, file/module ownership, public contracts,
-  naming, and acceptance criteria. Assign it concrete files/responsibilities and
-  remind it that other agents and user edits share the worktree. It must not make
-  product or architecture decisions, broaden scope, commit, push, or perform
-  external side effects unless that exact action is explicitly delegated. Codex
-  reviews its diff and owns final verification and acceptance.
 - Do not assign code implementation to Claude Code / MiniMax.
 - Typed settings via `AppSettings`; project `.env` keys have no global prefix.
 - Entity IDs: `<prefix>_<uuid7>` via `uuid6.uuid7()`.
