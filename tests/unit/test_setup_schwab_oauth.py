@@ -51,6 +51,12 @@ def test_macos_browser_failure_is_immediate_and_redacted(monkeypatch, failure) -
 
 
 def test_macos_flow_selects_foreground_browser(tmp_path, monkeypatch) -> None:
+    # Simulate only our macOS selection path. stdlib browser discovery binds
+    # platform-specific classes at import time, so invoking it after changing
+    # sys.platform would fail on a Linux runner and leak registry state.
+    monkeypatch.setattr(schwab_oauth.webbrowser, "_tryorder", [])
+    monkeypatch.setattr(schwab_oauth.webbrowser, "_browsers", {})
+    monkeypatch.delattr(schwab_oauth.webbrowser, "MacOSXOSAScript", raising=False)
     monkeypatch.setattr(schwab_oauth.sys, "platform", "darwin")
 
     def login_flow(*args, **kwargs):
