@@ -89,6 +89,18 @@ Progress survives browser reload through a saved opaque run identity; restoring 
 view never resubmits the refresh. Historical note text and current confirmed context
 are explicitly distinguished.
 
+The Notes reader keeps the Codex handoff and saved discussions in a collapsed
+Optional Discussion section. Owner-change visibility does not depend on discussion
+receipts. Note Context and Trades and Holdings work independently. FULL notes can
+open their exact revision in Journal for explicit independent review; an unavailable
+revision never substitutes a newer note, and reading requires no Research Subject.
+Copy Codex Request copies a static request and exact revision ID;
+source titles, bodies and account facts are excluded. Clipboard failure offers a
+read-only text field for manual copying. It never opens or sends to another chat.
+Saved discussion text requires a separate explicit read and retains the Journal's
+original note revision. Paging hides stale/mismatched responses, retry repeats only
+the GET, and browser reload returns to metadata without recreating a saved entry.
+
 ## Page layout and interaction
 
 Research answer fields use the host's typed presentation when it reconstructs the

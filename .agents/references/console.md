@@ -36,8 +36,9 @@ or classification values and use the passive tag treatment. Buttons use an actio
 obvious border/fill plus hover/focus/disabled states, and must not be styled like tags. Description
 Lists across pages use the shared component and top-rule treatment rather than page-specific
 boxed variants. Primary, destructive, and secondary actions must be spatially and visually
-distinct. When adding or renaming a prominent Console section, update the rendered-HTML regression
-tests so the intended heading relationship cannot silently regress.
+distinct. Shared component tests own heading structure; ordinary title/copy changes
+do not require new string-matching tests. Test changed semantics or accessibility
+at the component or browser layer that can actually verify the behavior.
 
 Every editable Console field that is required for the current action must show a red leading
 asterisk in its visible label and expose matching native `required` or `aria-required="true"`
@@ -45,8 +46,9 @@ semantics. Conditional requirements show the asterisk only while the condition a
 either/or requirement marks the field group rather than incorrectly marking every member.
 Placeholders, helper text, validation errors, and a `(Required)` suffix never replace the
 asterisk. Optional fields receive no asterisk and do not need an `(Optional)` suffix. Immutable
-disabled metadata is not marked required in edit mode. New or changed forms must extend the
-Console UI-convention regression test so this contract cannot silently regress.
+disabled metadata is not marked required in edit mode. Run the existing shared
+UI-convention checks for form changes; extend them only for a new invariant that
+they do not already cover.
 
 ## Console design-system implementation
 
@@ -59,7 +61,8 @@ status dots, noun Tags, removable FilterChips and SelectableRows are distinct.
 
 All Console routes and the Copilot rail have migrated. Ordinary native controls are
 forbidden outside the shared primitive/widget layer; there is no page allowlist.
-Run the component-conventions check for UI changes. Module-owned surface styles live
+Run the component-conventions check when controls, structure or styling change;
+copy-only edits need a diff review. Module-owned surface styles live
 under `console/app/styles/`, and `globals.css` contains only resets/document rules.
 Do not create new page-specific control skins. Synthetic previews use their own build
 directory and loopback port; never put private notes or account values in fixtures.

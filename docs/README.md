@@ -20,9 +20,10 @@ current specification, agent instructions, or an operator guide.
 | [guide/capability-usage-and-audit.md](guide/capability-usage-and-audit.md) | Focused MCP discovery, private aggregate usage evidence and dependency/size audits |
 | [guide/architecture-and-performance.md](guide/architecture-and-performance.md) | Module ownership, review query boundaries and synthetic performance measurement |
 | [operations/local-console-and-maintenance.md](operations/local-console-and-maintenance.md) | Console, backup, maintenance, scheduler, and operational controls |
+| [operations/note-model-evaluation.md](operations/note-model-evaluation.md) | 笔记模型、推理档比较，固定真实回归集与私有评测记录 |
 | [operations/known-issues.md](operations/known-issues.md) | Active defects and accepted operational constraints |
 | [roadmap/global-roadmap-cn-us.md](roadmap/global-roadmap-cn-us.md) | Prioritized evolution proposal, open-source evidence, acceptance gates, and deferred integrations |
-| [roadmap/workflow-evolution.md](roadmap/workflow-evolution.md) | 工作流演进提案：18 个项目对标、六条用户旅程、阶段依赖、具体任务和验收口径 |
+| [roadmap/workflow-evolution.md](roadmap/workflow-evolution.md) | 笔记驱动的后续瘦身、依赖退役条件、人工验收与性能门槛 |
 
 ## User and operator guides
 

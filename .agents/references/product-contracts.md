@@ -5,7 +5,7 @@ relevant to the affected behavior; paths in this document are repository-relativ
 
 ## Implemented boundary
 
-The public `mcp_vnext_shadow` v15 surface has nine entry tools over the unchanged
+The public `mcp_vnext_shadow` v16 surface has nine entry tools over the unchanged
 24-capability/109-operation Registry. `capability_discover` reveals a compact catalog,
 operation names, or one exact original input schema plus `call_tool`. `capability_read`
 routes only READ_DURABLE/READ_PROVIDER capabilities; `capability_write` routes only
@@ -26,8 +26,9 @@ resolution exposes its small complete schema to avoid an extra discovery round.
 
 - `system_health` — health plus `mcp_surface_profile`, `public_tool_count`,
   `surface_schema_version`, the durable-only Data Quality Center, and a
-  materialized-only `attention_summary`. Always follow with
-  `research_get/attention`; the summary cannot skip the inbox. The quality
+  materialized-only `attention_summary`. For an explicitly requested
+  cross-domain review, follow with `research_get/attention`; the summary cannot replace
+  that inbox. Ordinary note-led discussion does not require a health/archive sweep. The quality
   view summarizes latest account snapshot valuation/timestamp coverage, account
   activity receipts, and active Monitor blind spots without contacting an upstream
   Provider. Provider checks retain their `live_probe` versus `configuration` label;
@@ -157,6 +158,13 @@ Decision explicitly names the exact prior Decision through
 `supersedes_decision_id`, or the user manually resolves the ReviewItem. Failed or
 bounded source reads must never auto-resolve it.
 
+Moomoo notes alone support the core workflow. Conversation and saved discussion
+receipts are optional, including before a separate formal review in Console.
+Their absence never establishes unfinished work or authorizes a judgment update.
+Console owner-change visibility is independent of discussion receipts. Its FULL-note
+Journal link pins the exact revision with no Subject prerequisite for the read.
+An optional Subject on the exact-revision endpoint still enforces Instrument scope;
+formal Decision writes retain their existing matching active-Subject checks.
 Daily note-led work uses `view_get/notes` before archive attention sweeps. It reads
 metadata without a Subject or interpretation. `view_get/note` defaults to metadata;
 private content requires an explicit current-user request, `include_content=true`
@@ -169,6 +177,26 @@ retain their own privacy boundary. SUMMARY_ONLY remains metadata-only.
 analysis, broker refresh or UI automation. Existing scheduled-operation permissions
 are not expanded. Journal `external_note_revision` links may be global and require
 FULL/time-visible sources; optional Subject scope must match the note Instrument.
+Note metadata includes bounded durable account context with optional `context_cursor`.
+Keep independent source failures, snapshot times, native currencies and unknown activity
+coverage.
+Bounded activity coverage receipts preserve exact provider/account identity, requested/effective
+windows, source retrieval time, supported/unavailable kinds and gaps. Receipts certify only their
+recorded source windows, never complete history or continuous coverage. Future receipts are excluded,
+lookup failure does not erase positions/transactions, and receipt changes invalidate context cursors.
+Saved option Master relations take precedence and preserve recorded multiplier/version;
+conflicts are excluded and adjusted-contract terms may remain unknown. Symbol-derived
+identity is unverified, not a multiplier or Greek source. Metadata overflow withholds
+option associations rather than falling back across potentially omitted conflicts.
+Cursor content fingerprints reject changing snapshots/backfills; transport compaction
+must not drop financial rows while advancing their cursor. Reads do not refresh brokers.
+Console personal conclusions reuse global Journal NOTE append with
+`authored_by=confirmed_by="user"`, `personal_conclusion_v1`, and an exact FULL note
+revision. Classify these separately from saved discussions. Receipt recovery must
+match the exact request and source; retries retain the original payload/key. Browser
+storage may hold only the recovery ID and an equality fingerprint, never private text.
+The note history projection groups current exact Instrument mappings, not historical
+mapping claims. Period transactions are comparison facts, never inferred execution links.
 A discussion receipt does not adopt an Observation or update any formal judgment.
 Do not require per-Subject daily NO_ACTION or status maintenance to read/discuss notes.
 
@@ -186,7 +214,34 @@ do not change attribution.
 With the user's explicit private-content authorization, new
 revisions may be interpreted in the background by OpenCode Go
 `deepseek-flash` (DeepSeek V4.1 Flash) at `max` effort under a strict schema and
-120-second timeout. Escalated review drafts also default to `deepseek-flash` at
+300-second timeout. An explicitly enabled `EXTERNAL_NOTE_CLI_FALLBACK_ENABLED`
+uses the official OpenCode >=1.18.0 CLI for first-pass failures (transient errors,
+quota/admission failure, or exhausted output repair), never authentication/configuration
+failure or cancellation. The allowlisted default is `space-bunny-free`; training-enabled
+models are excluded. DeepSeek V4.1 Flash Free (`deepseek-v4.1-flash-free`) is also
+allowlisted without changing the configured default. GLM-5.3-Flash Free
+(`glm-5.3-flash-free`) is allowlisted under the same no-training privacy boundary.
+Cat Jam, DeepSeek, GLM and LongCat receive a CLI output budget of 32,000 tokens shared by
+reasoning and final JSON; other CLI models retain 8,000.
+Existing timeouts, schema/attribution validation and output-size bounds still apply;
+`length` termination is a closed `token_limit` diagnostic, never an accepted draft.
+CLI inherits the explicit
+`PROVIDER_PROXY_URL`, overriding ambient proxy/bypass values except for local
+loopback SDK traffic. Proxy credentials remain environment-only; preserve TLS
+verification and explicitly supplied CA paths. Never bypass certificate validation
+or hide TLS/partial-output failures with blind retries. Failure diagnostics retain
+only closed stage/category, HTTP status and partial-output flags, never raw errors,
+headers, note text or proxy URLs. Tool-operation rejection is a closed
+`tool_operation` response diagnostic and is not retryable.
+CLI input travels over stdin, not argv; per-call owner-only
+configuration, home, XDG storage, cache and logs are isolated and removed after
+completion/cancellation. Noninteractive CLI retains tools with `ask` permissions and
+rejects requests without `--auto`; tool events fail closed. Text JSON is converted to
+extraction arguments and still passes the original schema and attribution validator,
+including at most one repair. The resulting record reports `opencode_cli`, the actual
+model ID, and `provider_default` rather than claiming a configured `max` effort.
+Fallback does not expand private-content authorization or affect escalated reviews.
+Escalated review drafts also default to `deepseek-flash` at
 `max`. Optional OpenCode Go `muse-spark-1.3-contributor` at `high` requires the owner to have explicitly
 accepted Contributor prompt/completion training through
 `EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true`. The configured protocol router must send Muse Spark 1.3 and Grok 4.6 through
@@ -555,6 +610,11 @@ An OPEN configured Provider circuit is retryable unavailability, retaining
   Immutable buckets enter cache only after candle validation, so a malformed
   response cannot poison later explicit reads. Legacy quotes require exactly one
   matching explicit Instrument identity; a sole wrong row is rejected.
+  Jetta WAF challenge/captcha responses (including HTTP 202 empty HTML) are
+  nonretryable provider-unavailable errors, not malformed candles or API-key
+  failures. The adapter suppresses new Jetta requests for five minutes, preserves
+  validated immutable cache reads and configured legacy fallback, and permits a
+  fresh attempt after the cooldown. No browser challenge solving is performed.
 - Dukascopy OTC quote DTOs expose `display_price` plus `price_basis`; bid/ask
   observations normally use their midpoint while `last` stays null. Never
   relabel a quote midpoint as a traded price. The spot/future basis path also
@@ -698,7 +758,7 @@ preserve their original stored values and existing duplicate-warning contract.
   `trade_retro`)
 
 QuantConnect/LEAN code generation, backtesting, and result import are removed.
-The public schema is `mcp-vnext-shadow-v15`; `research_workflow_run` rejects the
+The public schema is `mcp-vnext-shadow-v16`; `research_workflow_run` rejects the
 retired `historical_validation_prepare` and `historical_validation_import` operations.
 Existing private artifacts are historical files only, not a runtime capability.
 
@@ -905,6 +965,12 @@ Scheduled Monitor quote reads also receive at most three bounded attempts when t
 safe Provider diagnostic explicitly marks the failure retryable. Contract/authentication
 failures are not retried, and a successful retry is disclosed by
 `MONITOR_PROVIDER_READ_RETRIED`.
+After a data interruption, rule evaluation resumes from the latest evaluated
+observation in the same Monitor version and within the evaluation cutoff. This
+preserves hysteresis and prevents unchanged alarms from firing again on data
+restoration; a real clearance or newly crossed condition still emits its transition.
+Only recovery paths query the existing observation history; no extra state table is
+maintained. Missing history does not imply a prior triggered state.
 Optional Telegram delivery uses a durable Outbox linked to either an event or a
 market-close run. INTERVAL alerts remain transition-only. A-share/US/KR post-market
 groups persist their ordinary transition events but enqueue no separate event-linked
@@ -925,7 +991,11 @@ then every rule's state, condition, and bounded human meaning. Repeated values a
 distances remain available in the durable Run instead of being repeated on a phone
 screen; one shared unavailable-fact cause is rendered once. Multiple same-Monitor
 transitions in one run are delivered as one Telegram message without collapsing
-their durable Monitor events. Monitor notifications use Telegram Bot API 10.1+
+their durable Monitor events. Cards retain partial-outage and restoration status;
+rule deduplication matches condition, meaning, severity and state rather than hiding
+different risks at the same threshold. Outbox delivery rechecks expiry before each
+message and starts provider backoff from the response time.
+Monitor notifications use Telegram Bot API 10.1+
 Rich Messages and a native two-column table for state/severity plus the combined
 condition/meaning; generic/manual notifications remain regular HTML messages. Quiet
 rules are collapsed behind a count while triggered and unavailable rules remain

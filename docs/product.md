@@ -8,23 +8,33 @@ schemas and operating procedures remain in their dedicated guides.
 ## Product loop
 
 Trading Partner is a local-first, note-led investment companion. The owner writes
-in Moomoo and discusses those notes with Codex. Research Subjects are background
+in Moomoo; those notes are sufficient for the core workflow. Discussion with Codex
+or another host is optional. Research Subjects are background
 archives, not a daily state-maintenance checklist.
 
 ```text
-Moomoo note revision → attributed reading / changes → Codex conversation
-                     → explicitly requested note-linked Journal conclusion
-                     → optional formal Thesis / Trade Plan / Decision review
+Moomoo note revision → attributed reading / changes + available saved portfolio context
+                     → optionally discuss with Codex and explicitly save a Journal conclusion
+                     → optionally review a formal Thesis / Trade Plan / Decision
 ```
+
+The owner can use notes directly without a conversation, model interpretation or
+saved discussion. Formal review can start from a note in Console without a prior
+conversation; exact user confirmation remains required. A missing discussion is
+not an incomplete task or an unreviewed-judgment determination.
 
 Reading or retaining an ordinary discussion requires neither a Research Subject,
 model interpretation nor a live Thesis. A recorded conversation is not a formal
 Decision, Observation adoption, order or instruction to update every archive.
 Formal judgment and execution changes retain exact scope and separate confirmation.
 
-The default Console tab is Your Notes. It shows changed owner text, folds exact
-revisions with saved discussions and folds unchanged/quoted-only text by default;
-Show All Recent Notes retains those records. No automatic status writes are made.
+The default Console tab is Your Notes. It shows changed owner text independently
+of saved discussion receipts and folds unchanged/quoted-only text by default;
+Show All Notes on This Page retains those records. Older/Newer Notes browse the
+saved archive beyond the initial page and the legacy MCP inbox's 500-note window.
+Title/Instrument search is read-only and keeps search terms out of URLs and browser
+storage. Discussions are an optional collapsed section. No automatic status writes
+are made.
 Risk/operational exceptions remain visible outside the collapsed background
 workspace. Existing Today/Weekly and structured research workflows remain optional.
 
@@ -44,6 +54,105 @@ it neither refreshes accounts nor calls a model. Reads never sync implicitly.
 The source must be FULL and visible at write time; any optional Subject must match
 the note Instrument. Existing actor, idempotency, indexing and audit gates apply.
 No new table, migration, reminder scheduler or autonomous judgment is introduced.
+
+## Note conversation context and default loading
+
+The three daily Console entries are Notes, Portfolio and System. Advanced Workspace
+keeps Journal, Research, Monitors, Capabilities, Charts, Agenda, Retro and Scorecards
+reachable at their original URLs. Risk and unresolved operational actions remain visible.
+Copilot defaults to closed for new preferences, is loaded on explicit opening, and
+stays mounted after first use so collapsing does not discard a draft or active turn.
+Existing explicit open preferences and `?agent=open` are respected. Question Research
+waits for the rail listener before offering its exact prepared context; no auto-send.
+
+The default Notes page reads durable note context, risk signals and unresolved
+Agent/Broker actions. Background archive review scans and maintenance inventory
+load only through their explicit views. Duplicate calendar, Monitor/run-history,
+post-market and local-runtime home cards are replaced by links to their owning
+Agenda, Monitors and System pages. Full Overview reads and explicit queue refresh
+remain available; ordinary note discussion requires no queue or archive maintenance.
+
+Note-list predecessor reads are batched for displayed rows. Missing and unreadable
+previous content remain distinct; a failed comparison never labels a note as new.
+Console browsing reads a lightweight latest-revision index and loads full revisions
+and predecessors only for the displayed page. Search uses latest revision titles or
+canonical Instrument IDs; it does not search private note bodies. The index remains
+a linear metadata scan and pages may move when new notes are synced.
+No additional cache or status maintenance is required.
+
+The note reader offers a reference-only Codex request for the selected revision;
+copying does not read private content or send a message. Console discussion history
+loads only when Saved Discussions is expanded; note-text and account-page reads skip
+that history, and history reads skip portfolio context. MCP read defaults are unchanged.
+Saved discussion text is read only after an explicit selection, with paginated text tied to their original note
+revision. Reloading does not reopen private discussion text or record another entry.
+FULL notes also link directly to the exact revision in Journal, independent of the
+latest inbox window and without requiring a Subject to read it. Journal's Notes scope
+loads Subject choices, selected judgment and saved positions; switching to other tabs
+loads the full Journal. Unloaded trade cycles are labeled, never reported as empty.
+Missing or mismatched
+revisions never fall back to the latest note. Record Independent Decision still
+requires an exact matching active Subject, the owner's rationale and confirmation;
+neither navigation nor reload invokes interpretation or adopts an Observation.
+
+Metadata reads of `view_get/note` include `portfolio_context`: exact-Instrument
+positions across saved accounts and symbol-related US option positions/transactions.
+Saved Instrument Master relations take precedence over symbol hints. Recorded positive
+multipliers retain their metadata version; they do not verify the complete deliverable.
+Registered adjusted contracts may be included with unknown expiry/type/strike; explicit
+conflicting underlying relations are excluded. A master lookup over its 500-row bound
+withholds option associations rather than guessing across omitted metadata. Canonical
+symbols are unverified fallback hints; Greeks are never invented. Other unmatched
+option positions are disclosed. Broker cost/P&L mismatches remain warnings; no FX,
+portfolio sizing or execution linkage is inferred.
+
+Context pages contain at most six rows and use `context_cursor`. Position and ledger
+failures degrade independently. A fingerprint invalidates continuation when the saved
+context changes. Up to 1,000 matching transactions are readable; an overflow is explicit.
+Historical ledger coverage remains UNVERIFIED, including empty results. Snapshot times,
+age, native currencies and provider warnings stay attached. Account context reads have
+no provider/model/write dependency. Private note pages remain separately authorized.
+Transport compaction must not retain a continuation cursor after dropping financial rows;
+when a page cannot fit, it reports an unavailable context and points to the full Console read.
+
+Sync receipts with PARTIAL/authentication warnings appear as incomplete in Console;
+configured credentials are not proof of current cloud access. Technical indicator/PNG
+adapters defer numerical imports until first use. Installed extras and public operations
+are preserved; this does not disable Monitor, broker, or scheduled-operation resources.
+
+## Personal conclusions and thinking history
+
+A FULL note offers **My Conclusion** directly in its reader. Explicit Save appends
+an existing global Journal NOTE, authored and confirmed by the user, tagged
+`personal_conclusion_v1` and linked to that exact immutable source revision. No
+conversation, interpretation or Research Subject is required. It is a personal
+record, not a Decision, Observation adoption, Thesis change or order. Source notes
+remain authored in Moomoo; this UI does not edit the source.
+
+Save recovery uses the existing Journal idempotency contract and a read-only
+exact-key receipt. An unconfirmed request retains its original key; edits are locked
+while its submitted draft is retained. Across reload, session storage retains only
+the request ID and a SHA-256 equality fingerprint. Re-entered text must match that
+fingerprint before retrying. A reload checks the receipt without saving again or
+opening private text. Private title/body text is never persisted in browser storage.
+A verified save offers a separate private read and an explicit new-conclusion action.
+
+**Thinking History** loads on expansion, grouping Moomoo notes by their current
+exact Instrument mapping; an unmapped note shows only its own versions. This does
+not reconstruct historical Instrument mappings. Source revisions, personal
+conclusions and saved discussions remain distinct, ordered by observed/recorded time
+with exact source references. Metadata responses do not disclose private bodies. Historical
+versions and record bodies require separate selection and retain source attribution,
+redaction and pagination. Personal conclusions are not labeled as Codex discussions.
+
+History is limited to the latest 1,000 source revisions and 1,000 linked Journal
+records, in 20-entry pages. Bounds and independent Journal failures remain visible.
+A changed history invalidates its continuation cursor instead of silently shifting
+entries. An optional period-transaction read uses the displayed history page's exact
+time window and existing durable account context rules, without current-position
+reads or broker refresh. Fees, native currencies, option identity limits and source
+coverage remain explicit. Period overlap is not evidence that a trade executed a
+note or a plan; no relationship is automatically written.
 
 ## Core records
 
@@ -75,7 +184,7 @@ workspace. The chart supports six candle/bar styles, common overlay and pane
 indicators, zoom/crosshair interaction, SMC overlays, drawing tools, and PNG export.
 Console reads complete local results and does not implicitly refresh a broker.
 
-The public `mcp_vnext_shadow` v15 surface has nine entry tools over 24 business
+The public `mcp_vnext_shadow` v16 surface has nine entry tools over 24 business
 capabilities. `capability_discover` reveals operations and exact schemas on demand;
 read and write gateways preserve the original capability validation. Identity,
 judgment confirmation, sync, broker-order, and chart operations keep dedicated
@@ -373,6 +482,11 @@ Optional model interpretation produces drafts only. Attribution and date orderin
 are computed deterministically first. A model cannot confirm a Thesis, Decision,
 Plan, Monitor, position, or order. Contributor models require the owner's explicit
 training opt-in.
+An explicitly enabled official OpenCode CLI fallback can recover first-pass note
+extraction after transient or exhausted structured-output failures. It uses isolated,
+temporary sessions with automatically rejected tool permissions, preserves the same
+schema/attribution gates, and records the actual model source. Configuration and
+limits are in the [local operations guide](operations/local-console-and-maintenance.md).
 
 ## Evidence impact links and research questions
 

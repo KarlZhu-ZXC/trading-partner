@@ -1,6 +1,6 @@
 # Capability usage and audit
 
-The MCP surface has nine public tools, 24 internal capabilities and 106 operations.
+The MCP surface has nine public tools, 24 internal capabilities and 109 operations.
 These are different inventory counts. Console's Public Tools value uses the public
 inventory; the Capability directory labels its internal entries as capabilities.
 
@@ -11,7 +11,8 @@ capabilities. Other closed categories are `research` (7), `market` (6), `monitor
 (3) and `operations` (3). The groups partition the inventory exactly. Omitting the
 category retains the full catalogue; exact tool/operation discovery remains
 available for every operation. Mixing category with tool/operation is rejected.
-This backward-compatible optional input is schema version `mcp-vnext-shadow-v13`.
+This backward-compatible optional input was introduced in schema version `mcp-vnext-shadow-v13`;
+the current surface is documented in [the capability guide](mcp-capability-boundary.md).
 No capability or authorization was removed or merged.
 
 ## Observations, not evidence of non-use
@@ -68,3 +69,14 @@ A retirement decision needs an adequate observation window, confirmation of
 Console/Agent/CLI/monitor dependencies, an explicit product decision, and contract
 migration tests. Discovery filtering offers smaller responses now without removing
 rare but potentially necessary operations.
+
+
+The audit preserves validated row dates and derives its usage window from accepted
+positive-call aggregates. It reports observed bounds, distinct recorded days,
+calendar span, dated/undated row counts and observed sources. Claimed export bounds
+or a claimed complete status cannot upgrade those observations. Zero-call rows do
+not establish invocation evidence. A 19-day calendar span with 13 recorded days is
+not proof of 19 continuously observed days, and undated rows establish no window.
+Registry aggregates still omit service/CLI callers that bypass the registry; missing
+activity never grants permission to retire a workflow. Use the window and static
+caller evidence together with the explicit product decision required above.

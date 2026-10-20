@@ -41,7 +41,7 @@
   Summary fallback may recover only a proven prefix/suffix around the prior FULL
   editor body, never a middle rewrite.
   First-pass and escalated review default to OpenCode Go `deepseek-flash` at
-  `max`; the first pass uses a 120-second per-attempt timeout. Model selection is
+  `max`; the first pass uses a 300-second per-attempt timeout. Model selection is
   configuration-owned; do not infer the active model from historical comparisons.
   Optional `muse-spark-1.3-contributor` at `high` requires
   `EXTERNAL_NOTE_CONTRIBUTOR_TRAINING_OPT_IN=true` recording the owner's explicit

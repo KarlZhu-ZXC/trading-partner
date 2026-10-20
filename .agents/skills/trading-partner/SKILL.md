@@ -56,6 +56,18 @@ or missing authorization; continue independent reads while waiting.
   unrecorded note into an obligation to process it.
 - If the owner requests fresh notes, discover `external_state_sync/notes`: it syncs
   Moomoo notes only, without account refresh or model analysis. Do not sync implicitly.
+- Before asking the owner to repeat a trade or position, read the note metadata's
+  `portfolio_context`: it includes saved cross-account positions and related activity.
+  Follow `context_cursor=next_cursor` until relevant pages are read; a changed-context
+  error requires restarting at the first page. Compare notes with those facts before
+  discussing additions/reductions. This is context association, not an execution link.
+  Preserve source ages, unknown history coverage and cost/P&L conflicts. Option-symbol
+  expiry/strike hints are unverified. Saved master relations and positive multipliers
+  retain their metadata version, not a claim of fully verified deliverables. Conflicting
+  master links are excluded; unknown contract terms and Greeks remain unknown.
+  A transport-limit gap is not an empty position list. Ordinary reads never refresh brokers.
+- A note sync with PARTIAL/authentication warnings is incomplete even when `ok=true`.
+  State cache/cloud coverage and do not describe zero new revisions as no cloud changes.
 - `view_get/note` reads one exact revision, without a Subject or interpretation.
   It defaults to metadata. Return private text to this external host only when the
   current user explicitly asks to read/discuss those notes, then set

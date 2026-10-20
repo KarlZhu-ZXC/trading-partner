@@ -42,7 +42,12 @@ uv run trading-partner-mcp
 ```
 
 源码工作区的默认开发依赖包含所有集成测试所需能力。最小生产安装按需选择
-`accounts-moomoo`、`accounts-schwab`、`chart`、`company-pdf` extras；需要完整能力时安装
+`accounts-moomoo`、`accounts-schwab`、`market-data`、`technical`、`tracing`、`chart`、`company-pdf` extras；
+Yahoo SDK 和 US/Korean 交易日历已移入 `market-data`；依赖这些来源的行情、Monitor、SGOV
+或其他调度必须保留该 extra 或 `all`。缺少日历时明确失败，不推测交易日或跳过订单安全检查。
+TA-Lib 技术计算已移入 `technical`，显式开启 tracing 需要 `tracing`；`chart` 同时包含
+TA-Lib 与 PNG 依赖。默认源码 `uv sync` 保留完整开发依赖，已安装运行环境不会被源码编辑改变。
+需要完整能力时安装
 `trading-partner[all]`。配置已启用但 extra 未安装时，Provider 必须返回显式 typed
 degradation，不能静默跳过或伪造结果。
 
@@ -93,18 +98,18 @@ v13 增加可选的 `category`：`research`、`portfolio`、`market`、`monitori
 例如 `capability_discover(category="portfolio")` 只返回组合相关的 5 个业务能力，
 不增加发现轮次。无参数调用仍返回完整 24 项；已知能力与操作时继续直接获取精确 schema。
 `category` 不能与 `tool` / `operation` 混用；分类仅筛选目录，不改变可调用范围或授权。
-9 个首层入口保持不变；当前 v15 共 109 个操作。没有根据缺少调用记录删除操作。
+9 个首层入口保持不变；当前 v16 共 109 个操作。没有根据缺少调用记录删除操作。
 
 不知道操作名时，仅传 `tool` 获取操作列表。同一会话复用已有 schema，不重复发现。
 `capability_write` 另外要求 `confirmation` 等于原业务 capability 名称和用户明确授权；
 底层继续检查 actor、版本、幂等键与业务授权。两个路由均拒绝上述六个独立工具，
 查询入口拒绝任何写入，发现不触发任何业务操作。标的解析参数较短，直接完整发布。
 
-当前 schema 为 `mcp-vnext-shadow-v15`：9 个入口、24 个业务能力、109 个业务操作。
+当前 schema 为 `mcp-vnext-shadow-v16`：9 个入口、24 个业务能力、109 个业务操作。
 原业务名称不再全部是公开 MCP 工具；历史记录及 next-read 提示保留原能力名，调用前
 根据发现返回的 `call_tool` 路由。Console 和内置 Agent 仍使用完整 Registry。
 完整 schema 的 `$ref` 在同一结果内可解析，绝不为了压缩而截断 schema。
-重新连接 MCP 客户端获取 v15；不需要迁移数据库或改写历史记录。
+重新连接 MCP 客户端获取 v16；不需要迁移数据库或改写历史记录。
 
 v14 在现有 `research_judgment_propose/research_state` 中加入 `evidence_impact` 的
 create/revise/retract，以及 `open_question` 的 update_research/link_decision。
@@ -1065,3 +1070,18 @@ identity，并拒绝覆盖已有恢复目标。它目前是内部 Python service
 6. 最后运行 Deep Dive 或 Portfolio Review。
 
 这样可以快速区分 MCP 启动问题、单个 Provider 问题和账户连接问题。
+
+### v16 笔记上下文
+
+`view_get/note` 的元数据页会附带 `portfolio_context`，默认读已有的相关成交与跨账户持仓，
+不刷新券商。续读时向同一操作传入 `context_cursor=portfolio_context.next_cursor`。
+上下文变化会拒绝旧游标，需重新读取首页；不是数据库快照。正文仍单独授权分页。
+已有 Instrument 主表标的关系优先，保留已记录的乘数与元数据版本；完整交割条款仍需核验。
+调整合约可依据主表关联，代码提示缺失的日期/行权价保留为空；主表明确冲突的关联被排除。
+只有代码推导时不能猜乘数或 Greeks；历史 coverage 未证实时不得声称完整。
+`transaction_coverage` 附带最多 6 条已有来源窗口回执，保留 provider/account、请求/实际
+时间范围、获取时间、支持/缺失活动类型及 gap codes；查询最多检查 500 条回执。
+这些是精确来源窗口，不证明连续覆盖或全历史；`history_coverage` 仍为 `UNVERIFIED`。
+未来回执被排除，查询失败不抹掉持仓/成交；回执变化也会使旧上下文游标失效。
+应先读完相关账户页再询问用户已知成交。传输超限会明确返回 context unavailable，
+不允许通过截断页继续推进游标。操作总数仍为 109，无数据库迁移。

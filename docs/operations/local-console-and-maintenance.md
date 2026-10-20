@@ -155,7 +155,7 @@ OPENCODE_API_KEY=
 OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
 OPENCODE_GO_MODEL=deepseek-flash
 EXTERNAL_NOTE_ANALYSIS_MODEL=deepseek-flash
-EXTERNAL_NOTE_ANALYSIS_TIMEOUT_SECONDS=120
+EXTERNAL_NOTE_ANALYSIS_TIMEOUT_SECONDS=300
 OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
 OPENCODE_ZEN_MODEL=gpt-5.6-luna
 ```
@@ -193,12 +193,47 @@ entitlement、地域限制与上游故障会保留为 typed Provider error，
 Journal 的 `Refresh Sources` 是另行授权的解释流程：扫描本机 Moomoo 缓存并快速返回；
 在已有私人正文处理授权下，新 revision 的正文会在
 后台发送给单独配置的 OpenCode Go `deepseek-flash`（DeepSeek V4.1 Flash），使用 `max` 推理强度与
-120 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
+300 秒单次超时。该授权只覆盖笔记结构化草稿，关闭 Web Search，且不能确认 Research 状态、
 创建 Monitor 或授权订单。未署名段落确定性视为本人观点，明确姓名前缀保留为外部观点。
 
 当前主调用统一使用 `deepseek-flash / max`：两层笔记处理、Monitor 综合判断和事件解释、
 Trade Retro，以及 Console Agent 默认模型。设置 `LLM_PROVIDER=opencode_go` 后，Monitor、
 事件解释、复盘与 Agent 复用 `OPENCODE_GO_MODEL`；笔记的两个模型字段独立配置。
+
+笔记首次意图解读可显式启用官方 OpenCode CLI 备用路径：
+
+```dotenv
+EXTERNAL_NOTE_CLI_FALLBACK_ENABLED=true
+EXTERNAL_NOTE_CLI_FALLBACK_MODEL=space-bunny-free
+EXTERNAL_NOTE_CLI_EXECUTABLE=/opt/homebrew/bin/opencode
+```
+
+需要本机安装 OpenCode 1.18.0 或更新版本；升级 Homebrew 安装可运行
+`brew upgrade opencode`。模型仅允许 Space Bunny、Cat Jam、LongCat 2.5 Preview、
+Step 5 Preview、DeepSeek V4.1 Flash（`deepseek-v4.1-flash-free`）、
+GLM-5.3-Flash（`glm-5.3-flash-free`）的免费 ID，
+默认 Space Bunny。主模型限流、超时、服务不可用、额度或
+本地排队失败，以及一次格式修复后仍未通过校验，才进入备用路径；鉴权、配置、
+授权失败和取消不触发切换。升级复核草稿与 Monitor 使用各自已有配置。
+
+CLI 通过标准输入接收文本，使用所有者临时目录隔离配置、会话、缓存和日志，结束或
+取消后清理；不会复用个人 OpenCode 会话。官方客户端保留工具声明，所有操作均要求
+审批，非交互运行自动拒绝审批且不传 `--auto`。出现工具事件的结果直接拒绝。
+文本 JSON 转为笔记提取参数后仍通过原 schema、作者归属校验及最多一次结构修复。
+结果记录实际 `opencode_cli` 来源、模型 ID 和 `provider_default` 推理档；不将客户端
+默认推理冒充为 `max`。主调用失败码只写入无正文诊断。免费额度和模型可用性由上游决定。
+CLI 同样使用 `PROVIDER_PROXY_URL`：显式代理覆盖桌面继承的代理和通配绕过设置，
+仅保留 localhost 回环通信直连。未配置时沿用进程代理。代理凭据只进入子进程环境，
+不进入命令行或诊断。保留 TLS 证书校验，允许继承 `SSL_CERT_FILE`、`SSL_CERT_DIR`
+及 `NODE_EXTRA_CA_CERTS`，不继承关闭证书校验的开关。
+失败诊断区分 TLS 校验、上游 HTTP 错误、工具操作拒绝、子进程退出、输出超限和响应未完成，
+只记录封闭类别、HTTP 状态及是否已有部分输出；不保存错误正文、请求头或代理地址。
+证书校验失败、截断或未知结局不通过自动重试隐藏；先检查代理路由和本机信任配置。
+Cat Jam、DeepSeek、GLM-5.3-Flash 与 LongCat 免费 CLI 模型的推理与最终 JSON 共用输出预算；
+为它们预留 32,000 token，
+其他 CLI 模型仍为 8,000。原有单次超时、正文大小、schema、作者归属和一次格式修复
+上限保持有效。客户端因 `length` 结束时记录 `token_limit` 并拒绝未完成结果，
+不再与连接失败混为一类。
 Go 的 Chat Completions 与 Responses 请求不发送客户端输出 token 上限，包括服务内原有的
 384/5000/8000 预算；普通调用、流式和重试策略一致。平台自身限制、超时与输出结构校验保留。
 Messages 协议仍保留其必需的 `max_tokens`；Zen 和其他 Provider 的预算不变。
@@ -296,6 +331,35 @@ function call 及其参数 JSON Schema，Responses 路由优先发送 strict JSO
 明确拒绝结构参数，才降级为 JSON-object 模式。系统只投影 schema 已声明字段，再执行本地
 闭合枚举、必填字段、长度、数量与证据校验；不合约输出只允许一次 structure-only 修复，
 不能从自由文本猜测或补造判断。
+
+### 笔记解析的模型选择与忠实度
+
+Go 模型目录是可选模型清单，不代表每个模型都适合笔记解析或支持相同请求协议。
+Grok 4.7 与 GPT 6 Luna 使用官方指定的 Responses 路径；目录发现本身不切换现用模型。
+模型更贵或输出更长不能作为升级依据。比较应使用同一输入、作者归属、网络配置、超时
+与结构校验，并分别记录内容忠实度、请求兼容性和服务可用性；连接失败属于明确失能，
+不归类为理解错误，但必须留在端到端通过率的分母。
+
+初步解释与进一步复核共享原文忠实度要求：四情景只是固定输出槽位，缺失条件明确标记
+“原文未给出”；不复活已撤回的历史计划，不把独立价位拼成震荡区间，不把已有持仓
+改写为新的 HOLD 指令。只观察不操作的最新 USER 声明维持 NO_ACTION；重新评估是否
+加仓保留 REVIEW；明确失效退出只属于 INVALIDATION。不得用外部作者的条件填补
+USER 的确认条件或风险边界；用户明确采纳时只保留其采纳的部分。方向、持有周期、
+成交状态分别取证，不由操作记录推断涨跌方向或当前仓位；旧条件未重申不等于撤销。
+只有真正互斥的断言才列作矛盾，其余有效性疑问保留为缺失证据。
+模型草稿仍需原有校验与用户审阅，不保证完全正确。
+
+有界比较已覆盖合成边界样例及经用户授权的八篇完整笔记，统一最高推理档和每次
+300 秒超时，失败项有限重试。八篇比较中 GPT 6 Luna 返回八篇、DeepSeek Flash
+返回五篇；双方均返回的五篇核心语义大多一致，可用性差异不能直接当成准确率。
+TP/take profit 表示止盈卖出意图，不能把保留该意图误判为幻觉；未知成交状态也
+不能抹掉计划。Luna 曾把 USER 段落引用外部共识后接续的参与计划误归外部作者，
+因此已补充保留 USER 自述意图、限制采纳范围的规则。随后在同一新版提示下，对三篇
+难例进行四模型 high/max 及 Luna medium 的 27 项比较；成功返回的参与意图样例已
+保留 USER 自身计划，但其他日期、归属、数字与历史关系仍出现错误。超时、服务错误
+与无效结构均计失能；完整方法及有限结论见[笔记模型评测](note-model-evaluation.md)。
+保守输出也可能漏掉原意，不能据此宣称某模型全面更准确。
+现用模型配置不随比较自动改变；评测草稿不修改正式判断，不扩大 Contributor 授权。
 
 ### 受保护的局域网访问（可选）
 

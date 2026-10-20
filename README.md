@@ -16,12 +16,12 @@ Most AI investment chats can summarize today's market. They do not remember why 
 bought, what would invalidate the idea, how the plan changed, or whether new evidence
 contradicts last month's judgment.
 
-Trading Partner starts with your Moomoo notes and conversations with Codex or another
-[Model Context Protocol](https://modelcontextprotocol.io/) host. It retains exact
-source revisions and explicitly requested discussion conclusions. Research archives,
+Trading Partner starts with your Moomoo notes. Use them directly, or optionally
+discuss them with Codex or another [Model Context Protocol](https://modelcontextprotocol.io/)
+host. It retains exact source revisions and explicitly requested discussion conclusions. Research archives,
 portfolio context and monitoring support that work in the background.
 
-> **Write in Moomoo. Discuss in Codex.** Ask to keep a conclusion when it matters.
+> **Start with Moomoo notes. Discussion is optional.** Ask to keep a discussion conclusion when it matters.
 > Reading notes and recording an ordinary discussion require no Research Subject
 > or daily status maintenance. Formal investment judgments, plans and orders keep
 > their separate confirmation rules.
@@ -46,11 +46,10 @@ Write or update your Moomoo note
     ↓
 Explicit sync stores immutable source revisions (no model or account refresh required)
     ↓
-Read attributed text and discuss changes with Codex
+Read attributed text and available saved holdings / transactions directly
+    ├─ Optional: discuss with Codex and explicitly save a conclusion against the note revision
     ↓
-When you ask to retain a conclusion, save it against the exact note revision
-    ↓
-Only when needed: formalize a Thesis, Trade Plan or Decision through its own review gate
+Optional, with or without discussion: review a Thesis, Trade Plan or Decision through its own gate
 ```
 
 | Built for | What it changes |
@@ -131,8 +130,16 @@ uv run alembic upgrade head
 uv run trading-partner-mcp
 ```
 
-Optional runtime extras are scoped to `accounts-moomoo`, `accounts-schwab`, `chart`,
-`company-pdf`, and `console`; `trading-partner[all]` installs all of them. Node.js
+Optional runtime extras are scoped to `accounts-moomoo`, `accounts-schwab`, `market-data`, `technical`,
+`tracing`, `chart`, `company-pdf`, and `console`; `trading-partner[all]` installs these
+capabilities. The base installation supports Notes and saved account reads without
+NumPy/Pandas, Yahoo SDK, exchange calendars, TA-Lib or the tracing SDK. Add `market-data`
+for Yahoo SDK operations and US/Korean exchange sessions; installed market/SGOV/Monitor
+workflows using these sources must retain this extra or `all`. Add `technical` for
+TA-Lib calculations, `chart` for calculations
+and PNG rendering, and `tracing` before explicitly enabling OpenTelemetry. Source
+`uv sync` retains these dependencies for development; an existing runtime is not
+changed by editing this source. Node.js
 22.13 or newer is required only for the optional Console frontend.
 
 After connecting, call `system_health` first. It separates live probes from
