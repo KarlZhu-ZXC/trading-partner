@@ -1,5 +1,10 @@
 # Unreleased
 
+- Require MCP SDK 1.30.0 or newer within the 1.x line to include the
+  [CVE-2026-59951 session cleanup fix](https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-84m7-p3x7-pcfv).
+- Restore strict type checking for note CLI errors and evaluation protocol payloads
+  without changing extraction requests or validation gates.
+
 - Identify Dukascopy Jetta WAF challenges accurately, including HTTP 202 empty
   HTML responses. Suppress repeat Jetta calls for five minutes, retain configured
   legacy fallback and validated history cache, and allow recovery after cooldown.

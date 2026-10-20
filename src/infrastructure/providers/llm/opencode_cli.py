@@ -26,6 +26,7 @@ from domain.common.errors import (
     ProviderRequestRejectedError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    TradingPartnerError,
 )
 
 NOTE_CLI_MODELS = frozenset(
@@ -110,7 +111,7 @@ class OpenCodeCliNoteProvider:
         tool = request.tools[0]
         definition = tool.as_dict() if hasattr(tool, "as_dict") else dict(tool)
         function = definition.get("function", {})
-        if function.get("name") != _TOOL:
+        if not isinstance(function, dict) or function.get("name") != _TOOL:
             raise DataContractError("Note CLI supports note extraction only")
         messages = [
             item.as_dict() if hasattr(item, "as_dict") else dict(item) for item in request.messages
@@ -346,6 +347,7 @@ class OpenCodeCliNoteProvider:
                 }:
                     details["cli_error_type"] = name
                 _LOGGER.warning("OpenCode CLI request failed: %s", details)
+                error_type: type[TradingPartnerError]
                 if name == "ProviderModelNotFoundError":
                     error_type = ProviderNotConfigured
                 elif status == 429:

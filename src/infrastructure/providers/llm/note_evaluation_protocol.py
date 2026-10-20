@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from time import perf_counter
+from typing import Any, Literal, TypedDict
 
 import httpx
 
 from application.ports.agent_model_provider import (
+    ModelReasoningEffort,
     ModelRequest,
     ModelResponse,
     ModelToolCall,
@@ -59,11 +61,21 @@ ZEN_MODELS = frozenset(
 )
 
 
-def profile_for(provider: str, model: str) -> dict:
+class EvaluationProfile(TypedDict):
+    family: Literal["chat", "responses", "google", "messages"]
+    effort: ModelReasoningEffort | Literal["provider_default"]
+    reasoning_mode: Literal["none", "effort", "thinking"]
+    output_budget: int | None
+    http_attempts_per_completion: int
+
+
+def profile_for(provider: str, model: str) -> EvaluationProfile:
     allowed = GO_MODELS if provider == "opencode_go" else ZEN_MODELS
     if provider not in {"opencode_go", "opencode_zen"} or model not in allowed:
         raise ValueError("Model is not in the selected evaluation allowlist")
-    family, effort, mode = "chat", "provider_default", "none"
+    family: Literal["chat", "responses", "google", "messages"] = "chat"
+    effort: ModelReasoningEffort | Literal["provider_default"] = "provider_default"
+    mode: Literal["none", "effort", "thinking"] = "none"
     if model in {"gpt-6-luna", "grok-4.7", "muse-spark-1.3-contributor"}:
         family, effort, mode = "responses", "high", "effort"
     elif model == "gemini-4-argon-contributor":
@@ -86,13 +98,15 @@ def profile_for(provider: str, model: str) -> dict:
 
 
 class EvaluationProtocolProvider:
-    def __init__(self, *, provider: str, model: str, api_key: str, client: httpx.AsyncClient):
+    def __init__(
+        self, *, provider: str, model: str, api_key: str, client: httpx.AsyncClient
+    ) -> None:
         self.provider, self.model, self.api_key, self.client = provider, model, api_key, client
         self.profile = profile_for(provider, model)
-        self.google_parts: dict[str, dict] = {}
-        self.wire_request_snapshots: list[dict] = []
+        self.google_parts: dict[str, dict[str, Any]] = {}
+        self.wire_request_snapshots: list[dict[str, Any]] = []
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         """The evaluation runner owns the shared, credential-free HTTP client."""
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -190,14 +204,15 @@ class EvaluationProtocolProvider:
             latency_ms=round((perf_counter() - started) * 1000),
         )
 
-    def _google_encode(self, request: ModelRequest) -> dict:
+    def _google_encode(self, request: ModelRequest) -> dict[str, Any]:
         system, contents = [], []
         for item in request.messages:
-            message = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            message: dict[str, Any] = item.as_dict() if hasattr(item, "as_dict") else dict(item)
             role, content = message.get("role"), message.get("content")
             if role == "system":
                 system.append({"text": content or ""})
                 continue
+            parts: list[dict[str, Any]]
             if role == "tool":
                 parts = [
                     {
@@ -224,8 +239,10 @@ class EvaluationProtocolProvider:
                     )
             contents.append({"role": "model" if role == "assistant" else "user", "parts": parts})
         declarations = []
-        for item in request.tools:
-            tool = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+        for tool_item in request.tools:
+            tool: dict[str, Any] = (
+                tool_item.as_dict() if hasattr(tool_item, "as_dict") else dict(tool_item)
+            )
             function = tool["function"]
             declarations.append(
                 {
@@ -250,7 +267,7 @@ class EvaluationProtocolProvider:
             },
         }
 
-    def _google_decode(self, raw: dict) -> ModelResponse:
+    def _google_decode(self, raw: dict[str, Any]) -> ModelResponse:
         candidates = raw.get("candidates", [])
         if len(candidates) != 1:
             raise DataContractError("Evaluation Gemini response requires one candidate")
