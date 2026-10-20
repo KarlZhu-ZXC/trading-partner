@@ -541,6 +541,46 @@ class SqlAlchemyMonitorRepository:
             )
             return tuple(_state(row) for row in rows)
 
+    def last_evaluated_rule_states(
+        self, monitor_id: str, version: int, as_of: datetime
+    ) -> tuple[MonitorRuleState, ...]:
+        observation = MonitorRunObservationRow
+        ranked = (
+            select(
+                observation,
+                MonitorRunRow.completed_at.label("updated_at"),
+                func.row_number()
+                .over(
+                    partition_by=observation.rule_code,
+                    order_by=(MonitorRunRow.completed_at.desc(), observation.run_id.desc()),
+                )
+                .label("rank"),
+            )
+            .join(MonitorRunRow, MonitorRunRow.run_id == observation.run_id)
+            .where(
+                observation.monitor_id == monitor_id,
+                observation.monitor_version == version,
+                observation.state != MonitorRuleStateValue.NOT_EVALUATED.value,
+                MonitorRunRow.completed_at <= as_of.isoformat(),
+            )
+            .subquery()
+        )
+        with Session(self._engine) as session:
+            rows = session.execute(select(ranked).where(ranked.c.rank == 1)).mappings()
+            return tuple(
+                MonitorRuleState(
+                    monitor_id=monitor_id,
+                    monitor_version=version,
+                    rule_code=row["rule_code"],
+                    state=MonitorRuleStateValue(row["state"]),
+                    observed_value=_dec(row["observed_value"]),
+                    fact_as_of=_dt(row["fact_as_of"]),
+                    message=row["message"],
+                    updated_at=datetime.fromisoformat(row["updated_at"]),
+                )
+                for row in rows
+            )
+
     def record_evaluation(
         self,
         run: MonitorRun,

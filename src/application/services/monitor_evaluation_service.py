@@ -180,6 +180,22 @@ class MonitorEvaluationService:
                 for item in self._repository.get_rule_states(monitor.monitor_id)
             }
             previous_states_by_monitor[monitor.monitor_id] = previous
+            # An outage is a data state, not an alarm reset. Consult immutable
+            # history only when recovering, and never carry a prior version forward.
+            last_evaluated = (
+                {
+                    item.rule_code: item
+                    for item in self._repository.last_evaluated_rule_states(
+                        monitor.monitor_id, monitor.version, as_of
+                    )
+                }
+                if any(
+                    item.monitor_version == monitor.version
+                    and item.state is MonitorRuleStateValue.NOT_EVALUATED
+                    for item in previous.values()
+                )
+                else {}
+            )
             for rule in monitor.rules:
                 rules_evaluated += 1
                 if rule.rule_type in {
@@ -240,12 +256,20 @@ class MonitorEvaluationService:
                 warnings.extend(fact.warning_codes)
                 errors.extend(fact.error_codes)
                 monitor_sources.extend(fact.source_names)
+                prior = previous.get(rule.rule_code)
+                alarm_prior = (
+                    last_evaluated.get(rule.rule_code)
+                    if prior is not None
+                    and prior.monitor_version == monitor.version
+                    and prior.state is MonitorRuleStateValue.NOT_EVALUATED
+                    else prior
+                )
                 state = self._evaluate_rule(
                     monitor,
                     rule,
                     fact,
                     evaluated_at,
-                    previous.get(rule.rule_code),
+                    alarm_prior,
                 )
                 states.append(state)
                 observation = _run_observation(
@@ -261,7 +285,7 @@ class MonitorEvaluationService:
                 event = self._transition_event(
                     monitor,
                     rule,
-                    previous.get(rule.rule_code),
+                    prior if state.state is MonitorRuleStateValue.NOT_EVALUATED else alarm_prior,
                     state,
                     evaluated_at,
                 )

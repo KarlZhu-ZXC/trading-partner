@@ -235,20 +235,28 @@ def _format_notification_html(title: str, body: str) -> str:
         previous_price=previous_price,
         price_change=price_change,
     )
+    data_status = _prefixed_value(lines[:rules_index], "数据状态：")
+    if data_status:
+        sections.append(f"ℹ️ <b>数据状态</b>：{html.escape(data_status)}")
     if price_context:
         sections.append(price_context)
 
     if judgment_lines:
         sections.append(_format_judgment_section(judgment_lines))
-    changed_conditions = frozenset(
-        match.group("condition").strip()
+    changed_rules = frozenset(
+        (
+            match.group("condition").strip(),
+            match.group("meaning").strip(),
+            match.group("severity").strip(),
+            "QUIET" if match.group("event") == "RECOVERED" else match.group("event"),
+        )
         for line in changes
         if (match := _detailed_change_match(line)) is not None
     )
     rule_cards = _format_rule_cards(
         rows,
         symbol=symbol,
-        exclude_conditions=changed_conditions,
+        exclude_rules=changed_rules,
     )
     if rule_cards:
         sections.append(rule_cards)
@@ -378,6 +386,9 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
         previous_price=previous_price,
         price_change=price_change,
     )
+    data_status = _prefixed_value(lines[:rules_index], "数据状态：")
+    if data_status:
+        parts.append(f"ℹ️ <b>数据状态</b>：{html.escape(data_status)}")
     if price_context:
         parts.append(price_context)
     formatted_changes = tuple(
@@ -392,15 +403,20 @@ def _format_digest_monitor_block(lines: list[str]) -> str | None:
             parts.append(_format_notification_note(note))
     if judgment_lines:
         parts.append(_format_judgment_section(judgment_lines))
-    changed_conditions = frozenset(
-        match.group("condition").strip()
+    changed_rules = frozenset(
+        (
+            match.group("condition").strip(),
+            match.group("meaning").strip(),
+            match.group("severity").strip(),
+            "QUIET" if match.group("event") == "RECOVERED" else match.group("event"),
+        )
         for line in changes
         if (match := _detailed_change_match(line)) is not None
     )
     rule_cards = _format_rule_cards(
         rows,
         symbol=symbol,
-        exclude_conditions=changed_conditions,
+        exclude_rules=changed_rules,
     )
     if rule_cards:
         parts.append(rule_cards)
@@ -698,13 +714,14 @@ def _format_rule_cards(
     rows: tuple[tuple[str, ...], ...],
     *,
     symbol: str | None = None,
-    exclude_conditions: frozenset[str] = frozenset(),
+    exclude_rules: frozenset[tuple[str, str, str, str]] = frozenset(),
 ) -> str:
-    attention = tuple(
+    rows = tuple(
         row
         for row in rows
-        if row[4] not in {"QUIET", "RECOVERED"} and row[1] not in exclude_conditions
+        if (row[1], row[6] if len(row) >= 7 else "", row[5], row[4]) not in exclude_rules
     )
+    attention = tuple(row for row in rows if row[4] not in {"QUIET", "RECOVERED"})
     quiet = tuple(row for row in rows if row[4] in {"QUIET", "RECOVERED"})
     sections: list[str] = []
     if attention:
@@ -712,7 +729,7 @@ def _format_rule_cards(
             f"🔔 <b>其他需关注 · {len(attention)} 项</b>"
             + _format_rule_table(attention, symbol=symbol)
         )
-    elif not exclude_conditions:
+    elif not exclude_rules:
         sections.append("✅ <b>当前无触发或数据异常规则</b>")
     if quiet:
         sections.append(

@@ -38,8 +38,7 @@ def test_xau_transition_and_judgment_are_scannable_before_delivery() -> None:
             "RULES",
             "• 状态：TRIGGERED · 条件：≥ 4380 · "
             "含义：XAUUSD ≥ 4380：突破结构仍在，继续观察黄金方向 · 级别：INFO",
-            "• 状态：QUIET · 条件：≥ 4430 · "
-            "含义：XAUUSD ≥ 4430：进入顶部复核区 · 级别：INFO",
+            "• 状态：QUIET · 条件：≥ 4430 · 含义：XAUUSD ≥ 4430：进入顶部复核区 · 级别：INFO",
             "JUDGMENT",
             f"监控：{monitor_name}",
             "阶段：PYRAMID_WAIT · WATCH",
@@ -107,3 +106,41 @@ def test_standalone_judgment_uses_the_same_readable_structure() -> None:
     assert "<b>下一关注</b>" in rendered
     assert "rule.XAU_HOLD_STRUCTURE_4380.state" not in rendered
     assert max(map(len, visible)) <= 120
+
+
+def test_data_recovery_and_same_threshold_different_rules_remain_visible() -> None:
+    body = "\n".join(
+        (
+            "黄金监控",
+            "标的：XAUUSD",
+            "当前价格：4400",
+            "数据状态：已恢复并重新计算 2 条规则",
+            "CHANGES",
+            "• [INFO] GOLD · 条件：≥ 4380 · 含义：黄金结构 → TRIGGERED",
+            "RULES",
+            "• 状态：TRIGGERED · 条件：≥ 4380 · 含义：黄金结构 · 级别：INFO",
+            "• 状态：TRIGGERED · 条件：≥ 4380 · 含义：另一个风险条件 · 级别：HIGH",
+        )
+    )
+    for payload in (body, "POST_MARKET_SUMMARY\nMONITOR\n" + body + "\nEND_MONITOR"):
+        rendered = _format_notification_html("黄金提醒", payload)
+        assert "已恢复并重新计算 2 条规则" in rendered
+        assert rendered.count("黄金结构") == 1
+        assert "另一个风险条件" in rendered
+
+
+def test_partial_outage_status_is_visible_and_escaped() -> None:
+    body = "\n".join(
+        (
+            "黄金监控",
+            "标的：XAUUSD",
+            "当前价格：4400",
+            "数据状态：部分中断 · <source> 暂停计算",
+            "CHANGES",
+            "• [HIGH] GOLD · 条件：≥ 4380 · 含义：黄金结构 → TRIGGERED",
+            "RULES",
+            "• 状态：TRIGGERED · 条件：≥ 4380 · 含义：黄金结构 · 级别：HIGH",
+        )
+    )
+    rendered = _format_notification_html("黄金提醒", body)
+    assert "部分中断 · &lt;source&gt; 暂停计算" in rendered

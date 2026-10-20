@@ -1124,7 +1124,8 @@ RULES
     assert "🟩 <b>告警解除</b>" in rendered
     assert "原触发条件当前已不成立；不代表价格上涨或行情转好。" in rendered
     assert "触发点位已恢复" not in rendered
-    assert "<table bordered striped>" in rendered
+    assert rendered.count("突破关键位") == 1
+    assert "<table bordered striped>" not in rendered
 
 
 def test_mobile_rule_overview_uses_two_columns_deduplicates_and_collapses_quiet() -> None:

@@ -36,6 +36,12 @@ class MonitorRepository(Protocol):
 
     def get_rule_states(self, monitor_id: str) -> tuple[MonitorRuleState, ...]: ...
 
+    def last_evaluated_rule_states(
+        self, monitor_id: str, version: int, as_of: datetime
+    ) -> tuple[MonitorRuleState, ...]:
+        """Latest valid state per rule in this version, before the evaluation cutoff."""
+        ...
+
     def record_evaluation(
         self,
         run: MonitorRun,

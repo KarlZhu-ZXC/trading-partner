@@ -413,3 +413,56 @@ async def test_enqueue_cli_receipt_does_not_echo_body_or_authorization(monkeypat
     output = capsys.readouterr().out
     assert "secret body" not in output
     assert "secret authorization" not in output
+
+
+@pytest.mark.asyncio
+async def test_slow_send_rechecks_expiry_and_starts_backoff_at_response(fixed_clock) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    start = fixed_clock.now()
+    sender = AsyncMock()
+
+    async def slow_send(_entry):
+        fixed_clock.set(start + timedelta(seconds=40))
+        return NotificationSendReceipt(
+            delivered=False,
+            retryable=True,
+            error_code="TELEGRAM_RATE_LIMITED",
+            retry_after_seconds=90,
+        )
+
+    sender.send.side_effect = slow_send
+    service = NotificationService(repository, sender, fixed_clock, enabled=True, configured=True)
+    first = await service.enqueue_system_text(
+        source_id="synthetic:first",
+        title="first",
+        body="synthetic",
+        idempotency_key="slow-first",
+        expires_at=start + timedelta(minutes=10),
+    )
+    fixed_clock.set(start + timedelta(seconds=1))
+    await service.enqueue_system_text(
+        source_id="synthetic:second",
+        title="second",
+        body="synthetic",
+        idempotency_key="slow-second",
+        expires_at=start + timedelta(seconds=30),
+    )
+    receipt = await service.flush_pending()
+    assert sender.send.await_count == 1
+    assert receipt.expired == 1
+    assert receipt.retry_scheduled == 1
+    due = repository.list_due_notifications(
+        NotificationChannel.TELEGRAM,
+        start + timedelta(seconds=129),
+        20,
+    )
+    assert not due
+    due = repository.list_due_notifications(
+        NotificationChannel.TELEGRAM,
+        start + timedelta(seconds=130),
+        20,
+    )
+    assert [item.notification_id for item in due] == [first.notification_id]
+    engine.dispose()

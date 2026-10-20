@@ -242,6 +242,8 @@ class NotificationService:
         delivered = retry_scheduled = dead_lettered = expired = 0
         errors: list[str] = []
         for group in _notification_groups(items):
+            # Earlier sends may take long enough for a queued alert to expire.
+            now = self._clock.now()
             item = group[0]
             expiry = item.expires_at or item.created_at + self._ttl
             if now >= expiry:
@@ -266,6 +268,8 @@ class NotificationService:
                     retryable=True,
                     error_code="TELEGRAM_TRANSPORT_FAILURE",
                 )
+            # Provider retry_after starts at the response, not the batch start.
+            now = self._clock.now()
             if receipt.delivered:
                 for entry in group:
                     self._record_attempt(

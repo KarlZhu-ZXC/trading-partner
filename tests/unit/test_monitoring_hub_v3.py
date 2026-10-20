@@ -30,6 +30,7 @@ from domain.common.diagnostics import ProviderFailureDiagnostic
 from domain.common.enums import Freshness, TradingSession
 from domain.monitoring.enums import (
     MonitorCadence,
+    MonitorNotificationChannel,
     MonitorRuleStateValue,
     MonitorRuleType,
     MonitorRunStatus,
@@ -661,3 +662,97 @@ def test_launchd_job_wakes_hourly_and_runs_due_dispatcher(tmp_path: Path) -> Non
     ]
     assert payload["StandardOutPath"] == "/dev/null"
     assert "Codex" not in " ".join(payload["ProgramArguments"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_price", "recovery_price", "expected_state", "expected_events"),
+    (
+        ("4070", "4070", "TRIGGERED", 0),
+        ("4070", "4090", "TRIGGERED", 0),
+        ("4070", "4100", "QUIET", 1),
+        ("4110", "4090", "QUIET", 0),
+        ("4110", "4070", "TRIGGERED", 1),
+    ),
+)
+async def test_xau_outage_preserves_alarm_and_hysteresis(
+    tmp_path,
+    fixed_clock,
+    id_generator,
+    initial_price,
+    recovery_price,
+    expected_state,
+    expected_events,
+) -> None:
+    from application.services.monitor_evaluation_service import _Fact
+    from domain.trade_plan.enums import TradePlanComparator, TradePlanFactType
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'xau-recovery.db'}")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyMonitorRepository(engine)
+    monitor = _xauusd_interval_monitor()
+    rule = MonitorRuleInput(
+        rule_code="GOLD_FLOOR",
+        description="Synthetic gold floor with recovery buffer",
+        rule_type=MonitorRuleType.FACT_COMPARISON,
+        instrument_id=monitor.primary_instrument_id,
+        fact_type=TradePlanFactType.PRICE,
+        metric_key="last",
+        comparator=TradePlanComparator.LTE,
+        numeric_threshold=Decimal("4080"),
+        recovery_threshold=Decimal("4100"),
+        max_fact_age_seconds=3600,
+    ).to_domain()
+    repository.create(replace(monitor, rules=(rule,)))
+    fixed_clock.set(NOW)
+    evaluator = MonitorEvaluationService(
+        repository,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        fixed_clock,
+        id_generator,
+    )
+    facts = AsyncMock()
+    evaluator._price_fact = facts
+    request = MonitorEvaluateInput(monitor_ids=(monitor.monitor_id,))
+    facts.return_value = _Fact(Decimal(initial_price), NOW, (), ())
+    first = await evaluator.evaluate(request)
+    assert first.events_created == (1 if initial_price == "4070" else 0)
+    for step in (1, 2):
+        fixed_clock.set(NOW + timedelta(minutes=step))
+        facts.return_value = _Fact(None, None, (), ())
+        outage = await evaluator.evaluate(request)
+        assert outage.events_created == (1 if step == 1 else 0)
+    cutoff_states = repository.last_evaluated_rule_states(monitor.monitor_id, 1, NOW)
+    assert len(cutoff_states) == 1
+    assert cutoff_states[0].state.value == ("TRIGGERED" if initial_price == "4070" else "QUIET")
+    assert not repository.last_evaluated_rule_states(monitor.monitor_id, 2, NOW)
+    assert not repository.last_evaluated_rule_states(
+        monitor.monitor_id,
+        1,
+        NOW - timedelta(seconds=1),
+    )
+    fixed_clock.set(NOW + timedelta(minutes=3))
+    facts.return_value = _Fact(Decimal(recovery_price), fixed_clock.now(), (), ())
+    recovered = await evaluator.evaluate(request)
+    assert recovered.events_created == expected_events
+    latest = repository.get_rule_states(monitor.monitor_id)
+    assert latest[0].state.value == expected_state
+    pending = repository.list_due_notifications(
+        MonitorNotificationChannel.TELEGRAM,
+        fixed_clock.now(),
+        20,
+    )
+    last = [item for item in pending if item.created_at == fixed_clock.now()]
+    assert len(last) == 1
+    if expected_events:
+        event = "RECOVERED" if expected_state == "QUIET" else "TRIGGERED"
+        assert event in last[0].body
+        assert "已恢复并重新计算" in last[0].body
+    else:
+        assert "数据恢复" in last[0].title
+    facts.return_value = _Fact(Decimal(recovery_price), fixed_clock.now(), (), ())
+    repeated = await evaluator.evaluate(request)
+    assert repeated.events_created == 0
+    engine.dispose()
