@@ -441,8 +441,18 @@ class AppSettings(BaseSettings):
             "EXTERNAL_NOTE_ANALYSIS_MODEL",
         ),
     )
-    external_note_analysis_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
+    external_note_analysis_timeout_seconds: float = Field(default=300.0, gt=0, le=300)
     external_note_analysis_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
+    external_note_cli_fallback_enabled: bool = False
+    external_note_cli_fallback_model: Literal[
+        "space-bunny-free",
+        "cat-jam-free",
+        "longcat-2.5-preview-free",
+        "step-5-preview-free",
+        "deepseek-v4.1-flash-free",
+        "glm-5.3-flash-free",
+    ] = "space-bunny-free"
+    external_note_cli_executable: str = Field(default="opencode", min_length=1)
     external_note_review_model: str = Field(
         default="deepseek-flash",
         validation_alias=AliasChoices(
@@ -453,7 +463,7 @@ class AppSettings(BaseSettings):
     external_note_review_reasoning_effort: (
         Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None
     ) = None
-    external_note_review_timeout_seconds: float = Field(default=120.0, gt=0, le=120)
+    external_note_review_timeout_seconds: float = Field(default=300.0, gt=0, le=300)
     external_note_review_max_output_tokens: int = Field(default=5000, ge=512, le=8000)
     external_note_contributor_training_opt_in: bool = False
     observation_review_workflow_enabled: bool = True

@@ -25,6 +25,7 @@ from application.ports.external_note_review_repository import ExternalNoteReview
 from application.ports.id_generator import IdGenerator
 from application.services.external_note_interpretation_service import (
     NOTE_INTERPRETATION_TOOL_NAME,
+    NOTE_SOURCE_FIDELITY_RULES,
     NoteInterpretationDraft,
     parse_note_interpretation_response,
     validate_note_interpretation_attribution,
@@ -36,7 +37,8 @@ from domain.external_note.enums import NoteSpeakerKind
 from domain.external_note.models import ExternalNoteReviewDraft
 
 _SCHEMA_VERSION = "external-note-review-draft-v1"
-_SYSTEM_PROMPT = """你是 Trading Partner 的第二层私有观点复核模型。
+_SYSTEM_PROMPT = (
+    """你是 Trading Partner 的第二层私有观点复核模型。
 输入包含精确 Moomoo Note Revision、第一层 Flash 草稿，以及只读的 confirmed Thesis、
 Trade Plan、Decision、Position、Monitor 和 coverage。外部说话人的观点不是 USER 判断。
 不得把上一版已经撤回的 ADD/HOLD/EXIT 延续到当前版；不得补造日期、时间窗口、价格、
@@ -44,6 +46,8 @@ Trade Plan、Decision、Position、Monitor 和 coverage。外部说话人的观�
 四情景只描述 USER 当前文本能够支持的 UPSIDE、SIDEWAYS、PULLBACK、INVALIDATION；每个
 结论必须引用 source_block_ordinals。confirmed baseline 是对照事实，不得被改写，也不代表
 本次草稿已经确认。只调用 submit_note_interpretation 一次，不输出普通文本。"""
+    + NOTE_SOURCE_FIDELITY_RULES
+)
 
 _TIME_QUALIFIERS = (
     "收盘",
@@ -287,7 +291,7 @@ class ExternalNoteReviewDraftService:
         view_reviews: ViewReviewService,
         clock: Clock,
         id_generator: IdGenerator,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = 300.0,
         max_output_tokens: int = 5000,
         reasoning_effort: str = "max",
     ) -> None:
@@ -299,7 +303,7 @@ class ExternalNoteReviewDraftService:
         self._view_reviews = view_reviews
         self._clock = clock
         self._ids = id_generator
-        self._timeout_seconds = max(1.0, min(timeout_seconds, 120.0))
+        self._timeout_seconds = max(1.0, min(timeout_seconds, 300.0))
         self._max_output_tokens = max(512, min(max_output_tokens, 8000))
         self._reasoning_effort = reasoning_effort
 

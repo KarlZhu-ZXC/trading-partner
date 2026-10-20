@@ -955,3 +955,74 @@ async def test_go_stream_omits_output_budget() -> None:
             )
         ]
     assert "".join(item.text_delta for item in chunks) == "完成"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["grok-4.7", "gpt-6-luna"])
+async def test_new_go_responses_models_use_documented_endpoint(model: str) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/responses")
+        assert json.loads(request.content)["model"] == model
+        assert request.headers["x-opencode-session"].startswith("tp-")
+        return httpx.Response(200, json={"model": model, "output_text": "完成"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config(model), client=client)
+        response = await provider.complete(
+            ModelRequest(
+                messages=(ModelMessage(role="user", content="合成测试"),),
+                session_id="synthetic-new-model-route",
+            )
+        )
+    assert response.text == "完成"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("mode", ["none", "thinking"])
+async def test_go_glm_flash_uses_effort_without_native_thinking(streaming, mode):
+    async def handler(request):
+        payload = json.loads(request.content)
+        assert request.url.path.endswith("/chat/completions")
+        assert payload["reasoning_effort"] == "high"
+        assert "thinking" not in payload
+        assert "max_tokens" not in payload
+        assert payload["tools"][0]["function"]["strict"] is True
+        if streaming:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=(
+                    'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n'
+                    "data: [DONE]\n\n"
+                ),
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenCodeGoModelProvider(_config("glm-5.3-flash"), client=client)
+        request = ModelRequest(
+            messages=(ModelMessage(role="user", content="synthetic"),),
+            reasoning_mode=mode,
+            reasoning_effort="high",
+            session_id="synthetic-glm-flash",
+            tools=(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit",
+                        "strict": True,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+            ),
+        )
+        if streaming:
+            chunks = [chunk async for chunk in provider.stream(request)]
+            assert "".join(chunk.text_delta for chunk in chunks) == "OK"
+        else:
+            assert (await provider.complete(request)).text == "OK"

@@ -298,9 +298,7 @@ def test_line_leading_at_marker_allows_new_speaker_but_midline_mention_does_not(
         "另一个人",
     ]
     assert blocks[0].body == "新朋友：没有@时只是标题"
-    assert blocks[1].body == (
-        "这是新speaker\n\n后续继承\n\n句中提到 @另一个人：但不切换"
-    )
+    assert blocks[1].body == ("这是新speaker\n\n后续继承\n\n句中提到 @另一个人：但不切换")
     assert blocks[2].body == "现在才切换"
 
 
@@ -489,9 +487,7 @@ def test_moomoo_notes_remote_missing_cookie_falls_back_without_a_request(
     assert result.warning_codes == ("MOOMOO_NOTES_REMOTE_COOKIE_UNAVAILABLE",)
 
 
-def test_moomoo_notes_remote_auth_failure_keeps_cached_summary(
-    tmp_path: Path, fixed_clock
-) -> None:
+def test_moomoo_notes_remote_auth_failure_keeps_cached_summary(tmp_path: Path, fixed_clock) -> None:
     cache = tmp_path / "cache"
     cache.mkdir()
     stock_db = tmp_path / "stock.db"
@@ -602,9 +598,7 @@ async def test_capture_api_spool_enters_the_same_provider_neutral_revision_chain
             observed_at=NOW.replace(minute=1),
         )
     )
-    reverted = await service.capture(
-        replace(request, observed_at=NOW.replace(minute=2))
-    )
+    reverted = await service.capture(replace(request, observed_at=NOW.replace(minute=2)))
     replayed = await service.sync(source_code="LOCAL_OBSERVATION_BRIDGE")
     stale = await service.capture(
         replace(
@@ -704,17 +698,21 @@ async def test_cross_process_sync_contention_fails_with_typed_retryable_error(
     engine.dispose()
 
 
+@pytest.mark.parametrize("effort", [None, "max", "high", "medium"])
+@pytest.mark.parametrize("wrong_author", [False, True])
 @pytest.mark.asyncio
-async def test_note_interpretation_uses_opencode_max_and_preserves_attribution(
-    fixed_clock, id_generator
+async def test_note_interpretation_preserves_effort_and_attribution(
+    fixed_clock, id_generator, effort, wrong_author
 ) -> None:
     captured = None
+    calls = 0
 
     class Provider:
         model = "deepseek-v4-flash-vision-exp"
 
         async def complete(self, request):  # type: ignore[no-untyped-def]
-            nonlocal captured
+            nonlocal captured, calls
+            calls += 1
             captured = request
             scenarios = [
                 {
@@ -741,7 +739,7 @@ async def test_note_interpretation_uses_opencode_max_and_preserves_attribution(
                     },
                     {
                         "speaker_kind": "NAMED_PERSON",
-                        "speaker_label": "宝总",
+                        "speaker_label": "WRONG" if wrong_author else "宝总",
                         "source_block_ordinals": [1],
                         "summary": "宝总观察突破。",
                         "holding_horizon": "UNKNOWN",
@@ -802,19 +800,35 @@ async def test_note_interpretation_uses_opencode_max_and_preserves_attribution(
     service = ExternalNoteInterpretationService(
         Provider(),  # type: ignore[arg-type]
         provider_name="opencode_go",
+        **({"reasoning_effort": effort} if effort is not None else {}),
         model="deepseek-v4-flash-vision-exp",
         clock=fixed_clock,
         id_generator=id_generator,
     )
     fixed_clock.set(NOW)
 
-    result = await service.analyze(revision, None)
+    context = {
+        "owner_clarifications": ["该笔止盈已成交"],
+        "saved_portfolio_context": {"transactions": [{"side": "sell", "quantity": "12"}]},
+    }
+    result = await service.analyze(revision, None, interpretation_context=context)
 
-    assert result.status == "SUCCEEDED"
-    assert result.reasoning_effort == "max"
+    assert result.status == ("FAILED" if wrong_author else "SUCCEEDED")
+    if wrong_author:
+        assert result.error_code == "NOTE_INTERPRETATION_ATTRIBUTION_LABEL_CHANGED"
+        assert result.payload_json == "{}"
+        assert calls == 2
+        assert "段内引用" in captured.messages[-1]["content"]
+        assert "NOTE_INTERPRETATION_ATTRIBUTION_LABEL_CHANGED" in captured.messages[-1]["content"]
+        feedback = json.loads(captured.messages[-2].content)
+        assert feedback["validation"][0]["type"] == result.error_code
+    assert result.reasoning_effort == (effort or "max")
     assert captured is not None
-    assert captured.reasoning_effort == "max"
+    assert captured.reasoning_effort == (effort or "max")
     assert captured.native_web_search is False
+    input_payload = json.loads(captured.messages[1]["content"])
+    assert input_payload["interpretation_context"] == context
+    assert input_payload["blocks"][0]["body"] == "用户观察"
 
 
 @pytest.mark.asyncio
@@ -917,18 +931,33 @@ async def test_note_interpretation_accepts_the_models_closed_interpretation_wrap
         "assistant",
         "tool",
     ]
+    assert "字段路径/类型" in requests[1].messages[-1]["content"]
+    assert "不是完整有效 JSON" not in requests[1].messages[-1]["content"]
 
 
+@pytest.mark.parametrize("invalid_json", [False, True])
 @pytest.mark.asyncio
 async def test_note_interpretation_reports_missing_tool_call_without_raw_output(
-    fixed_clock, id_generator
+    fixed_clock, id_generator, invalid_json
 ) -> None:
     calls = 0
+    requests = []
 
     class Provider:
         async def complete(self, _request):  # type: ignore[no-untyped-def]
             nonlocal calls
             calls += 1
+            requests.append(_request)
+            if invalid_json:
+                return ModelResponse(
+                    tool_calls=(
+                        ModelToolCall(
+                            id="invalid_json",
+                            name="submit_note_interpretation",
+                            arguments="not json; private response must not be persisted",
+                        ),
+                    )
+                )
             return ModelResponse(text="ordinary text must not be persisted")
 
     revision = ExternalNoteRevision(
@@ -967,7 +996,15 @@ async def test_note_interpretation_reports_missing_tool_call_without_raw_output(
 
     assert calls == 2
     assert result.status == "FAILED"
-    assert result.error_code == "NOTE_INTERPRETATION_TOOL_CALL_MISSING"
+    assert result.error_code == (
+        "NOTE_INTERPRETATION_JSON_INVALID"
+        if invalid_json
+        else "NOTE_INTERPRETATION_TOOL_CALL_MISSING"
+    )
+    repair = requests[1].messages[-1]["content"]
+    assert ("无法解析为 JSON" if invalid_json else "不要在正文打印 JSON") in repair
+    assert result.error_code in repair
+    assert "private response" not in repair
     assert result.payload_json == "{}"
 
 
@@ -1089,9 +1126,7 @@ async def test_successful_analysis_enqueues_only_deterministic_user_text_changes
             )
 
     class Reviews:
-        def ensure_pending(
-            self, *, note_revision_id: str, subject_id: str | None = None
-        ) -> object:
+        def ensure_pending(self, *, note_revision_id: str, subject_id: str | None = None) -> object:
             assert subject_id is None
             materialized.append(note_revision_id)
             return object()
@@ -1445,9 +1480,7 @@ async def test_background_interpretation_compares_latest_revision_to_prior_succe
     deep_review_attempts: list[str] = []
 
     class ReviewMaterializer:
-        def ensure_pending(
-            self, *, note_revision_id: str, subject_id: str | None = None
-        ) -> None:
+        def ensure_pending(self, *, note_revision_id: str, subject_id: str | None = None) -> None:
             assert subject_id is None
             review_revision_ids.append(note_revision_id)
 

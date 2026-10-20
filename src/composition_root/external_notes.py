@@ -27,6 +27,7 @@ from infrastructure.persistence.observation_capture_store import (
     OwnerOnlyObservationCaptureStore,
 )
 from infrastructure.providers.llm import OpenCodeGoModelProvider
+from infrastructure.providers.llm.opencode_cli import OpenCodeCliNoteProvider
 from infrastructure.providers.llm.routed import (
     LLMResilienceController,
     RoutedAgentModelProvider,
@@ -80,6 +81,24 @@ def build_external_note_services(
             clock=clock,
             id_generator=id_generator,
             timeout_seconds=config.timeout_seconds,
+            fallback=(
+                ExternalNoteInterpretationService(
+                    OpenCodeCliNoteProvider(
+                        model=settings.external_note_cli_fallback_model,
+                        executable=settings.external_note_cli_executable,
+                        timeout_seconds=config.timeout_seconds,
+                        proxy_url=settings.provider_proxy_url,
+                    ),
+                    provider_name="opencode_cli",
+                    model=settings.external_note_cli_fallback_model,
+                    reasoning_effort="provider_default",
+                    clock=clock,
+                    id_generator=id_generator,
+                    timeout_seconds=config.timeout_seconds,
+                )
+                if settings.external_note_cli_fallback_enabled
+                else None
+            ),
         )
     if review_config is not None:
         review_provider = RoutedAgentModelProvider(
@@ -132,7 +151,7 @@ def build_external_note_services(
         view_reviews=view_review_service,
         clock=clock,
         id_generator=id_generator,
-        timeout_seconds=(review_config.timeout_seconds if review_config is not None else 120),
+        timeout_seconds=(review_config.timeout_seconds if review_config is not None else 300),
         max_output_tokens=(review_config.max_output_tokens if review_config is not None else 5000),
         reasoning_effort=(
             review_config.reasoning_effort

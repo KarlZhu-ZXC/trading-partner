@@ -58,7 +58,9 @@ _GO_RESPONSES_MODELS = frozenset(
     {
         "grok-4.5",
         "grok-4.6",
+        "grok-4.7",
         "gpt-5.6-luna",
+        "gpt-6-luna",
         "muse-spark-1.2-contributor",
         "muse-spark-1.3-contributor",
     }
@@ -123,6 +125,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
         *,
         proxy_url: str | None = None,
         client: httpx.AsyncClient | None = None,
+        trust_env: bool = True,
     ) -> None:
         if _SAFE_MODEL_ID.fullmatch(config.model) is None:
             raise DataContractError(f"Configured {self.display_name} model identifier is invalid")
@@ -134,6 +137,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
         self._client = client or httpx.AsyncClient(
             timeout=config.timeout_seconds,
             proxy=proxy_url,
+            trust_env=trust_env,
             follow_redirects=False,
         )
         self._session_header_name = (
@@ -186,7 +190,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self._model(request, self.model)
-        effective = replace(request, model=model, native_web_search=False)
+        effective = self._effective_request(request, model=model)
         last_error: DataContractError | None = None
         for _attempt in range(2):
             try:
@@ -203,6 +207,17 @@ class OpenCodeGoModelProvider(AgentModelProvider):
             )
         assert last_error is not None
         raise last_error
+
+    def _effective_request(self, request: ModelRequest, *, model: str) -> ModelRequest:
+        # Go's Flash route accepts reasoning_effort but rejects the extra native
+        # thinking object. Keep the requested effort; do not disable reasoning.
+        effort_only = self.provider_name == "opencode_go" and model == "glm-5.3-flash"
+        return replace(
+            request,
+            model=model,
+            native_web_search=False,
+            reasoning_mode="effort" if effort_only else request.reasoning_mode,
+        )
 
     async def _complete_once(
         self,
@@ -247,7 +262,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamChunk]:
         model = self._model(request, self.model)
-        effective = replace(request, model=model, native_web_search=False)
+        effective = self._effective_request(request, model=model)
         if model in self.responses_models:
             async for chunk in self._responses.stream(effective):
                 yield chunk
@@ -307,9 +322,7 @@ class OpenCodeGoModelProvider(AgentModelProvider):
                 }
                 if self._session_header_name is not None:
                     if session_id is None:
-                        raise DataContractError(
-                            "Model request is missing a session identifier"
-                        )
+                        raise DataContractError("Model request is missing a session identifier")
                     headers[self._session_header_name] = opaque_model_session_id(session_id)
                 response = await self._client.post(
                     url,

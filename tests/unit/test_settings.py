@@ -250,10 +250,11 @@ def test_monitor_judgment_uses_bailian_qwen_defaults_and_requires_key() -> None:
     assert opencode_go.resolved_external_note_analysis_config is not None
     assert opencode_go.resolved_external_note_analysis_config.model == "deepseek-flash"
     assert opencode_go.resolved_external_note_analysis_config.reasoning_effort == "max"
-    assert opencode_go.resolved_external_note_analysis_config.timeout_seconds == 120.0
+    assert opencode_go.resolved_external_note_analysis_config.timeout_seconds == 300.0
     assert opencode_go.resolved_external_note_review_config is not None
     assert opencode_go.resolved_external_note_review_config.model == "deepseek-flash"
     assert opencode_go.resolved_external_note_review_config.reasoning_effort == "max"
+    assert opencode_go.resolved_external_note_review_config.timeout_seconds == 300.0
     assert "test-opencode-go-secret" not in repr(opencode_go)
 
     with pytest.raises(ValidationError, match="CONTRIBUTOR_TRAINING_OPT_IN"):

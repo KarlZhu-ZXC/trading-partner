@@ -346,6 +346,51 @@ async def test_exact_review_revision_is_scoped_and_read_only(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_exact_note_revision_needs_no_subject_model_or_discussion(monkeypatch) -> None:
+    from unittest.mock import AsyncMock, call
+
+    import interfaces.console.api as api
+
+    container = MagicMock()
+    container.settings.observation_review_workflow_enabled = False
+    container.services.external_notes.read_revision.return_value = _item(
+        revision=_revision(), interpretation=None,
+    )
+    container.services.external_note_reviews.get_for_revision.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
+    invoke = AsyncMock()
+    monkeypatch.setattr(api, "_invoke_capability", invoke)
+
+    response = await api.observation_exact_revision(request, REVISION_ID)
+
+    data = json.loads(response.body)["data"]
+    assert response.headers["cache-control"] == "no-store"
+    assert data["revision"]["note_revision_id"] == REVISION_ID
+    assert data["revision"]["blocks"]
+    assert data["interpretation"] is None
+    assert data["review"] is None
+    invoke.assert_not_called()
+    assert container.services.mock_calls == [
+        call.external_notes.read_revision(REVISION_ID),
+        call.external_note_reviews.get_for_revision(REVISION_ID),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_exact_note_revision_missing_does_not_fall_back_to_latest() -> None:
+    import interfaces.console.api as api
+
+    container = MagicMock()
+    container.services.external_notes.read_revision.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(container=container)))
+    with pytest.raises(HTTPException) as failure:
+        await api.observation_exact_revision(request, REVISION_ID)
+    assert failure.value.status_code == 404
+    container.services.external_notes.inbox.assert_not_called()
+    container.services.external_note_reviews.get_for_revision.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_changes_endpoint_retains_full_projection_without_mutation() -> None:
     import interfaces.console.api as api
 
