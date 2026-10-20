@@ -133,9 +133,10 @@ test("partial sync exposes authentication failure rather than claiming fresh clo
   await mock(page, false, true);
   await page.goto("/");
   await page.getByRole("button", { name: "Sync Moomoo Notes" }).click();
-  await expect(page.getByRole("status")).toContainText("Sync incomplete");
-  await expect(page.getByRole("status")).toContainText("Cloud changes are not confirmed");
-  await expect(page.getByRole("status")).not.toContainText("Notes synced.");
+  const syncStatus = page.getByRole("status").filter({ hasText: /^Sync incomplete\./ });
+  await expect(syncStatus).toContainText("Sync incomplete");
+  await expect(syncStatus).toContainText("Cloud changes are not confirmed");
+  await expect(syncStatus).not.toContainText("Notes synced.");
 });
 
 test("note context includes paginated holdings and trades before private text", async ({ page }) => {
@@ -145,7 +146,7 @@ test("note context includes paginated holdings and trades before private text", 
   await expect(page.getByText(/multiplier and Greeks require verified/)).toBeVisible();
   await expect(page.getByText(/Broker cost and reported P.L do not reconcile/)).toBeVisible();
   await page.getByRole("button", { name: "More Trades and Holdings" }).click();
-  await expect(page.getByText(/Recorded Transaction/)).toBeVisible();
+  await expect(page.getByText(`${item.instrument_id} · Recorded Transaction`, { exact: true })).toBeVisible();
   await expect(page.getByText(/synthetic-two/)).toBeVisible();
   expect(state.contentReads).toEqual([]);
   expect(state.writes).toEqual([]);
