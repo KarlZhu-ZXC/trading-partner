@@ -8,9 +8,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
-import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
-
 from domain.common.errors import (
     NoMarketData,
     ProviderRateLimitError,
@@ -18,6 +15,7 @@ from domain.common.errors import (
     ProviderUnavailableError,
 )
 from domain.us_market.models import USBreadthSnapshot, USSectorRotation
+from infrastructure.providers.us.yfinance_dependency import yfinance_errors
 
 _EXCHANGES = ("NYQ", "NMS", "ASE", "NCM", "NGM")
 _UNIVERSE = (
@@ -45,6 +43,8 @@ class YahooBreadthClient(Protocol):
 
 class YFinanceBreadthClient:
     async def get_current(self, *, timeout_seconds: float) -> USBreadthSnapshot:
+        YFRateLimitError, _ = yfinance_errors("breadth")
+
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._get_current_sync), timeout=timeout_seconds
@@ -73,6 +73,8 @@ class YFinanceBreadthClient:
 
     @staticmethod
     def _count(operator: str, value: int) -> int:
+        import yfinance as yf
+
         query = yf.EquityQuery(
             "and",
             [
@@ -104,6 +106,8 @@ class YFinanceBreadthClient:
 
     @classmethod
     def _get_current_sync(cls) -> USBreadthSnapshot:
+        import yfinance as yf
+
         advancing = cls._count("gt", 0)
         declining = cls._count("lt", 0)
         unchanged = cls._count("eq", 0)

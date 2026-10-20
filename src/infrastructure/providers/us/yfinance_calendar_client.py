@@ -8,15 +8,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
 
-import yfinance as yf
-from curl_cffi.requests import Session
-from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
-
 from domain.common.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
+from infrastructure.providers.us.yfinance_dependency import yfinance_errors
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +103,8 @@ class YFinanceCalendarClient:
         *args: object,
         timeout_seconds: float,
     ) -> object:
+        YFRateLimitError, YFTickerMissingError = yfinance_errors("calendar")
+
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(function, *args),  # type: ignore[arg-type]
@@ -140,6 +139,9 @@ class YFinanceCalendarClient:
     def _get_ticker_calendar_sync(
         cls, symbol: str, proxy_url: str | None
     ) -> tuple[tuple[date, ...], tuple[date, ...], tuple[date, ...]]:
+        import yfinance as yf
+        from curl_cffi.requests import Session
+
         session = Session(proxy=proxy_url) if proxy_url else Session()
         try:
             raw = yf.Ticker(symbol, session=session).get_calendar()
@@ -156,6 +158,9 @@ class YFinanceCalendarClient:
     def _get_splits_sync(
         cls, start: date, end: date, proxy_url: str | None
     ) -> tuple[YahooSplitCalendarRow, ...]:
+        import yfinance as yf
+        from curl_cffi.requests import Session
+
         session = Session(proxy=proxy_url) if proxy_url else Session()
         try:
             frame: Any = yf.Calendars(

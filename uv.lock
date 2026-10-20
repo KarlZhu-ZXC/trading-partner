@@ -2119,19 +2119,14 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "defusedxml" },
-    { name = "exchange-calendars" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "sqlalchemy" },
-    { name = "ta-lib" },
     { name = "uuid6" },
-    { name = "yfinance" },
 ]
 
 [package.optional-dependencies]
@@ -2142,15 +2137,21 @@ accounts-schwab = [
     { name = "schwab-py" },
 ]
 all = [
+    { name = "exchange-calendars" },
     { name = "fastapi" },
     { name = "matplotlib" },
     { name = "moomoo-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pypdf" },
     { name = "schwab-py" },
+    { name = "ta-lib" },
     { name = "uvicorn" },
+    { name = "yfinance" },
 ]
 chart = [
     { name = "matplotlib" },
+    { name = "ta-lib" },
 ]
 company-pdf = [
     { name = "pypdf" },
@@ -2159,17 +2160,31 @@ console = [
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
+market-data = [
+    { name = "exchange-calendars" },
+    { name = "yfinance" },
+]
 semantic-search = [
     { name = "fastembed" },
+]
+technical = [
+    { name = "ta-lib" },
+]
+tracing = [
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "cyclonedx-bom" },
+    { name = "exchange-calendars" },
     { name = "fastapi" },
     { name = "matplotlib" },
     { name = "moomoo-api" },
     { name = "mypy" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pip-audit" },
     { name = "pypdf" },
     { name = "pytest" },
@@ -2177,61 +2192,74 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "schwab-py" },
+    { name = "ta-lib" },
     { name = "types-defusedxml" },
     { name = "types-pyyaml" },
     { name = "uvicorn" },
+    { name = "yfinance" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
-    { name = "defusedxml", specifier = ">=0.7.1,<1" },
-    { name = "exchange-calendars", specifier = ">=4.5,<5" },
-    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115,<1" },
-    { name = "fastapi", marker = "extra == 'console'", specifier = ">=0.115,<1" },
-    { name = "fastembed", marker = "extra == 'semantic-search'", specifier = ">=0.7,<1" },
+    { name = "defusedxml", specifier = "<1,>=0.7.1" },
+    { name = "exchange-calendars", marker = "extra == 'all'", specifier = "<5,>=4.5" },
+    { name = "exchange-calendars", marker = "extra == 'market-data'", specifier = "<5,>=4.5" },
+    { name = "fastapi", marker = "extra == 'all'", specifier = "<1,>=0.115" },
+    { name = "fastapi", marker = "extra == 'console'", specifier = "<1,>=0.115" },
+    { name = "fastembed", marker = "extra == 'semantic-search'", specifier = "<1,>=0.7" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "matplotlib", marker = "extra == 'all'", specifier = ">=3.10,<4" },
-    { name = "matplotlib", marker = "extra == 'chart'", specifier = ">=3.10,<4" },
-    { name = "mcp", specifier = ">=1.0.0,<2" },
-    { name = "moomoo-api", marker = "extra == 'accounts-moomoo'", specifier = ">=10.9,<11" },
-    { name = "moomoo-api", marker = "extra == 'all'", specifier = ">=10.9,<11" },
-    { name = "opentelemetry-api", specifier = ">=1.30,<2" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30,<2" },
-    { name = "opentelemetry-sdk", specifier = ">=1.30,<2" },
+    { name = "matplotlib", marker = "extra == 'all'", specifier = "<4,>=3.10" },
+    { name = "matplotlib", marker = "extra == 'chart'", specifier = "<4,>=3.10" },
+    { name = "mcp", specifier = "<2,>=1.0.0" },
+    { name = "moomoo-api", marker = "extra == 'accounts-moomoo'", specifier = "<11,>=10.9" },
+    { name = "moomoo-api", marker = "extra == 'all'", specifier = "<11,>=10.9" },
+    { name = "opentelemetry-api", specifier = "<2,>=1.30" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'all'", specifier = "<2,>=1.30" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'tracing'", specifier = "<2,>=1.30" },
+    { name = "opentelemetry-sdk", marker = "extra == 'all'", specifier = "<2,>=1.30" },
+    { name = "opentelemetry-sdk", marker = "extra == 'tracing'", specifier = "<2,>=1.30" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
-    { name = "pypdf", marker = "extra == 'all'", specifier = ">=6.20.0,<7" },
-    { name = "pypdf", marker = "extra == 'company-pdf'", specifier = ">=6.20.0,<7" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = "<7,>=6.20.0" },
+    { name = "pypdf", marker = "extra == 'company-pdf'", specifier = "<7,>=6.20.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "schwab-py", marker = "extra == 'accounts-schwab'", specifier = ">=1.5,<2" },
-    { name = "schwab-py", marker = "extra == 'all'", specifier = ">=1.5,<2" },
+    { name = "schwab-py", marker = "extra == 'accounts-schwab'", specifier = "<2,>=1.5" },
+    { name = "schwab-py", marker = "extra == 'all'", specifier = "<2,>=1.5" },
     { name = "sqlalchemy", specifier = ">=2.0" },
-    { name = "ta-lib", specifier = ">=0.6.8,<0.7" },
+    { name = "ta-lib", marker = "extra == 'all'", specifier = "<0.7,>=0.6.8" },
+    { name = "ta-lib", marker = "extra == 'chart'", specifier = "<0.7,>=0.6.8" },
+    { name = "ta-lib", marker = "extra == 'technical'", specifier = "<0.7,>=0.6.8" },
     { name = "uuid6", specifier = ">=2024.7.10" },
-    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.32,<1" },
-    { name = "uvicorn", marker = "extra == 'console'", specifier = ">=0.32,<1" },
-    { name = "yfinance", specifier = ">=1.4.1,<2" },
+    { name = "uvicorn", marker = "extra == 'all'", specifier = "<1,>=0.32" },
+    { name = "uvicorn", marker = "extra == 'console'", specifier = "<1,>=0.32" },
+    { name = "yfinance", marker = "extra == 'all'", specifier = "<2,>=1.4.1" },
+    { name = "yfinance", marker = "extra == 'market-data'", specifier = "<2,>=1.4.1" },
 ]
-provides-extras = ["accounts-moomoo", "accounts-schwab", "all", "chart", "company-pdf", "console", "semantic-search"]
+provides-extras = ["accounts-moomoo", "accounts-schwab", "all", "chart", "company-pdf", "console", "market-data", "semantic-search", "technical", "tracing"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cyclonedx-bom", specifier = ">=6.0,<8" },
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "matplotlib", specifier = ">=3.10,<4" },
-    { name = "moomoo-api", specifier = ">=10.9,<11" },
+    { name = "cyclonedx-bom", specifier = "<8,>=6.0" },
+    { name = "exchange-calendars", specifier = "<5,>=4.5" },
+    { name = "fastapi", specifier = "<1,>=0.115" },
+    { name = "matplotlib", specifier = "<4,>=3.10" },
+    { name = "moomoo-api", specifier = "<11,>=10.9" },
     { name = "mypy", specifier = ">=1.13" },
-    { name = "pip-audit", specifier = ">=2.9,<3" },
-    { name = "pypdf", specifier = ">=6.20.0,<7" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = "<2,>=1.30" },
+    { name = "opentelemetry-sdk", specifier = "<2,>=1.30" },
+    { name = "pip-audit", specifier = "<3,>=2.9" },
+    { name = "pypdf", specifier = "<7,>=6.20.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.8" },
-    { name = "schwab-py", specifier = ">=1.5,<2" },
+    { name = "schwab-py", specifier = "<2,>=1.5" },
+    { name = "ta-lib", specifier = "<0.7,>=0.6.8" },
     { name = "types-defusedxml", specifier = ">=0.7.0" },
     { name = "types-pyyaml", specifier = ">=6.0" },
-    { name = "uvicorn", specifier = ">=0.32,<1" },
+    { name = "uvicorn", specifier = "<1,>=0.32" },
+    { name = "yfinance", specifier = "<2,>=1.4.1" },
 ]
 
 [[package]]

@@ -7,14 +7,9 @@ import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import Status, StatusCode
 
 from application import __version__
@@ -24,7 +19,12 @@ from application.ports.telemetry import (
     TelemetrySpan,
     TelemetryValue,
 )
+from domain.common.errors import ProviderNotConfigured
 from infrastructure.config.settings import AppSettings
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SpanExporter
 
 _SAFE_SPAN_NAMES = frozenset({"agent.turn", "provider.route"})
 _SAFE_ATTRIBUTE_KEY = re.compile(r"^tp\.[a-z][a-z0-9_.-]{0,95}$")
@@ -69,9 +69,8 @@ def _safe_attributes(
     result: dict[str, TelemetryValue] = {}
     for key, value in (values or {}).items():
         lowered = key.casefold()
-        if (
-            _SAFE_ATTRIBUTE_KEY.fullmatch(key) is None
-            or any(part in lowered for part in _SENSITIVE_PARTS)
+        if _SAFE_ATTRIBUTE_KEY.fullmatch(key) is None or any(
+            part in lowered for part in _SENSITIVE_PARTS
         ):
             continue
         string_pattern = _SAFE_STRING_ATTRIBUTES.get(key)
@@ -159,6 +158,29 @@ def configure_tracing(
     with _LOCK:
         if _STATE is not None:
             return _STATE
+        try:
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+            selected_exporter = exporter
+            if selected_exporter is None and settings.otel_exporter == "otlp_http":
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+                selected_exporter = OTLPSpanExporter(
+                    endpoint=settings.otel_exporter_otlp_endpoint,
+                )
+        except ModuleNotFoundError as error:
+            if error.name is None or not error.name.startswith(
+                ("opentelemetry.sdk", "opentelemetry.exporter", "opentelemetry.proto")
+            ):
+                raise
+            raise ProviderNotConfigured(
+                "Enabled tracing requires trading-partner[tracing]",
+                details={"extra": "tracing", "operation": "configure_tracing"},
+            ) from None
+
         provider = TracerProvider(
             resource=Resource.create(
                 {
@@ -168,11 +190,6 @@ def configure_tracing(
             ),
             sampler=ParentBased(TraceIdRatioBased(settings.otel_trace_sample_ratio)),
         )
-        selected_exporter = exporter
-        if selected_exporter is None and settings.otel_exporter == "otlp_http":
-            selected_exporter = OTLPSpanExporter(
-                endpoint=settings.otel_exporter_otlp_endpoint,
-            )
         if selected_exporter is not None:
             provider.add_span_processor(BatchSpanProcessor(selected_exporter))
         if register_global:

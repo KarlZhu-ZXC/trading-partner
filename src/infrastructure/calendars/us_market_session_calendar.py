@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from functools import cached_property
+from typing import Any
 from zoneinfo import ZoneInfo
 
-import exchange_calendars
-
 from application.ports.market_session_calendar import MarketSession
+from domain.common.errors import ProviderNotConfigured
 from domain.common.time import require_aware_datetime
 
 _NEW_YORK = ZoneInfo("America/New_York")
@@ -19,8 +20,21 @@ _HISTORICAL_START = "1990-01-01"
 
 
 class XnysMarketSessionCalendar:
-    def __init__(self) -> None:
-        self._calendar = exchange_calendars.get_calendar("XNYS", start=_HISTORICAL_START)
+    @cached_property
+    def _calendar(self) -> Any:
+        # Note/account reads need no exchange schedule. Retain the exact library
+        # calendar and its fail-closed bounds when a market operation uses it.
+        try:
+            import exchange_calendars
+        except ModuleNotFoundError as error:
+            if error.name != "exchange_calendars":
+                raise
+            raise ProviderNotConfigured(
+                "Exchange sessions require trading-partner[market-data]",
+                details={"extra": "market-data", "exchange": "XNYS"},
+            ) from None
+
+        return exchange_calendars.get_calendar("XNYS", start=_HISTORICAL_START)
 
     def session_at(self, moment: datetime) -> MarketSession | None:
         require_aware_datetime(moment, field_name="moment")

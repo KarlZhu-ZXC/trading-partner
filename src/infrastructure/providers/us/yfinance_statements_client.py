@@ -7,15 +7,13 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any, Protocol, cast
 
-import yfinance as yf
-from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
-
 from domain.common.errors import (
     NoMarketData,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
+from infrastructure.providers.us.yfinance_dependency import yfinance_errors
 
 
 class YahooStatementsClient(Protocol):
@@ -28,6 +26,8 @@ class YFinanceStatementsClient:
     async def get_tables(
         self, symbol: str, *, frequency: str, timeout_seconds: float
     ) -> Mapping[str, tuple[tuple[date, Mapping[str, object]], ...]]:
+        YFRateLimitError, YFTickerMissingError = yfinance_errors("statements")
+
         try:
             tables = await asyncio.wait_for(
                 asyncio.to_thread(self._get_tables_sync, symbol, frequency),
@@ -68,6 +68,8 @@ class YFinanceStatementsClient:
     def _get_tables_sync(
         cls, symbol: str, frequency: str
     ) -> Mapping[str, tuple[tuple[date, Mapping[str, object]], ...]]:
+        import yfinance as yf
+
         ticker = yf.Ticker(symbol)
         raw = {
             "income": ticker.get_income_stmt(freq=frequency),

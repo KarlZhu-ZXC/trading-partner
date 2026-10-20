@@ -12,6 +12,7 @@ startup path uses ``AppSettings.load()`` under an installed layout.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -35,8 +36,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 from importlib.util import find_spec
 from pathlib import Path
+
+def forbid_network(*args, **kwargs):
+    raise AssertionError("isolated wheel probe must not contact the network")
+socket.socket.connect = forbid_network
+socket.socket.connect_ex = forbid_network
 
 from bootstrap import build_application
 from domain.common.enums import AppEnvironment, LogLevel
@@ -48,11 +55,34 @@ from infrastructure.config.settings import (
     AppSettings,
 )
 from infrastructure.providers.a_share.cninfo_org_map import load_cninfo_org_map
-from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_mcp_server
+from interfaces.mcp.server import PUBLIC_TOOL_NAMES, create_capability_registry, create_mcp_server
 
 # A core wheel must stay usable without heavyweight capability extras.
-for optional_module in ("matplotlib", "moomoo", "pypdf", "schwab"):
+for optional_module in (
+    "matplotlib", "moomoo", "pypdf", "schwab", "talib", "numpy", "pandas",
+    "yfinance", "exchange_calendars", "curl_cffi",
+):
     assert find_spec(optional_module) is None, optional_module
+for optional_module in ("opentelemetry.sdk", "opentelemetry.exporter"):
+    assert find_spec(optional_module) is None, optional_module
+
+from domain.common.errors import ProviderNotConfigured
+from infrastructure.technical import TALibIndicatorEngine
+try:
+    TALibIndicatorEngine().analyze((), interval="1d")
+except ProviderNotConfigured as error:
+    assert error.details["extra"] == "technical"
+else:
+    raise AssertionError("missing technical extra must fail explicitly")
+
+from datetime import UTC, datetime
+from infrastructure.calendars.us_market_session_calendar import XnysMarketSessionCalendar
+try:
+    XnysMarketSessionCalendar().session_at(datetime(2026, 10, 1, 18, tzinfo=UTC))
+except ProviderNotConfigured as error:
+    assert error.details["extra"] == "market-data"
+else:
+    raise AssertionError("missing market extra must not invent a trading session")
 
 # Installed layout: packaged YAML must be present next to infrastructure.config.
 assert PACKAGED_VENDOR_CHAIN_PATH.is_file(), (
@@ -116,6 +146,32 @@ try:
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert names == set(PUBLIC_TOOL_NAMES), (len(names), sorted(names))
     assert names == PUBLIC_TOOL_NAMES
+
+    from domain.common.enums import VendorId
+    from domain.portfolio.enums import AccountEnvironment
+    from domain.portfolio.models import AccountSnapshot
+    from infrastructure.persistence.account_snapshot_repository import (
+        SqlAlchemyAccountSnapshotRepository,
+    )
+    from sqlalchemy import event
+    at = datetime(2026, 10, 1, tzinfo=UTC)
+    SqlAlchemyAccountSnapshotRepository(container.resources.database.engine).append_account(
+        AccountSnapshot("synthetic_snapshot", "synthetic_account", VendorId.SCHWAB,
+                        AccountEnvironment.REAL, "USD", at, at, None, None, None, None,
+                        (), (), False, ())
+    )
+    writes = []
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+            writes.append(statement.split()[0])
+    event.listen(container.resources.database.engine, "before_cursor_execute", capture)
+    async def read_default_workflow():
+        registry = create_capability_registry(container)
+        for name, operation in (("view_get", "notes"), ("portfolio_get", "positions")):
+            result = await registry.invoke(name, {"request": {"operation": operation}})
+            assert result["ok"], result
+        assert not writes, writes
+    asyncio.run(read_default_workflow())
 finally:
     container.close()
 
@@ -129,6 +185,11 @@ def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None 
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true", help="Use cached uv packages only")
+    args = parser.parse_args()
+    if args.offline and not shutil.which("uv"):
+        parser.error("--offline requires uv; no network fallback is attempted")
     work = Path(tempfile.mkdtemp(prefix="tp-wheel-smoke-"))
     # Ensure the isolated tree is outside the project root.
     assert not work.is_relative_to(PROJECT_ROOT), work
@@ -140,7 +201,8 @@ def main() -> int:
         # Prefer uv when available (project standard); fall back to pip+build.
         if shutil.which("uv"):
             _run(
-                ["uv", "build", "--wheel", "--out-dir", str(dist_dir)],
+                ["uv", "build", "--wheel", "--out-dir", str(dist_dir)]
+                + (["--offline"] if args.offline else []),
                 cwd=PROJECT_ROOT,
             )
         else:
@@ -155,21 +217,22 @@ def main() -> int:
         wheel = wheels[-1]
         print(f"wheel={wheel}", flush=True)
 
-        venv.create(venv_dir, with_pip=True, clear=True)
+        venv.create(venv_dir, with_pip=not args.offline, clear=True)
         if sys.platform == "win32":
             python = venv_dir / "Scripts" / "python.exe"
         else:
             python = venv_dir / "bin" / "python"
 
         # Install only the wheel — no editable, no PYTHONPATH into the repo.
-        _run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-        _run([str(python), "-m", "pip", "install", str(wheel)])
+        if args.offline:
+            _run(["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)])
+        else:
+            _run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+            _run([str(python), "-m", "pip", "install", str(wheel)])
 
         if sys.platform == "win32":
             init_command = venv_dir / "Scripts" / "trading-partner-init.exe"
-            notes_cookie_command = (
-                venv_dir / "Scripts" / "trading-partner-moomoo-notes-cookie.exe"
-            )
+            notes_cookie_command = venv_dir / "Scripts" / "trading-partner-moomoo-notes-cookie.exe"
             post_market_automation_command = (
                 venv_dir / "Scripts" / "trading-partner-us-post-market-automation.exe"
             )
@@ -199,6 +262,7 @@ def main() -> int:
                 "--json",
             ],
             cwd=work,
+            env={k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TMPDIR") if k in os.environ},
             capture_output=True,
             text=True,
             check=False,
@@ -224,16 +288,8 @@ def main() -> int:
             print(f"unexpected packaged migration head: {revision}", file=sys.stderr)
             return 1
 
-        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        # Clear every project key documented by .env.example so ambient shell
-        # configuration cannot steer the isolated probe now that keys are unprefixed.
-        settings_keys = {
-            line.partition("=")[0].strip()
-            for line in (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#") and "=" in line
-        }
-        for key in settings_keys:
-            env.pop(key, None)
+        # Allowlist excludes inherited provider credentials and settings overrides.
+        env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TMPDIR") if k in os.environ}
 
         # Required process env for installed AppSettings.load() (console/MCP path).
         db_path = runtime_db

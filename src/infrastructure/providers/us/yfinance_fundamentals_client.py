@@ -6,15 +6,13 @@ import asyncio
 from collections.abc import Mapping
 from typing import Protocol
 
-import yfinance as yf
-from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
-
 from domain.common.errors import (
     NoMarketData,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
+from infrastructure.providers.us.yfinance_dependency import yfinance_errors
 
 
 class YahooFundamentalsClient(Protocol):
@@ -24,9 +22,9 @@ class YahooFundamentalsClient(Protocol):
 class YFinanceFundamentalsClient:
     """Run yfinance off the event loop and expose only a plain mapping."""
 
-    async def get_info(
-        self, symbol: str, *, timeout_seconds: float
-    ) -> Mapping[str, object]:
+    async def get_info(self, symbol: str, *, timeout_seconds: float) -> Mapping[str, object]:
+        YFRateLimitError, YFTickerMissingError = yfinance_errors("fundamentals")
+
         try:
             value = await asyncio.wait_for(
                 asyncio.to_thread(self._get_info_sync, symbol),
@@ -65,4 +63,6 @@ class YFinanceFundamentalsClient:
 
     @staticmethod
     def _get_info_sync(symbol: str) -> object:
+        import yfinance as yf
+
         return yf.Ticker(symbol).get_info()
