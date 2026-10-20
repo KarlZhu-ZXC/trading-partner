@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from domain.external_note.enums import NoteCoverage
 from domain.external_note.models import (
     ExternalNoteIdentity,
     ExternalNoteInterpretation,
     ExternalNoteRevision,
     ExternalNoteSyncReceipt,
 )
+
+
+@dataclass(frozen=True)
+class NoteHistoryMetadata:
+    note_id: str
+    note_revision_id: str
+    version: int
+    title: str
+    coverage: NoteCoverage
+    observed_at: datetime
+    source_timestamp: datetime | None
 
 
 class ExternalNoteRepository(Protocol):
@@ -25,6 +39,12 @@ class ExternalNoteRepository(Protocol):
     def previous_revision(
         self, note_id: str, before_version: int
     ) -> ExternalNoteRevision | None: ...
+
+    def previous_revisions(
+        self, before_versions: Mapping[str, int]
+    ) -> dict[str, ExternalNoteRevision | None]:
+        """One predecessor per note; None means absent, an omitted key means unreadable."""
+        ...
 
     def revision_by_source_key(
         self, note_id: str, source_revision_key: str
@@ -55,5 +75,16 @@ class ExternalNoteRepository(Protocol):
     def list_latest(
         self, limit: int = 100
     ) -> tuple[tuple[ExternalNoteIdentity, ExternalNoteRevision], ...]: ...
+
+    def browse_latest(
+        self, *, limit: int, offset: int, query: str, observed_through: datetime,
+    ) -> tuple[tuple[tuple[ExternalNoteIdentity, ExternalNoteRevision], ...], bool]:
+        """Page all saved Moomoo identities by latest revision time, without a 500-note cap."""
+        ...
+
+    def history_metadata(
+        self, *, note_id: str, instrument_id: str | None,
+        observed_through: datetime, limit: int,
+    ) -> tuple[tuple[NoteHistoryMetadata, ...], bool]: ...
 
     def list_revisions(self, note_id: str, limit: int = 50) -> tuple[ExternalNoteRevision, ...]: ...

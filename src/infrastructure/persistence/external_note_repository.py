@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from application.ports.external_note_repository import NoteHistoryMetadata
 from domain.external_note.enums import NoteCoverage, NoteSpeakerKind
 from domain.external_note.models import (
     AttributedNoteBlock,
@@ -70,6 +72,39 @@ class SqlAlchemyExternalNoteRepository:
                 .limit(1)
             )
             return _revision(row) if row is not None else None
+
+    def previous_revisions(
+        self, before_versions: Mapping[str, int]
+    ) -> dict[str, ExternalNoteRevision | None]:
+        if not before_versions:
+            return {}
+        with Session(self._engine) as session:
+            predecessors = (
+                select(
+                    ExternalNoteRevisionRow.note_id,
+                    func.max(ExternalNoteRevisionRow.version).label("version"),
+                )
+                .where(or_(*(
+                    and_(
+                        ExternalNoteRevisionRow.note_id == note_id,
+                        ExternalNoteRevisionRow.version < version,
+                    )
+                    for note_id, version in before_versions.items()
+                )))
+                .group_by(ExternalNoteRevisionRow.note_id)
+                .subquery()
+            )
+            rows = session.scalars(select(ExternalNoteRevisionRow).where(
+                ExternalNoteRevisionRow.note_id == predecessors.c.note_id,
+                ExternalNoteRevisionRow.version == predecessors.c.version,
+            ))
+            result: dict[str, ExternalNoteRevision | None] = dict.fromkeys(before_versions)
+            for row in rows:
+                try:
+                    result[row.note_id] = _revision(row)
+                except Exception:  # noqa: BLE001 - one corrupt predecessor cannot hide other notes
+                    del result[row.note_id]
+            return result
 
     def revision_by_source_key(
         self, note_id: str, source_revision_key: str
@@ -249,17 +284,99 @@ class SqlAlchemyExternalNoteRepository:
                 .order_by(ExternalNoteIdentityRow.last_seen_at.desc())
                 .limit(bounded)
             ).all()
-            result: list[tuple[ExternalNoteIdentity, ExternalNoteRevision]] = []
-            for identity_row in identities:
-                revision_row = session.scalar(
-                    select(ExternalNoteRevisionRow)
-                    .where(ExternalNoteRevisionRow.note_id == identity_row.note_id)
-                    .order_by(ExternalNoteRevisionRow.version.desc())
-                    .limit(1)
+            if not identities:
+                return ()
+            latest = (
+                select(
+                    ExternalNoteRevisionRow.note_id,
+                    func.max(ExternalNoteRevisionRow.version).label("version"),
                 )
-                if revision_row is not None:
-                    result.append((_identity(identity_row), _revision(revision_row)))
-            return tuple(result)
+                .where(ExternalNoteRevisionRow.note_id.in_(row.note_id for row in identities))
+                .group_by(ExternalNoteRevisionRow.note_id)
+                .subquery()
+            )
+            revisions = {
+                row.note_id: row
+                for row in session.scalars(
+                    select(ExternalNoteRevisionRow).where(
+                        ExternalNoteRevisionRow.note_id == latest.c.note_id,
+                        ExternalNoteRevisionRow.version == latest.c.version,
+                    )
+                )
+            }
+            # Preserve the existing identity-first bound and ordering, including
+            # identities without revisions consuming a slot in that bound.
+            return tuple(
+                (_identity(row), _revision(revisions[row.note_id]))
+                for row in identities
+                if row.note_id in revisions
+            )
+
+    def browse_latest(
+        self, *, limit: int, offset: int, query: str, observed_through: datetime,
+    ) -> tuple[tuple[tuple[ExternalNoteIdentity, ExternalNoteRevision], ...], bool]:
+        latest = select(
+            ExternalNoteRevisionRow.note_id,
+            func.max(ExternalNoteRevisionRow.version).label("version"),
+        ).group_by(ExternalNoteRevisionRow.note_id).subquery()
+        with Session(self._engine) as session:
+            # Sort aware timestamps in Python: persisted ISO offsets need not match.
+            # Read only the lightweight index; private bodies are loaded for one page.
+            index = session.execute(select(
+                ExternalNoteRevisionRow.note_revision_id,
+                ExternalNoteRevisionRow.observed_at,
+                ExternalNoteRevisionRow.title,
+                ExternalNoteIdentityRow.primary_instrument_id,
+            ).join(latest, and_(
+                ExternalNoteRevisionRow.note_id == latest.c.note_id,
+                ExternalNoteRevisionRow.version == latest.c.version,
+            )).join(ExternalNoteIdentityRow,
+                    ExternalNoteIdentityRow.note_id == ExternalNoteRevisionRow.note_id
+            ).where(ExternalNoteIdentityRow.source == "MOOMOO_NOTE")).all()
+            needle = query.strip().casefold()
+            eligible = sorted(
+                ((datetime.fromisoformat(row.observed_at), row.note_revision_id)
+                 for row in index
+                 if datetime.fromisoformat(row.observed_at) <= observed_through
+                 and (not needle or needle in row.title.casefold()
+                      or needle in (row.primary_instrument_id or "").casefold())),
+                reverse=True,
+            )
+            ids = [revision_id for _, revision_id in eligible[offset:offset + limit]]
+            if not ids:
+                return (), len(eligible) > offset + limit
+            rows = session.execute(select(
+                ExternalNoteIdentityRow, ExternalNoteRevisionRow,
+            ).join(ExternalNoteRevisionRow,
+                   ExternalNoteIdentityRow.note_id == ExternalNoteRevisionRow.note_id
+            ).where(ExternalNoteRevisionRow.note_revision_id.in_(ids))).all()
+            values = {revision.note_revision_id: (_identity(identity), _revision(revision))
+                      for identity, revision in rows}
+            return tuple(values[revision_id] for revision_id in ids), len(eligible) > offset + limit
+
+    def history_metadata(
+        self, *, note_id: str, instrument_id: str | None,
+        observed_through: datetime, limit: int,
+    ) -> tuple[tuple[NoteHistoryMetadata, ...], bool]:
+        revision, identity = ExternalNoteRevisionRow, ExternalNoteIdentityRow
+        with Session(self._engine) as session:
+            rows = session.execute(select(
+                revision.note_id, revision.note_revision_id, revision.version,
+                revision.title, revision.coverage, revision.observed_at, revision.source_timestamp,
+            ).join(identity, identity.note_id == revision.note_id).where(
+                identity.source == "MOOMOO_NOTE",
+                identity.primary_instrument_id == instrument_id
+                if instrument_id else identity.note_id == note_id,
+            ))
+            # No private bodies are decoded for the historical index. Aware sorting
+            # retains exact microseconds across legacy ISO timezone offsets.
+            items = [NoteHistoryMetadata(
+                row.note_id, row.note_revision_id, row.version, row.title,
+                NoteCoverage(row.coverage), datetime.fromisoformat(row.observed_at),
+                datetime.fromisoformat(row.source_timestamp) if row.source_timestamp else None,
+            ) for row in rows if datetime.fromisoformat(row.observed_at) <= observed_through]
+        items.sort(key=lambda row: (row.observed_at, row.note_revision_id), reverse=True)
+        return tuple(items[:limit]), len(items) > limit
 
     def list_revisions(self, note_id: str, limit: int = 50) -> tuple[ExternalNoteRevision, ...]:
         bounded = max(1, min(limit, 200))

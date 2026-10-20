@@ -65,6 +65,9 @@ def setup():
     notes.get.return_value = identity
     notes.list_latest.return_value = ((identity, r),)
     notes.previous_revision.return_value = None
+    notes.previous_revisions.side_effect = lambda versions: {
+        note_id: notes.previous_revision.return_value for note_id in versions
+    }
     notes.list_revisions.return_value = (r,)
     uow.__enter__.return_value = uow
     uow.journal.list_related.return_value = ()
@@ -211,6 +214,7 @@ def test_owner_change_detection_ignores_quoted_changes_and_redacts_before_paging
     assert "fixture" not in page["content"]["text"]
     assert page["content"]["content_redacted"]
     notes.previous_revision.side_effect = RuntimeError("private provider detail")
+    notes.previous_revisions.side_effect = RuntimeError("private provider detail")
     assert service.inbox()["items"][0]["change"] == "PREVIOUS_CONTENT_UNAVAILABLE"
 
 
@@ -256,3 +260,84 @@ def test_discussion_read_failure_does_not_block_note_or_claim_no_prior_discussio
     assert data["content"]["text"] == "My uncertain thinking"
     assert data["discussion_coverage"] == "UNAVAILABLE"
     assert "private database" not in str(data)
+
+
+@pytest.mark.parametrize("mismatch", ["note", "coverage", "source_time", "journal_time", "type"])
+def test_saved_discussion_must_belong_to_same_visible_full_note(mismatch):
+    from dataclasses import replace
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    notes, uow, service = setup()
+    linked_id = "external_note_revision_00000000-0000-7000-8000-000000000098"
+    linked = replace(revision(), note_revision_id=linked_id)
+    if mismatch == "note":
+        linked = replace(linked, note_id="external_note_other")
+    elif mismatch == "coverage":
+        linked = replace(linked, coverage=NoteCoverage.SUMMARY_ONLY, full_body=None, blocks=())
+    elif mismatch == "source_time":
+        linked = replace(linked, observed_at=NOW + timedelta(days=1))
+    notes.revision_by_id.side_effect = lambda key: revision() if key == REV else linked
+    uow.journal.get.return_value = SimpleNamespace(
+        related_entity_type="decision" if mismatch == "type" else "external_note_revision",
+        related_entity_id=linked_id,
+        created_at=NOW + timedelta(days=1) if mismatch == "journal_time" else NOW,
+        body_markdown="Must never display this mismatched discussion",
+    )
+    with pytest.raises(DataContractError, match="Discussion does not belong"):
+        service.note(REV, journal_id="journal_synthetic", include_content=True,
+                     private_content_authorized=True)
+    uow.commit.assert_not_called()
+
+
+def test_saved_discussion_pages_redact_before_slicing_and_keep_original_revision():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    notes, uow, service = setup()
+    linked_id = "external_note_revision_00000000-0000-7000-8000-000000000098"
+    linked = replace(revision(), note_revision_id=linked_id)
+    notes.revision_by_id.side_effect = lambda key: revision() if key == REV else linked
+    uow.journal.get.return_value = SimpleNamespace(
+        related_entity_type="external_note_revision", related_entity_id=linked_id,
+        created_at=NOW, body_markdown="Saved source https://synthetic.invalid/private End",
+        journal_id="journal_synthetic", title="Saved discussion", confirmed_by="user",
+        authored_by="codex", topic_tags=(),
+        supersedes_journal_id=None,
+    )
+    with pytest.raises(DataContractError, match="Explicit owner authorization"):
+        service.note(REV, journal_id="journal_synthetic", include_content=True)
+    uow.journal.get.assert_not_called()
+    uow.journal.list_related.return_value = (uow.journal.get.return_value,)
+    chunks, offset = [], 0
+    while True:
+        result = service.note(REV, journal_id="journal_synthetic", include_content=True,
+                              private_content_authorized=True, text_offset=offset, max_chars=7)
+        page = result["discussion_content"]
+        assert result["content"] is None
+        assert result["discussion_history"][0]["body_preview"] is None
+        assert page["note_revision_id"] == linked_id
+        chunks.append(page["text"])
+        if page["next_text_offset"] is None:
+            break
+        offset = page["next_text_offset"]
+    assert "".join(chunks) == "Saved source [REDACTED_URL] End"
+    uow.commit.assert_not_called()
+
+
+def test_note_reads_can_skip_history_and_history_reads_can_skip_portfolio():
+    notes, uow, service = setup()
+    context = MagicMock()
+    service._portfolio_context = context
+    service.note(REV, include_discussions=False)
+    service.note(REV, include_content=True, private_content_authorized=True,
+                 include_discussions=False)
+    notes.list_revisions.assert_not_called()
+    uow.journal.list_related.assert_not_called()
+    context.get.assert_called_once()
+    context.reset_mock()
+    result = service.note(REV, include_discussions=True, include_portfolio=False)
+    assert result["discussion_history"] == []
+    assert "portfolio_context" not in result
+    context.get.assert_not_called()
+    notes.list_revisions.assert_called_once()

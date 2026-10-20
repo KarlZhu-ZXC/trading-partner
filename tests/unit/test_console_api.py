@@ -2738,3 +2738,28 @@ async def test_observation_lock_contention_returns_retryable_code_without_except
         await console_api._sync_observations(request, source_code=None, analyze=False)
     assert caught.value.status_code == 503
     assert caught.value.detail == {"code": "OBSERVATION_SYNC_BUSY", "retryable": True}
+
+
+@pytest.mark.asyncio
+async def test_notes_workbench_reads_only_selected_judgment_and_saved_positions(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from interfaces.console import api
+
+    choices = [{"subject": {"subject_id": "subject_synthetic"}, "state": None}]
+    monkeypatch.setattr(api, "_console_subject_choices", AsyncMock(
+        return_value=(choices, {"ok": True}),
+    ))
+    reads = AsyncMock(side_effect=[{"ok": True, "data": {}}, {"ok": False}])
+    monkeypatch.setattr(api, "_durable_console_call", reads)
+    result = await api.decision_workbench(
+        None, scope="notes", subject_id="subject_synthetic",
+    )
+    assert result["scope"] == "notes"
+    assert result["selected_subject_id"] == "subject_synthetic"
+    assert result["partial_failures"] == ["accounts"]
+    assert "trade_cycles" in result["unloaded_sections"]
+    assert "trade_cycles" not in result
+    assert [(c.args[1], c.args[2]["request"]["operation"])
+            for c in reads.call_args_list] == [("research_get", "state"),
+                                              ("portfolio_get", "positions")]

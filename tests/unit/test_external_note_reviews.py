@@ -88,9 +88,7 @@ class _Reviews:
     def __init__(self) -> None:
         self.values: list[ExternalNoteReview] = []
 
-    def append(
-        self, value: ExternalNoteReview, *, expected_version: int
-    ) -> ExternalNoteReview:
+    def append(self, value: ExternalNoteReview, *, expected_version: int) -> ExternalNoteReview:
         duplicate = next(
             (item for item in self.values if item.idempotency_key == value.idempotency_key),
             None,
@@ -199,9 +197,7 @@ def test_pending_review_recovers_exact_concurrent_materialization(
     class RacingReviews(_Reviews):
         raced = False
 
-        def append(
-            self, value: ExternalNoteReview, *, expected_version: int
-        ) -> ExternalNoteReview:
+        def append(self, value: ExternalNoteReview, *, expected_version: int) -> ExternalNoteReview:
             if not self.raced:
                 self.raced = True
                 self.values.append(value)
@@ -299,6 +295,25 @@ def test_review_rejects_decision_for_another_revision(fixed_clock, id_generator)
         )
 
 
+@pytest.mark.parametrize("count", [0, 499, 500, 501])
+def test_metrics_respects_page_limit_and_reports_truncation(
+    fixed_clock, id_generator, monkeypatch, count
+) -> None:
+    service, reviews = _service(fixed_clock, id_generator)
+    service.ensure_pending(note_revision_id=REVISION_ID)
+    values = (reviews.values[0],) * count
+
+    def list_latest(*, limit: int, offset: int = 0):
+        assert 1 <= limit <= 500
+        return values[offset : offset + limit]
+
+    monkeypatch.setattr(reviews, "list_latest", list_latest)
+    metrics = service.metrics()
+    assert metrics.total == min(count, 500)
+    assert metrics.pending == min(count, 500)
+    assert metrics.truncated is (count > 500)
+
+
 def test_sql_repository_appends_versions_and_filters_latest(
     migrated_sqlite_url, fixed_clock, id_generator
 ) -> None:
@@ -346,10 +361,16 @@ def test_sql_repository_appends_versions_and_filters_latest(
     )
     reviews.append(deferred, expected_version=1)
 
+    service = ExternalNoteReviewService(reviews, notes, lambda: _Uow(), fixed_clock, id_generator)
+    metrics = service.metrics()
+    assert metrics.total == 1
+    assert metrics.deferred == 1
+    assert metrics.truncated is False
+
     assert reviews.latest_for_revision(REVISION_ID) == deferred
-    assert reviews.list_latest(
-        statuses=frozenset({ExternalNoteReviewStatus.DEFERRED})
-    ) == (deferred,)
+    assert reviews.list_latest(statuses=frozenset({ExternalNoteReviewStatus.DEFERRED})) == (
+        deferred,
+    )
     assert reviews.append(deferred, expected_version=1) == deferred
     with pytest.raises(ExternalNoteReviewVersionConflict):
         reviews.append(

@@ -349,6 +349,38 @@ class ReviewWorkspaceQueryService:
             )
         return ReviewWorkspaceSources(agenda=agenda, batch=batch, coverage=coverage)
 
+    def read_operations(self) -> dict[str, Any]:
+        """Expose source-bound recovery state without requiring queue maintenance."""
+        batch = self._refresh.collect_operations()
+        coverage = {
+            source.value: (
+                "COMPLETE" if source in batch.fully_observed_source_types
+                else "PARTIAL" if source in batch.observed_source_types
+                else "UNAVAILABLE"
+            )
+            for source in (
+                ReviewItemSourceType.AGENT_PENDING_ACTION,
+                ReviewItemSourceType.BROKER_ORDER_INTENT,
+            )
+        }
+        return {
+            "workflow_attention_projection": [
+                {
+                    **asdict(row),
+                    "key": row.source_key,
+                    "source_type": row.source_type.value,
+                    "severity": row.severity.value,
+                }
+                for row in batch.projections
+            ],
+            "review_coverage": {
+                "scope": "operations",
+                "generated_at": self._clock.now().isoformat(),
+                "sources": coverage,
+                "complete": all(value == "COMPLETE" for value in coverage.values()),
+            },
+        }
+
     def read(self) -> dict[str, Any]:
         sources = self.collect()
         coverage = dict(sources.coverage)

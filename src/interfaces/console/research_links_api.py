@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from decimal import Decimal
 from typing import cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from bootstrap import ApplicationContainer
 from domain.common.errors import TradingPartnerError
@@ -154,9 +156,27 @@ async def retro_detail(request: Request, run_id: str) -> JSONResponse:
 
 
 @router.get("/api/note-desk")
-async def note_desk(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> JSONResponse:
+async def note_desk(
+    request: Request, limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> JSONResponse:
     container = cast(ApplicationContainer, request.app.state.container)
-    data = await asyncio.to_thread(container.services.note_desk.inbox, limit=limit)
+    data = await asyncio.to_thread(container.services.note_desk.browse, limit=limit, offset=offset)
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+class NoteSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(default="", max_length=200)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+@router.post("/api/note-desk/search")
+async def search_notes(request: Request, body: NoteSearchRequest) -> JSONResponse:
+    # Read-only POST keeps private title searches out of URLs/access logs.
+    container = cast(ApplicationContainer, request.app.state.container)
+    data = await asyncio.to_thread(container.services.note_desk.browse, **body.model_dump())
     return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
 
 
@@ -165,8 +185,12 @@ async def note_desk_detail(
     request: Request,
     revision_id: str,
     include_content: bool = False,
+    include_discussions: bool = False,
+    include_portfolio: bool = True,
     block_index: int = Query(default=0, ge=0),
     text_offset: int = Query(default=0, ge=0),
+    context_cursor: str | None = Query(default=None, min_length=1, max_length=256),
+    journal_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> JSONResponse:
     container = cast(ApplicationContainer, request.app.state.container)
     try:
@@ -177,6 +201,10 @@ async def note_desk_detail(
             private_content_authorized=include_content,
             block_index=block_index,
             text_offset=text_offset,
+            context_cursor=context_cursor,
+            journal_id=journal_id,
+            include_discussions=include_discussions,
+            include_portfolio=include_portfolio,
         )
     except TradingPartnerError as error:
         raise HTTPException(
@@ -185,5 +213,59 @@ async def note_desk_detail(
                 "code": error.code,
                 "message": "This exact note revision is unavailable. Reload the note list.",
             },
+        ) from None
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/note-desk/{revision_id}/history")
+async def note_history(
+    request: Request, revision_id: str,
+    cursor: str | None = Query(default=None, min_length=1, max_length=256),
+) -> JSONResponse:
+    container = cast(ApplicationContainer, request.app.state.container)
+    try:
+        data = await asyncio.to_thread(
+            container.services.note_desk.history, revision_id, cursor=cursor,
+        )
+    except TradingPartnerError:
+        raise HTTPException(
+            status_code=409,
+            detail="Note history changed or is unavailable. Reload the first page.",
+        ) from None
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/note-desk/{revision_id}/conclusion-receipt")
+async def note_conclusion_receipt(
+    request: Request, revision_id: str,
+    request_id: str = Query(min_length=1, max_length=128),
+) -> JSONResponse:
+    container = cast(ApplicationContainer, request.app.state.container)
+    try:
+        data = await asyncio.to_thread(
+            container.services.note_desk.conclusion_receipt, revision_id, request_id,
+        )
+    except TradingPartnerError:
+        raise HTTPException(
+            status_code=409, detail="Conclusion receipt is unavailable for this note.",
+        ) from None
+    return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/note-desk/{revision_id}/history-trades")
+async def note_history_trades(
+    request: Request, revision_id: str, start: datetime, end: datetime,
+    cursor: str | None = Query(default=None, min_length=1, max_length=256),
+) -> JSONResponse:
+    container = cast(ApplicationContainer, request.app.state.container)
+    try:
+        data = await asyncio.to_thread(
+            container.services.note_desk.history_trades, revision_id,
+            start=start, end=end, cursor=cursor,
+        )
+    except TradingPartnerError:
+        raise HTTPException(
+            status_code=409,
+            detail="Transaction window changed or is unavailable. Reload the first page.",
         ) from None
     return JSONResponse({"data": jsonable_encoder(data)}, headers={"Cache-Control": "no-store"})

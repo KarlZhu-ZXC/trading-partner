@@ -244,15 +244,10 @@ class ExternalNoteReviewService:
         for value in values:
             revision = self._notes.revision_by_id(value.note_revision_id)
             if revision is None:
-                raise ExternalNoteReviewNotFound(
-                    "Observation review source revision was not found"
-                )
+                raise ExternalNoteReviewNotFound("Observation review source revision was not found")
             href = "/decision-workbench#notes"
             if value.subject_id is not None:
-                href = (
-                    "/decision-workbench?subject_id="
-                    f"{value.subject_id}#notes"
-                )
+                href = f"/decision-workbench?subject_id={value.subject_id}#notes"
             result.append(
                 ReviewItemProjection(
                     source_key=f"OBSERVATION_REVIEW_DUE:{value.review_id}",
@@ -273,43 +268,32 @@ class ExternalNoteReviewService:
         return tuple(result)
 
     def metrics(self) -> ExternalNoteReviewMetricsDTO:
-        values = self._reviews.list_latest(limit=501)
-        visible = values[:500]
+        visible = self._reviews.list_latest(limit=500)
+        truncated = len(visible) == 500 and bool(self._reviews.list_latest(limit=1, offset=500))
         now = self._clock.now()
         unresolved = tuple(
             item
             for item in visible
-            if item.status
-            in {ExternalNoteReviewStatus.PENDING, ExternalNoteReviewStatus.DEFERRED}
+            if item.status in {ExternalNoteReviewStatus.PENDING, ExternalNoteReviewStatus.DEFERRED}
         )
         oldest = min((item.created_at for item in unresolved), default=None)
         terminal = tuple(
             item
             for item in visible
-            if item.status
-            in {ExternalNoteReviewStatus.ADOPTED, ExternalNoteReviewStatus.NO_ACTION}
+            if item.status in {ExternalNoteReviewStatus.ADOPTED, ExternalNoteReviewStatus.NO_ACTION}
         )
         return ExternalNoteReviewMetricsDTO(
             measured_at=now,
             total=len(visible),
-            pending=sum(
-                item.status is ExternalNoteReviewStatus.PENDING for item in visible
-            ),
-            deferred=sum(
-                item.status is ExternalNoteReviewStatus.DEFERRED for item in visible
-            ),
-            adopted=sum(
-                item.status is ExternalNoteReviewStatus.ADOPTED for item in visible
-            ),
-            no_action=sum(
-                item.status is ExternalNoteReviewStatus.NO_ACTION for item in visible
-            ),
+            pending=sum(item.status is ExternalNoteReviewStatus.PENDING for item in visible),
+            deferred=sum(item.status is ExternalNoteReviewStatus.DEFERRED for item in visible),
+            adopted=sum(item.status is ExternalNoteReviewStatus.ADOPTED for item in visible),
+            no_action=sum(item.status is ExternalNoteReviewStatus.NO_ACTION for item in visible),
             oldest_unresolved_age_seconds=(
                 max(0, int((now - oldest).total_seconds())) if oldest is not None else None
             ),
             terminal_with_exact_decision=sum(
-                item.decision_id is not None and item.subject_id is not None
-                for item in terminal
+                item.decision_id is not None and item.subject_id is not None for item in terminal
             ),
-            truncated=len(values) > 500,
+            truncated=truncated,
         )

@@ -190,3 +190,31 @@ def test_read_does_not_treat_failed_research_as_empty_complete() -> None:
     assert result["research_attention"] == []
     assert result["review_coverage"]["sources"]["research"] == "UNAVAILABLE"
     assert result["review_coverage"]["complete"] is False
+
+
+def test_notes_read_keeps_live_recovery_without_archive_or_materialized_queue_reads() -> None:
+    service, refresh, items, research = _build_service(batch=_batch())
+    projection = ReviewItemProjection(
+        source_key="broker-order-intent-order_1",
+        source_type=ReviewItemSourceType.BROKER_ORDER_INTENT,
+        source_ref="order_1", title="Unknown order outcome", detail="Inspect receipt",
+        severity=ReviewItemSeverity.ATTENTION, recommended_action="INSPECT", href="/capabilities",
+    )
+    refresh.collect_operations.return_value = ReviewItemRefreshBatch(
+        projections=(projection,),
+        observed_source_types=frozenset({ReviewItemSourceType.BROKER_ORDER_INTENT}),
+        fully_observed_source_types=frozenset(), authoritative_source_refs=frozenset(),
+    )
+    result = service.read_operations()
+    assert result["workflow_attention_projection"][0]["source_ref"] == "order_1"
+    assert result["review_coverage"]["scope"] == "operations"
+    assert result["review_coverage"]["complete"] is False
+    assert result["review_coverage"]["sources"] == {
+        "AGENT_PENDING_ACTION": "UNAVAILABLE", "BROKER_ORDER_INTENT": "PARTIAL",
+    }
+    refresh.collect.assert_not_called()
+    refresh.apply.assert_not_called()
+    assert items.mock_calls == research.mock_calls == []
+    assert service._agenda.mock_calls == []  # type: ignore[attr-defined]
+    assert service._retro.mock_calls == []  # type: ignore[attr-defined]
+    assert service._scorecards.mock_calls == []  # type: ignore[attr-defined]

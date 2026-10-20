@@ -45,6 +45,7 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
         text_offset: Annotated[int, Field(ge=0)] = 0,
         max_chars: Annotated[int, Field(ge=1, le=2000)] = 2000,
         journal_id: Annotated[str | None, Field(min_length=1, max_length=128)] = None,
+        context_cursor: Annotated[str | None, Field(min_length=1, max_length=256)] = None,
     ) -> dict[str, Any]:
         """Read attributed text after the owner's explicit private-content request."""
         try:
@@ -56,7 +57,15 @@ def build_view_review_adapters(container: ApplicationContainer) -> SimpleNamespa
                 text_offset=text_offset,
                 max_chars=max_chars,
                 journal_id=journal_id,
+                context_cursor=context_cursor,
             )
+            if not include_content:
+                # Metadata includes bounded account context. Full saved discussion
+                # text is separately paged through journal_id.
+                for discussion in data.get("discussion_history", []):
+                    if "body_preview" in discussion:
+                        discussion["body_preview"] = discussion["body_preview"][:160]
+                        discussion["body_truncated"] = True
             if include_content:
                 # Keep a full text page below the MCP transport byte budget. Context
                 # and history are obtained by the separate metadata read.

@@ -33,10 +33,16 @@ async def _read(request: Request, name: str, arguments: dict[str, Any]) -> dict[
 
 
 @router.get("/api/overview")
-async def overview(request: Request) -> dict[str, Any]:
+async def overview(
+    request: Request, scope: Literal["full", "notes"] = "full",
+) -> dict[str, Any]:
     container = cast(ApplicationContainer, request.app.state.container)
+    read_workspace = (
+        container.services.review_workspace_query.read_operations
+        if scope == "notes" else container.services.review_workspace_query.read
+    )
     workspace, health, monitors, runs = await asyncio.gather(
-        asyncio.to_thread(container.services.review_workspace_query.read),
+        asyncio.to_thread(read_workspace),
         _read(request, "system_health", {}),
         _read(request, "monitor_read", {"request": {"operation": "dashboard", "status": None}}),
         _read(request, "monitor_read", {"request": {"operation": "runs", "limit": 20}}),
@@ -54,6 +60,8 @@ async def overview(request: Request) -> dict[str, Any]:
         "notifications": container.operations.notifications.status,
         "maintenance": container.operations.maintenance.status,
     }
+    if scope == "notes":
+        readers = {"notifications": container.operations.notifications.status}
     for name, read_status in readers.items():
         try:
             status = await asyncio.to_thread(read_status)

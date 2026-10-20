@@ -21,12 +21,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ThemeSwitch } from "./theme-switch";
-import { AgentRail } from "./agent-rail";
+import dynamic from "next/dynamic";
+const AgentRail = dynamic(() => import("./agent-rail").then(module => module.AgentRail), { ssr: false });
 import { GlobalNotifications } from "./global-notifications";
+import { Disclosure } from "./ui";
 import { Button, DismissLayer, IconButton } from "./ui/controls";
 
 export const CONSOLE_PAGE_LABELS = {
-  overview: "Overview",
+  overview: "Notes",
   "decision-workbench": "Journal",
   research: "Research",
   charts: "Charts",
@@ -36,7 +38,7 @@ export const CONSOLE_PAGE_LABELS = {
   capabilities: "Capabilities",
   portfolio: "Portfolio",
   retro: "Trade Retro",
-  operations: "Operations",
+  operations: "System",
 } as const;
 
 type ConsolePageKey = keyof typeof CONSOLE_PAGE_LABELS;
@@ -44,12 +46,18 @@ type NavigationItem = { href: string; key: ConsolePageKey; icon: LucideIcon };
 
 const navigation: NavigationItem[] = [
   { href: "/", icon: LayoutDashboard, key: "overview" },
+  { href: "/portfolio", icon: BriefcaseBusiness, key: "portfolio" },
+  { href: "/operations", icon: SlidersHorizontal, key: "operations" },
+];
+const advancedNavigation: NavigationItem[] = [
   { href: "/decision-workbench", icon: Workflow, key: "decision-workbench" },
   { href: "/research", icon: BookOpenText, key: "research" },
   { href: "/monitors", icon: Radar, key: "monitors" },
-  { href: "/portfolio", icon: BriefcaseBusiness, key: "portfolio" },
-  { href: "/operations", icon: SlidersHorizontal, key: "operations" },
   { href: "/capabilities", icon: Blocks, key: "capabilities" },
+  { href: "/charts", icon: LayoutDashboard, key: "charts" },
+  { href: "/agenda", icon: BookOpenText, key: "agenda" },
+  { href: "/retro", icon: Workflow, key: "retro" },
+  { href: "/scorecards", icon: Blocks, key: "scorecards" },
 ];
 
 const SIDEBAR_STORAGE_KEY = "trading-partner-sidebar-collapsed";
@@ -65,7 +73,8 @@ export function ConsoleShell({
   pageActions?: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [agentRailCollapsed, setAgentRailCollapsed] = useState(false);
+  const [agentRailCollapsed, setAgentRailCollapsed] = useState(true);
+  const [agentLoaded, setAgentLoaded] = useState(false);
   const [overlayViewport, setOverlayViewport] = useState(false);
   const [lanMode, setLanMode] = useState(false);
 
@@ -83,7 +92,7 @@ export function ConsoleShell({
   useEffect(() => {
     try {
       const storedCollapsed = window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
-      const storedAgentCollapsed = window.localStorage.getItem(AGENT_RAIL_STORAGE_KEY) === "true";
+      const storedAgentCollapsed = window.localStorage.getItem(AGENT_RAIL_STORAGE_KEY) !== "false";
       const overlayViewport = window.matchMedia("(max-width: 1100px)").matches;
       const agentRequested = new URLSearchParams(window.location.search).get("agent") === "open";
       const nextSidebarCollapsed = overlayViewport || storedCollapsed;
@@ -190,6 +199,16 @@ export function ConsoleShell({
     applyAgentRailCollapsed(next);
   }
 
+  useEffect(() => {
+    if (!agentRailCollapsed) setAgentLoaded(true);
+  }, [agentRailCollapsed]);
+
+  useEffect(() => {
+    const open = () => applyAgentRailCollapsed(false);
+    window.addEventListener("tp:copilot-load", open);
+    return () => window.removeEventListener("tp:copilot-load", open);
+  }, [applyAgentRailCollapsed]);
+
   const overlayOpen = overlayViewport && (!collapsed || !agentRailCollapsed);
 
   async function signOutLanSession() {
@@ -237,6 +256,23 @@ export function ConsoleShell({
             );
           })}
         </nav>
+        <Disclosure
+          className="sidebar-advanced"
+          title={collapsed && !overlayViewport
+            ? <><Blocks aria-hidden="true" className="nav-icon" /><span className="sr-only">Advanced Workspace</span></>
+            : "Advanced Workspace"}
+          defaultOpen={advancedNavigation.some(item => item.key === active)}
+          onToggle={open => { if (open && collapsed && !overlayViewport) applySidebarCollapsed(false); }}
+        >
+          <nav className="nav-list" aria-label="Advanced Navigation">
+            {advancedNavigation.map(item => <Link key={item.key} href={item.href} prefetch={false}
+              aria-label={CONSOLE_PAGE_LABELS[item.key]} data-label={CONSOLE_PAGE_LABELS[item.key]}
+              className={item.key === active ? "nav-item active" : "nav-item"}>
+              <item.icon aria-hidden="true" className="nav-icon" strokeWidth={1.7} />
+              <span className="nav-label">{CONSOLE_PAGE_LABELS[item.key]}</span>
+            </Link>)}
+          </nav>
+        </Disclosure>
         <div className="sidebar-bottom">
           {lanMode ? (
             <Button className="lan-sign-out" onClick={signOutLanSession} type="button">
@@ -301,11 +337,11 @@ export function ConsoleShell({
         </header>
         {children}
       </main>
-      <AgentRail
+      {agentLoaded && <AgentRail
         collapsed={agentRailCollapsed}
         onCollapsedChange={applyAgentRailCollapsed}
         overlayViewport={overlayViewport}
-      />
+      />}
     </div>
   );
 }

@@ -50,6 +50,7 @@ class _Registry:
 class _Workspace:
     def __init__(self) -> None:
         self.read_calls = 0
+        self.operations_calls = 0
         self.collect_calls = 0
         self.refresh_calls = 0
         self.batch = object()
@@ -73,6 +74,12 @@ class _Workspace:
                 "materialization_required": False,
             },
         }
+
+    def read_operations(self) -> dict[str, Any]:
+        self.operations_calls += 1
+        return {"workflow_attention_projection": [], "review_coverage": {
+            "scope": "operations", "complete": True,
+        }}
 
     def collect(self) -> Any:
         self.collect_calls += 1
@@ -378,3 +385,28 @@ async def test_review_items_refresh_collects_and_applies_once_after_explicit_com
     assert workspace.refresh_calls == 1
     assert workspace.collect_calls == 0
     assert refresh.apply_calls == []
+
+
+@pytest.mark.asyncio
+async def test_note_overview_skips_archive_and_maintenance_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, workspace, refresh, _, _ = _install_state(monkeypatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=console_api.app),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = await client.get("/api/overview?scope=notes")
+        invalid = await client.get("/api/overview?scope=unknown")
+    assert response.status_code == 200
+    assert invalid.status_code == 422
+    assert workspace.operations_calls == 1
+    assert workspace.read_calls == workspace.collect_calls == workspace.refresh_calls == 0
+    assert refresh.apply_calls == []
+    assert response.json()["review_coverage"]["scope"] == "operations"
+    assert "maintenance" not in response.json()
+    assert "post_market_sync" not in response.json()
+    statuses = console_api.app.state.container.operations
+    assert statuses.maintenance.calls == statuses.post_market_sync.calls == 0
+    assert statuses.notifications.calls == 1
+    assert len(registry.calls) == 3

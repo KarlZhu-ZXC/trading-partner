@@ -135,3 +135,94 @@ test("multiple active Subjects require explicit selection before manual review",
   await page.getByRole("button", { name: "Record Independent Decision", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Apple Tactical Scope");
 });
+
+test("Notes opens an exact historical revision for independent review without discussion", async ({ page }) => {
+  const writes = await mockJournal(page);
+  const reads: string[] = [];
+  page.on("request", request => { if (request.method() === "GET") reads.push(new URL(request.url()).pathname); });
+  const exactRevision = "external_note_revision_historical_no_discussion";
+  await page.route("**/api/console/api/note-desk", route => route.fulfill({ json: { data: { items: [{
+    note_id: NOTE, note_revision_id: exactRevision, version: 2, title: "Standalone Moomoo note",
+    instrument_id: INSTRUMENT, coverage: "FULL", observed_at: "2026-09-19T08:00:00Z", change: "USER_TEXT_CHANGED",
+  }] } } }));
+  await page.route(`**/api/console/api/observations/${exactRevision}/revision`, route => {
+    expect(new URL(route.request().url()).searchParams.has("subject_id")).toBe(false);
+    const historical = note("failed-full");
+    return route.fulfill({ json: { data: { ...historical,
+      identity: { ...historical.identity, title: "Exact historical standalone note" },
+      revision: { ...historical.revision, note_revision_id: exactRevision, version: 2 },
+      interpretation: null, review: null,
+    } } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open Note", exact: true }).click();
+  await page.getByRole("link", { name: "Review This Note in Journal" }).click();
+  const selected = page.getByRole("region", { name: "Selected Note" });
+  await expect(selected.getByRole("heading", { name: "Exact historical standalone note" })).toBeVisible();
+  await expect(selected).toContainText("v2");
+  await page.reload();
+  await expect(selected.getByRole("heading", { name: "Exact historical standalone note" })).toBeVisible();
+  await page.getByRole("button", { name: "Record Independent Decision", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Reason")).toHaveValue("");
+  expect(writes).toEqual([]);
+  expect(reads.some(path => path.includes("/api/agent/"))).toBe(false);
+  await dialog.getByLabel("Reason").fill("Reviewed directly from my Moomoo note.");
+  await dialog.getByRole("button", { name: "Confirm & Record Independent Decision", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  const request = (writes[0].body.arguments as { request: Record<string, unknown> }).request;
+  expect(request.external_note_revision_id).toBe(exactRevision);
+  expect(writes[0].body.confirmation).toBe("research_memory_append");
+});
+
+for (const failure of ["missing", "mismatched"]) {
+  test(`direct note review never substitutes latest when exact revision is ${failure}`, async ({ page }) => {
+    const writes = await mockJournal(page);
+    await page.route(`**/api/console/api/observations/${REVISION}/revision`, route => route.fulfill(failure === "missing"
+      ? { status: 404, json: { detail: "Synthetic exact revision unavailable" } }
+      : { json: { data: { ...note("failed-full"), revision: { ...note("failed-full").revision, note_revision_id: "wrong_revision" } } } }));
+    await page.goto(`/decision-workbench?note_revision_id=${REVISION}#notes`);
+    await expect(page.getByRole("button", { name: "Retry Exact Revision" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Record Independent Decision", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Selected Note" }).getByRole("heading", { name: "Apple Manual Source" })).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+}
+
+test("exact standalone note is readable without any Research Subject", async ({ page }) => {
+  const writes = await mockJournal(page);
+  await page.route("**/api/console/api/decision-workbench**", route => route.fulfill({ json: { ...workbench(false), selected_subject_id: null, subjects: [] } }));
+  await page.route(`**/api/console/api/observations/${REVISION}/revision`, route => route.fulfill({ json: { data: { ...note("failed-full"), interpretation: null } } }));
+  await page.goto(`/decision-workbench?note_revision_id=${REVISION}#notes`);
+  await expect(page.getByRole("region", { name: "Selected Note" }).getByRole("heading", { name: "Apple Manual Source" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Record Independent Decision", exact: true })).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
+
+test("direct note review loads notes scope before loading full Journal on tab switch", async ({ page }) => {
+  await mockJournal(page);
+  const scopes: string[] = [];
+  let failFull = true;
+  await page.route("**/api/console/api/decision-workbench?*", async route => {
+    const scope = new URL(route.request().url()).searchParams.get("scope") ?? "full";
+    scopes.push(scope);
+    if (scope === "full" && failFull) return route.fulfill({ status: 409, json: { detail: "Synthetic full read failed" } });
+    const value = workbench(false);
+    return route.fulfill({ json: scope === "notes" ? {
+      scope, selected_subject_id: value.selected_subject_id, subjects: value.subjects,
+      accounts: value.accounts, partial_failures: [],
+    } : { ...value, scope } });
+  });
+  await page.goto(`/decision-workbench?subject_id=${SUBJECT_A}#notes`);
+  await expect(page.getByRole("button", { name: "Record Independent Decision", exact: true })).toBeVisible();
+  expect(scopes.length).toBeGreaterThan(0);
+  expect(scopes.every(scope => scope === "notes")).toBe(true);
+  await page.getByRole("tab", { name: "Trade Cycles" }).click();
+  await expect(page.getByRole("button", { name: "Retry Journal Read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Trade Cycles", exact: true })).toHaveCount(0);
+  failFull = false;
+  await page.getByRole("button", { name: "Retry Journal Read" }).click();
+  await expect(page.getByRole("heading", { name: "Trade Cycles", exact: true })).toBeVisible();
+  expect(scopes.at(-1)).toBe("full");
+});

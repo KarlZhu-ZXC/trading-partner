@@ -28,7 +28,7 @@ test("interactive technical chart loads indicators, SMC, styles, and drawing con
   });
 
   await page.goto("/capabilities");
-  await page.getByRole("button", { name: "Close Copilot Panel", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Open Copilot Panel", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open Chart", exact: true }).click();
 
   const chart = page.getByRole("img", { name: /interactive candlestick chart/i });

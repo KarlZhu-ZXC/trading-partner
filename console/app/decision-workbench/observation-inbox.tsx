@@ -420,8 +420,8 @@ export function ObservationInbox({
     >
       <p className="card-note">
         Each source note is retained as immutable revisions. Unprefixed text is
-        your view; explicitly named prefixes remain external. Only full-text
-        model drafts can enter Decision review.
+        your view; explicitly named prefixes remain external. Full-text notes
+        can be reviewed directly; model interpretations are optional drafts.
       </p>
 
       {visible.length === 0 ? (

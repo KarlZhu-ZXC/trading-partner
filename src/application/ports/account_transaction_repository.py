@@ -21,6 +21,17 @@ class AccountTransactionRepository(Protocol):
         limit: int | None,
     ) -> tuple[AccountTransaction, ...]: ...
 
+    def list_for_note(
+        self,
+        instrument_id: str,
+        *,
+        end: datetime,
+        limit: int,
+        related_instrument_ids: tuple[str, ...] = (),
+        excluded_instrument_ids: tuple[str, ...] = (),
+        include_symbol_options: bool = True,
+    ) -> tuple[AccountTransaction, ...]: ...
+
     def append_coverage(
         self, receipts: tuple[AccountActivityCoverageReceipt, ...]
     ) -> tuple[AccountActivityCoverageReceipt, ...]: ...

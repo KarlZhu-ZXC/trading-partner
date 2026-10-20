@@ -567,6 +567,49 @@ class ReviewItemRefreshService:
             due_at=question.due_at,
         )
 
+    def collect_operations(self) -> ReviewItemRefreshBatch:
+        """Read unresolved actions only; notes need no archive review sweep."""
+
+        observed: set[ReviewItemSourceType] = set()
+        fully_observed: set[ReviewItemSourceType] = set()
+        projections: list[ReviewItemProjection] = []
+        try:
+            agent_actions = self._agent_pending_actions.list_unresolved(
+                now=self._clock.now(),
+                limit=self._SOURCE_LIMIT,
+            )
+        except Exception:  # noqa: BLE001 - absence must not resolve prior items
+            agent_actions = ()
+        else:
+            observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
+            if len(agent_actions) < self._SOURCE_LIMIT:
+                fully_observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
+
+        try:
+            broker_intents = self._broker_orders.list_unresolved(limit=self._SOURCE_LIMIT)
+        except Exception:  # noqa: BLE001 - absence must not resolve prior items
+            broker_intents = ()
+        else:
+            observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
+            if len(broker_intents) < self._SOURCE_LIMIT:
+                fully_observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
+
+        projections.extend(
+            projection
+            for item in operational_attention_items(
+                agent_actions=agent_actions,
+                broker_intents=broker_intents,
+            )
+            if (projection := review_item_projection(item)) is not None
+        )
+
+        return ReviewItemRefreshBatch(
+            projections=tuple(projections),
+            observed_source_types=frozenset(observed),
+            authoritative_source_refs=frozenset(),
+            fully_observed_source_types=frozenset(fully_observed),
+        )
+
     def collect(
         self,
         agenda: dict[str, Any],
@@ -633,35 +676,10 @@ class ReviewItemRefreshService:
                 if len(observation_reviews) < self._SOURCE_LIMIT:
                     fully_observed.add(ReviewItemSourceType.OBSERVATION_REVIEW_DUE)
 
-            try:
-                agent_actions = self._agent_pending_actions.list_unresolved(
-                    now=self._clock.now(),
-                    limit=self._SOURCE_LIMIT,
-                )
-            except Exception:  # noqa: BLE001 - absence must not resolve prior items
-                agent_actions = ()
-            else:
-                observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
-                if len(agent_actions) < self._SOURCE_LIMIT:
-                    fully_observed.add(ReviewItemSourceType.AGENT_PENDING_ACTION)
-
-            try:
-                broker_intents = self._broker_orders.list_unresolved(limit=self._SOURCE_LIMIT)
-            except Exception:  # noqa: BLE001 - absence must not resolve prior items
-                broker_intents = ()
-            else:
-                observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
-                if len(broker_intents) < self._SOURCE_LIMIT:
-                    fully_observed.add(ReviewItemSourceType.BROKER_ORDER_INTENT)
-
-            projections.extend(
-                projection
-                for item in operational_attention_items(
-                    agent_actions=agent_actions,
-                    broker_intents=broker_intents,
-                )
-                if (projection := review_item_projection(item)) is not None
-            )
+            operations = self.collect_operations()
+            projections.extend(operations.projections)
+            observed.update(operations.observed_source_types)
+            fully_observed.update(operations.fully_observed_source_types)
         else:
             projections = [item for item in projections if item.subject_id == subject_id]
 

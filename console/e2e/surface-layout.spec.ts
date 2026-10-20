@@ -27,6 +27,8 @@ for (const theme of ["light", "dark"]) test(`all Console surfaces fit supported 
       if (route !== "/lan-login") await expect(page.getByRole("button", { name: `${theme === "light" ? "Light" : "Dark"} Theme`, exact: true })).toHaveAttribute("aria-pressed", "true");
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       if (width > 1100 && route !== "/lan-login") {
+        const openCopilot = page.getByRole("button", { name: "Open Copilot Panel", exact: true });
+        if (await openCopilot.isVisible()) await openCopilot.click();
         const panel = page.locator("#console-agent-panel");
         await expect.poll(() => panel.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
         const handle = page.getByRole("separator", { name: "Resize Copilot Panel" });

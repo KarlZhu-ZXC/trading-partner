@@ -15,6 +15,11 @@ export function useResearchChangeReview(subjectId: string) {
     const query = new URLSearchParams(window.location.search);
     const requested = query.get("subject_id");
     const changeId = query.get("change_id");
+    const revisionId = query.get("note_revision_id");
+    if (revisionId) {
+      setPinnedRevisionId(revisionId);
+      setPinnedSubjectId(requested);
+    }
     if (requested && changeId) {
       const baseline = query.get("changes_baseline");
       const returnParams = new URLSearchParams({ change_id: changeId });
@@ -28,11 +33,11 @@ export function useResearchChangeReview(subjectId: string) {
     }
   }, []);
   const pinnedObservationApi = useApi<Dict>(
-    `/api/observations/${encodeURIComponent(pinnedRevisionId ?? "")}/revision?subject_id=${encodeURIComponent(pinnedSubjectId ?? "")}`,
-    { enabled: Boolean(pinnedRevisionId && pinnedSubjectId && subjectId === pinnedSubjectId) },
+    `/api/observations/${encodeURIComponent(pinnedRevisionId ?? "")}/revision${pinnedSubjectId ? `?subject_id=${encodeURIComponent(pinnedSubjectId)}` : ""}`,
+    { enabled: Boolean(pinnedRevisionId && (!pinnedSubjectId || subjectId === pinnedSubjectId)) },
   );
   const pinnedObservation = asDict(pinnedObservationApi.data?.data);
-  const pinnedRevisionMatches = text(asDict(pinnedObservation.revision).note_revision_id, "") === pinnedRevisionId && subjectId === pinnedSubjectId;
+  const pinnedRevisionMatches = text(asDict(pinnedObservation.revision).note_revision_id, "") === pinnedRevisionId && (!pinnedSubjectId || subjectId === pinnedSubjectId);
   const changeReviewApi = useApi<Dict>(
     `/api/research/${encodeURIComponent(pinnedSubjectId ?? "")}/changes?offset=${changeReviewContext?.offset ?? "0"}&limit=25&change_id=${encodeURIComponent(changeReviewContext?.id ?? "")}${changeReviewContext?.baseline ? `&baseline_decision_id=${encodeURIComponent(changeReviewContext.baseline)}` : ""}`,
     { enabled: Boolean(changeReviewContext && pinnedSubjectId && subjectId === pinnedSubjectId) },
@@ -77,5 +82,10 @@ export function ResearchChangeReview({ context, subjectId, canRecord, onRecord }
 export function PinnedObservationStatus({ context }: { context: ReturnType<typeof useResearchChangeReview> }) {
   if (!context.pinnedRevisionId) return null;
   const api = context.pinnedObservationApi;
-  return <>{api.loading ? <p role="status">Loading exact Observation revision…</p> : null}{api.error ? <ErrorNote>{api.error}<Button onClick={api.refresh}>Retry Exact Revision</Button></ErrorNote> : null}</>;
+  const revisionMatches = text(asDict(asDict(api.data?.data).revision).note_revision_id, "") === context.pinnedRevisionId;
+  return <>
+    {!context.researchReturnHref && <p>This review keeps the exact note revision. Choose Record Independent Decision to review it without a model interpretation or discussion. <QuickLink href="/">Return to Your Notes</QuickLink></p>}
+    {api.loading ? <p role="status">Loading exact Observation revision…</p> : null}
+    {api.error || (!api.loading && !revisionMatches) ? <ErrorNote>{api.error ?? "The requested note revision is unavailable. No other revision has been substituted."}<Button onClick={api.refresh}>Retry Exact Revision</Button></ErrorNote> : null}
+  </>;
 }

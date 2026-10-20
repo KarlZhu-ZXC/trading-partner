@@ -42,6 +42,15 @@
 .root :global(.workspace-pane-toggle:active) { transform:translateY(1px); }
 .root :global(.workspace-pane-backdrop) { display:none; }
 
+@media (min-width: 1101px) {
+  .root:global(.app-shell.sidebar-collapsed) :global(.sidebar-advanced > summary) {
+    justify-content:center; gap:0; padding:10px 8px;
+  }
+  .root:global(.app-shell.sidebar-collapsed) :global(.sidebar-advanced .disclosure-meta) {
+    display:none;
+  }
+}
+
 @media (max-width: 1050px) {
   .root :global(.main-content) { --content-gutter:28px; padding:0 var(--content-gutter) 50px; }
 }

@@ -1,5 +1,5 @@
 {
-  "surface_schema_version": "mcp-vnext-shadow-v15",
+  "surface_schema_version": "mcp-vnext-shadow-v16",
   "operation_count": 109,
   "tool_renames": {
     "investment_case_read": "research_get",
@@ -150,6 +150,11 @@
       "reason": "v12 adds opt-in bars for the complete Console chart result; ordinary calls keep bars disabled.",
       "legacy_contract_sha256": "e3dc1cfcab1fd02d5478dfb64d10200313700d013b01a3a3468a242f03a48955",
       "current_contract_sha256": "3a4e6afeb15600c50aac6cb2a9d5ee739cf8d098ac7ffd3f99a64c1269649493"
+    },
+    "view_get:note": {
+      "reason": "v16 adds optional stable account-context pagination; existing note and private-content gates are unchanged.",
+      "legacy_contract_sha256": "45189d1cd2b2e880c8921a40e8dc401c39c47b912fa7777e21bdfad8941f13e8",
+      "current_contract_sha256": "f5b9d1cc0e54362007c1024f426876c8fa9ae2bff9800d315d3aff4369f1e626"
     }
   },
   "operations": [
@@ -1429,7 +1434,7 @@
       "view_get",
       "note",
       "view_get",
-      "45189d1cd2b2e880c8921a40e8dc401c39c47b912fa7777e21bdfad8941f13e8",
+      "f5b9d1cc0e54362007c1024f426876c8fa9ae2bff9800d315d3aff4369f1e626",
       [
         "READ_DURABLE",
         false,

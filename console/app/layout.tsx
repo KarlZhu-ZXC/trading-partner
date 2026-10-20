@@ -35,14 +35,14 @@ const appearanceInitScript = `
   }
 
   try {
-    var agentRailCollapsed = agentRequested ? false : overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") === "true";
+    var agentRailCollapsed = agentRequested ? false : overlayViewport || localStorage.getItem("trading-partner-agent-rail-collapsed") !== "false";
     document.documentElement.classList.toggle("agent-rail-collapsed", agentRailCollapsed);
     var storedAgentRailWidth = Number(localStorage.getItem("trading-partner-agent-rail-width"));
     if (Number.isFinite(storedAgentRailWidth) && storedAgentRailWidth >= ${AGENT_RAIL_MIN_WIDTH} && storedAgentRailWidth <= ${AGENT_RAIL_MAX_WIDTH}) {
       document.documentElement.style.setProperty("--agent-rail-user-width", storedAgentRailWidth + "px");
     }
   } catch (_) {
-    document.documentElement.classList.remove("agent-rail-collapsed");
+    document.documentElement.classList.add("agent-rail-collapsed");
   }
 `;
 

@@ -21,16 +21,11 @@ import {
   ErrorNote,
   MetricTile,
   RefreshButton,
-  formatBytes,
   formatDate,
-  monitorAnchorId,
-  shortId,
   Table,
 } from "./components/ui";
 import { envelopeData, listOf, postApi, useApi } from "./lib/api";
 import { buildConsoleNotices } from "./lib/attention";
-import { agendaSummaryFromPayload } from "./lib/agenda-presentation";
-import { monitorRunPresentation } from "./lib/monitor-runs";
 
 type Dict = Record<string, unknown>;
 
@@ -69,7 +64,11 @@ export default function OverviewPage() {
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
   const [submittedReceipt, setSubmittedReceipt] = useState<Dict | null>(null);
   const accountLabel = useAccountLabel();
-  const result = useApi<Dict>("/api/overview");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const fullOverview = reviewMode !== "notes" || detailsOpen;
+  const noteOverview = useApi<Dict>("/api/overview?scope=notes", { enabled: !fullOverview });
+  const backgroundOverview = useApi<Dict>("/api/overview", { enabled: fullOverview });
+  const result = fullOverview ? backgroundOverview : noteOverview;
   const reviewCoverage = result.data?.review_coverage as Dict | undefined;
   const scanReceipt = submittedReceipt ?? result.data?.recent_refresh_receipt as Dict | undefined;
   const scanWindow = scanReceipt?.receipt_window as Dict | undefined;
@@ -102,9 +101,7 @@ export default function OverviewPage() {
   const runs = listOf<Dict>(runsData, "runs");
   const triggered = activeMonitorItems.flatMap((item) => listOf<Dict>(item, "rule_states"))
     .filter((rule) => rule.state === "TRIGGERED").length;
-  const maintenance = result.data?.maintenance as Dict | undefined;
   const notifications = result.data?.notifications as Dict | undefined;
-  const sync = result.data?.post_market_sync as Dict | undefined;
   const quality = health?.data_quality as Dict | undefined;
   const qualityIssues = listOf<Dict>(quality, "issues");
   const qualityAccounts = listOf<Dict>(quality, "account_snapshots");
@@ -149,30 +146,34 @@ export default function OverviewPage() {
   const pendingOperationalReviews = [...new Map([...reviewItems, ...listOf<Dict>(result.data, "workflow_attention_projection")]
     .filter(item => ["BROKER_ORDER_INTENT", "AGENT_PENDING_ACTION"].includes(String(item.source_type)) && !["RESOLVED", "AUTO_RESOLVED", "CANCELLED"].includes(String(item.status)))
     .map(item => [`${String(item.source_type)}:${String(item.source_ref ?? item.source_key ?? item.review_item_id)}`, item])).values()];
-  const operationalActions = notices.actionItems.filter((item) => item.href.startsWith("/operations") || item.key === "outbox-dead");
+  const operationalActions = notices.actionItems.filter((item) => ["/operations", "/monitors", "/portfolio"].some(prefix => item.href.startsWith(prefix)) || item.key === "outbox-dead");
+  const exceptionCoverageIncomplete = result.data && (
+    reviewCoverage?.complete === false
+    || ["health", "monitor_dashboard", "recent_runs"].some(key => (result.data?.[key] as Dict | undefined)?.ok === false)
+    || (notifications?.ok === false)
+  );
   const groupedInboxCount = notices.actionItems.length + (otherReviewCount > 0 ? 1 : 0);
-  const agendaCounts = agendaSummaryFromPayload(result.data?.agenda_summary);
 
   return (
     <ConsoleShell active="overview">
-      <HorizontalTabs items={[{id:"notes",label:"Your Notes"},{id:"today",label:"Changes and Risks"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={setReviewMode} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
+      <HorizontalTabs items={[{id:"notes",label:"Your Notes"},{id:"today",label:"Changes and Risks"},{id:"week",label:"Weekly Review"}]} value={reviewMode} onChange={value => { setDetailsOpen(false); setReviewMode(value); }} ariaLabel="Review Window" idPrefix="review-window" panelIdPrefix="review-window-panel" />
       <section id={`review-window-panel-${reviewMode}`} role="tabpanel" aria-labelledby={`review-window-${reviewMode}`}>{reviewMode === "notes" ? <NoteDesk /> : reviewMode === "today" ? <TodayReview /> : <WeeklyReview />}</section>
       {result.error && <div role="status">
-        {result.data && <><ErrorNote>{result.error}</ErrorNote><p>Showing the last loaded overview. Refresh to check for newer items.</p></>}
+        <ErrorNote>{result.error}</ErrorNote>
+        <p>{result.data ? "Showing the last loaded overview. Refresh to check for newer items." : "Risk and operational coverage is unavailable. This does not mean there are no pending actions."}</p>
         <Button disabled={result.loading} onClick={result.refresh}>Retry Overview</Button>
       </div>}
       {result.loading && result.data && <p role="status">Refreshing overview. Current items remain visible.</p>}
+      {reviewMode === "notes" && exceptionCoverageIncomplete && <ErrorNote>Some risk or recovery sources are incomplete or unavailable. Available signals remain visible; this is not an all-clear.</ErrorNote>}
       {reviewMode === "notes" && (operationalActions.length > 0 || pendingOperationalReviews.length > 0 || triggered > 0 || blindMonitorCount > 0) && <Card kicker="EXCEPTIONS" title="Risk and Operations"><p>Risk and operational signals remain separate from note discussions.</p>{triggered > 0 && <LinkButton href="/monitors">Inspect {triggered} Triggered Rules</LinkButton>}{blindMonitorCount > 0 && <LinkButton href="/monitors">Inspect Unavailable Monitor Facts</LinkButton>}{operationalActions.map(item => <p key={item.key}><LinkButton href={item.href}>{item.title}</LinkButton></p>)}{pendingOperationalReviews.map(item => <p key={String(item.review_item_id ?? item.source_key)}><LinkButton href={String(item.href ?? "/decision-workbench")}>{String(item.title ?? "Inspect Pending Operational Action")}</LinkButton></p>)}</Card>}
-      <Disclosure key={reviewMode} title="Background Workspace Details" defaultOpen={reviewMode !== "notes"}>
+      <Disclosure key={reviewMode} title="Background Workspace Details" defaultOpen={reviewMode !== "notes"} onToggle={setDetailsOpen}>
+      {fullOverview && <>
       <DataBoundary loading={result.loading && result.data === null} error={result.data ? null : result.error}>
-        <Card className="span-12" kicker="EVENT COVERAGE" title="Catalyst Pulse" subtitle="Upcoming schedule and unresolved timing gaps" action={<QuickLink href="/agenda">Open /agenda</QuickLink>}>
-          <div className="agenda-summary-grid">
-            <MetricTile label="Upcoming 7 Days" value={String(agendaCounts.upcoming7d)} />
-            <MetricTile label="Upcoming" value={String(agendaCounts.upcoming)} />
-            <MetricTile label="Overdue" value={String(agendaCounts.overdue)} />
-            <MetricTile label="Coverage Gap" value={String(agendaCounts.coverageGap)} />
-          </div>
-        </Card>
+        <div className="workspace-controls">
+          <QuickLink href="/operations">System Health and Maintenance</QuickLink>
+          <QuickLink href="/monitors">Monitor Status and Runs</QuickLink>
+          <QuickLink href="/agenda">Catalyst Agenda</QuickLink>
+        </div>
 
         <div className="summary-strip">
           <div>
@@ -271,99 +272,9 @@ export default function OverviewPage() {
             </div>
           </Card>
 
-          <Card
-            className="span-8"
-            kicker="MONITOR PULSE"
-            title="Current Monitor Posture"
-            subtitle="Triggered and unavailable rules first; quiet rules are summarized"
-            action={<QuickLink href="/monitors">View All</QuickLink>}
-          >
-            {activeMonitorItems.length === 0 ? (
-              <Empty>No Monitor definitions yet.</Empty>
-            ) : (
-              <div className="monitor-overview-list">
-                {activeMonitorItems.slice(0, 4).map((item) => {
-                  const monitor = (item.monitor ?? {}) as Dict;
-                  const states = listOf<Dict>(item, "rule_states");
-                  const attentionStates = states.filter((state) => String(state.state ?? "").toUpperCase() !== "QUIET");
-                  const triggeredStates = attentionStates.filter((state) => String(state.state ?? "").toUpperCase() === "TRIGGERED");
-                  const unavailableStates = attentionStates.length - triggeredStates.length;
-                  const run = (item.latest_run ?? {}) as Dict;
-                  return (
-                    <article className="monitor-row" key={String(monitor.monitor_id)}>
-                      <div className="symbol-tile">{shortId(monitor.primary_instrument_id)}</div>
-                      <div className="monitor-copy">
-                        <Link
-                          className="monitor-title-link"
-                          href={`/monitors#${monitorAnchorId(monitor.monitor_id)}`}
-                        >
-                          {String(monitor.name ?? "Untitled Monitor")}
-                        </Link>
-                        <span>Created {formatDate(item.monitor_created_at ?? monitor.created_at)} · {String(monitor.cadence ?? "—")} · v{String(monitor.version ?? "—")}</span>
-                      </div>
-                      <div className="monitor-state-summary" aria-label="Rule State Summary">
-                        <strong>{triggeredStates.length} Triggered</strong>
-                        <span>{unavailableStates ? `${unavailableStates} Unavailable · ` : ""}{states.length - attentionStates.length} Quiet</span>
-                      </div>
-                      <div className="run-meta">
-                        <Badge value={String(run.status ?? monitor.status ?? "—")} />
-                        <span>{formatDate(run.completed_at)}</span>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
-          <Card className="span-4" kicker="AUTOMATION" title="Post-Market Run" subtitle="Latest scheduled account and Watchlist refresh">
-            <div className="status-hero">
-              <Badge value={String(sync?.health ?? "UNKNOWN")} />
-              <strong>{String(sync?.run_status ?? "No receipt")}</strong>
-              <span>Latest Session {String(sync?.receipt_session_date ?? "—")}</span>
-            </div>
-            <dl className="detail-list">
-              <div><dt>Account Sync</dt><dd>{String(sync?.portfolio_status ?? "—")}</dd></div>
-              <div><dt>Watchlist Sync</dt><dd>{String(sync?.watchlist_status ?? "—")}</dd></div>
-              <div><dt>OAuth</dt><dd><Badge value={String((sync?.schwab_oauth as Dict | undefined)?.state ?? "—")} /></dd></div>
-            </dl>
-          </Card>
-
-          <Card className="span-7" kicker="OBSERVATION HISTORY" title="Recent Monitor Runs" subtitle="Latest immutable evaluation batches">
-            {runs.length === 0 ? <Empty>No run history yet.</Empty> : (
-              <div className="table-wrap">
-                <Table>
-                  <thead><tr><th>Target / Monitor</th><th>Completed</th><th>Cadence</th><th>Rules</th><th>Events</th><th>Status</th></tr></thead>
-                  <tbody>
-                    {runs.slice(0, 8).map((run) => {
-                      const identity = monitorRunPresentation(run, monitorItems);
-                      return (
-                        <tr key={String(run.run_id)}>
-                          <td><div className="run-target-cell"><strong>{identity.symbolLabel}</strong><small>{identity.nameLabel}</small></div></td>
-                          <td>{formatDate(run.completed_at)}</td>
-                          <td className="mono">{String(run.cadence ?? "MANUAL")}</td>
-                          <td>{String(run.rules_evaluated ?? 0)}</td>
-                          <td>{String(run.events_created ?? 0)}</td>
-                          <td><Badge value={String(run.status ?? "—")} /></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
-              </div>
-            )}
-          </Card>
-
-          <Card className="span-5" kicker="OPERATIONS" title="Local Runtime" subtitle="Database, backups, and notification delivery">
-            <div className="metric-pairs">
-              <MetricTile label="Database" value={formatBytes(maintenance?.database_bytes)} detail={String(maintenance?.database_filename ?? "—")} />
-              <MetricTile label="Backups" value={String(maintenance?.backup_files ?? 0)} detail={<>Latest {formatDate(maintenance?.latest_backup_at)}</>} />
-              <MetricTile label="Notifications Pending" value={String(notifications?.pending ?? 0)} detail={String(notifications?.provider ?? "Not configured")} />
-              <MetricTile label="Expired Cache" value={String(maintenance?.provider_cache_expired ?? 0)} detail="Removed only by explicit command" />
-            </div>
-          </Card>
         </div>
       </DataBoundary>
+      </>}
       </Disclosure>
     </ConsoleShell>
   );

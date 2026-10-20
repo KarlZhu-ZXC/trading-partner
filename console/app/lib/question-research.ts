@@ -39,8 +39,18 @@ export function validQuestionContext(value: unknown): value is QuestionResearchC
     && v.source_refs.every((ref) => ref && ["EVIDENCE", "OBSERVATION", "MONITOR"].includes(ref.kind) && id(ref.source_id)));
 }
 
-export function offerQuestionResearch(prepared: PreparedQuestionResearch): boolean {
+export async function offerQuestionResearch(prepared: PreparedQuestionResearch): Promise<boolean> {
   if (!validQuestionContext(prepared.context) || !prepared.prompt || !prepared.question_context_token) return false;
+  if (!document.getElementById("console-agent-panel")) {
+    const ready = new Promise<boolean>(resolve => {
+      const finish = (loaded: boolean) => { clearTimeout(timer); window.removeEventListener("tp:copilot-ready", receive); resolve(loaded); };
+      const receive = () => finish(true);
+      const timer = window.setTimeout(() => finish(false), 10000);
+      window.addEventListener("tp:copilot-ready", receive, { once: true });
+    });
+    window.dispatchEvent(new Event("tp:copilot-load"));
+    if (!await ready) return false;
+  }
   // A listener accepts explicitly. No storage, navigation payload, or auto-send.
   return !window.dispatchEvent(new CustomEvent(QUESTION_RESEARCH_EVENT, { detail: prepared, cancelable: true }));
 }

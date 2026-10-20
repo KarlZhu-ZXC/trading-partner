@@ -491,6 +491,32 @@ def compact_tool_result(
                     encoded = encode_result(projected)
     if len(encoded) <= max_bytes:
         return projected
+    if capability == "view_get" and operation == "note" and isinstance(projected, dict):
+        data = projected.get("data")
+        if isinstance(data, dict) and isinstance(data.get("portfolio_context"), dict):
+            # A continuation cursor covers an entire financial page. Never allow
+            # generic array compaction to skip rows while retaining that cursor.
+            projected["data"] = {
+                key: data[key]
+                for key in (
+                    "note_revision_id",
+                    "instrument_id",
+                    "portfolio_context",
+                    "formal_judgment_updated",
+                )
+                if key in data
+            }
+            if len(encode_result(projected)) <= max_bytes:
+                return projected
+            projected["data"]["portfolio_context"] = {
+                "status": "UNAVAILABLE",
+                "items": [],
+                "next_cursor": None,
+                "warning_codes": ["ACCOUNT_CONTEXT_TRANSPORT_LIMIT"],
+                "next_read": "Use the full Console note context; no rows were advanced.",
+            }
+            if len(encode_result(projected)) <= max_bytes:
+                return projected
     if capability == "market_data_get" and operation == "quotes":
         compact_quotes = _compact_quote_batch(projected, original=encoded, max_bytes=max_bytes)
         if compact_quotes is not None:

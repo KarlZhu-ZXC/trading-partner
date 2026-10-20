@@ -1003,6 +1003,7 @@ export function AgentRail({ collapsed, overlayViewport, onCollapsedChange }: Age
       onCollapsedChange(false);
     };
     window.addEventListener(QUESTION_RESEARCH_EVENT, receive);
+    window.dispatchEvent(new Event("tp:copilot-ready"));
     return () => window.removeEventListener(QUESTION_RESEARCH_EVENT, receive);
   }, [composer, composerImages.length, selectedStreaming, durableTurnActive, actionBusy, editingMessageId, onCollapsedChange]);
 

@@ -215,7 +215,7 @@ export function QuestionResearchPanel({ subjectId, questions: questionValues, on
     try {
       const response = await getJson(`/api/research/${encodeURIComponent(subjectId)}/questions/${encodeURIComponent(researchQuestion.question_id)}/research-context?${query}`) as { data: PreparedQuestionResearch };
       if (response.data.context.subject_id !== subjectId || response.data.context.question_id !== researchQuestion.question_id) throw new Error("Question scope changed.");
-      if (!offerQuestionResearch(response.data)) throw new Error("Copilot has an existing draft or active turn. Finish or clear it before preparing this question.");
+      if (!await offerQuestionResearch(response.data)) throw new Error("Copilot has an existing draft or active turn. Finish or clear it before preparing this question.");
       setPreparationMessage("Question and cutoff prepared in Copilot. Review the prompt and budget, then press Send to start Research.");
       setResearchQuestion(null);
     } catch (error) { setPreparationMessage(error instanceof Error ? error.message : "Question could not be prepared."); }

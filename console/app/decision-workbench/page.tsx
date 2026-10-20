@@ -43,6 +43,7 @@ import { CycleAdjustmentEditor } from "./cycle-adjustment-editor";
 type Dict = Record<string, unknown>;
 
 type JournalWorkbenchResponse = {
+  scope?: "full" | "notes";
   selected_subject_id?: unknown;
   subjects?: SubjectAggregate[];
   partial_failures?: string[];
@@ -453,8 +454,23 @@ function CurrentViewCard({
   return <Card kicker="JUDGMENT SYSTEM OF RECORD" title="Current Confirmed View" description={text(currentView.subject_title, text(subject.title, "Select a Research Subject"))} action={currentView.review ? <Badge value={upper(asDict(currentView.review).status, "CONFIRMED")} tone="good" /> : undefined}>{content}</Card>;
 }
 
-function initialJournalLoading(workbenchLoading: boolean, workbenchData: unknown, notesLoading: boolean, notesData: unknown, notesSelected: boolean, pinned: string | null) {
-  return (workbenchLoading && workbenchData === null) || (notesSelected && !pinned && notesLoading && notesData === null);
+function journalReadState(
+  navigationReady: boolean,
+  scope: "full" | "notes",
+  workbench: { loading: boolean; data: JournalWorkbenchResponse | null; error: string | null },
+  observations: { loading: boolean; data: unknown; error: string | null },
+  pinnedRevisionId: string | null,
+) {
+  const scopeMismatch = Boolean(workbench.data?.scope && workbench.data.scope !== scope);
+  const needsInbox = scope === "notes" && !pinnedRevisionId;
+  return {
+    loading: !navigationReady
+      || (scopeMismatch && !workbench.error)
+      || (workbench.loading && workbench.data === null)
+      || (needsInbox && observations.loading && observations.data === null),
+    error: workbench.error || (needsInbox ? observations.error : null),
+    scopeError: scopeMismatch && Boolean(workbench.error),
+  };
 }
 
 export default function DecisionWorkbenchPage() {
@@ -486,6 +502,7 @@ export default function DecisionWorkbenchPage() {
   const [captureContextError, setCaptureContextError] = useState<string | null>(null);
   const [supersedesDecisionId, setSupersedesDecisionId] = useState<string | null>(null);
   const [journalTab, setJournalTab] = useState<JournalTab>("overview");
+  const [navigationReady, setNavigationReady] = useState(false);
   const [cycleOffset, setCycleOffset] = useState(0);
   const [cyclePageSize, setCyclePageSize] = useState<4 | 6 | 8 | 10>(6);
   const [behaviorReviewBusy, setBehaviorReviewBusy] = useState(false);
@@ -524,7 +541,9 @@ export default function DecisionWorkbenchPage() {
   const periodWindowValid = selectedPeriod.valid;
   const activeWindowValid = periodWindowValid || journalTab === "notes" || journalTab === "reviews";
   const usesActivityFilters = journalTab !== "notes" && journalTab !== "reviews";
+  const workbenchScope = journalTab === "notes" ? "notes" : "full";
   const workbenchQuery = [
+    `scope=${workbenchScope}`,
     requestedSubjectId ? `subject_id=${encodeURIComponent(requestedSubjectId)}` : "",
     ...subjectFilters.map((value) => `subject_ids=${encodeURIComponent(value)}`),
     ...classificationFilters.map((value) => `classifications=${encodeURIComponent(value)}`),
@@ -533,7 +552,7 @@ export default function DecisionWorkbenchPage() {
     activityDateParameter("behavior_start", selectedPeriodStart, periodWindowValid, usesActivityFilters),
     activityDateParameter("behavior_end", selectedPeriodEnd, periodWindowValid, usesActivityFilters),
   ].filter(Boolean).join("&");
-  const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`, { enabled: activeWindowValid });
+  const workbenchApi = useApi<JournalWorkbenchResponse>(`/api/decision-workbench${workbenchQuery ? `?${workbenchQuery}` : ""}`, { enabled: navigationReady && activeWindowValid });
   const subjects = listOf<SubjectAggregate>(workbenchApi.data, "subjects");
   const activeSubjects = useMemo(
     () => subjects.filter((item) => upper(item.subject?.status) !== "ARCHIVED"),
@@ -544,11 +563,11 @@ export default function DecisionWorkbenchPage() {
   const researchReview = useResearchChangeReview(subjectId);
   const { pinnedRevisionId, pinnedObservationApi } = researchReview;
   const observationApi = useApi<ObservationInboxResponse>("/api/observations?limit=100", {
-    enabled: !pinnedRevisionId && (journalTab === "notes" || journalTab === "overview"),
+    enabled: navigationReady && !pinnedRevisionId && (journalTab === "notes" || journalTab === "overview"),
   });
   const currentViewApi = useApi<Dict>(
     `/api/current-view?subject_id=${encodeURIComponent(subjectId)}`,
-    { enabled: Boolean(subjectId) },
+    { enabled: navigationReady && journalTab === "overview" && Boolean(subjectId) },
   );
   useAgentPageContext({
     surface: "decision-workbench",
@@ -601,6 +620,7 @@ export default function DecisionWorkbenchPage() {
       if (JOURNAL_TABS.some((item) => item.id === value)) setJournalTab(value);
     };
     update();
+    setNavigationReady(true);
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
@@ -1742,8 +1762,9 @@ export default function DecisionWorkbenchPage() {
     }
   }
 
-  const loading = initialJournalLoading(workbenchApi.loading, workbenchApi.data, observationApi.loading, observationApi.data, journalTab === "notes", pinnedRevisionId);
-  const error = workbenchApi.error || (journalTab === "notes" && !pinnedRevisionId ? observationApi.error : null);
+  const { loading, error, scopeError } = journalReadState(
+    navigationReady, workbenchScope, workbenchApi, observationApi, pinnedRevisionId,
+  );
   const readyNotes = filteredExternalNotes.filter((item) => {
     const revision = asDict(item.revision);
     const interpretation = asDict(item.interpretation);
@@ -1800,7 +1821,7 @@ export default function DecisionWorkbenchPage() {
 
           <HorizontalTabs items={journalTabs} value={journalTab} onChange={selectJournalTab} ariaLabel="Journal Sections" idPrefix="journal-tab" panelIdPrefix="journal-panel" />
 
-          {!activeWindowValid ? <Empty>Correct the date range to view Journal results.</Empty> : <DataBoundary loading={loading} error={workbenchApi.data ? null : error}>
+          {!activeWindowValid ? <Empty>Correct the date range to view Journal results.</Empty> : scopeError ? <><ErrorNote>This Journal section could not be loaded. Retry to read its saved context.</ErrorNote><ActionButton onClick={workbenchApi.refresh}>Retry Journal Read</ActionButton></> : <DataBoundary loading={loading} error={workbenchApi.data ? null : error}>
       {error && workbenchApi.data && <ErrorNote>{error} · Showing the last loaded context; retry before recording a Decision.</ErrorNote>}
           <section id="journal-panel-overview" role="tabpanel" aria-labelledby="journal-tab-overview" hidden={journalTab !== "overview"} className="journal-panel-stack">
           <CurrentViewCard subjectId={subjectId} currentView={currentView} subject={subject} loading={currentViewApi.loading} error={currentViewApi.error} />
@@ -1943,8 +1964,8 @@ export default function DecisionWorkbenchPage() {
               analysisBusyId={noteAnalysisBusyId}
               reviewBusyId={noteReviewBusyId}
               onAnalyzeRevision={(revisionId) => { void analyzeObservation(revisionId); }}
-              positionContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allPositions.filter((position) => text(position.instrument_id, "") === noteInstrumentId); const quantity = matches.reduce((total, position) => total + number(position.quantity), 0); return <div><strong>{matches.length ? quantity : "No Position"}</strong><small>{matches.length ? `${matches.length} account position${matches.length === 1 ? "" : "s"}` : "No durable holding in the current snapshot"}</small></div>; }}
-              cyclesContext={(noteInstrumentId) => { if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allTradeCycles.filter((cycle) => text(cycle.instrument_id, "") === noteInstrumentId); const latest = [...matches].sort((left, right) => cycleReviewTime(right) - cycleReviewTime(left))[0]; const pnl = latest ? cyclePnlPresentation(latest) : null; return <div><strong>{matches.length} Cycle{matches.length === 1 ? "" : "s"}</strong><small>{latest && pnl ? `${upper(latest.status)} · ${pnl.label} ${pnl.value}${pnl.detail ? ` · ${pnl.detail}` : ""}` : "No durable Trade Cycle"}</small></div>; }}
+              positionContext={(noteInstrumentId) => { if (accountsUnavailable) return <div><strong>Unavailable</strong><small>Saved positions could not be read</small></div>; if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allPositions.filter((position) => text(position.instrument_id, "") === noteInstrumentId); const quantity = matches.reduce((total, position) => total + number(position.quantity), 0); return <div><strong>{matches.length ? quantity : "No Position"}</strong><small>{matches.length ? `${matches.length} account position${matches.length === 1 ? "" : "s"}` : "No durable holding in the current snapshot"}</small></div>; }}
+              cyclesContext={(noteInstrumentId) => { if (workbenchScope === "notes") return <div><strong>Not Loaded</strong><LinkButton href="#cycles">Open Trade Cycles</LinkButton></div>; if (!noteInstrumentId) return <div><strong>Unverified</strong><small>Canonical Instrument unresolved</small></div>; const matches = allTradeCycles.filter((cycle) => text(cycle.instrument_id, "") === noteInstrumentId); const latest = [...matches].sort((left, right) => cycleReviewTime(right) - cycleReviewTime(left))[0]; const pnl = latest ? cyclePnlPresentation(latest) : null; return <div><strong>{matches.length} Cycle{matches.length === 1 ? "" : "s"}</strong><small>{latest && pnl ? `${upper(latest.status)} · ${pnl.label} ${pnl.value}${pnl.detail ? ` · ${pnl.detail}` : ""}` : "No durable Trade Cycle"}</small></div>; }}
             />
           </section>
 

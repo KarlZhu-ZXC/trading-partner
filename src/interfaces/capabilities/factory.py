@@ -63,7 +63,7 @@ def create_capability_registry(
             container,
             surface_profile="mcp_vnext_shadow",
             public_tool_count=len(PUBLIC_TOOL_NAMES),
-            surface_schema_version="mcp-vnext-shadow-v15",
+            surface_schema_version="mcp-vnext-shadow-v16",
         ),
         instrument=build_instrument_adapters(container),
         research=build_research_adapters(container),

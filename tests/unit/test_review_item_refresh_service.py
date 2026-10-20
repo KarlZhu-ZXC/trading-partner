@@ -323,3 +323,34 @@ def test_scoped_decision_failure_is_reported_before_apply() -> None:
         }
     )
     assert review_items.calls == []
+
+
+def test_operational_read_preserves_unknown_orders_and_does_not_read_research() -> None:
+    decisions, observations = _Decisions(), _ObservationReviews()
+    agents = _AgentActions(error=RuntimeError("unavailable"))
+    brokers = _BrokerOrders((SimpleNamespace(
+        order_intent_id="order_unknown", status="UNKNOWN", symbol="SYNTH",
+        provider_status=None,
+    ),))
+    service, _, items = _service(
+        decisions=decisions, observations=observations, agents=agents, brokers=brokers,
+    )
+    batch = service.collect_operations()
+    assert decisions.calls == observations.calls == items.calls == []
+    assert len(agents.calls) == len(brokers.calls) == 1
+    assert [p.source_ref for p in batch.projections] == ["order_unknown"]
+    assert batch.observed_source_types == frozenset({ReviewItemSourceType.BROKER_ORDER_INTENT})
+    assert batch.fully_observed_source_types == batch.observed_source_types
+
+
+def test_operational_source_at_bound_remains_partial() -> None:
+    agents = _AgentActions(tuple(SimpleNamespace(
+        action_id=f"action_{i}", status=SimpleNamespace(value="PENDING"),
+        capability="watchlist_manage", operation="add",
+    ) for i in range(100)))
+    service, _, items = _service(agents=agents)
+    batch = service.collect_operations()
+    assert len(batch.projections) == 100
+    assert ReviewItemSourceType.AGENT_PENDING_ACTION in batch.observed_source_types
+    assert ReviewItemSourceType.AGENT_PENDING_ACTION not in batch.fully_observed_source_types
+    assert items.calls == []

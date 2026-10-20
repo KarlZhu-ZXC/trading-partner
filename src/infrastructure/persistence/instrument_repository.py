@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from application.ports.clock import Clock
 from domain.common.enums import AliasType, AssetType, Market
 from domain.instruments.models import Instrument, InstrumentAlias
+from domain.portfolio.note_instruments import option_symbol_context
 from infrastructure.persistence.orm import InstrumentAliasRow, InstrumentRow
 from infrastructure.persistence.repositories._mapping import (
     bool_from_db,
@@ -78,9 +79,7 @@ _LIKE_ESCAPE = "\\"
 def _escape_like(value: str, *, escape: str = _LIKE_ESCAPE) -> str:
     """Escape SQL LIKE wildcards and the escape character for literal match."""
     return (
-        value.replace(escape, escape + escape)
-        .replace("%", escape + "%")
-        .replace("_", escape + "_")
+        value.replace(escape, escape + escape).replace("%", escape + "%").replace("_", escape + "_")
     )
 
 
@@ -119,9 +118,7 @@ class SqlAlchemyInstrumentRepository:
         if asset_type is not None:
             stmt = stmt.where(InstrumentRow.asset_type == asset_type.value)
         stmt = stmt.order_by(InstrumentRow.instrument_id)
-        return tuple(
-            _instrument_to_domain(row) for row in self._session.scalars(stmt).all()
-        )
+        return tuple(_instrument_to_domain(row) for row in self._session.scalars(stmt).all())
 
     def find_by_alias(
         self,
@@ -142,9 +139,7 @@ class SqlAlchemyInstrumentRepository:
         if alias_type is not None:
             stmt = stmt.where(InstrumentAliasRow.alias_type == alias_type.value)
         stmt = stmt.order_by(InstrumentRow.instrument_id).distinct()
-        return tuple(
-            _instrument_to_domain(row) for row in self._session.scalars(stmt).all()
-        )
+        return tuple(_instrument_to_domain(row) for row in self._session.scalars(stmt).all())
 
     def list_aliases(self, instrument_id: str) -> tuple[InstrumentAlias, ...]:
         stmt = (
@@ -152,9 +147,7 @@ class SqlAlchemyInstrumentRepository:
             .where(InstrumentAliasRow.instrument_id == instrument_id)
             .order_by(InstrumentAliasRow.alias_id)
         )
-        return tuple(
-            _alias_to_domain(row) for row in self._session.scalars(stmt).all()
-        )
+        return tuple(_alias_to_domain(row) for row in self._session.scalars(stmt).all())
 
     def upsert_instrument(self, instrument: Instrument) -> None:
         now = self._clock.now()
@@ -235,6 +228,39 @@ class SqlAlchemyInstrumentRepository:
             row.is_primary = bool_to_db(alias.is_primary)
         self._session.flush()
 
+    def note_option_candidates(self, underlying_id: str, *, limit: int) -> tuple[Instrument, ...]:
+        if limit < 1:
+            return ()
+        prefix = f"option:US:{underlying_id.split(':', 2)[-1]}"
+        statement = (
+            select(InstrumentRow)
+            .where(
+                InstrumentRow.asset_type == AssetType.OPTION.value,
+                or_(
+                    InstrumentRow.underlying_instrument_id == underlying_id,
+                    InstrumentRow.instrument_id.startswith(prefix, autoescape=True),
+                ),
+            )
+            .order_by(InstrumentRow.instrument_id)
+            .execution_options(yield_per=128)
+        )
+        # Prefix siblings must not consume the metadata bound (e.g. M vs META).
+        # Explicit underlying links also admit adjusted/nonstandard roots.
+        values: list[Instrument] = []
+        rows = self._session.scalars(statement)
+        try:
+            for row in rows:
+                if (
+                    row.underlying_instrument_id == underlying_id
+                    or option_symbol_context(row.instrument_id, underlying_id) is not None
+                ):
+                    values.append(_instrument_to_domain(row))
+                    if len(values) == limit:
+                        break
+        finally:
+            rows.close()
+        return tuple(values)
+
     def search_name(
         self,
         market: Market,
@@ -255,6 +281,4 @@ class SqlAlchemyInstrumentRepository:
             .order_by(InstrumentRow.name, InstrumentRow.instrument_id)
             .limit(limit)
         )
-        return tuple(
-            _instrument_to_domain(row) for row in self._session.scalars(stmt).all()
-        )
+        return tuple(_instrument_to_domain(row) for row in self._session.scalars(stmt).all())

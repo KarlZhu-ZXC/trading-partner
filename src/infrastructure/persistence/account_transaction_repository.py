@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
+from heapq import nlargest
 
-from sqlalchemy import select
-from sqlalchemy.engine import Engine
+from sqlalchemy import false, or_, select
+from sqlalchemy.engine import Engine, RowMapping
 from sqlalchemy.orm import Session
 
 from domain.common.enums import VendorId
@@ -17,6 +19,7 @@ from domain.portfolio.enums import (
     AccountTransactionSide,
 )
 from domain.portfolio.models import AccountActivityCoverageReceipt, AccountTransaction
+from domain.portfolio.note_instruments import option_symbol_context
 from infrastructure.persistence.orm import AccountActivityCoverageReceiptRow, AccountTransactionRow
 
 
@@ -115,6 +118,67 @@ class SqlAlchemyAccountTransactionRepository:
         values.sort(key=lambda item: item.occurred_at, reverse=True)
         return tuple(values if limit is None else values[:limit])
 
+    def list_for_note(
+        self,
+        instrument_id: str,
+        *,
+        end: datetime,
+        limit: int,
+        related_instrument_ids: tuple[str, ...] = (),
+        excluded_instrument_ids: tuple[str, ...] = (),
+        include_symbol_options: bool = True,
+    ) -> tuple[AccountTransaction, ...]:
+        # Filter before hydrating: unrelated cash/other-symbol rows cannot consume
+        # the page. Datetime comparison stays aware for legacy offset timestamps.
+        symbol = instrument_id.split(":", 2)[-1]
+        prefix = f"option:US:{symbol}"
+        statement = select(AccountTransactionRow.__table__).where(
+            or_(
+                AccountTransactionRow.instrument_id == instrument_id,
+                AccountTransactionRow.instrument_id.in_(related_instrument_ids),
+                AccountTransactionRow.instrument_id.startswith(prefix, autoescape=True)
+                if include_symbol_options
+                else false(),
+            )
+        )
+        if excluded_instrument_ids:
+            statement = statement.where(
+                AccountTransactionRow.instrument_id.not_in(excluded_instrument_ids)
+            )
+        related_ids = frozenset(related_instrument_ids)
+        if limit < 1:
+            raise ValueError("limit must be positive")
+
+        @lru_cache(maxsize=256)
+        def related(identity: str) -> bool:
+            return (
+                identity == instrument_id
+                or identity in related_ids
+                or (
+                    include_symbol_options
+                    and option_symbol_context(identity, instrument_id) is not None
+                )
+            )
+
+        with Session(self._engine) as session:
+            # Stream candidates and retain only the bounded newest set. Keep aware
+            # Python time ordering: legacy ISO offsets cannot be sorted as strings,
+            # and SQLite julianday rounds sub-millisecond timestamp differences.
+            rows = session.execute(statement.execution_options(yield_per=128)).mappings()
+            values = (self._hydrate(row) for row in rows if related(row["instrument_id"] or ""))
+            return tuple(
+                nlargest(
+                    limit,
+                    (row for row in values if row.occurred_at <= end),
+                    key=lambda row: (
+                        row.occurred_at,
+                        row.provider.value,
+                        row.account_ref,
+                        row.provider_transaction_id,
+                    ),
+                )
+            )
+
     def append_coverage(
         self, receipts: tuple[AccountActivityCoverageReceipt, ...]
     ) -> tuple[AccountActivityCoverageReceipt, ...]:
@@ -196,22 +260,32 @@ class SqlAlchemyAccountTransactionRepository:
             return tuple(self._hydrate_coverage(row) for row in session.scalars(statement))
 
     @staticmethod
-    def _hydrate(row: AccountTransactionRow) -> AccountTransaction:
+    def _hydrate(row: AccountTransactionRow | RowMapping) -> AccountTransaction:
+        values = (
+            row
+            if isinstance(row, RowMapping)
+            else {
+                column.name: getattr(row, column.name)
+                for column in AccountTransactionRow.__table__.columns
+            }
+        )
         return AccountTransaction(
-            provider_transaction_id=row.provider_transaction_id,
-            account_ref=row.account_ref,
-            provider=VendorId(row.provider),
-            instrument_id=row.instrument_id,
-            kind=AccountTransactionKind(row.kind),
-            side=AccountTransactionSide(row.side) if row.side else None,
-            quantity=Decimal(row.quantity) if row.quantity is not None else None,
-            price=Decimal(row.price) if row.price is not None else None,
-            fees=Decimal(row.fees) if row.fees is not None else None,
-            currency=row.currency,
-            occurred_at=datetime.fromisoformat(row.occurred_at),
-            cash_amount=Decimal(row.cash_amount) if row.cash_amount is not None else None,
-            source_type=row.source_type,
-            mapping_version=row.mapping_version,
+            provider_transaction_id=values["provider_transaction_id"],
+            account_ref=values["account_ref"],
+            provider=VendorId(values["provider"]),
+            instrument_id=values["instrument_id"],
+            kind=AccountTransactionKind(values["kind"]),
+            side=AccountTransactionSide(values["side"]) if values["side"] else None,
+            quantity=Decimal(values["quantity"]) if values["quantity"] is not None else None,
+            price=Decimal(values["price"]) if values["price"] is not None else None,
+            fees=Decimal(values["fees"]) if values["fees"] is not None else None,
+            currency=values["currency"],
+            occurred_at=datetime.fromisoformat(values["occurred_at"]),
+            cash_amount=Decimal(values["cash_amount"])
+            if values["cash_amount"] is not None
+            else None,
+            source_type=values["source_type"],
+            mapping_version=values["mapping_version"],
         )
 
     @staticmethod

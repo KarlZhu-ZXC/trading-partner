@@ -1232,6 +1232,7 @@ async def append_activity_annotation(
 @app.get("/api/decision-workbench")
 async def decision_workbench(
     request: Request,
+    scope: Literal["full", "notes"] = "full",
     subject_id: str | None = Query(default=None, min_length=1, max_length=100),
     subject_ids: Annotated[list[str] | None, Query()] = None,
     classification: str | None = Query(default=None, min_length=1, max_length=64),
@@ -1244,7 +1245,8 @@ async def decision_workbench(
     """Aggregate one durable Research Subject decision loop for the Console.
 
     The endpoint deliberately performs no Provider refresh and no user/domain
-    write. It may refresh the internal ReviewItem materialized projection. It
+    write or ReviewItem materialization. The notes scope loads only Subject
+    choices, selected judgment state and saved positions. The full scope
     loads state for only the selected Subject, then reads the independent
     Monitor, Agenda, account, transaction, Retro, and Scorecard sections
     concurrently. Each section retains its own envelope so one failed read
@@ -1292,6 +1294,31 @@ async def decision_workbench(
                 },
             )
         )
+
+    if scope == "notes":
+        accounts = _canonical_subject_transport(await _durable_console_call(
+            request, "portfolio_get", {"request": {"operation": "positions"}},
+        ))
+        failures = []
+        if subject_list.get("ok") is False:
+            failures.append("research_subjects")
+        if selected is not None and (selected.get("state") or {}).get("ok") is False:
+            failures.append("research_state")
+        if accounts.get("ok") is False:
+            failures.append("accounts")
+        return {
+            "scope": "notes",
+            "selected_subject_id": selected_subject_id if selected is not None else None,
+            "subjects": subjects,
+            "subject_list": subject_list,
+            "accounts": accounts,
+            "partial_failures": failures,
+            "unloaded_sections": [
+                "monitors", "agenda", "timeline", "transactions", "trade_cycles",
+                "daily_equity", "performance_series", "behavior", "retro", "scorecards",
+                "activity_annotations", "order_intents", "behavior_review_runs", "review_items",
+            ],
+        }
 
     agenda_request: dict[str, Any] = {
         "operation": "agenda",
@@ -1518,6 +1545,7 @@ async def decision_workbench(
         except Exception:  # noqa: BLE001 - retain other durable stages when the queue fails
             partial_failures.append("review_items")
     return {
+        "scope": "full",
         "selected_subject_id": selected_subject_id if selected is not None else None,
         "subjects": subjects,
         "subject_list": subject_list,
@@ -1769,32 +1797,33 @@ async def observation_analysis_status(
 async def observation_exact_revision(
     request: Request,
     note_revision_id: str,
-    subject_id: str,
+    subject_id: str | None = None,
 ) -> JSONResponse:
     """Restore one exact private revision, independent of the latest inbox window."""
     services = _container(request).services
     item = services.external_notes.read_revision(note_revision_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Observation revision was not found")
-    state = await _invoke_capability(
-        request,
-        "research_get",
-        {"request": {"operation": "state", "case_id": subject_id}},
-        preserve_full_result=True,
-    )
-    data = state.get("data") if isinstance(state, dict) and state.get("ok") is True else None
-    subject = data.get("subject") if isinstance(data, dict) else None
-    if not isinstance(subject, dict):
-        # The public state shape uses case at the compatibility boundary.
-        subject = data.get("case") if isinstance(data, dict) else None
-    if (
-        not isinstance(subject, dict)
-        or not item.identity.primary_instrument_id
-        or subject.get("primary_instrument_id") != item.identity.primary_instrument_id
-    ):
-        raise HTTPException(
-            status_code=422, detail="Observation does not match this Research Subject"
+    if subject_id is not None:
+        state = await _invoke_capability(
+            request,
+            "research_get",
+            {"request": {"operation": "state", "case_id": subject_id}},
+            preserve_full_result=True,
         )
+        data = state.get("data") if isinstance(state, dict) and state.get("ok") is True else None
+        subject = data.get("subject") if isinstance(data, dict) else None
+        if not isinstance(subject, dict):
+            # The public state shape uses case at the compatibility boundary.
+            subject = data.get("case") if isinstance(data, dict) else None
+        if (
+            not isinstance(subject, dict)
+            or not item.identity.primary_instrument_id
+            or subject.get("primary_instrument_id") != item.identity.primary_instrument_id
+        ):
+            raise HTTPException(
+                status_code=422, detail="Observation does not match this Research Subject"
+            )
     review = services.external_note_reviews.get_for_revision(note_revision_id)
     payload = {
         "review_workflow_enabled": (
