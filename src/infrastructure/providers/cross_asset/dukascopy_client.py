@@ -655,6 +655,7 @@ _LEGACY_FALLBACK_WARNING = "DUKASCOPY_LEGACY_KEY_API_FALLBACK"
 _JETTA_CACHE_MAX_ITEMS = 512
 _QUOTE_LOOKBACK_DAYS = 7
 _QUOTE_FRESH_SECONDS = 120
+_JETTA_ACCESS_COOLDOWN_SECONDS = 300
 
 
 class DukascopySpotAdapter:
@@ -703,6 +704,22 @@ class DukascopySpotAdapter:
         # Completed Jetta buckets are immutable.  A bounded process-local cache
         # avoids repeated downloads without introducing a persistence schema.
         self._completed_bucket_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._jetta_access_blocked_until: datetime | None = None
+
+    def _require_jetta_access(self, *, operation: str) -> None:
+        until = self._jetta_access_blocked_until
+        now = self._clock.now()
+        if until is not None and now < until:
+            raise ProviderUnavailableError(
+                "Dukascopy Jetta access requires a WAF challenge; requests are cooling down",
+                retryable=False,
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": operation,
+                    "error_type": "waf_challenge",
+                    "retry_after_seconds": max(1, int((until - now).total_seconds())),
+                },
+            )
 
     @property
     def vendor_id(self) -> VendorId:
@@ -811,6 +828,8 @@ class DukascopySpotAdapter:
                 self._completed_bucket_cache.move_to_end(request_spec.url)
                 return loads_dukascopy_json(cached, operation=operation), True
 
+        self._require_jetta_access(operation=operation)
+
         request = HttpRequest(
             method="GET",
             url=request_spec.url,
@@ -837,6 +856,32 @@ class DukascopySpotAdapter:
                 retryable=exc.retryable,
             ) from None
 
+        # AWS WAF may return HTTP 202 with an empty HTML body, not an HTTP
+        # authentication/rate-limit error. Never parse/cache it as market data
+        # or retry it as a transient failure. Keep only the bounded diagnosis.
+        waf_action = next(
+            (
+                value
+                for key, value in response.headers.items()
+                if key.casefold() == "x-amzn-waf-action"
+            ),
+            "",
+        )
+        if waf_action.casefold().strip() in {"challenge", "captcha"}:
+            self._jetta_access_blocked_until = self._clock.now() + timedelta(
+                seconds=_JETTA_ACCESS_COOLDOWN_SECONDS
+            )
+            raise ProviderUnavailableError(
+                "Dukascopy Jetta access requires a WAF challenge",
+                retryable=False,
+                details={
+                    "vendor": self.vendor_id.value,
+                    "operation": operation,
+                    "error_type": "waf_challenge",
+                    "status_code": response.status_code,
+                    "retry_after_seconds": _JETTA_ACCESS_COOLDOWN_SECONDS,
+                },
+            )
         if response.status_code in {204, 404}:
             return None, False
         self._raise_for_jetta_status(response.status_code, operation=operation)

@@ -136,9 +136,7 @@ async def test_keyless_jetta_quote_preserves_swfx_basis_and_delay() -> None:
             ),
         }
     )
-    result = await DukascopySpotAdapter(transport, clock=_FixedClock()).get_quote(
-        _XAU, AS_OF
-    )
+    result = await DukascopySpotAdapter(transport, clock=_FixedClock()).get_quote(_XAU, AS_OF)
 
     assert result.value.bid == Decimal("2348.10")
     assert result.value.ask == Decimal("2348.40")
@@ -193,9 +191,7 @@ async def test_jetta_light_oil_quote_uses_rolling_cfd_unit_and_warnings() -> Non
             ),
         }
     )
-    result = await DukascopySpotAdapter(transport, clock=_FixedClock()).get_quote(
-        _LIGHT_OIL, AS_OF
-    )
+    result = await DukascopySpotAdapter(transport, clock=_FixedClock()).get_quote(_LIGHT_OIL, AS_OF)
 
     assert result.value.instrument_id == "cfd:OTC:LIGHT_CMD_USD"
     assert result.value.unit == "USD/bbl"
@@ -208,9 +204,7 @@ async def test_jetta_light_oil_quote_uses_rolling_cfd_unit_and_warnings() -> Non
 
 @pytest.mark.asyncio
 async def test_completed_bucket_is_cached_but_active_bucket_is_not() -> None:
-    payload = _candle_payload(
-        timestamp=datetime(2026, 6, 23, 14, tzinfo=UTC), base="31.0"
-    )
+    payload = _candle_payload(timestamp=datetime(2026, 6, 23, 14, tzinfo=UTC), base="31.0")
     path = "/v1/candles/hour/XAG-USD/BID/2026/6"
     transport = _FixtureTransport({path: (200, payload)})
     adapter = DukascopySpotAdapter(transport, clock=_FixedClock())
@@ -275,13 +269,93 @@ async def test_rate_limit_and_transport_failure_remain_typed_and_redacted() -> N
     with pytest.raises(ProviderRateLimitError):
         await limited.get_quote(_XAU, AS_OF)
 
-    down = DukascopySpotAdapter(
-        _TransportFailure(), clock=_FixedClock(), proxy_configured=True
-    )
+    down = DukascopySpotAdapter(_TransportFailure(), clock=_FixedClock(), proxy_configured=True)
     with pytest.raises(ProviderUnavailableError) as exc:
         await down.get_quote(_XAU, AS_OF)
     assert exc.value.details["network_route"] == "proxy"
     assert "jetta.dukascopy.com" not in exc.value.message
+
+
+class _WafTransport(_FixtureTransport):
+    async def send(self, request: HttpRequest) -> HttpResponse:
+        if urlsplit(request.url).hostname == "jetta.dukascopy.com":
+            self.requests.append(request)
+            return HttpResponse(
+                status_code=202,
+                headers={"Content-Type": "text/html", "X-Amzn-Waf-Action": "challenge"},
+                body=b"private upstream challenge",
+            )
+        return await super().send(request)
+
+
+@pytest.mark.asyncio
+async def test_waf_challenge_is_nonretryable_and_cools_down_then_recovers() -> None:
+    class Clock:
+        current = AS_OF
+
+        def now(self) -> datetime:
+            return self.current
+
+    clock = Clock()
+    transport = _WafTransport({})
+    adapter = DukascopySpotAdapter(transport, clock=clock)
+    with pytest.raises(ProviderUnavailableError) as exc:
+        await adapter.get_quote(_XAU, AS_OF)
+    assert exc.value.details["error_type"] == "waf_challenge"
+    assert exc.value.retryable is False
+    assert "private upstream" not in str(exc.value)
+    count = len(transport.requests)
+    # Cooldown is shared across symbols and quote/history paths.
+    with pytest.raises(ProviderUnavailableError):
+        await adapter.get_bars(
+            _XAG,
+            start=AS_OF.date(),
+            end=AS_OF.date(),
+            interval=USBarInterval.ONE_DAY,
+            adjustment=AdjustmentMethod.NONE,
+            as_of=AS_OF,
+        )
+    assert len(transport.requests) == count
+    assert not adapter._completed_bucket_cache
+    clock.current += timedelta(seconds=301)
+    # Recover without restarting the adapter once the source is serving JSON.
+    working = _FixtureTransport(
+        {
+            "/v1/candles/minute/XAU-USD/BID": (
+                200,
+                _candle_payload(timestamp=clock.current - timedelta(minutes=1), base="2348.1"),
+            ),
+            "/v1/candles/minute/XAU-USD/ASK": (
+                200,
+                _candle_payload(timestamp=clock.current - timedelta(minutes=1), base="2348.4"),
+            ),
+        }
+    )
+    transport.send = working.send  # type: ignore[method-assign]
+    result = await adapter.get_quote(_XAU, clock.current)
+    assert result.value.mid == Decimal("2348.25")
+
+
+@pytest.mark.asyncio
+async def test_waf_challenge_can_use_configured_legacy_without_repeating_jetta() -> None:
+    quote = [
+        {
+            "instrument": "XAU/USD",
+            "bid": "2348.10",
+            "ask": "2348.40",
+            "timestamp": int((AS_OF - timedelta(minutes=1)).timestamp() * 1000),
+        }
+    ]
+    transport = _WafTransport({"legacy:api/currentPrices": (200, quote)})
+    adapter = DukascopySpotAdapter(transport, clock=_FixedClock(), api_key="fixture-key")
+    first = await adapter.get_quote(_XAU, AS_OF)
+    count = sum(urlsplit(r.url).hostname == "jetta.dukascopy.com" for r in transport.requests)
+    second = await adapter.get_quote(_XAU, AS_OF)
+    assert first.value.mid == second.value.mid == Decimal("2348.25")
+    assert "DUKASCOPY_LEGACY_KEY_API_FALLBACK" in second.meta.warnings
+    assert (
+        sum(urlsplit(r.url).hostname == "jetta.dukascopy.com" for r in transport.requests) == count
+    )
 
 
 def test_configuration_and_supported_surface() -> None:
@@ -550,6 +624,7 @@ async def test_completed_filter_preserves_requested_day_boundaries(
     bar = result.value.bars[0]
     assert bar.open == bar.high == bar.low == bar.close == Decimal("32.25")
     assert bar.volume == Decimal("2.5")
+
 
 def _legacy_identity_transport(payload: object) -> _FixtureTransport:
     return _FixtureTransport(
