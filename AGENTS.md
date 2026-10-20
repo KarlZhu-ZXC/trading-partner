@@ -5,6 +5,10 @@
 Trading Partner is a long-horizon investment judgment companion and the durable
 system of record for the owner's reviewed investment views. Daily work is note-led:
 Research Subjects are background archives, not a daily state-maintenance checklist.
+Moomoo notes are sufficient for the core workflow; Codex or another agent conversation
+and a saved discussion are optional, never prerequisites. The owner may review notes
+and existing context directly in Console, including separately confirming a formal
+judgment without a prior conversation.
 Owner-requested conversations may be recorded as note-linked global Journal entries
 without creating a Subject or changing a formal judgment. Moomoo is the owner's
 primary analysis and note-authoring surface; Trading Partner ingests immutable
@@ -208,33 +212,36 @@ not runtime dependencies. Do not add MiniMax or Grok as project runtime deps.
 
 ## Verification
 
-Use progressive verification. Test effort must be proportional to the current
-change; do not run every check after every edit.
+Run the smallest check that can detect a regression in the changed behavior, then
+stop once it passes. Existing tests are enough when they already cover the rule.
 
-- Inner loop: run only the exact affected test node/module and lint only changed
-  Python files. Prefer commands such as
-  `uv run pytest tests/unit/test_x.py::test_y -q` and
-  `uv run ruff check path/to/changed.py tests/path/to/test_changed.py`.
-- Feature checkpoint: run the directly affected test directories/modules. Do not
-  add coverage, wheel builds, dependency audits, or the entire suite.
-- Subagents/workers must not run repository-wide pytest, mypy, coverage, frontend
-  builds, wheel smoke, or audits unless the parent explicitly delegates that one
-  check. They report their focused commands and results to the main agent.
-- The main agent owns broad verification when the affected contracts warrant it.
-  Repeat a successful check only after relevant changes or new evidence that its
-  result is insufficient; a changed shared dependency can invalidate earlier checks.
-- Full coverage, isolated-wheel smoke, dependency audits, SBOM, and secret scans
-  belong to CI/release verification unless the change directly affects that area
-  or the user explicitly requests them.
-- Documentation-only changes require formatting/diff checks, not pytest.
+| Change | Local verification |
+|---|---|
+| Documentation or display copy only | Diff/format review; no new test, build or pytest |
+| Backend logic | Affected test node/module and Ruff on changed Python files |
+| Frontend helper or source contract | Affected `node --test tests/<name>.test.mjs`; no build |
+| UI controls, layout or interaction | Relevant convention check and affected browser spec; build once for the current app source |
+| Shared schema, composition or migration | Relevant contract/integration tests; disposable DB for migration upgrades |
 
-The final local backend checkpoint, when warranted, is:
+- Add tests for new behavior, a reproduced bug, or a previously uncovered boundary.
+  Do not mirror implementation details, freeze incidental copy/CSS dimensions, or
+  replay the same business flow at several viewports unless behavior changes there.
+  Keep authorization, idempotency, privacy, data-integrity and recovery coverage.
+- Reuse a successful build/check while its inputs remain unchanged. Test-only edits
+  do not need another app build. Run type checking separately only when a build has
+  not already checked the same source. A relevant shared-dependency change invalidates
+  earlier checks.
+- In `console/`, `npm test` means quick unit/source checks. `npm run test:full` builds and
+  runs unit, render and browser checks for CI or an explicitly needed full checkpoint.
+- Broad Ruff/mypy/pytest, coverage, wheel smoke, dependency audits, SBOM and secret
+  scans belong to CI/release verification unless the change affects that area or
+  focused checks leave a concrete cross-cutting concern. Subagents need an explicit
+  delegation from the main agent for any broad check.
 
-```bash
-uv run ruff check .
-uv run mypy
-uv run pytest -q
-```
+Keep the workflow equally small: no separate plan/audit artifact for routine changes,
+no mandatory issue for an already authorized task, and update only the documentation
+whose contract or instructions actually changed. Do not repeat the same change across
+unaffected guides. Report the outcome, relevant checks and material limits concisely.
 
 For migration changes, verify upgrades against a disposable database. Applying
 `uv run alembic upgrade head` to the installed runtime requires authorization for

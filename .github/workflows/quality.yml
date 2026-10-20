@@ -128,7 +128,7 @@ jobs:
           npx playwright install --with-deps chromium
           npm run check:contracts
           npm run lint
-          npm test
+          npm run test:full
 
       - name: Console CycloneDX SBOM
         working-directory: console

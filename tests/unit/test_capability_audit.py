@@ -27,14 +27,10 @@ def test_audit_uses_only_graph_metadata_and_covers_the_canonical_inventory(monke
     assert report["inventory"]["operation_count"] == 109
     assert report["surface"]["entrypoint_count"] == 9
     operation_keys = {
-        (item["capability"], item["operation"])
-        for item in report["inventory"]["operations"]
+        (item["capability"], item["operation"]) for item in report["inventory"]["operations"]
     }
     assert len(operation_keys) == 109
-    assert all(
-        item["status"] == "NOT_OBSERVED"
-        for item in report["inventory"]["operations"]
-    )
+    assert all(item["status"] == "NOT_OBSERVED" for item in report["inventory"]["operations"])
     for item in report["inventory"]["operations"]:
         evidence = item["source_evidence"]
         assert "static_call_references" not in evidence
@@ -82,9 +78,7 @@ invoke(\"market_data_get\", { request: { operation: \"quote\" } });
         },
     )
 
-    market_paths = {
-        item["path"] for item in refs[audit.OperationKey("market_data_get", "quote")]
-    }
+    market_paths = {item["path"] for item in refs[audit.OperationKey("market_data_get", "quote")]}
     assert market_paths == {"src/consumer.py", "console/app/consumer.tsx"}
     chart_refs = refs[audit.OperationKey("technical_render_chart", None)]
     assert chart_refs == (
@@ -193,9 +187,7 @@ def test_report_byte_totals_and_hypothetical_surface_are_self_consistent() -> No
     discovery = report["discovery"]
     hypothetical = report["hypothetical_7"]
 
-    assert surface["wire_bytes_sum"] == sum(
-        item["wire_bytes"] for item in surface["entrypoints"]
-    )
+    assert surface["wire_bytes_sum"] == sum(item["wire_bytes"] for item in surface["entrypoints"])
     assert surface["wire_bytes"] >= surface["wire_bytes_sum"]
     assert surface["input_schema_bytes"] == sum(
         item["input_schema_bytes"] for item in surface["entrypoints"]
@@ -224,3 +216,72 @@ def test_synthetic_container_does_not_accidentally_use_a_real_runtime() -> None:
     assert isinstance(container, MagicMock)
     assert container.settings.mcp_server_name == "synthetic-capability-audit"
     assert container.context.clock.now.return_value == audit.SYNTHETIC_NOW
+
+
+def test_usage_window_comes_from_valid_observed_days_not_claimed_coverage(tmp_path: Path) -> None:
+    row = {
+        "source": "MCP",
+        "capability": "market_data_get",
+        "operation": "quote",
+        "outcome": "OK",
+        "calls": 1,
+        "total_elapsed_ms": 2,
+        "max_elapsed_ms": 2,
+    }
+    path = tmp_path / "usage.json"
+    path.write_text(
+        json.dumps(
+            {
+                "initialized": True,
+                "observed_from": "1900-01-01",
+                "completeness": "complete",
+                "rows": [
+                    {**row, "day": "2026-01-01"},
+                    {**row, "day": "2026-01-19"},
+                    row,
+                    {**row, "day": "1900-01-01", "calls": 0},
+                    {**row, "day": "2026-01-32"},
+                    {**row, "day": "2999-01-01"},
+                ],
+            }
+        )
+    )
+    result = audit._read_usage(path, {audit.OperationKey("market_data_get", "quote")})
+    assert result["window"] == {
+        "observed_from": "2026-01-01",
+        "observed_to": "2026-01-19",
+        "observed_day_count": 2,
+        "calendar_span_days": 19,
+        "dated_row_count": 2,
+        "undated_row_count": 1,
+        "sources": ["MCP"],
+        "basis": "accepted_dated_aggregate_rows",
+        "completeness": "best_effort",
+    }
+    assert result["ignored_rows"] == 3
+    assert [item["day"] for item in result["rows"] if "day" in item] == [
+        "2026-01-01",
+        "2026-01-19",
+    ]
+
+
+def test_undated_usage_and_zero_calls_cannot_establish_a_retirement_window(tmp_path: Path) -> None:
+    row = {
+        "source": "MCP",
+        "capability": "market_data_get",
+        "operation": "quote",
+        "outcome": "OK",
+        "calls": 1,
+        "total_elapsed_ms": 2,
+        "max_elapsed_ms": 2,
+    }
+    path = tmp_path / "usage.json"
+    path.write_text(json.dumps([row, {**row, "calls": 0, "day": "2026-01-01"}]))
+    result = audit._read_usage(path, {audit.OperationKey("market_data_get", "quote")})
+    assert result["window"]["calendar_span_days"] is None
+    assert result["window"]["undated_row_count"] == 1
+    assert result["window"]["observed_day_count"] == 0
+    assert result["ignored_rows"] == 1
+    path.write_text(json.dumps([{**row, "calls": 0}]))
+    result = audit._read_usage(path, {audit.OperationKey("market_data_get", "quote")})
+    assert audit._usage_index(result) == set()

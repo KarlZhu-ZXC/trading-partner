@@ -66,9 +66,7 @@ class OperationKey(NamedTuple):
 def _json_bytes(value: Any) -> int:
     """Return the byte length of the deterministic UTF-8 JSON projection."""
 
-    return len(
-        json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    )
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def _synthetic_container() -> MagicMock:
@@ -102,9 +100,9 @@ def _iter_source_files(project_root: Path) -> Iterable[Path]:
                 continue
             if any(part in relative.name for part in _EXCLUDED_NAME_PARTS):
                 continue
-            if any(
-                part in {"test", "tests", "__tests__"} for part in relative.parts
-            ) or re.search(r"(?:\.test|\.spec)\.[^.]+$", relative.name):
+            if any(part in {"test", "tests", "__tests__"} for part in relative.parts) or re.search(
+                r"(?:\.test|\.spec)\.[^.]+$", relative.name
+            ):
                 continue
             yield path
 
@@ -117,8 +115,7 @@ def _literal_strings(node: ast.AST) -> tuple[str, ...]:
     return tuple(
         value
         for item in ast.walk(node)
-        if isinstance(item, ast.Constant)
-        and isinstance(value := item.value, str)
+        if isinstance(item, ast.Constant) and isinstance(value := item.value, str)
     )
 
 
@@ -183,11 +180,7 @@ class _PythonStaticVisitor(ast.NodeVisitor):
                 call_name = node.func.id
             elif isinstance(node.func, ast.Attribute):
                 call_name = node.func.attr
-        capabilities = {
-            value
-            for value in values
-            if value in self.operations_by_capability
-        }
+        capabilities = {value for value in values if value in self.operations_by_capability}
         if call_name is not None and call_name in self.operations_by_capability:
             capabilities.add(call_name)
         if not capabilities:
@@ -207,9 +200,7 @@ class _PythonStaticVisitor(ast.NodeVisitor):
                     operation=None,
                 )
             operations = {
-                value
-                for value in values
-                if value in known_operations and value is not None
+                value for value in values if value in known_operations and value is not None
             }
             for operation in sorted(operations):
                 _record_static_reference(
@@ -329,9 +320,7 @@ def _scan_javascript_file(
         # operation on a long JSX line belongs to the first capability.
         context_end = min(next_capability_start, end + 512)
         context = source[end:context_end]
-        operation_match = re.search(
-            r"\boperation\s*[:=]\s*['\"`]([^'\"`]+)['\"`]", context
-        )
+        operation_match = re.search(r"\boperation\s*[:=]\s*['\"`]([^'\"`]+)['\"`]", context)
         if operation_match is None:
             line_end = source.find("\n", end)
             line_end = len(source) if line_end == -1 else line_end
@@ -556,13 +545,8 @@ def _discovery_measurements(
     from interfaces.capabilities.catalog import CATEGORY_CAPABILITIES
     from interfaces.mcp.progressive import SHORT_DESCRIPTIONS
 
-    names = tuple(
-        name for name in SHORT_DESCRIPTIONS if name in registry.policies
-    )
-    full = [
-        {"tool": name, "description": SHORT_DESCRIPTIONS[name]}
-        for name in names
-    ]
+    names = tuple(name for name in SHORT_DESCRIPTIONS if name in registry.policies)
+    full = [{"tool": name, "description": SHORT_DESCRIPTIONS[name]} for name in names]
     categories: dict[str, Any] = {}
     for category, capabilities in CATEGORY_CAPABILITIES.items():
         items = [
@@ -643,7 +627,7 @@ def _read_usage(
             or not isinstance(outcome, str)
             or outcome not in _USAGE_OUTCOMES
             or type(calls) is not int
-            or calls < 0
+            or calls < 1
             or type(total_elapsed_ms) is not int
             or total_elapsed_ms < 0
             or type(max_elapsed_ms) is not int
@@ -662,8 +646,11 @@ def _read_usage(
                 "max_elapsed_ms": max_elapsed_ms,
             }
         )
+        if day is not None:
+            safe_rows[-1]["day"] = usage_day.isoformat()
     safe_rows.sort(
         key=lambda row: (
+            row.get("day", ""),
             row["source"],
             row["capability"],
             row["operation"],
@@ -674,6 +661,23 @@ def _read_usage(
         "provided": True,
         "initialized": initialized,
         "rows": safe_rows,
+    }
+    observed_days = sorted({row["day"] for row in safe_rows if "day" in row})
+    dated_rows = sum("day" in row for row in safe_rows)
+    result["window"] = {
+        "observed_from": observed_days[0] if observed_days else None,
+        "observed_to": observed_days[-1] if observed_days else None,
+        "observed_day_count": len(observed_days),
+        "calendar_span_days": (
+            (date.fromisoformat(observed_days[-1]) - date.fromisoformat(observed_days[0])).days + 1
+            if observed_days
+            else None
+        ),
+        "dated_row_count": dated_rows,
+        "undated_row_count": len(safe_rows) - dated_rows,
+        "sources": sorted({row["source"] for row in safe_rows}),
+        "basis": "accepted_dated_aggregate_rows",
+        "completeness": "best_effort",
     }
     if ignored:
         result["ignored_rows"] = ignored
@@ -709,9 +713,7 @@ def _build_report(project_root: Path, usage_path: Path | None = None) -> dict[st
     container = _synthetic_container()
     registry = create_capability_registry(container, chart_persister=persist_chart_png)
     descriptors = tuple(registry.operation_descriptors())
-    operation_keys = {
-        OperationKey(item.capability, item.operation) for item in descriptors
-    }
+    operation_keys = {OperationKey(item.capability, item.operation) for item in descriptors}
     static_refs = _scan_static_references(project_root, operation_keys)
     usage = _read_usage(usage_path, operation_keys)
     observed_keys = _usage_index(usage)
@@ -725,8 +727,7 @@ def _build_report(project_root: Path, usage_path: Path | None = None) -> dict[st
     hypothetical_tools = [
         tool
         for tool in tools
-        if getattr(tool, "name", "")
-        not in {"research_judgment_propose", "technical_render_chart"}
+        if getattr(tool, "name", "") not in {"research_judgment_propose", "technical_render_chart"}
     ]
     hypothetical = _tool_measurements(hypothetical_tools)
     hypothetical.update(
@@ -764,9 +765,7 @@ def _build_report(project_root: Path, usage_path: Path | None = None) -> dict[st
     capabilities: list[dict[str, Any]] = []
     for capability in registry.registered_capabilities:
         name = capability.tool.name
-        capability_operations = [
-            item for item in operations if item["capability"] == name
-        ]
+        capability_operations = [item for item in operations if item["capability"] == name]
         observed = any(item["status"] == OBSERVED for item in capability_operations)
         capabilities.append(
             {
@@ -803,6 +802,8 @@ def _build_report(project_root: Path, usage_path: Path | None = None) -> dict[st
                 "Registration and catalogue metadata literals are not invocation or "
                 "dependency proof.",
                 "Status is runtime usage evidence; static references do not imply invocation.",
+                "Observed usage date span is not continuous coverage; undated aggregates "
+                "cannot establish an observation window. Missing days are not proof of no use.",
             ],
         },
         "inventory": {
